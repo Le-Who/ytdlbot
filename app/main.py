@@ -6,7 +6,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-import aiohttp  # Оставляем только для вспомогательных нужд, не для скачивания видео
+import aiohttp
 from cachetools import TTLCache
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -39,7 +39,6 @@ if not BOT_TOKEN:
 if not BASE_URL:
     BASE_URL = "http://localhost:8000"
 
-# Настройка логирования
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
@@ -66,6 +65,7 @@ def is_supported_url(text: str) -> bool:
         or ("rutube.ru" in t)
         or ("vk.com" in t)
         or ("vkvideo.ru" in t)
+        or ("tiktok.com" in t)
     )
 
 
@@ -92,15 +92,13 @@ async def download(token: str):
     format_id = payload["format_id"]
     title = payload.get("title") or "video"
     
-    # --- ИСПРАВЛЕНИЕ ТУТ: Убрали ручную "очистку" и добавили URL-кодирование для заголовка ---
+    # URL-кодирование для имени файла
     from urllib.parse import quote
     encoded_filename = quote(title)
-    # -----------------------------------------------------------------------------------------
     
     logger.info(f"[DOWNLOAD] Starting stream for: {page_url} (Format: {format_id})")
 
     async def stream_video_subprocess():
-        # Формируем команду yt-dlp для вывода в stdout (-)
         cmd = [
             "yt-dlp",
             "--format", format_id,
@@ -108,11 +106,9 @@ async def download(token: str):
             "--quiet",
             "--no-warnings",
             "--no-playlist",
-            # Важно: используем IPv4 для стабильности
             "--force-ipv4", 
         ]
         
-        # Добавляем куки, если файл существует
         if ytdlp.cookies_path:
             cmd.extend(["--cookies", ytdlp.cookies_path])
             
@@ -121,22 +117,18 @@ async def download(token: str):
         logger.info(f"[DOWNLOAD] Executing CMD: {' '.join(cmd)}")
 
         try:
-            # Запускаем процесс
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             
-            # Читаем stdout частями и отдаем клиенту
-            # Используем буфер 64KB
             while True:
                 chunk = await proc.stdout.read(64 * 1024)
                 if not chunk:
                     break
                 yield chunk
 
-            # Ждем завершения
             await proc.wait()
             
             if proc.returncode != 0:
@@ -146,7 +138,6 @@ async def download(token: str):
                 
         except Exception as e:
             logger.error(f"[DOWNLOAD] Streaming exception: {e}", exc_info=True)
-            # Пытаемся убить процесс при обрыве соединения клиентом
             try:
                 proc.kill()
             except:
@@ -156,7 +147,6 @@ async def download(token: str):
         stream_video_subprocess(),
         media_type="application/octet-stream",
         headers={
-            # Используем стандарт RFC 5987 для UTF-8 имен файлов
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}.mp4"
         }
     )
@@ -164,7 +154,7 @@ async def download(token: str):
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Отправьте ссылку на видео (YouTube / VK Видео / RuTube).\n"
+        "👋 Отправьте ссылку на видео (YouTube / TikTok / VK / RuTube).\n"
         "Бот предложит качество и создаст ссылку для скачивания."
     )
 
@@ -172,13 +162,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
     if not is_supported_url(text):
-        await update.message.reply_text("❌ Пришлите корректную ссылку на YouTube / VK / RuTube.")
+        await update.message.reply_text("❌ Пришлите ссылку на YouTube, TikTok, VK или RuTube.")
         return
 
     msg = await update.message.reply_text("⏳ Анализирую видео...")
     try:
         logger.info(f"[BOT] Analyzing: {text}")
-        title, formats, audio = await asyncio.to_thread(ytdlp.list_formats, text)
+        title, formats, audio, duration = await asyncio.to_thread(ytdlp.list_formats, text)
         logger.info(f"[BOT] Success: {title}")
     except Exception as e:
         logger.error(f"[BOT] Parse error: {e}", exc_info=True)
@@ -189,14 +179,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["title"] = title
 
     buttons = []
-    # Показываем только первые 5 форматов для компактности
-    for f in formats[:5]:
+    # Показываем только первые 6 форматов
+    for f in formats[:6]:
         buttons.append([InlineKeyboardButton(f.label, callback_data=f"pick|{f.format_id}")])
 
     buttons.append([InlineKeyboardButton(audio.label, callback_data=f"pick|{audio.format_id}")])
 
     await msg.edit_text(
-        f"📹 <b>{title}</b>\n\nВыберите качество:",
+        f"📹 <b>{title}</b>\n⏱ {duration}\n\nВыберите качество:",
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode="HTML"
     )
@@ -261,7 +251,6 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tmp_dir.mkdir(exist_ok=True)
         out_path = tmp_dir / f"{uuid.uuid4().hex}.mp4"
 
-        # Скачивание через yt-dlp процесс
         cmd = [
             "yt-dlp",
             "--format", format_id,
@@ -293,7 +282,6 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await q.edit_message_text("📤 Отправляю в Telegram...")
             
-            # Увеличенные таймауты для отправки
             with out_path.open("rb") as f:
                 await context.bot.send_document(
                     chat_id=q.message.chat_id,

@@ -92,8 +92,10 @@ async def download(token: str):
     format_id = payload["format_id"]
     title = payload.get("title") or "video"
     
-    # Очистка имени файла от спецсимволов для заголовка
-    safe_title = re.sub(r'[^\w\-_\. ]', '_', title)
+    # --- ИСПРАВЛЕНИЕ ТУТ: Убрали ручную "очистку" и добавили URL-кодирование для заголовка ---
+    from urllib.parse import quote
+    encoded_filename = quote(title)
+    # -----------------------------------------------------------------------------------------
     
     logger.info(f"[DOWNLOAD] Starting stream for: {page_url} (Format: {format_id})")
 
@@ -141,8 +143,6 @@ async def download(token: str):
                 err_bytes = await proc.stderr.read()
                 err_text = err_bytes.decode(errors='ignore')
                 logger.error(f"[DOWNLOAD] yt-dlp process error: {err_text}")
-                # Мы не можем уже изменить статус ответа, т.к. стриминг начался,
-                # но логи покажут проблему.
                 
         except Exception as e:
             logger.error(f"[DOWNLOAD] Streaming exception: {e}", exc_info=True)
@@ -156,7 +156,8 @@ async def download(token: str):
         stream_video_subprocess(),
         media_type="application/octet-stream",
         headers={
-            "Content-Disposition": f'attachment; filename="{safe_title}.mp4"'
+            # Используем стандарт RFC 5987 для UTF-8 имен файлов
+            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}.mp4"
         }
     )
 

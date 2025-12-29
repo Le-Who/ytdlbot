@@ -2,6 +2,7 @@ import os
 import re
 import uuid
 import asyncio
+import logging
 from pathlib import Path
 from typing import Optional
 
@@ -35,9 +36,15 @@ MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "2"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")
 
-# Можно задеплоить, а затем задать BASE_URL в Koyeb и сделать redeploy
 if not BASE_URL:
     BASE_URL = "http://localhost:8000"
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger("app")
 
 api = FastAPI()
 ytdlp = YtDlpService()
@@ -74,47 +81,75 @@ async def favicon():
 
 @api.get("/dl/{token}")
 async def download(token: str):
+    logger.info(f"[DOWNLOAD] Token: {token}")
+    
     payload = link_cache.get(token)
     if not payload:
+        logger.warning(f"[DOWNLOAD] Token expired: {token}")
         raise HTTPException(status_code=404, detail="Link expired or not found")
 
     page_url = payload["page_url"]
     format_id = payload["format_id"]
     title = payload.get("title") or "video"
+    
+    logger.info(f"[DOWNLOAD] URL: {page_url}, Format: {format_id}")
 
     try:
+        logger.info("[DOWNLOAD] Extracting direct URL from yt-dlp...")
         direct_url, headers = await asyncio.to_thread(ytdlp.get_direct_url, page_url, format_id)
+        logger.info(f"[DOWNLOAD] Direct URL obtained: {direct_url[:100]}...")
+        
+        logger.info("[DOWNLOAD] Getting cookies...")
         cookies = await asyncio.to_thread(ytdlp.get_cookies_dict)
+        logger.info(f"[DOWNLOAD] Cookies count: {len(cookies)}")
     except Exception as e:
+        logger.error(f"[DOWNLOAD] Extractor error: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Extractor error: {e}")
 
     timeout = aiohttp.ClientTimeout(total=60 * 60)
+    
+    logger.info("[DOWNLOAD] Starting aiohttp session...")
+    try:
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers or {}, cookies=cookies) as session:
+            logger.info(f"[DOWNLOAD] Requesting: {direct_url[:80]}...")
+            async with session.get(direct_url, allow_redirects=True) as resp:
+                logger.info(f"[DOWNLOAD] Response status: {resp.status}")
+                
+                if resp.status >= 400:
+                    body = ""
+                    try:
+                        body = (await resp.text())[:500]
+                    except Exception:
+                        pass
+                    logger.error(f"[DOWNLOAD] Upstream error {resp.status}: {body}")
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"YouTube returned {resp.status}. {body[:200]}",
+                    )
 
-    async with aiohttp.ClientSession(timeout=timeout, headers=headers or {}, cookies=cookies) as session:
-        async with session.get(direct_url, allow_redirects=True) as resp:
-            if resp.status >= 400:
-                body = ""
-                try:
-                    body = (await resp.text())[:300]
-                except Exception:
-                    pass
-                raise HTTPException(
-                    status_code=502,
-                    detail=f"Upstream error {resp.status}. {body}",
+                content_type = resp.headers.get("Content-Type", "application/octet-stream")
+                cd = f'attachment; filename="{title}.mp4"'
+                
+                logger.info("[DOWNLOAD] Starting streaming to client...")
+
+                async def gen():
+                    try:
+                        async for chunk in resp.content.iter_chunked(256 * 1024):
+                            yield chunk
+                    except Exception as e:
+                        logger.error(f"[DOWNLOAD] Streaming error: {e}")
+
+                return StreamingResponse(
+                    gen(),
+                    media_type=content_type,
+                    headers={"Content-Disposition": cd},
                 )
-
-            content_type = resp.headers.get("Content-Type", "application/octet-stream")
-            cd = f'attachment; filename="{title}.mp4"'
-
-            async def gen():
-                async for chunk in resp.content.iter_chunked(256 * 1024):
-                    yield chunk
-
-            return StreamingResponse(
-                gen(),
-                media_type=content_type,
-                headers={"Content-Disposition": cd},
-            )
+    except aiohttp.ClientError as e:
+        logger.error(f"[DOWNLOAD] aiohttp error: {e}", exc_info=True)
+        raise HTTPException(status_code=502, detail=f"Network error: {e}")
+    except Exception as e:
+        logger.error(f"[DOWNLOAD] Unexpected error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Server error: {e}")
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,8 +167,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = await update.message.reply_text("Анализирую видео…")
     try:
+        logger.info(f"[BOT] Parsing video: {text}")
         title, formats, audio = await asyncio.to_thread(ytdlp.list_formats, text)
+        logger.info(f"[BOT] Video parsed: {title}, {len(formats)} formats")
     except Exception as e:
+        logger.error(f"[BOT] Parse error: {e}", exc_info=True)
         await msg.edit_text(f"Ошибка парсинга: {e}")
         return
 
@@ -171,6 +209,8 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     token = uuid.uuid4().hex
     link_cache[token] = {"page_url": page_url, "format_id": format_id, "title": title}
     dl_link = f"{BASE_URL}/dl/{token}"
+    
+    logger.info(f"[BOT] Generated link: {dl_link}")
 
     kb = [[InlineKeyboardButton("Открыть ссылку", url=dl_link)]]
     if ENABLE_TELEGRAM_UPLOAD:
@@ -204,11 +244,15 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with tasks_sem:
         await q.edit_message_text("Готовлю файл для отправки в Telegram…")
+        
+        logger.info(f"[BOT] Telegram upload started for: {page_url}")
 
         try:
             direct_url, headers = await asyncio.to_thread(ytdlp.get_direct_url, page_url, format_id)
             cookies = await asyncio.to_thread(ytdlp.get_cookies_dict)
+            logger.info(f"[BOT] Direct URL obtained for upload")
         except Exception as e:
+            logger.error(f"[BOT] Upload extract error: {e}", exc_info=True)
             await q.edit_message_text(f"Не удалось получить прямую ссылку: {e}")
             return
 
@@ -217,33 +261,40 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         out_path = tmp_dir / f"{uuid.uuid4().hex}.mp4"
 
         timeout = aiohttp.ClientTimeout(total=60 * 60)
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers or {}, cookies=cookies) as session:
-            async with session.get(direct_url, allow_redirects=True) as resp:
-                if resp.status >= 400:
-                    await q.edit_message_text(f"Upstream error {resp.status}")
-                    return
+        try:
+            async with aiohttp.ClientSession(timeout=timeout, headers=headers or {}, cookies=cookies) as session:
+                async with session.get(direct_url, allow_redirects=True) as resp:
+                    if resp.status >= 400:
+                        logger.error(f"[BOT] Upload upstream error: {resp.status}")
+                        await q.edit_message_text(f"Upstream error {resp.status}")
+                        return
 
-                size = resp.headers.get("Content-Length")
-                if size and int(size) > MAX_TG_UPLOAD_MB * 1024 * 1024:
-                    await q.edit_message_text(
-                        f"Файл слишком большой для отправки ботом (>{MAX_TG_UPLOAD_MB} MB).\n"
-                        f"Используйте ссылку: {BASE_URL}/dl/{token}"
-                    )
-                    return
+                    size = resp.headers.get("Content-Length")
+                    if size and int(size) > MAX_TG_UPLOAD_MB * 1024 * 1024:
+                        await q.edit_message_text(
+                            f"Файл слишком большой для отправки ботом (>{MAX_TG_UPLOAD_MB} MB).\n"
+                            f"Используйте ссылку: {BASE_URL}/dl/{token}"
+                        )
+                        return
 
-                downloaded = 0
-                with out_path.open("wb") as f:
-                    async for chunk in resp.content.iter_chunked(256 * 1024):
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        if downloaded > MAX_TG_UPLOAD_MB * 1024 * 1024:
-                            f.close()
-                            out_path.unlink(missing_ok=True)
-                            await q.edit_message_text(
-                                f"Файл превысил лимит {MAX_TG_UPLOAD_MB} MB, отправка отменена.\n"
-                                f"Используйте ссылку: {BASE_URL}/dl/{token}"
-                            )
-                            return
+                    downloaded = 0
+                    with out_path.open("wb") as f:
+                        async for chunk in resp.content.iter_chunked(256 * 1024):
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if downloaded > MAX_TG_UPLOAD_MB * 1024 * 1024:
+                                f.close()
+                                out_path.unlink(missing_ok=True)
+                                await q.edit_message_text(
+                                    f"Файл превысил лимит {MAX_TG_UPLOAD_MB} MB, отправка отменена.\n"
+                                    f"Используйте ссылку: {BASE_URL}/dl/{token}"
+                                )
+                                return
+        except Exception as e:
+            logger.error(f"[BOT] Download for telegram failed: {e}", exc_info=True)
+            await q.edit_message_text(f"Ошибка при скачивании: {e}")
+            out_path.unlink(missing_ok=True)
+            return
 
         await q.edit_message_text("Отправляю документ…")
         try:
@@ -254,7 +305,11 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     filename=f"{title}.mp4",
                     caption="Готово.",
                 )
+            logger.info(f"[BOT] Document sent successfully")
             await q.edit_message_text("Готово: документ отправлен.")
+        except Exception as e:
+            logger.error(f"[BOT] Telegram send error: {e}", exc_info=True)
+            await q.edit_message_text(f"Ошибка отправки в Telegram: {e}")
         finally:
             out_path.unlink(missing_ok=True)
 
@@ -274,17 +329,21 @@ bot_app: Optional[Application] = None
 @api.on_event("startup")
 async def _startup():
     global bot_app
+    logger.info("[STARTUP] Starting bot application...")
     bot_app = build_bot_app()
     await bot_app.initialize()
     await bot_app.start()
     await bot_app.updater.start_polling(drop_pending_updates=True)
+    logger.info("[STARTUP] Bot is ready")
 
 
 @api.on_event("shutdown")
 async def _shutdown():
     global bot_app
+    logger.info("[SHUTDOWN] Stopping bot...")
     if bot_app:
         await bot_app.updater.stop()
         await bot_app.stop()
         await bot_app.shutdown()
         bot_app = None
+    logger.info("[SHUTDOWN] Complete")

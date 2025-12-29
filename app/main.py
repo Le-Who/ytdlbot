@@ -2,9 +2,8 @@ import os
 import re
 import uuid
 import asyncio
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Optional
 
 import aiohttp
 from cachetools import TTLCache
@@ -13,7 +12,14 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    CallbackQueryHandler,
+    filters,
+)
 
 from .ytdlp_service import YtDlpService
 
@@ -28,15 +34,16 @@ MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "2"))
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")
+
+# Можно задеплоить, а затем задать BASE_URL в Koyeb и сделать redeploy
 if not BASE_URL:
-    # можно задеплоить, а потом установить переменную и перезапустить
     BASE_URL = "http://localhost:8000"
 
 api = FastAPI()
 ytdlp = YtDlpService()
 tasks_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
-# token -> payload (url, format_id, created_at)
+# token -> payload (page_url, format_id, title)
 link_cache: TTLCache = TTLCache(maxsize=2000, ttl=LINK_TTL_MINUTES * 60)
 
 URL_RE = re.compile(r"^https?://", re.I)
@@ -46,18 +53,23 @@ def is_supported_url(text: str) -> bool:
     if not URL_RE.search(text or ""):
         return False
     t = text.lower()
-    return ("youtube.com" in t) or ("youtu.be" in t) or ("rutube.ru" in t) or ("vk.com" in t) or ("vkvideo.ru" in t)
-
-
-def fmt_size_mb(size: Optional[int]) -> Optional[int]:
-    if not size:
-        return None
-    return int(size / 1024 / 1024)
+    return (
+        ("youtube.com" in t)
+        or ("youtu.be" in t)
+        or ("rutube.ru" in t)
+        or ("vk.com" in t)
+        or ("vkvideo.ru" in t)
+    )
 
 
 @api.get("/health")
 async def health():
     return {"ok": True}
+
+
+@api.get("/favicon.ico")
+async def favicon():
+    raise HTTPException(status_code=404, detail="No favicon")
 
 
 @api.get("/dl/{token}")
@@ -70,23 +82,39 @@ async def download(token: str):
     format_id = payload["format_id"]
     title = payload.get("title") or "video"
 
-    direct_url, headers = await asyncio.to_thread(ytdlp.get_direct_url, page_url, format_id)
+    try:
+        direct_url, headers = await asyncio.to_thread(ytdlp.get_direct_url, page_url, format_id)
+        cookies = await asyncio.to_thread(ytdlp.get_cookies_dict)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Extractor error: {e}")
 
     timeout = aiohttp.ClientTimeout(total=60 * 60)
-    session_headers = headers or {}
-    async with aiohttp.ClientSession(timeout=timeout, headers=session_headers) as session:
+
+    async with aiohttp.ClientSession(timeout=timeout, headers=headers or {}, cookies=cookies) as session:
         async with session.get(direct_url, allow_redirects=True) as resp:
             if resp.status >= 400:
-                raise HTTPException(status_code=502, detail=f"Upstream error {resp.status}")
+                body = ""
+                try:
+                    body = (await resp.text())[:300]
+                except Exception:
+                    pass
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Upstream error {resp.status}. {body}",
+                )
 
-            cd = f'attachment; filename="{title}.mp4"'
             content_type = resp.headers.get("Content-Type", "application/octet-stream")
+            cd = f'attachment; filename="{title}.mp4"'
 
             async def gen():
-                async for chunk in resp.content.iter_chunked(1024 * 256):
+                async for chunk in resp.content.iter_chunked(256 * 1024):
                     yield chunk
 
-            return StreamingResponse(gen(), media_type=content_type, headers={"Content-Disposition": cd})
+            return StreamingResponse(
+                gen(),
+                media_type=content_type,
+                headers={"Content-Disposition": cd},
+            )
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -179,21 +207,22 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             direct_url, headers = await asyncio.to_thread(ytdlp.get_direct_url, page_url, format_id)
+            cookies = await asyncio.to_thread(ytdlp.get_cookies_dict)
         except Exception as e:
             await q.edit_message_text(f"Не удалось получить прямую ссылку: {e}")
             return
 
-        # Скачиваем во временный файл и отправляем как документ (только если небольшой)
         tmp_dir = Path("/tmp")
         tmp_dir.mkdir(exist_ok=True)
         out_path = tmp_dir / f"{uuid.uuid4().hex}.mp4"
 
         timeout = aiohttp.ClientTimeout(total=60 * 60)
-        async with aiohttp.ClientSession(timeout=timeout, headers=headers or {}) as session:
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers or {}, cookies=cookies) as session:
             async with session.get(direct_url, allow_redirects=True) as resp:
                 if resp.status >= 400:
                     await q.edit_message_text(f"Upstream error {resp.status}")
                     return
+
                 size = resp.headers.get("Content-Length")
                 if size and int(size) > MAX_TG_UPLOAD_MB * 1024 * 1024:
                     await q.edit_message_text(
@@ -204,7 +233,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 downloaded = 0
                 with out_path.open("wb") as f:
-                    async for chunk in resp.content.iter_chunked(1024 * 256):
+                    async for chunk in resp.content.iter_chunked(256 * 1024):
                         f.write(chunk)
                         downloaded += len(chunk)
                         if downloaded > MAX_TG_UPLOAD_MB * 1024 * 1024:

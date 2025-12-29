@@ -1,7 +1,7 @@
 python-telegram-bot==20.8
 fastapi==0.115.6
 uvicorn[standard]==0.32.1
-yt-dlp==2025.1.1
+yt-dlp
 aiohttp==3.10.11
 python-dotenv==1.0.1
 cachetools==5.5.0

@@ -75,7 +75,6 @@ class YtDlpService:
         with yt_dlp.YoutubeDL(self._base_opts()) as ydl:
             return ydl.extract_info(url, download=False)
 
-    # Возвращает: Title, Formats, Audio, DurationStr
     def list_formats(self, url: str, max_items: int = 12) -> Tuple[str, List[FormatItem], FormatItem, str]:
         info = self.extract(url)
         title = info.get("title") or "Видео"
@@ -87,17 +86,14 @@ class YtDlpService:
         
         is_tiktok = "tiktok.com" in url
 
-        seen_heights = set()
-
         for f in raw_formats:
-            # TikTok может не иметь vcodec в манифесте, но быть валидным
+            # TikTok: иногда без кодеков, но валидные
             if f.get("vcodec") == "none" and not is_tiktok:
                 continue
             
             ext = f.get("ext")
             protocol = f.get("protocol") or ""
             
-            # Фильтруем экзотику
             if ext not in ["mp4", "webm"] and "m3u8" not in protocol:
                  continue
 
@@ -107,7 +103,6 @@ class YtDlpService:
 
             height = f.get("height")
             if not height:
-                # Пытаемся вытащить высоту из note или если это TikTok
                 note = f.get("format_note", "")
                 if "p" in note:
                      try:
@@ -115,11 +110,20 @@ class YtDlpService:
                      except:
                          pass
                 elif is_tiktok:
-                    height = 720 # Условно для сортировки
+                    height = 720
 
-            fs = f.get("filesize") or f.get("filesize_approx")
+            # --- Логика определения размера ---
+            fs = f.get("filesize") # Точный размер
+            if not fs:
+                fs = f.get("filesize_approx") # Примерный размер
             
-            # Формирование лейбла
+            # Если размера нет, пробуем рассчитать по битрейту (tbr)
+            # tbr = total bit rate (kbit/s)
+            if not fs and f.get("tbr") and duration_sec:
+                tbr = f.get("tbr")
+                fs = int((tbr * 1024 / 8) * duration_sec)
+            # ----------------------------------
+            
             label_parts = []
             
             if is_tiktok:
@@ -134,8 +138,12 @@ class YtDlpService:
                     label_parts.append(f"({int(fs/1024)} KB)")
                 else:
                     label_parts.append(f"({mb:.1f} MB)")
-            elif "m3u8" in protocol:
-                 label_parts.append("(HLS)")
+            else:
+                # Если совсем никак не узнать размер
+                if "m3u8" in protocol:
+                     label_parts.append("(~HLS)")
+                else:
+                     label_parts.append("(?)")
 
             label = " ".join(label_parts)
 
@@ -149,10 +157,8 @@ class YtDlpService:
                 )
             )
 
-        # Сортировка: сначала по высоте, потом по размеру
         formats.sort(key=lambda x: (x.height or 0, x.filesize or 0), reverse=True)
         
-        # Убираем дубликаты разрешений (кроме TikTok, там лучше все показать)
         if not is_tiktok:
             unique_formats = []
             seen = set()
@@ -179,18 +185,15 @@ class YtDlpService:
         return title, final_formats, audio, duration_str
 
     def get_direct_url(self, page_url: str, format_id: str) -> Tuple[str, Dict[str, str]]:
+        # Метод больше не используется в новой логике, но оставим для совместимости
         opts = self._base_opts()
         opts["format"] = format_id
-
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(page_url, download=False)
-
+        
         if isinstance(info, dict) and info.get("url"):
             return info["url"], info.get("http_headers") or {}
-
         req = info.get("requested_formats") or []
         if req and req[0].get("url"):
-            headers = req[0].get("http_headers") or info.get("http_headers") or {}
-            return req[0]["url"], headers
-
-        raise RuntimeError("Не удалось получить прямую ссылку.")
+            return req[0]["url"], req[0].get("http_headers") or {}
+        raise RuntimeError("Direct URL not found")

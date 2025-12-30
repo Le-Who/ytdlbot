@@ -72,20 +72,18 @@ def is_supported_url(text: str) -> bool:
 
 def build_complex_format(format_id: str) -> str:
     """
-    Построение format string для yt-dlp.
+    Построение format string для yt-dlp с падбэками.
     
-    Важно: Язык теперь будет контролироваться через --audio-langs флаг,
-    поэтому здесь мы фокусируемся только на выборе видео + комбинированного аудио.
+    Основная идея: берем выбранный format_id и пробуем разные комбинации с аудио.
     """
     if "+" in format_id or format_id in ("bestaudio/best", "best"):
         return format_id
 
-    # Многоуровневый fallback (сохраняет выбранное качество видео)
-    # yt-dlp применит --audio-langs ПЕРЕД этим, так что приоритет языка гарантирован
+    # Многоуровневый fallback
     return (
-        f"{format_id}+bestaudio[vcodec=none]/"  # Чистое аудио (без видео)
-        f"{format_id}+bestaudio/"                # Любое аудио
-        f"{format_id}"                           # Если всё остальное не сработало
+        f"{format_id}+bestaudio[vcodec=none]/"  # Чистое аудио
+        f"{format_id}+bestaudio/"                # Любое аудио (может включать видео)
+        f"{format_id}"                           # Финальный fallback
     )
 
 
@@ -96,9 +94,14 @@ def build_yt_dlp_command(
     cookies_path: Optional[str] = None,
 ) -> list:
     """
-    Строит команду yt-dlp с поддержкой выбора языка аудио.
+    Строит команду yt-dlp.
     
-    Приоритет языков: English -> Original (неизвестный) -> Любой
+    Ключевой момент: используем -S для сортировки по приоритету языка.
+    -S "lang:en,lang:und,lang:*,quality,filesize"  означает:
+    - Предпочитаем English (en)
+    - Затем Undefined (und) - часто это оригинальная дорожка без метаданных
+    - Затем любой язык
+    - Затем по качеству и размеру
     """
     complex_format = build_complex_format(format_id)
     
@@ -106,23 +109,21 @@ def build_yt_dlp_command(
         "yt-dlp",
         # Выбор качества видео и формата
         "--format", complex_format,
-        # КЛЮЧЕВОЕ: --audio-langs применяется ПЕРВЫМ, ДО формата
-        # Приоритет: en (English) -> und (undefined/original) -> все остальные
-        "--audio-langs", "und,*",
+        # Сортировка: приоритет языка ПЕРЕД качеством
+        # Это заставляет выбирать правильный язык даже если他 имеет меньший битрейт
+        "-S", "lang:en,lang:und,lang:*,quality,filesize",
         # Выходной файл
         "--output", output,
-        # Опции логирования
+        # Опции логирования и стабильности
         "--quiet",
         "--no-warnings",
         "--no-playlist",
         "--force-ipv4",
     ]
     
-    # Cookies для доступа к региональному контенту
     if cookies_path:
         cmd.extend(["--cookies", cookies_path])
     
-    # URL видео
     cmd.append(page_url)
     
     return cmd

@@ -72,17 +72,28 @@ def is_supported_url(text: str) -> bool:
 
 def build_complex_format(format_id: str) -> str:
     """
-    Важно: БЕЗ fallback на `/best`, потому что он может игнорировать выбранный format_id.
-    Приоритет аудио: English -> orig -> любое аудио (только аудио дорожки, vcodec=none).
+    Строит format string с несколькими уровнями fallback:
+    1. Выбранное видео + английское аудио
+    2. Выбранное видео + оригинальное аудио
+    3. Выбранное видео + любое аудио (БЕЗ vcodec=none фильтра)
+    4. Выбранное видео + вообще любое лучшее аудио
+    5. В крайнем случае - просто выбранный формат (если в нём уже есть аудио)
     """
     # Уже составной селектор или аудио-only/общий best — не трогаем
     if "+" in format_id or format_id in ("bestaudio/best", "best"):
         return format_id
 
     return (
+        # Попытка 1: Чистое аудио с английским языком
         f"{format_id}+bestaudio[vcodec=none][language^=en]/"
+        # Попытка 2: Чистое аудио с оригинальным языком
         f"{format_id}+bestaudio[vcodec=none][language^=orig]/"
-        f"{format_id}+bestaudio[vcodec=none]"
+        # Попытка 3: Любое чистое аудио (без vcodec фильтра по языку)
+        f"{format_id}+bestaudio[vcodec=none]/"
+        # Попытка 4: Выбранное видео + просто лучшее аудио (без строгих фильтров)
+        f"{format_id}+bestaudio/"
+        # Попытка 5: Если ничего не сработало - просто выбранный формат
+        f"{format_id}"
     )
 
 

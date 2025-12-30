@@ -9,8 +9,8 @@ from urllib.parse import quote
 
 from cachetools import TTLCache
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.responses import FileResponse
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -52,7 +52,10 @@ tasks_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 link_cache: TTLCache = TTLCache(maxsize=2000, ttl=LINK_TTL_MINUTES * 60)
 
 URL_RE = re.compile(r"^https?://", re.I)
-CHUNK_SIZE = 64 * 1024
+
+# Папка для временных файлов
+TMP_DIR = Path("/tmp/video_downloads")
+TMP_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def is_supported_url(text: str) -> bool:
@@ -70,23 +73,6 @@ def is_supported_url(text: str) -> bool:
     )
 
 
-def build_complex_format(format_id: str) -> str:
-    """
-    Строит format string с жесткой приоритизацией.
-    """
-    if "+" in format_id or format_id in ("bestaudio/best", "best"):
-        return format_id
-
-    # Приоритет: English -> Original -> Undefined (часто оригинал) -> Любое
-    return (
-        f"{format_id}+bestaudio[language^=en]/"   # 1. English
-        f"{format_id}+bestaudio[language^=orig]/" # 2. Original tag
-        f"{format_id}+bestaudio[language=und]/"   # 3. Undefined tag (ВАЖНО!)
-        f"{format_id}+bestaudio/"                 # 4. Fallback to any audio
-        f"{format_id}"                            # 5. Last resort
-    )
-
-
 def build_yt_dlp_command(
     page_url: str,
     format_id: str,
@@ -95,13 +81,27 @@ def build_yt_dlp_command(
 ) -> list:
     """
     Строит команду yt-dlp.
-    Убрали -S, полагаемся полностью на format string.
+    Используем стратегию сортировки (-S) вместо жестких фильтров.
     """
-    complex_format = build_complex_format(format_id)
     
+    # Базовый формат: выбранное видео + лучшее доступное аудио
+    if "+" in format_id or format_id in ("bestaudio/best", "best"):
+        fmt = format_id
+    else:
+        fmt = f"{format_id}+bestaudio/best"
+
     cmd = [
         "yt-dlp",
-        "--format", complex_format,
+        "--format", fmt,
+        
+        # СТРАТЕГИЯ СОРТИРОВКИ АУДИО:
+        # 1. lang:en   - Сначала ищем английский
+        # 2. lang:orig - Потом помеченный как "original"
+        # 3. lang:und  - Потом "undefined" (часто это оригинал без тегов)
+        # 4. quality   - Потом по качеству
+        # 5. lang:*    - В конце любой другой язык
+        "-S", "lang:en,lang:orig,lang:und,quality,lang:*",
+        
         "--output", output,
         "--quiet",
         "--no-warnings",
@@ -117,6 +117,16 @@ def build_yt_dlp_command(
     return cmd
 
 
+def cleanup_file(path: Path):
+    """Фоновая задача для удаления файла после отдачи"""
+    try:
+        if path.exists():
+            path.unlink()
+            logger.info(f"[CLEANUP] Deleted temporary file: {path}")
+    except Exception as e:
+        logger.error(f"[CLEANUP] Error deleting {path}: {e}")
+
+
 @api.get("/health")
 async def health():
     return {"ok": True}
@@ -128,7 +138,7 @@ async def favicon():
 
 
 @api.get("/dl/{token}")
-async def download(token: str):
+async def download(token: str, background_tasks: BackgroundTasks):
     logger.info(f"[DOWNLOAD] Token request: {token}")
 
     payload = link_cache.get(token)
@@ -142,55 +152,73 @@ async def download(token: str):
 
     encoded_filename = quote(title)
     
+    # Генерируем временный файл
+    tmp_filename = f"{uuid.uuid4().hex}.mp4"
+    out_path = TMP_DIR / tmp_filename
+
     logger.info(f"[DOWNLOAD] Page URL: {page_url}")
     logger.info(f"[DOWNLOAD] Selected format_id: {format_id}")
+    logger.info(f"[DOWNLOAD] Temp path: {out_path}")
 
-    async def stream_video_subprocess():
-        cmd = build_yt_dlp_command(
-            page_url=page_url,
-            format_id=format_id,
-            output="-",
-            cookies_path=ytdlp.cookies_path,
+    # Строим команду
+    cmd = build_yt_dlp_command(
+        page_url=page_url,
+        format_id=format_id,
+        output=str(out_path),
+        cookies_path=ytdlp.cookies_path,
+    )
+    
+    logger.info(f"[DOWNLOAD] Executing CMD: {' '.join(cmd)}")
+
+    try:
+        # Запускаем процесс скачивания ВО ВРЕМЕННЫЙ ФАЙЛ
+        # Это решает проблему "Empty file" при работе с pipe
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
         )
-        
-        logger.info(f"[DOWNLOAD] Executing CMD: {' '.join(cmd)}")
 
-        proc = None
+        # Ждем завершения (можно добавить таймаут, если нужно)
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-            while True:
-                chunk = await proc.stdout.read(CHUNK_SIZE)
-                if not chunk:
-                    break
-                yield chunk
-
-            await proc.wait()
-
-            if proc.returncode != 0:
-                err_bytes = await proc.stderr.read()
-                err_text = err_bytes.decode(errors="ignore")
-                logger.error(f"[DOWNLOAD] yt-dlp process error: {err_text}")
-
-        except Exception as e:
-            logger.error(f"[DOWNLOAD] Streaming exception: {e}", exc_info=True)
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300) # 5 минут таймаут
+        except asyncio.TimeoutError:
             if proc:
                 try:
                     proc.kill()
-                except Exception:
+                except:
                     pass
+            logger.error("[DOWNLOAD] Timeout exceeded")
+            raise HTTPException(status_code=504, detail="Download timeout")
 
-    return StreamingResponse(
-        stream_video_subprocess(),
-        media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}.mp4"
-        },
-    )
+        if proc.returncode != 0:
+            err_text = stderr.decode(errors="ignore")
+            logger.error(f"[DOWNLOAD] yt-dlp failed: {err_text}")
+            raise HTTPException(status_code=500, detail="Download failed on server")
+
+        if not out_path.exists() or out_path.stat().st_size == 0:
+             logger.error("[DOWNLOAD] File not found or empty after success code")
+             raise HTTPException(status_code=500, detail="File processing error")
+
+        # Отдаем файл и планируем удаление
+        background_tasks.add_task(cleanup_file, out_path)
+        
+        return FileResponse(
+            path=out_path,
+            media_type="video/mp4",
+            filename=f"{title}.mp4",
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}.mp4"
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[DOWNLOAD] Unexpected error: {e}", exc_info=True)
+        # Чистим за собой при ошибке
+        cleanup_file(out_path)
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -303,9 +331,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with tasks_sem:
         await q.edit_message_text("⏳ Скачиваю файл на сервер...")
 
-        tmp_dir = Path("/tmp")
-        tmp_dir.mkdir(exist_ok=True)
-        out_path = tmp_dir / f"{uuid.uuid4().hex}.mp4"
+        # Используем ту же папку TMP_DIR
+        out_path = TMP_DIR / f"{uuid.uuid4().hex}.mp4"
 
         cmd = build_yt_dlp_command(
             page_url=page_url,
@@ -330,7 +357,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             size = out_path.stat().st_size
             if size > MAX_TG_UPLOAD_MB * 1024 * 1024:
-                out_path.unlink(missing_ok=True)
+                cleanup_file(out_path)
                 await q.edit_message_text(
                     f"⚠️ Файл слишком большой ({int(size/1024/1024)} MB). Используйте ссылку."
                 )
@@ -355,8 +382,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"[BOT] Upload error: {e}", exc_info=True)
             await q.edit_message_text(f"❌ Ошибка отправки: {str(e)[:120]}")
         finally:
-            if out_path.exists():
-                out_path.unlink()
+            cleanup_file(out_path)
 
 
 def build_bot_app() -> Application:

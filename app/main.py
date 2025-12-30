@@ -49,11 +49,9 @@ api = FastAPI()
 ytdlp = YtDlpService()
 tasks_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
-# token -> payload (page_url, format_id, title)
 link_cache: TTLCache = TTLCache(maxsize=2000, ttl=LINK_TTL_MINUTES * 60)
 
 URL_RE = re.compile(r"^https?://", re.I)
-
 
 def is_supported_url(text: str) -> bool:
     if not URL_RE.search(text or ""):
@@ -68,16 +66,13 @@ def is_supported_url(text: str) -> bool:
         or ("tiktok.com" in t)
     )
 
-
 @api.get("/health")
 async def health():
     return {"ok": True}
 
-
 @api.get("/favicon.ico")
 async def favicon():
     raise HTTPException(status_code=404, detail="No favicon")
-
 
 @api.get("/dl/{token}")
 async def download(token: str):
@@ -92,7 +87,6 @@ async def download(token: str):
     format_id = payload["format_id"]
     title = payload.get("title") or "video"
     
-    # URL-кодирование для имени файла
     from urllib.parse import quote
     encoded_filename = quote(title)
     
@@ -107,8 +101,11 @@ async def download(token: str):
             "--no-warnings",
             "--no-playlist",
             "--force-ipv4",
-            # Исправление языка аудио: Английский > Русский > Оригинал
-            "--format-sort", "lang:en,lang:ru,lang:orig",
+            # --- ИЗМЕНЕНИЕ: ЖЕСТКИЙ ПРИОРИТЕТ ОРИГИНАЛА ---
+            # lang:orig = оригинальная дорожка
+            # lang:en = английская (если оригинала нет или он не помечен)
+            # +size = при прочих равных берем больший битрейт
+            "--format-sort", "lang:orig,lang:en,+size",
         ]
         
         if ytdlp.cookies_path:
@@ -153,13 +150,11 @@ async def download(token: str):
         }
     )
 
-
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Отправьте ссылку на видео (YouTube / TikTok / VK / RuTube).\n"
         "Бот предложит качество и создаст ссылку для скачивания."
     )
-
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (update.message.text or "").strip()
@@ -181,7 +176,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["title"] = title
 
     buttons = []
-    # Показываем только первые 6 форматов
     for f in formats[:6]:
         buttons.append([InlineKeyboardButton(f.label, callback_data=f"pick|{f.format_id}")])
 
@@ -192,7 +186,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode="HTML"
     )
-
 
 async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -226,7 +219,6 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
         disable_web_page_preview=True,
     )
 
-
 async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -259,8 +251,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "--output", str(out_path),
             "--quiet", "--no-warnings", "--no-playlist",
             "--force-ipv4",
-            # Исправление языка аудио и тут
-            "--format-sort", "lang:en,lang:ru,lang:orig",
+            # Сортировка и тут
+            "--format-sort", "lang:orig,lang:en,+size",
         ]
         if ytdlp.cookies_path:
             cmd.extend(["--cookies", ytdlp.cookies_path])
@@ -306,7 +298,6 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if out_path.exists():
                 out_path.unlink()
 
-
 def build_bot_app() -> Application:
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
@@ -315,9 +306,7 @@ def build_bot_app() -> Application:
     app.add_handler(CallbackQueryHandler(on_send, pattern=r"^send\|"))
     return app
 
-
 bot_app: Optional[Application] = None
-
 
 @api.on_event("startup")
 async def _startup():
@@ -328,7 +317,6 @@ async def _startup():
     await bot_app.start()
     await bot_app.updater.start_polling(drop_pending_updates=True)
     logger.info("[STARTUP] Bot polling started")
-
 
 @api.on_event("shutdown")
 async def _shutdown():

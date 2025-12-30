@@ -76,36 +76,56 @@ def is_supported_url(text: str) -> bool:
 def build_yt_dlp_command(
     page_url: str,
     format_id: str,
+    height: Optional[int],
     output: str,
     cookies_path: Optional[str] = None,
 ) -> list:
     """
     Строит команду yt-dlp.
-    РЕШЕНИЕ ПРОБЛЕМЫ КАЧЕСТВА И АУДИО:
     
-    1. Мы указываем КОНКРЕТНЫЙ format_id для видео (например, '137').
-    2. Мы приклеиваем к нему '+bestaudio'.
-    3. Мы используем -S для сортировки ТОЛЬКО аудио части (по языку).
-    4. Мы УБИРАЕМ fallback на '/best', так как format_id для видео у нас точный.
+    СТРАТЕГИЯ "Original Audio + Fixed Video Height":
+    
+    1. Видео выбираем жестко по высоте: bestvideo[height=X]
+    2. Аудио выбираем с приоритетом оригинальной дорожки через format_note,
+       чтобы обойти AI-дубляж.
     """
     
-    # Если это уже сложный формат (выбран аудио-онли или специфика), не трогаем
-    if "+" in format_id or format_id in ("bestaudio/best", "best"):
-        fmt = format_id
+    # Селектор видео (по высоте или ID)
+    if height:
+        video_sel = f"bestvideo[height={height}]"
+        # Fallback для прогрессивных форматов
+        prog_sel = f"best[height={height}]"
+    elif "+" not in format_id and format_id not in ("bestaudio/best", "best"):
+         video_sel = format_id
+         prog_sel = f"best" # fallback
     else:
-        # Жесткая связка: ТочноеВидео + ЛучшееАудио
-        fmt = f"{format_id}+bestaudio"
+        # Если формат сложный - возвращаем как есть, доверяем пользователю
+        # (но аудио фильтры уже не применить так просто)
+        return [
+            "yt-dlp", "--format", format_id, "--output", output,
+            "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4"
+        ] + (["--cookies", cookies_path] if cookies_path else []) + [page_url]
+
+
+    # Селектор аудио с приоритетами (СЛЕВА НАПРАВО):
+    # 1. bestaudio[format_note*=original] -> Явно оригинальная (анти-AI дубляж)
+    # 2. bestaudio[language^=en]         -> Английская
+    # 3. bestaudio[language^=orig]       -> Помечена как оригинал
+    # 4. bestaudio                       -> Любая (fallback)
+    audio_sel = (
+        "bestaudio[format_note*=original]/"
+        "bestaudio[language^=en]/"
+        "bestaudio[language^=orig]/"
+        "bestaudio"
+    )
+    
+    # Собираем финальный формат:
+    # (Video + AudioSelector) ИЛИ (ProgressiveVideoSelector) ИЛИ (Best)
+    final_fmt = f"{video_sel}+({audio_sel})/{prog_sel}/best"
 
     cmd = [
         "yt-dlp",
-        "--format", fmt,
-        
-        # Сортировка форматов.
-        # Так как видео-ID задан жестко в --format, эта сортировка повлияет
-        # только на выбор компонента bestaudio.
-        # Приоритет: Английский > Оригинал > Без тега > Качество
-        "-S", "lang:en,lang:orig,lang:und,quality",
-        
+        "--format", final_fmt,
         "--output", output,
         "--quiet",
         "--no-warnings",
@@ -152,30 +172,28 @@ async def download(token: str, background_tasks: BackgroundTasks):
 
     page_url = payload["page_url"]
     format_id = payload["format_id"]
+    height = payload.get("height")
     title = payload.get("title") or "video"
 
     encoded_filename = quote(title)
     
-    # Генерируем временный файл
     tmp_filename = f"{uuid.uuid4().hex}.mp4"
     out_path = TMP_DIR / tmp_filename
 
-    logger.info(f"[DOWNLOAD] Page URL: {page_url}")
-    logger.info(f"[DOWNLOAD] Selected format_id: {format_id}")
-    logger.info(f"[DOWNLOAD] Temp path: {out_path}")
+    logger.info(f"[DOWNLOAD] URL: {page_url}")
+    logger.info(f"[DOWNLOAD] ID: {format_id}, Height: {height}")
 
-    # Строим команду
     cmd = build_yt_dlp_command(
         page_url=page_url,
         format_id=format_id,
+        height=height,
         output=str(out_path),
         cookies_path=ytdlp.cookies_path,
     )
     
-    logger.info(f"[DOWNLOAD] Executing CMD: {' '.join(cmd)}")
+    logger.info(f"[DOWNLOAD] CMD: {' '.join(cmd)}")
 
     try:
-        # Запускаем процесс скачивания
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -186,26 +204,20 @@ async def download(token: str, background_tasks: BackgroundTasks):
             _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
         except asyncio.TimeoutError:
             if proc:
-                try:
-                    proc.kill()
-                except:
-                    pass
-            logger.error("[DOWNLOAD] Timeout exceeded")
-            raise HTTPException(status_code=504, detail="Download timeout")
+                try: proc.kill() 
+                except: pass
+            logger.error("[DOWNLOAD] Timeout")
+            raise HTTPException(status_code=504, detail="Timeout")
 
         if proc.returncode != 0:
             err_text = stderr.decode(errors="ignore")
             logger.error(f"[DOWNLOAD] yt-dlp failed: {err_text}")
-            
-            # Если упало из-за того, что video_id не найден (редко, но бывает),
-            # можно сделать fallback. Но пока считаем, что id валидный из list_formats.
-            raise HTTPException(status_code=500, detail="Download failed on server")
+            raise HTTPException(status_code=500, detail="Server download error")
 
         if not out_path.exists() or out_path.stat().st_size == 0:
-             logger.error("[DOWNLOAD] File not found or empty after success code")
-             raise HTTPException(status_code=500, detail="File processing error")
+             logger.error("[DOWNLOAD] Empty file")
+             raise HTTPException(status_code=500, detail="Empty file error")
 
-        # Отдаем файл и планируем удаление
         background_tasks.add_task(cleanup_file, out_path)
         
         return FileResponse(
@@ -220,9 +232,9 @@ async def download(token: str, background_tasks: BackgroundTasks):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"[DOWNLOAD] Unexpected error: {e}", exc_info=True)
+        logger.error(f"[DOWNLOAD] Error: {e}", exc_info=True)
         cleanup_file(out_path)
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal Error")
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -252,8 +264,13 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ Ошибка парсинга: {str(e)[:120]}")
         return
 
+    # Сохраняем высоту для надежного выбора
+    format_map = {f.format_id: f.height for f in formats}
+    format_map[audio.format_id] = None
+    
     context.user_data["page_url"] = text
     context.user_data["title"] = title
+    context.user_data["format_map"] = format_map
 
     buttons = []
     for f in formats[:6]:
@@ -284,15 +301,25 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     page_url = context.user_data.get("page_url")
     title = context.user_data.get("title", "video")
+    
+    format_map = context.user_data.get("format_map", {})
+    height = format_map.get(format_id)
+
     if not page_url:
         await q.edit_message_text("⚠️ Сессия устарела. Отправьте ссылку заново.")
         return
 
     token = uuid.uuid4().hex
-    link_cache[token] = {"page_url": page_url, "format_id": format_id, "title": title}
+    link_cache[token] = {
+        "page_url": page_url, 
+        "format_id": format_id, 
+        "height": height, 
+        "title": title
+    }
+    
     dl_link = f"{BASE_URL}/dl/{token}"
 
-    logger.info(f"[BOT] Link generated: {dl_link} (format_id={format_id})")
+    logger.info(f"[BOT] Link generated: {dl_link} (ID={format_id}, H={height})")
 
     kb = [[InlineKeyboardButton("📥 Скачать (Ссылка)", url=dl_link)]]
     if ENABLE_TELEGRAM_UPLOAD:
@@ -328,9 +355,10 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     page_url = payload["page_url"]
     format_id = payload["format_id"]
+    height = payload.get("height")
     title = payload.get("title") or "video"
 
-    logger.info(f"[BOT] TG send requested. format_id={format_id}")
+    logger.info(f"[BOT] TG send requested. ID={format_id}, H={height}")
 
     async with tasks_sem:
         await q.edit_message_text("⏳ Скачиваю файл на сервер...")
@@ -340,12 +368,13 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cmd = build_yt_dlp_command(
             page_url=page_url,
             format_id=format_id,
+            height=height,
             output=str(out_path),
             cookies_path=ytdlp.cookies_path,
         )
 
         try:
-            logger.info(f"[BOT] Downloading to file: {' '.join(cmd)}")
+            logger.info(f"[BOT] Downloading: {' '.join(cmd)}")
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,

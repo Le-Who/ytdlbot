@@ -72,18 +72,18 @@ def is_supported_url(text: str) -> bool:
 
 def build_complex_format(format_id: str) -> str:
     """
-    Построение format string для yt-dlp с падбэками.
-    
-    Основная идея: берем выбранный format_id и пробуем разные комбинации с аудио.
+    Строит format string с жесткой приоритизацией.
     """
     if "+" in format_id or format_id in ("bestaudio/best", "best"):
         return format_id
 
-    # Многоуровневый fallback
+    # Приоритет: English -> Original -> Undefined (часто оригинал) -> Любое
     return (
-        f"{format_id}+bestaudio[vcodec=none]/"  # Чистое аудио
-        f"{format_id}+bestaudio/"                # Любое аудио (может включать видео)
-        f"{format_id}"                           # Финальный fallback
+        f"{format_id}+bestaudio[language^=en]/"   # 1. English
+        f"{format_id}+bestaudio[language^=orig]/" # 2. Original tag
+        f"{format_id}+bestaudio[language=und]/"   # 3. Undefined tag (ВАЖНО!)
+        f"{format_id}+bestaudio/"                 # 4. Fallback to any audio
+        f"{format_id}"                            # 5. Last resort
     )
 
 
@@ -95,26 +95,14 @@ def build_yt_dlp_command(
 ) -> list:
     """
     Строит команду yt-dlp.
-    
-    Ключевой момент: используем -S для сортировки по приоритету языка.
-    -S "lang:en,lang:und,lang:*,quality,filesize"  означает:
-    - Предпочитаем English (en)
-    - Затем Undefined (und) - часто это оригинальная дорожка без метаданных
-    - Затем любой язык
-    - Затем по качеству и размеру
+    Убрали -S, полагаемся полностью на format string.
     """
     complex_format = build_complex_format(format_id)
     
     cmd = [
         "yt-dlp",
-        # Выбор качества видео и формата
         "--format", complex_format,
-        # Сортировка: приоритет языка ПЕРЕД качеством
-        # Это заставляет выбирать правильный язык даже если他 имеет меньший битрейт
-        "-S", "lang:en,lang:und,lang:*,quality,filesize",
-        # Выходной файл
         "--output", output,
-        # Опции логирования и стабильности
         "--quiet",
         "--no-warnings",
         "--no-playlist",

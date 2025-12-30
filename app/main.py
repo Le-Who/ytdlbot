@@ -81,26 +81,30 @@ def build_yt_dlp_command(
 ) -> list:
     """
     Строит команду yt-dlp.
-    Используем стратегию сортировки (-S) вместо жестких фильтров.
+    РЕШЕНИЕ ПРОБЛЕМЫ КАЧЕСТВА И АУДИО:
+    
+    1. Мы указываем КОНКРЕТНЫЙ format_id для видео (например, '137').
+    2. Мы приклеиваем к нему '+bestaudio'.
+    3. Мы используем -S для сортировки ТОЛЬКО аудио части (по языку).
+    4. Мы УБИРАЕМ fallback на '/best', так как format_id для видео у нас точный.
     """
     
-    # Базовый формат: выбранное видео + лучшее доступное аудио
+    # Если это уже сложный формат (выбран аудио-онли или специфика), не трогаем
     if "+" in format_id or format_id in ("bestaudio/best", "best"):
         fmt = format_id
     else:
-        fmt = f"{format_id}+bestaudio/best"
+        # Жесткая связка: ТочноеВидео + ЛучшееАудио
+        fmt = f"{format_id}+bestaudio"
 
     cmd = [
         "yt-dlp",
         "--format", fmt,
         
-        # СТРАТЕГИЯ СОРТИРОВКИ АУДИО:
-        # 1. lang:en   - Сначала ищем английский
-        # 2. lang:orig - Потом помеченный как "original"
-        # 3. lang:und  - Потом "undefined" (часто это оригинал без тегов)
-        # 4. quality   - Потом по качеству
-        # 5. lang:*    - В конце любой другой язык
-        "-S", "lang:en,lang:orig,lang:und,quality,lang:*",
+        # Сортировка форматов.
+        # Так как видео-ID задан жестко в --format, эта сортировка повлияет
+        # только на выбор компонента bestaudio.
+        # Приоритет: Английский > Оригинал > Без тега > Качество
+        "-S", "lang:en,lang:orig,lang:und,quality",
         
         "--output", output,
         "--quiet",
@@ -171,17 +175,15 @@ async def download(token: str, background_tasks: BackgroundTasks):
     logger.info(f"[DOWNLOAD] Executing CMD: {' '.join(cmd)}")
 
     try:
-        # Запускаем процесс скачивания ВО ВРЕМЕННЫЙ ФАЙЛ
-        # Это решает проблему "Empty file" при работе с pipe
+        # Запускаем процесс скачивания
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
 
-        # Ждем завершения (можно добавить таймаут, если нужно)
         try:
-            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300) # 5 минут таймаут
+            _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
         except asyncio.TimeoutError:
             if proc:
                 try:
@@ -194,6 +196,9 @@ async def download(token: str, background_tasks: BackgroundTasks):
         if proc.returncode != 0:
             err_text = stderr.decode(errors="ignore")
             logger.error(f"[DOWNLOAD] yt-dlp failed: {err_text}")
+            
+            # Если упало из-за того, что video_id не найден (редко, но бывает),
+            # можно сделать fallback. Но пока считаем, что id валидный из list_formats.
             raise HTTPException(status_code=500, detail="Download failed on server")
 
         if not out_path.exists() or out_path.stat().st_size == 0:
@@ -216,7 +221,6 @@ async def download(token: str, background_tasks: BackgroundTasks):
         raise
     except Exception as e:
         logger.error(f"[DOWNLOAD] Unexpected error: {e}", exc_info=True)
-        # Чистим за собой при ошибке
         cleanup_file(out_path)
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -331,7 +335,6 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with tasks_sem:
         await q.edit_message_text("⏳ Скачиваю файл на сервер...")
 
-        # Используем ту же папку TMP_DIR
         out_path = TMP_DIR / f"{uuid.uuid4().hex}.mp4"
 
         cmd = build_yt_dlp_command(

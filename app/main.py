@@ -72,28 +72,27 @@ def is_supported_url(text: str) -> bool:
 
 def build_complex_format(format_id: str) -> str:
     """
-    Строит format string с несколькими уровнями fallback:
-    1. Выбранное видео + английское аудио
-    2. Выбранное видео + оригинальное аудио
-    3. Выбранное видео + любое аудио (БЕЗ vcodec=none фильтра)
-    4. Выбранное видео + вообще любое лучшее аудио
-    5. В крайнем случае - просто выбранный формат (если в нём уже есть аудио)
+    Строит цепочку форматов для выбора ПРАВИЛЬНОГО аудио.
+    
+    Логика приоритетов:
+    1. Явный Английский (en*)
+    2. Явный Оригинал (orig*)
+    3. 'Undefined' (und) - это КЛЮЧЕВОЙ фикс. Оригинальные дорожки часто не имеют тега языка.
+       Если мы не укажем это явно, fallback 'bestaudio' может выбрать дубляж с высшим битрейтом.
+    4. Fallback: любое аудио (если ничего выше не найдено)
+    5. Fallback: исходный формат (если видео и аудио склеены)
     """
-    # Уже составной селектор или аудио-only/общий best — не трогаем
+    # Если формат уже сложный (с плюсом) или это запрос только аудио
     if "+" in format_id or format_id in ("bestaudio/best", "best"):
         return format_id
 
     return (
-        # Попытка 1: Чистое аудио с английским языком
-        f"{format_id}+bestaudio[vcodec=none][language^=en]/"
-        # Попытка 2: Чистое аудио с оригинальным языком
-        f"{format_id}+bestaudio[vcodec=none][language^=orig]/"
-        # Попытка 3: Любое чистое аудио (без vcodec фильтра по языку)
-        f"{format_id}+bestaudio[vcodec=none]/"
-        # Попытка 4: Выбранное видео + просто лучшее аудио (без строгих фильтров)
-        f"{format_id}+bestaudio/"
-        # Попытка 5: Если ничего не сработало - просто выбранный формат
-        f"{format_id}"
+        f"{format_id}+bestaudio[vcodec=none][language^=en]/"   # 1. English
+        f"{format_id}+bestaudio[vcodec=none][language^=orig]/" # 2. Marked as Original
+        f"{format_id}+bestaudio[vcodec=none][language=und]/"   # 3. Undefined (Fix for silent defaults)
+        f"{format_id}+bestaudio[vcodec=none]/"                 # 4. Any clean audio
+        f"{format_id}+bestaudio/"                              # 5. Any audio (dirty)
+        f"{format_id}"                                         # 6. Container as is
     )
 
 
@@ -122,7 +121,9 @@ async def download(token: str):
 
     encoded_filename = quote(title)
 
+    # Строим сложный формат
     complex_format = build_complex_format(format_id)
+    
     logger.info(f"[DOWNLOAD] Page URL: {page_url}")
     logger.info(f"[DOWNLOAD] Selected format_id: {format_id}")
     logger.info(f"[DOWNLOAD] Complex format: {complex_format}")
@@ -290,6 +291,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     format_id = payload["format_id"]
     title = payload.get("title") or "video"
 
+    # Строим сложный формат
     complex_format = build_complex_format(format_id)
     logger.info(f"[BOT] TG send requested. format_id={format_id}, complex={complex_format}")
 

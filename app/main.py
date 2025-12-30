@@ -101,11 +101,9 @@ async def download(token: str):
             "--no-warnings",
             "--no-playlist",
             "--force-ipv4",
-            # --- ИЗМЕНЕНИЕ: ЖЕСТКИЙ ПРИОРИТЕТ ОРИГИНАЛА ---
-            # lang:orig = оригинальная дорожка
-            # lang:en = английская (если оригинала нет или он не помечен)
-            # +size = при прочих равных берем больший битрейт
-            "--format-sort", "lang:orig,lang:en,+size",
+            # ИСПРАВЛЕНИЕ: Явный выбор английского или оригинального языка для АУДИОДОРОЖКИ
+            # Это НАМНОГО надежнее, чем --format-sort, потому что применяется ДО мердже видео и звука
+            "--audio-language", "en,orig",
         ]
         
         if ytdlp.cookies_path:
@@ -251,8 +249,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "--output", str(out_path),
             "--quiet", "--no-warnings", "--no-playlist",
             "--force-ipv4",
-            # Сортировка и тут
-            "--format-sort", "lang:orig,lang:en,+size",
+            # То же самое исправление и в отправке в Telegram
+            "--audio-language", "en,orig",
         ]
         if ytdlp.cookies_path:
             cmd.extend(["--cookies", ytdlp.cookies_path])

@@ -93,17 +93,29 @@ async def download(token: str):
     logger.info(f"[DOWNLOAD] Starting stream for: {page_url} (Format: {format_id})")
 
     async def stream_video_subprocess():
+        # ИСПРАВЛЕНИЕ: yt-dlp не поддерживает --audio-language
+        # Вместо этого используем фильтрацию через --format с параметром language
+        # Формат: video_format + bestaudio[language^=en] или bestaudio[language^=orig]
+        
+        # Если format_id это простой ID (например '137'), добавляем аудио с фильтром по языку
+        if "+" not in format_id and format_id not in ["bestaudio/best", "best"]:
+            # Это чистое видео (например '137'), нужно добавить аудио с приоритетом:
+            # 1. Английское аудио (language^=en)
+            # 2. Оригинальное аудио (language^=orig)
+            # 3. Любое лучшее аудио (bestaudio/best) - fallback
+            complex_format = f"{format_id}+bestaudio[language^=en]/{format_id}+bestaudio[language^=orig]/{format_id}+bestaudio/best"
+        else:
+            # Это уже комбинированный формат или аудио-only, используем как есть
+            complex_format = format_id
+        
         cmd = [
             "yt-dlp",
-            "--format", format_id,
+            "--format", complex_format,
             "--output", "-",
             "--quiet",
             "--no-warnings",
             "--no-playlist",
             "--force-ipv4",
-            # ИСПРАВЛЕНИЕ: Явный выбор английского или оригинального языка для АУДИОДОРОЖКИ
-            # Это НАМНОГО надежнее, чем --format-sort, потому что применяется ДО мердже видео и звука
-            "--audio-language", "en,orig",
         ]
         
         if ytdlp.cookies_path:
@@ -243,14 +255,18 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tmp_dir.mkdir(exist_ok=True)
         out_path = tmp_dir / f"{uuid.uuid4().hex}.mp4"
 
+        # Та же логика для формата (с фильтром по языку аудио)
+        if "+" not in format_id and format_id not in ["bestaudio/best", "best"]:
+            complex_format = f"{format_id}+bestaudio[language^=en]/{format_id}+bestaudio[language^=orig]/{format_id}+bestaudio/best"
+        else:
+            complex_format = format_id
+
         cmd = [
             "yt-dlp",
-            "--format", format_id,
+            "--format", complex_format,
             "--output", str(out_path),
             "--quiet", "--no-warnings", "--no-playlist",
             "--force-ipv4",
-            # То же самое исправление и в отправке в Telegram
-            "--audio-language", "en,orig",
         ]
         if ytdlp.cookies_path:
             cmd.extend(["--cookies", ytdlp.cookies_path])

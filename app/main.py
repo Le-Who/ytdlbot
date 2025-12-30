@@ -93,19 +93,21 @@ async def download(token: str):
     logger.info(f"[DOWNLOAD] Starting stream for: {page_url} (Format: {format_id})")
 
     async def stream_video_subprocess():
-        # ИСПРАВЛЕНИЕ: yt-dlp не поддерживает --audio-language
-        # Вместо этого используем фильтрацию через --format с параметром language
-        # Формат: video_format + bestaudio[language^=en] или bestaudio[language^=orig]
+        # ИСПРАВЛЕНИЕ: Более точная фильтрация аудио с сохранением выбранного качества видео
+        # Ключевое отличие: используем vcodec=none чтобы получить ТОЛЬКО аудиодорожку,
+        # а не видео+аудио комбо (которые могут быть выше качеством)
         
-        # Если format_id это простой ID (например '137'), добавляем аудио с фильтром по языку
         if "+" not in format_id and format_id not in ["bestaudio/best", "best"]:
-            # Это чистое видео (например '137'), нужно добавить аудио с приоритетом:
-            # 1. Английское аудио (language^=en)
-            # 2. Оригинальное аудио (language^=orig)
-            # 3. Любое лучшее аудио (bestaudio/best) - fallback
-            complex_format = f"{format_id}+bestaudio[language^=en]/{format_id}+bestaudio[language^=orig]/{format_id}+bestaudio/best"
+            # Это чистое видео (например '137' для 720p)
+            # Формируем: video_id + (audio с языком) / video_id + (любое аудио)
+            # Важно: [vcodec=none] гарантирует что берем ТОЛЬКО аудио, не видео
+            complex_format = (
+                f"{format_id}+bestaudio[vcodec=none][language^=en]/"
+                f"{format_id}+bestaudio[vcodec=none][language^=orig]/"
+                f"{format_id}+bestaudio[vcodec=none]/best"
+            )
         else:
-            # Это уже комбинированный формат или аудио-only, используем как есть
+            # Это уже комбинированный формат или аудио-only
             complex_format = format_id
         
         cmd = [
@@ -255,9 +257,13 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tmp_dir.mkdir(exist_ok=True)
         out_path = tmp_dir / f"{uuid.uuid4().hex}.mp4"
 
-        # Та же логика для формата (с фильтром по языку аудио)
+        # Та же логика для формата
         if "+" not in format_id and format_id not in ["bestaudio/best", "best"]:
-            complex_format = f"{format_id}+bestaudio[language^=en]/{format_id}+bestaudio[language^=orig]/{format_id}+bestaudio/best"
+            complex_format = (
+                f"{format_id}+bestaudio[vcodec=none][language^=en]/"
+                f"{format_id}+bestaudio[vcodec=none][language^=orig]/"
+                f"{format_id}+bestaudio[vcodec=none]/best"
+            )
         else:
             complex_format = format_id
 

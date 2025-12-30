@@ -72,28 +72,60 @@ def is_supported_url(text: str) -> bool:
 
 def build_complex_format(format_id: str) -> str:
     """
-    Строит цепочку форматов для выбора ПРАВИЛЬНОГО аудио.
+    Построение format string для yt-dlp.
     
-    Логика приоритетов:
-    1. Явный Английский (en*)
-    2. Явный Оригинал (orig*)
-    3. 'Undefined' (und) - это КЛЮЧЕВОЙ фикс. Оригинальные дорожки часто не имеют тега языка.
-       Если мы не укажем это явно, fallback 'bestaudio' может выбрать дубляж с высшим битрейтом.
-    4. Fallback: любое аудио (если ничего выше не найдено)
-    5. Fallback: исходный формат (если видео и аудио склеены)
+    Важно: Язык теперь будет контролироваться через --audio-langs флаг,
+    поэтому здесь мы фокусируемся только на выборе видео + комбинированного аудио.
     """
-    # Если формат уже сложный (с плюсом) или это запрос только аудио
     if "+" in format_id or format_id in ("bestaudio/best", "best"):
         return format_id
 
+    # Многоуровневый fallback (сохраняет выбранное качество видео)
+    # yt-dlp применит --audio-langs ПЕРЕД этим, так что приоритет языка гарантирован
     return (
-        f"{format_id}+bestaudio[vcodec=none][language^=en]/"   # 1. English
-        f"{format_id}+bestaudio[vcodec=none][language^=orig]/" # 2. Marked as Original
-        f"{format_id}+bestaudio[vcodec=none][language=und]/"   # 3. Undefined (Fix for silent defaults)
-        f"{format_id}+bestaudio[vcodec=none]/"                 # 4. Any clean audio
-        f"{format_id}+bestaudio/"                              # 5. Any audio (dirty)
-        f"{format_id}"                                         # 6. Container as is
+        f"{format_id}+bestaudio[vcodec=none]/"  # Чистое аудио (без видео)
+        f"{format_id}+bestaudio/"                # Любое аудио
+        f"{format_id}"                           # Если всё остальное не сработало
     )
+
+
+def build_yt_dlp_command(
+    page_url: str,
+    format_id: str,
+    output: str,
+    cookies_path: Optional[str] = None,
+) -> list:
+    """
+    Строит команду yt-dlp с поддержкой выбора языка аудио.
+    
+    Приоритет языков: English -> Original (неизвестный) -> Любой
+    """
+    complex_format = build_complex_format(format_id)
+    
+    cmd = [
+        "yt-dlp",
+        # Выбор качества видео и формата
+        "--format", complex_format,
+        # КЛЮЧЕВОЕ: --audio-langs применяется ПЕРВЫМ, ДО формата
+        # Приоритет: en (English) -> und (undefined/original) -> все остальные
+        "--audio-langs", "und,*",
+        # Выходной файл
+        "--output", output,
+        # Опции логирования
+        "--quiet",
+        "--no-warnings",
+        "--no-playlist",
+        "--force-ipv4",
+    ]
+    
+    # Cookies для доступа к региональному контенту
+    if cookies_path:
+        cmd.extend(["--cookies", cookies_path])
+    
+    # URL видео
+    cmd.append(page_url)
+    
+    return cmd
 
 
 @api.get("/health")
@@ -120,32 +152,18 @@ async def download(token: str):
     title = payload.get("title") or "video"
 
     encoded_filename = quote(title)
-
-    # Строим сложный формат
-    complex_format = build_complex_format(format_id)
     
     logger.info(f"[DOWNLOAD] Page URL: {page_url}")
     logger.info(f"[DOWNLOAD] Selected format_id: {format_id}")
-    logger.info(f"[DOWNLOAD] Complex format: {complex_format}")
 
     async def stream_video_subprocess():
-        cmd = [
-            "yt-dlp",
-            "--format",
-            complex_format,
-            "--output",
-            "-",
-            "--quiet",
-            "--no-warnings",
-            "--no-playlist",
-            "--force-ipv4",
-        ]
-
-        if ytdlp.cookies_path:
-            cmd.extend(["--cookies", ytdlp.cookies_path])
-
-        cmd.append(page_url)
-
+        cmd = build_yt_dlp_command(
+            page_url=page_url,
+            format_id=format_id,
+            output="-",
+            cookies_path=ytdlp.cookies_path,
+        )
+        
         logger.info(f"[DOWNLOAD] Executing CMD: {' '.join(cmd)}")
 
         proc = None
@@ -291,9 +309,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     format_id = payload["format_id"]
     title = payload.get("title") or "video"
 
-    # Строим сложный формат
-    complex_format = build_complex_format(format_id)
-    logger.info(f"[BOT] TG send requested. format_id={format_id}, complex={complex_format}")
+    logger.info(f"[BOT] TG send requested. format_id={format_id}")
 
     async with tasks_sem:
         await q.edit_message_text("⏳ Скачиваю файл на сервер...")
@@ -302,20 +318,12 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tmp_dir.mkdir(exist_ok=True)
         out_path = tmp_dir / f"{uuid.uuid4().hex}.mp4"
 
-        cmd = [
-            "yt-dlp",
-            "--format",
-            complex_format,
-            "--output",
-            str(out_path),
-            "--quiet",
-            "--no-warnings",
-            "--no-playlist",
-            "--force-ipv4",
-        ]
-        if ytdlp.cookies_path:
-            cmd.extend(["--cookies", ytdlp.cookies_path])
-        cmd.append(page_url)
+        cmd = build_yt_dlp_command(
+            page_url=page_url,
+            format_id=format_id,
+            output=str(out_path),
+            cookies_path=ytdlp.cookies_path,
+        )
 
         try:
             logger.info(f"[BOT] Downloading to file: {' '.join(cmd)}")

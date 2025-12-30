@@ -87,7 +87,6 @@ class YtDlpService:
         is_tiktok = "tiktok.com" in url
 
         for f in raw_formats:
-            # TikTok: иногда без кодеков, но валидные
             if f.get("vcodec") == "none" and not is_tiktok:
                 continue
             
@@ -112,17 +111,13 @@ class YtDlpService:
                 elif is_tiktok:
                     height = 720
 
-            # --- Логика определения размера ---
-            fs = f.get("filesize") # Точный размер
+            fs = f.get("filesize")
             if not fs:
-                fs = f.get("filesize_approx") # Примерный размер
+                fs = f.get("filesize_approx")
             
-            # Если размера нет, пробуем рассчитать по битрейту (tbr)
-            # tbr = total bit rate (kbit/s)
             if not fs and f.get("tbr") and duration_sec:
                 tbr = f.get("tbr")
                 fs = int((tbr * 1024 / 8) * duration_sec)
-            # ----------------------------------
             
             label_parts = []
             
@@ -139,7 +134,6 @@ class YtDlpService:
                 else:
                     label_parts.append(f"({mb:.1f} MB)")
             else:
-                # Если совсем никак не узнать размер
                 if "m3u8" in protocol:
                      label_parts.append("(~HLS)")
                 else:
@@ -185,7 +179,6 @@ class YtDlpService:
         return title, final_formats, audio, duration_str
 
     def get_direct_url(self, page_url: str, format_id: str) -> Tuple[str, Dict[str, str]]:
-        # Метод больше не используется в новой логике, но оставим для совместимости
         opts = self._base_opts()
         opts["format"] = format_id
         with yt_dlp.YoutubeDL(opts) as ydl:

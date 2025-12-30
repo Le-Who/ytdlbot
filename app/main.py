@@ -108,7 +108,7 @@ async def download(token: str):
             "--no-playlist",
             "--force-ipv4",
             # Исправление языка аудио: Английский > Русский > Оригинал
-            "--format-sort", "lang:orig",
+            "--format-sort", "lang:en,lang:ru,lang:orig",
         ]
         
         if ytdlp.cookies_path:
@@ -260,7 +260,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "--quiet", "--no-warnings", "--no-playlist",
             "--force-ipv4",
             # Исправление языка аудио и тут
-            "--format-sort", "lang:orig",
+            "--format-sort", "lang:en,lang:ru,lang:orig",
         ]
         if ytdlp.cookies_path:
             cmd.extend(["--cookies", ytdlp.cookies_path])

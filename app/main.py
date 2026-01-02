@@ -1,14 +1,15 @@
 import os
 import re
 import uuid
+import time
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Dict
 from urllib.parse import quote
 
 from cachetools import TTLCache
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -27,54 +28,56 @@ from .constants import CHUNK_SIZE
 
 load_dotenv()
 
+# --- КОНФИГУРАЦИЯ ---
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip() # Если есть - используем вебхук
+
 LINK_TTL_MINUTES = int(os.getenv("LINK_TTL_MINUTES", "30"))
 ENABLE_TELEGRAM_UPLOAD = os.getenv("ENABLE_TELEGRAM_UPLOAD", "0").strip() == "1"
 MAX_TG_UPLOAD_MB = int(os.getenv("MAX_TG_UPLOAD_MB", "45"))
 MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "2"))
 
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN is required")
+if not BOT_TOKEN: raise RuntimeError("BOT_TOKEN is required")
+if not BASE_URL: BASE_URL = "http://localhost:8000"
 
-if not BASE_URL:
-    BASE_URL = "http://localhost:8000"
-
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("app")
 
+# --- ИНИЦИАЛИЗАЦИЯ ---
 api = FastAPI()
 ytdlp = YtDlpService()
 tasks_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
+# Кэши
 link_cache: TTLCache = TTLCache(maxsize=2000, ttl=LINK_TTL_MINUTES * 60)
+info_cache: TTLCache = TTLCache(maxsize=1000, ttl=600) # Кэш форматов на 10 минут
+
+# Rate Limiter (простой in-memory)
+user_rates: TTLCache = TTLCache(maxsize=1000, ttl=60) # Сброс каждую минуту
 
 URL_RE = re.compile(r"^https?://", re.I)
 
-
 def is_supported_url(text: str) -> bool:
-    if not URL_RE.search(text or ""):
-        return False
-    t = text.lower()
-    return any(p in t for p in ["youtube.com", "youtu.be", "rutube.ru", "vk.com", "vkvideo.ru", "tiktok.com"])
+    if not URL_RE.search(text or ""): return False
+    return any(p in text.lower() for p in ["youtube.com", "youtu.be", "rutube.ru", "vk.com", "vkvideo.ru", "tiktok.com"])
 
+def check_rate_limit(user_id: int, limit: int = 5) -> bool:
+    """Проверяет лимит запросов пользователя в минуту"""
+    current = user_rates.get(user_id, 0)
+    if current >= limit:
+        return False
+    user_rates[user_id] = current + 1
+    return True
 
 def build_yt_dlp_command(
-    page_url: str,
-    format_id: str,
-    height: Optional[int],
-    output: str,
-    cookies_path: Optional[str] = None,
-    max_filesize: Optional[int] = None
+    page_url: str, format_id: str, height: Optional[int], output: str,
+    cookies_path: Optional[str] = None, max_filesize: Optional[int] = None,
+    use_aria2: bool = False
 ) -> list:
-    """
-    Строит команду yt-dlp.
-    Поддерживает стриминг, выбор качества и ограничение размера файла.
-    """
-    # 1. Селектор видео (по высоте или ID)
+    """Строит команду yt-dlp с поддержкой aria2c"""
+    
+    # 1. Селектор видео
     if height:
         video_sel = f"bestvideo[height={height}]"
         prog_sel = f"best[height={height}]"
@@ -82,118 +85,84 @@ def build_yt_dlp_command(
          video_sel = format_id
          prog_sel = f"best"
     else:
-        # Сложный формат от пользователя (или только аудио)
-        cmd = [
-            "yt-dlp", "--format", format_id, "--output", output,
-            "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4"
-        ]
+        # Аудио/Raw
+        cmd = ["yt-dlp", "--format", format_id, "--output", output, "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4"]
         if cookies_path: cmd.extend(["--cookies", cookies_path])
         if max_filesize: cmd.extend(["--max-filesize", f"{max_filesize}M"])
         cmd.append(page_url)
         return cmd
 
-    # 2. Селектор аудио (Приоритет: Original -> English -> OrigTag -> Any)
-    audio_sel = (
-        "bestaudio[format_note*=original]/"
-        "bestaudio[language^=en]/"
-        "bestaudio[language^=orig]/"
-        "bestaudio"
-    )
-    
+    # 2. Селектор аудио (Original -> English -> OrigTag -> Any)
+    audio_sel = "bestaudio[format_note*=original]/bestaudio[language^=en]/bestaudio[language^=orig]/bestaudio"
     final_fmt = f"{video_sel}+({audio_sel})/{prog_sel}/best"
 
     cmd = [
-        "yt-dlp",
-        "--format", final_fmt,
-        "--output", output,
-        "--quiet",
-        "--no-warnings",
-        "--no-playlist",
-        "--force-ipv4",
-        # Для стриминга MP4 в pipe
+        "yt-dlp", "--format", final_fmt, "--output", output,
+        "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4",
+        # Для прогресс-бара нам нужен вывод в stdout/stderr
+        "--progress", "--newline", 
         "--postprocessor-args", "Merger+ffmpeg:-movflags frag_keyframe+empty_moov"
     ]
     
-    if cookies_path:
-        cmd.extend(["--cookies", cookies_path])
-        
-    if max_filesize:
-        cmd.extend(["--max-filesize", f"{max_filesize}M"])
+    # Если стримим в pipe ("-"), то aria2c использовать нельзя, и прогресс тоже мешает
+    if output == "-":
+        # Убираем --progress для чистого стрима
+        cmd = [c for c in cmd if c not in ["--progress", "--newline"]]
+    elif use_aria2 and ytdlp.has_aria2:
+        # Ускорение для скачивания на диск
+        cmd.extend(["--external-downloader", "aria2c", "--external-downloader-args", "-x 8 -k 1M"])
+    
+    if cookies_path: cmd.extend(["--cookies", cookies_path])
+    if max_filesize: cmd.extend(["--max-filesize", f"{max_filesize}M"])
     
     cmd.append(page_url)
-    
     return cmd
 
+# --- API ENDPOINTS ---
 
 @api.get("/health")
-async def health():
-    return {"ok": True}
-
+async def health(): return {"ok": True}
 
 @api.get("/favicon.ico")
-async def favicon():
-    raise HTTPException(status_code=404, detail="No favicon")
-
+async def favicon(): raise HTTPException(404)
 
 @api.get("/dl/{token}")
 async def download(token: str):
-    logger.info(f"[DOWNLOAD] Token request: {token}")
-
+    logger.info(f"[DOWNLOAD] Token: {token}")
     payload = link_cache.get(token)
-    if not payload:
-        logger.warning(f"[DOWNLOAD] Token expired or invalid: {token}")
-        raise HTTPException(status_code=404, detail="Link expired or not found")
-
-    page_url = payload["page_url"]
-    format_id = payload["format_id"]
-    height = payload.get("height")
-    title = payload.get("title") or "video"
-
-    encoded_filename = quote(title)
+    if not payload: raise HTTPException(404, "Link expired")
     
-    logger.info(f"[DOWNLOAD] URL: {page_url}")
-    logger.info(f"[DOWNLOAD] Height: {height} (Format: {format_id})")
+    encoded_filename = quote(payload.get("title") or "video")
 
     async def stream_video_subprocess():
         cmd = build_yt_dlp_command(
-            page_url=page_url,
-            format_id=format_id,
-            height=height,
-            output="-", # Вывод в stdout
-            cookies_path=ytdlp.cookies_path,
+            payload["page_url"], payload["format_id"], payload.get("height"),
+            output="-", cookies_path=ytdlp.cookies_path
+            # Aria2c не работает с pipe выходом
+        )
+        logger.info(f"[STREAM] {' '.join(cmd)}")
+        
+        proc = await asyncio.create_subprocess_exec(
+            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         
-        logger.info(f"[DOWNLOAD] CMD: {' '.join(cmd)}")
-
-        proc = None
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
             while True:
-                # Читаем с таймаутом, чтобы не зависнуть
                 try:
-                    chunk = await asyncio.wait_for(proc.stdout.read(CHUNK_SIZE), timeout=60.0)
+                    chunk = await asyncio.wait_for(proc.stdout.read(CHUNK_SIZE), timeout=45.0)
+                    if not chunk: break
+                    yield chunk
                 except asyncio.TimeoutError:
-                    logger.error("[DOWNLOAD] Read timeout")
+                    logger.error("[STREAM] Timeout")
                     break
-                    
-                if not chunk:
-                    break
-                yield chunk
-
+            
             await proc.wait()
-
             if proc.returncode != 0:
-                err_bytes = await proc.stderr.read()
-                err_text = err_bytes.decode(errors="ignore")
-                logger.error(f"[DOWNLOAD] yt-dlp error: {err_text}")
-
+                err = await proc.stderr.read()
+                logger.error(f"[STREAM] Error: {err.decode(errors='ignore')}")
+                
         except Exception as e:
-            logger.error(f"[DOWNLOAD] Streaming error: {e}", exc_info=True)
+            logger.error(f"[STREAM] Ex: {e}")
             if proc:
                 try: proc.kill()
                 except: pass
@@ -201,235 +170,203 @@ async def download(token: str):
     return StreamingResponse(
         stream_video_subprocess(),
         media_type="application/octet-stream",
-        headers={
-            "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}.mp4"
-        }
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}.mp4"}
     )
 
+# --- WEBHOOK ENDPOINT ---
+if WEBHOOK_URL:
+    @api.post("/webhook")
+    async def telegram_webhook(request: Request):
+        """Обработка вебхука от Telegram"""
+        if bot_app:
+            try:
+                update = Update.de_json(await request.json(), bot_app.bot)
+                await bot_app.process_update(update)
+            except Exception as e:
+                logger.error(f"Webhook update error: {e}")
+        return {"ok": True}
+
+# --- TELEGRAM HANDLERS ---
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Отправьте ссылку на видео (YouTube / TikTok / VK / RuTube).\n"
-        "Бот предложит качество и создаст ссылку для скачивания."
-    )
-
+    await update.message.reply_text("👋 Пришлите ссылку на видео (YouTube/TikTok/VK/RuTube).")
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
     text = (update.message.text or "").strip()
+    
     if not is_supported_url(text):
-        await update.message.reply_text(
-            "❌ Пришлите ссылку на YouTube, TikTok, VK или RuTube."
-        )
+        await update.message.reply_text("❌ Ссылка не поддерживается.")
         return
 
-    msg = await update.message.reply_text("⏳ Анализирую видео...")
-    try:
-        logger.info(f"[BOT] Analyzing: {text}")
-        # Выполняем в отдельном потоке, чтобы не блокировать event loop
-        title, formats, audio, duration = await asyncio.to_thread(
-            ytdlp.list_formats, text
-        )
-        logger.info(f"[BOT] Success: {title}")
-    except Exception as e:
-        logger.error(f"[BOT] Parse error: {e}", exc_info=True)
-        await msg.edit_text(f"❌ Ошибка парсинга: {str(e)[:120]}")
+    # Rate Limit: 10 запросов в минуту
+    if not check_rate_limit(user.id, limit=10):
+        await update.message.reply_text("⚠️ Слишком часто. Подождите минуту.")
         return
 
-    # Сохраняем мапу высот
+    msg = await update.message.reply_text("⏳ Анализирую...")
+
+    # 1. Проверяем КЭШ
+    cached = info_cache.get(text)
+    if cached:
+        logger.info(f"[CACHE] Hit: {text}")
+        title, formats, audio, duration = cached
+    else:
+        try:
+            # Выполняем парсинг
+            title, formats, audio, duration = await asyncio.to_thread(ytdlp.list_formats, text)
+            info_cache[text] = (title, formats, audio, duration) # Сохраняем в кэш
+        except Exception as e:
+            logger.error(f"Parse error: {e}")
+            await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}")
+            return
+
+    # Сохраняем контекст
     format_map = {f.format_id: f.height for f in formats}
     format_map[audio.format_id] = None
     
-    context.user_data["page_url"] = text
-    context.user_data["title"] = title
-    context.user_data["format_map"] = format_map
+    context.user_data.update({
+        "page_url": text, "title": title, "format_map": format_map
+    })
 
-    buttons = []
-    for f in formats[:6]:
-        buttons.append(
-            [InlineKeyboardButton(f.label, callback_data=f"pick|{f.format_id}")]
-        )
-
-    buttons.append(
-        [InlineKeyboardButton(audio.label, callback_data=f"pick|{audio.format_id}")]
-    )
+    # Клавиатура
+    buttons = [[InlineKeyboardButton(f.label, callback_data=f"pick|{f.format_id}")] for f in formats[:6]]
+    buttons.append([InlineKeyboardButton(audio.label, callback_data=f"pick|{audio.format_id}")])
 
     await msg.edit_text(
-        f"📹 <b>{title}</b>\n⏱ {duration}\n\nВыберите качество:",
+        f"📹 <b>{title}</b>\n⏱ {duration}",
         reply_markup=InlineKeyboardMarkup(buttons),
-        parse_mode="HTML",
+        parse_mode="HTML"
     )
-
 
 async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-
-    try:
-        _, format_id = q.data.split("|", 1)
-    except Exception:
-        await q.edit_message_text("Ошибка выбора.")
-        return
-
-    page_url = context.user_data.get("page_url")
-    title = context.user_data.get("title", "video")
     
-    format_map = context.user_data.get("format_map", {})
-    height = format_map.get(format_id)
+    try: _, format_id = q.data.split("|", 1)
+    except: return
 
-    if not page_url:
-        await q.edit_message_text("⚠️ Сессия устарела. Отправьте ссылку заново.")
+    data = context.user_data
+    if not data.get("page_url"):
+        await q.edit_message_text("⚠️ Данные устарели. Пришлите ссылку снова.")
         return
 
     token = uuid.uuid4().hex
     link_cache[token] = {
-        "page_url": page_url, 
-        "format_id": format_id, 
-        "height": height, 
-        "title": title
+        "page_url": data["page_url"],
+        "format_id": format_id,
+        "height": data["format_map"].get(format_id),
+        "title": data["title"]
     }
     
     dl_link = f"{BASE_URL}/dl/{token}"
-
-    logger.info(f"[BOT] Link generated: {dl_link} (ID={format_id}, H={height})")
-
+    
     kb = [[InlineKeyboardButton("📥 Скачать (Ссылка)", url=dl_link)]]
     if ENABLE_TELEGRAM_UPLOAD:
-        kb.append(
-            [
-                InlineKeyboardButton(
-                    "📤 Отправить файл в TG", callback_data=f"send|{token}"
-                )
-            ]
-        )
+        kb.append([InlineKeyboardButton("📤 Отправить файл в TG", callback_data=f"send|{token}")])
 
     await q.edit_message_text(
-        f"✅ Ссылка готова (живет {LINK_TTL_MINUTES} мин):\n\n{dl_link}",
+        f"✅ Ссылка готова ({LINK_TTL_MINUTES} мин):\n\n{dl_link}",
         reply_markup=InlineKeyboardMarkup(kb),
-        disable_web_page_preview=True,
+        disable_web_page_preview=True
     )
 
-
 async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """
-    Скачивает файл локально и отправляет в TG.
-    Имеет защиту от переполнения диска через --max-filesize в yt-dlp.
-    """
     q = update.callback_query
     await q.answer()
+    user_id = q.from_user.id
 
-    try:
-        _, token = q.data.split("|", 1)
-    except Exception:
-        await q.edit_message_text("Ошибка.")
+    # Rate Limit для скачивания: 3 раза в минуту
+    if not check_rate_limit(user_id, limit=3):
+        await q.edit_message_text("⚠️ Слишком часто скачиваете. Подождите.")
         return
+
+    try: _, token = q.data.split("|", 1)
+    except: return
 
     payload = link_cache.get(token)
     if not payload:
         await q.edit_message_text("⚠️ Ссылка устарела.")
         return
 
-    # Проверка загруженности сервера
     if tasks_sem.locked():
-        await q.edit_message_text("⚠️ Сервер занят (слишком много загрузок). Попробуйте позже или скачайте по ссылке.")
+        await q.edit_message_text("⚠️ Очередь переполнена. Скачайте по ссылке.")
         return
 
-    page_url = payload["page_url"]
-    format_id = payload["format_id"]
-    height = payload.get("height")
-    title = payload.get("title") or "video"
-
-    logger.info(f"[BOT] TG send requested. ID={format_id}, H={height}")
-
     async with tasks_sem:
-        await q.edit_message_text("⏳ Скачиваю файл на сервер...")
-
+        await q.edit_message_text("⏳ Начинаю загрузку...")
         tmp_path = f"/tmp/{uuid.uuid4().hex}.mp4"
 
-        # ВАЖНО: Используем --max-filesize 50M
+        # Строим команду с Aria2c и MaxFilesize
         cmd = build_yt_dlp_command(
-            page_url=page_url,
-            format_id=format_id,
-            height=height,
-            output=tmp_path,
-            cookies_path=ytdlp.cookies_path,
-            max_filesize=50 # Ограничение 50 МБ на уровне yt-dlp
+            payload["page_url"], payload["format_id"], payload.get("height"),
+            output=tmp_path, cookies_path=ytdlp.cookies_path,
+            max_filesize=50, use_aria2=True # Используем aria2c для скорости!
         )
 
         try:
-            logger.info(f"[BOT] Downloading to file: {' '.join(cmd)}")
+            logger.info(f"[DL-TG] {' '.join(cmd)}")
             proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT # Объединяем stdout/stderr для парсинга
             )
             
-            # Ждем с таймаутом (например 10 минут)
-            try:
-                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
-            except asyncio.TimeoutError:
-                proc.kill()
-                await q.edit_message_text("❌ Тайм-аут скачивания.")
-                return
+            # --- ЧТЕНИЕ ПРОГРЕССА ---
+            last_update = 0
+            while True:
+                try:
+                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=300.0)
+                except asyncio.TimeoutError:
+                    break
+                
+                if not line: break
+                
+                line_str = line.decode('utf-8', errors='ignore').strip()
+                
+                # Парсим процент "[download]  45.0% of..."
+                if "[download]" in line_str and "%" in line_str:
+                    now = time.time()
+                    if now - last_update > 3.0: # Обновляем раз в 3 сек
+                        match = re.search(r"(\d+\.\d+)%", line_str)
+                        if match:
+                            try:
+                                await q.edit_message_text(f"⏳ Скачиваю: {match.group(1)}%")
+                                last_update = now
+                            except Exception: pass # Игнорим ошибки редактирования (flood wait)
+            
+            await proc.wait()
 
             if proc.returncode != 0:
-                err_msg = stderr.decode(errors='ignore')
-                # Проверяем, не превышен ли размер файла
-                if "File is larger than max-filesize" in err_msg or "Abort" in err_msg:
-                    await q.edit_message_text(
-                        "⚠️ Файл превышает лимит Telegram (50 MB).\n"
-                        "📥 Скачайте его по прямой ссылке выше 👆"
-                    )
-                else:
-                    logger.error(f"[BOT] Download failed: {err_msg}")
-                    await q.edit_message_text("❌ Ошибка при скачивании файла.")
+                # Ошибки часто связаны с размером файла
+                await q.edit_message_text("⚠️ Ошибка или файл > 50 МБ. Используйте ссылку.")
                 return
 
-            # Дополнительная проверка размера файла
             if os.path.getsize(tmp_path) > 49.5 * 1024 * 1024:
                  os.unlink(tmp_path)
-                 await q.edit_message_text(
-                    "⚠️ Файл превышает лимит Telegram (50 MB).\n"
-                    "📥 Скачайте его по прямой ссылке выше 👆"
-                )
+                 await q.edit_message_text("⚠️ Файл > 50 МБ. Используйте ссылку.")
                  return
 
-            await q.edit_message_text("📤 Отправляю в Telegram...")
-
+            await q.edit_message_text("📤 Загружаю в Telegram...")
             with open(tmp_path, "rb") as f:
                 await context.bot.send_document(
-                    chat_id=q.message.chat_id,
-                    document=f,
-                    filename=f"{title}.mp4",
+                    chat_id=q.message.chat_id, document=f,
+                    filename=f"{payload.get('title', 'video')}.mp4",
                     caption="✅ Готово!",
-                    read_timeout=120,
-                    write_timeout=120,
-                    connect_timeout=60,
+                    read_timeout=60, write_timeout=60, connect_timeout=60
                 )
-
-            await q.edit_message_text("✅ Документ отправлен.")
+            await q.edit_message_text("✅ Отправлено.")
 
         except NetworkError as e:
-            # Обработка ошибки 413 (если файл все-таки проскочил проверки)
-            if "Request Entity Too Large" in str(e) or "413" in str(e):
-                logger.warning(f"[BOT] File too large for TG API: {e}")
-                await q.edit_message_text(
-                    "⚠️ Файл оказался слишком большим для серверов Telegram.\n"
-                    "📥 Используйте прямую ссылку для скачивания."
-                )
-            else:
-                logger.error(f"[BOT] Network error: {e}", exc_info=True)
-                await q.edit_message_text(f"❌ Ошибка сети при отправке.")
-
+            if "413" in str(e): await q.edit_message_text("⚠️ Файл > 50 MB. Скачайте по ссылке.")
+            else: await q.edit_message_text("❌ Ошибка сети TG.")
         except Exception as e:
-            logger.error(f"[BOT] Upload error: {e}", exc_info=True)
-            await q.edit_message_text(f"❌ Ошибка отправки: {str(e)[:100]}")
-            
+            logger.error(f"Upload error: {e}")
+            await q.edit_message_text("❌ Ошибка.")
         finally:
             if os.path.exists(tmp_path):
                 try: os.unlink(tmp_path)
                 except: pass
 
-
+# --- APP BUILDER ---
 def build_bot_app() -> Application:
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
@@ -438,27 +375,29 @@ def build_bot_app() -> Application:
     app.add_handler(CallbackQueryHandler(on_send, pattern=r"^send\|"))
     return app
 
-
 bot_app: Optional[Application] = None
-
 
 @api.on_event("startup")
 async def _startup():
     global bot_app
-    logger.info("[STARTUP] Initializing bot...")
     bot_app = build_bot_app()
     await bot_app.initialize()
     await bot_app.start()
-    await bot_app.updater.start_polling(drop_pending_updates=True)
-    logger.info("[STARTUP] Bot polling started")
-
+    
+    if WEBHOOK_URL:
+        # Режим Webhook
+        await bot_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+        logger.info(f"Webhook set to {WEBHOOK_URL}")
+    else:
+        # Режим Polling
+        await bot_app.updater.start_polling(drop_pending_updates=True)
+        logger.info("Polling started")
 
 @api.on_event("shutdown")
 async def _shutdown():
     global bot_app
     if bot_app:
-        logger.info("[SHUTDOWN] Stopping bot...")
-        await bot_app.updater.stop()
+        if WEBHOOK_URL: await bot_app.bot.delete_webhook()
+        elif bot_app.updater.running: await bot_app.updater.stop()
         await bot_app.stop()
         await bot_app.shutdown()
-        bot_app = None

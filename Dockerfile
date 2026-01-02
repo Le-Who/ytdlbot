@@ -2,16 +2,28 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# 1. Устанавливаем системные зависимости
+# ffmpeg - для склеивания видео+аудио
+# aria2 - для ускорения загрузки (многопоточность)
+# ca-certificates - для HTTPS
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg ca-certificates \
+    ffmpeg \
+    aria2 \
+    ca-certificates \
+    curl \
   && rm -rf /var/lib/apt/lists/*
 
+# 2. Устанавливаем Python-зависимости
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 3. Копируем код приложения
 COPY app ./app
 
+# 4. Настройка окружения
 ENV PYTHONUNBUFFERED=1
-ENV PORT=8000
+# Порт по умолчанию (Northflank/Heroku обычно переопределяют его через ENV)
+ENV PORT=8000 
 
-CMD ["bash", "-lc", "uvicorn app.main:api --host 0.0.0.0 --port ${PORT}"]
+# 5. Запуск через sh -c для корректной подстановки переменной окружения PORT
+CMD ["sh", "-c", "uvicorn app.main:api --host 0.0.0.0 --port ${PORT}"]

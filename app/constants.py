@@ -1,18 +1,17 @@
 """Константы приложения"""
 
 # Настройки скачивания
-CHUNK_SIZE = 64 * 1024  # 64 KB
+CHUNK_SIZE = 1024 * 1024  # 1 MB (Оптимизация: меньше вызовов read/write)
+
 MAX_FORMATS_DISPLAY = 6
 DOWNLOAD_TIMEOUT_SECONDS = 900  # 15 минут
 UPLOAD_TIMEOUT_SECONDS = 600    # 10 минут
 
 # Поддерживаемые платформы
 SUPPORTED_PLATFORMS = {
-    "youtube.com",
-    "youtu.be",
+    "youtube.com", "youtu.be",
     "rutube.ru",
-    "vk.com",
-    "vkvideo.ru",
+    "vk.com", "vkvideo.ru",
     "tiktok.com",
 }
 

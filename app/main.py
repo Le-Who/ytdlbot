@@ -23,6 +23,7 @@ from telegram.ext import (
 from telegram.error import NetworkError
 
 from .ytdlp_service import YtDlpService
+from .constants import CHUNK_SIZE
 
 load_dotenv()
 
@@ -52,22 +53,13 @@ tasks_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 link_cache: TTLCache = TTLCache(maxsize=2000, ttl=LINK_TTL_MINUTES * 60)
 
 URL_RE = re.compile(r"^https?://", re.I)
-CHUNK_SIZE = 64 * 1024
 
 
 def is_supported_url(text: str) -> bool:
     if not URL_RE.search(text or ""):
         return False
-
     t = text.lower()
-    return (
-        ("youtube.com" in t)
-        or ("youtu.be" in t)
-        or ("rutube.ru" in t)
-        or ("vk.com" in t)
-        or ("vkvideo.ru" in t)
-        or ("tiktok.com" in t)
-    )
+    return any(p in t for p in ["youtube.com", "youtu.be", "rutube.ru", "vk.com", "vkvideo.ru", "tiktok.com"])
 
 
 def build_yt_dlp_command(
@@ -76,16 +68,13 @@ def build_yt_dlp_command(
     height: Optional[int],
     output: str,
     cookies_path: Optional[str] = None,
+    max_filesize: Optional[int] = None
 ) -> list:
     """
-    Строит команду yt-dlp для стриминга.
-    
-    СТРАТЕГИЯ:
-    1. Видео выбираем жестко по высоте: bestvideo[height=X]
-    2. Аудио выбираем с приоритетом оригинальной дорожки через format_note
+    Строит команду yt-dlp.
+    Поддерживает стриминг, выбор качества и ограничение размера файла.
     """
-    
-    # Селектор видео (по высоте)
+    # 1. Селектор видео (по высоте или ID)
     if height:
         video_sel = f"bestvideo[height={height}]"
         prog_sel = f"best[height={height}]"
@@ -93,17 +82,17 @@ def build_yt_dlp_command(
          video_sel = format_id
          prog_sel = f"best"
     else:
-        # Сложный формат от пользователя
+        # Сложный формат от пользователя (или только аудио)
         cmd = [
             "yt-dlp", "--format", format_id, "--output", output,
             "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4"
         ]
-        if cookies_path: 
-            cmd.extend(["--cookies", cookies_path])
+        if cookies_path: cmd.extend(["--cookies", cookies_path])
+        if max_filesize: cmd.extend(["--max-filesize", f"{max_filesize}M"])
         cmd.append(page_url)
         return cmd
 
-    # Селектор аудио (Original -> English -> OrigTag -> Any)
+    # 2. Селектор аудио (Приоритет: Original -> English -> OrigTag -> Any)
     audio_sel = (
         "bestaudio[format_note*=original]/"
         "bestaudio[language^=en]/"
@@ -127,6 +116,9 @@ def build_yt_dlp_command(
     
     if cookies_path:
         cmd.extend(["--cookies", cookies_path])
+        
+    if max_filesize:
+        cmd.extend(["--max-filesize", f"{max_filesize}M"])
     
     cmd.append(page_url)
     
@@ -167,7 +159,7 @@ async def download(token: str):
             page_url=page_url,
             format_id=format_id,
             height=height,
-            output="-", 
+            output="-", # Вывод в stdout
             cookies_path=ytdlp.cookies_path,
         )
         
@@ -182,7 +174,13 @@ async def download(token: str):
             )
 
             while True:
-                chunk = await proc.stdout.read(CHUNK_SIZE)
+                # Читаем с таймаутом, чтобы не зависнуть
+                try:
+                    chunk = await asyncio.wait_for(proc.stdout.read(CHUNK_SIZE), timeout=60.0)
+                except asyncio.TimeoutError:
+                    logger.error("[DOWNLOAD] Read timeout")
+                    break
+                    
                 if not chunk:
                     break
                 yield chunk
@@ -197,10 +195,8 @@ async def download(token: str):
         except Exception as e:
             logger.error(f"[DOWNLOAD] Streaming error: {e}", exc_info=True)
             if proc:
-                try: 
-                    proc.kill()
-                except: 
-                    pass
+                try: proc.kill()
+                except: pass
 
     return StreamingResponse(
         stream_video_subprocess(),
@@ -229,6 +225,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("⏳ Анализирую видео...")
     try:
         logger.info(f"[BOT] Analyzing: {text}")
+        # Выполняем в отдельном потоке, чтобы не блокировать event loop
         title, formats, audio, duration = await asyncio.to_thread(
             ytdlp.list_formats, text
         )
@@ -238,6 +235,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.edit_text(f"❌ Ошибка парсинга: {str(e)[:120]}")
         return
 
+    # Сохраняем мапу высот
     format_map = {f.format_id: f.height for f in formats}
     format_map[audio.format_id] = None
     
@@ -313,8 +311,8 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Для отправки в Telegram нужно сохранить файл на диск (временно).
-    Ограничение Telegram Bot API: 50 МБ максимум.
+    Скачивает файл локально и отправляет в TG.
+    Имеет защиту от переполнения диска через --max-filesize в yt-dlp.
     """
     q = update.callback_query
     await q.answer()
@@ -330,6 +328,11 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("⚠️ Ссылка устарела.")
         return
 
+    # Проверка загруженности сервера
+    if tasks_sem.locked():
+        await q.edit_message_text("⚠️ Сервер занят (слишком много загрузок). Попробуйте позже или скачайте по ссылке.")
+        return
+
     page_url = payload["page_url"]
     format_id = payload["format_id"]
     height = payload.get("height")
@@ -342,12 +345,14 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         tmp_path = f"/tmp/{uuid.uuid4().hex}.mp4"
 
+        # ВАЖНО: Используем --max-filesize 50M
         cmd = build_yt_dlp_command(
             page_url=page_url,
             format_id=format_id,
             height=height,
             output=tmp_path,
             cookies_path=ytdlp.cookies_path,
+            max_filesize=50 # Ограничение 50 МБ на уровне yt-dlp
         )
 
         try:
@@ -357,24 +362,36 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            _, stderr = await proc.communicate()
+            
+            # Ждем с таймаутом (например 10 минут)
+            try:
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await q.edit_message_text("❌ Тайм-аут скачивания.")
+                return
 
             if proc.returncode != 0:
-                logger.error(f"[BOT] Download failed: {stderr.decode(errors='ignore')}")
-                await q.edit_message_text("❌ Ошибка при скачивании файла.")
+                err_msg = stderr.decode(errors='ignore')
+                # Проверяем, не превышен ли размер файла
+                if "File is larger than max-filesize" in err_msg or "Abort" in err_msg:
+                    await q.edit_message_text(
+                        "⚠️ Файл превышает лимит Telegram (50 MB).\n"
+                        "📥 Скачайте его по прямой ссылке выше 👆"
+                    )
+                else:
+                    logger.error(f"[BOT] Download failed: {err_msg}")
+                    await q.edit_message_text("❌ Ошибка при скачивании файла.")
                 return
 
-            size = os.path.getsize(tmp_path)
-            
-            # Строгая проверка: лимит Telegram 50 МБ, оставляем запас
-            size_mb = size / (1024 * 1024)
-            if size > 49 * 1024 * 1024:
-                os.unlink(tmp_path)
-                await q.edit_message_text(
-                    f"⚠️ Файл ({size_mb:.1f} MB) превышает лимит Telegram Bot API (50 MB).\n\n"
-                    f"📥 Пожалуйста, скачайте его по прямой ссылке выше 👆"
+            # Дополнительная проверка размера файла
+            if os.path.getsize(tmp_path) > 49.5 * 1024 * 1024:
+                 os.unlink(tmp_path)
+                 await q.edit_message_text(
+                    "⚠️ Файл превышает лимит Telegram (50 MB).\n"
+                    "📥 Скачайте его по прямой ссылке выше 👆"
                 )
-                return
+                 return
 
             await q.edit_message_text("📤 Отправляю в Telegram...")
 
@@ -392,28 +409,25 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("✅ Документ отправлен.")
 
         except NetworkError as e:
-            # Обработка ошибки 413 (файл слишком большой для Telegram API)
+            # Обработка ошибки 413 (если файл все-таки проскочил проверки)
             if "Request Entity Too Large" in str(e) or "413" in str(e):
                 logger.warning(f"[BOT] File too large for TG API: {e}")
                 await q.edit_message_text(
-                    "⚠️ Файл оказался слишком большим для серверов Telegram (>50 MB).\n\n"
+                    "⚠️ Файл оказался слишком большим для серверов Telegram.\n"
                     "📥 Используйте прямую ссылку для скачивания."
                 )
             else:
                 logger.error(f"[BOT] Network error: {e}", exc_info=True)
-                await q.edit_message_text(f"❌ Ошибка сети при отправке в Telegram.")
+                await q.edit_message_text(f"❌ Ошибка сети при отправке.")
 
         except Exception as e:
             logger.error(f"[BOT] Upload error: {e}", exc_info=True)
             await q.edit_message_text(f"❌ Ошибка отправки: {str(e)[:100]}")
             
         finally:
-            # Всегда удаляем временный файл
             if os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                except Exception as cleanup_err:
-                    logger.error(f"[BOT] Cleanup error: {cleanup_err}")
+                try: os.unlink(tmp_path)
+                except: pass
 
 
 def build_bot_app() -> Application:

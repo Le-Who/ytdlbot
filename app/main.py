@@ -20,6 +20,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
 )
+from telegram.error import NetworkError
 
 from .ytdlp_service import YtDlpService
 
@@ -73,14 +74,18 @@ def build_yt_dlp_command(
     page_url: str,
     format_id: str,
     height: Optional[int],
-    output: str, # Здесь будет "-"
+    output: str,
     cookies_path: Optional[str] = None,
 ) -> list:
     """
     Строит команду yt-dlp для стриминга.
+    
+    СТРАТЕГИЯ:
+    1. Видео выбираем жестко по высоте: bestvideo[height=X]
+    2. Аудио выбираем с приоритетом оригинальной дорожки через format_note
     """
     
-    # 1. Селектор видео (по высоте)
+    # Селектор видео (по высоте)
     if height:
         video_sel = f"bestvideo[height={height}]"
         prog_sel = f"best[height={height}]"
@@ -93,11 +98,12 @@ def build_yt_dlp_command(
             "yt-dlp", "--format", format_id, "--output", output,
             "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4"
         ]
-        if cookies_path: cmd.extend(["--cookies", cookies_path])
+        if cookies_path: 
+            cmd.extend(["--cookies", cookies_path])
         cmd.append(page_url)
         return cmd
 
-    # 2. Селектор аудио (Original -> English -> OrigTag -> Any)
+    # Селектор аудио (Original -> English -> OrigTag -> Any)
     audio_sel = (
         "bestaudio[format_note*=original]/"
         "bestaudio[language^=en]/"
@@ -110,14 +116,12 @@ def build_yt_dlp_command(
     cmd = [
         "yt-dlp",
         "--format", final_fmt,
-        "--output", output, # Будет "-" для stdout
+        "--output", output,
         "--quiet",
         "--no-warnings",
         "--no-playlist",
         "--force-ipv4",
-        
-        # ВАЖНО ДЛЯ СТРИМИНГА MP4!
-        # Позволяет писать MP4 в pipe без ошибки muxer'а
+        # Для стриминга MP4 в pipe
         "--postprocessor-args", "Merger+ffmpeg:-movflags frag_keyframe+empty_moov"
     ]
     
@@ -159,7 +163,6 @@ async def download(token: str):
     logger.info(f"[DOWNLOAD] Height: {height} (Format: {format_id})")
 
     async def stream_video_subprocess():
-        # output="-" означает вывод в stdout (pipe)
         cmd = build_yt_dlp_command(
             page_url=page_url,
             format_id=format_id,
@@ -172,21 +175,18 @@ async def download(token: str):
 
         proc = None
         try:
-            # Запускаем процесс
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            # Читаем stdout кусками и отдаем клиенту
             while True:
                 chunk = await proc.stdout.read(CHUNK_SIZE)
                 if not chunk:
                     break
                 yield chunk
 
-            # Ждем завершения
             await proc.wait()
 
             if proc.returncode != 0:
@@ -197,12 +197,14 @@ async def download(token: str):
         except Exception as e:
             logger.error(f"[DOWNLOAD] Streaming error: {e}", exc_info=True)
             if proc:
-                try: proc.kill()
-                except: pass
+                try: 
+                    proc.kill()
+                except: 
+                    pass
 
     return StreamingResponse(
         stream_video_subprocess(),
-        media_type="application/octet-stream", # Или video/mp4, но octet-stream надежнее для скачивания
+        media_type="application/octet-stream",
         headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}.mp4"
         }
@@ -290,6 +292,8 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     dl_link = f"{BASE_URL}/dl/{token}"
 
+    logger.info(f"[BOT] Link generated: {dl_link} (ID={format_id}, H={height})")
+
     kb = [[InlineKeyboardButton("📥 Скачать (Ссылка)", url=dl_link)]]
     if ENABLE_TELEGRAM_UPLOAD:
         kb.append(
@@ -309,9 +313,8 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
-    Для отправки в Telegram нам всё равно придется сохранить файл на диск (временно),
-    так как Telegram Bot API требует файл или URL (но URL стриминг от самого себя может вызвать timeout).
-    Если места совсем мало, этот метод может падать на больших файлах.
+    Для отправки в Telegram нужно сохранить файл на диск (временно).
+    Ограничение Telegram Bot API: 50 МБ максимум.
     """
     q = update.callback_query
     await q.answer()
@@ -332,13 +335,13 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     height = payload.get("height")
     title = payload.get("title") or "video"
 
+    logger.info(f"[BOT] TG send requested. ID={format_id}, H={height}")
+
     async with tasks_sem:
         await q.edit_message_text("⏳ Скачиваю файл на сервер...")
 
-        # Используем /tmp, надеясь, что там есть хоть немного места (обычно это RAM диск)
         tmp_path = f"/tmp/{uuid.uuid4().hex}.mp4"
 
-        # Для локального сохранения флаги фрагментации не обязательны, но не повредят
         cmd = build_yt_dlp_command(
             page_url=page_url,
             format_id=format_id,
@@ -348,6 +351,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         try:
+            logger.info(f"[BOT] Downloading to file: {' '.join(cmd)}")
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -361,10 +365,14 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
 
             size = os.path.getsize(tmp_path)
-            if size > MAX_TG_UPLOAD_MB * 1024 * 1024:
+            
+            # Строгая проверка: лимит Telegram 50 МБ, оставляем запас
+            size_mb = size / (1024 * 1024)
+            if size > 49 * 1024 * 1024:
                 os.unlink(tmp_path)
                 await q.edit_message_text(
-                    f"⚠️ Файл слишком большой ({int(size/1024/1024)} MB). Используйте ссылку."
+                    f"⚠️ Файл ({size_mb:.1f} MB) превышает лимит Telegram Bot API (50 MB).\n\n"
+                    f"📥 Пожалуйста, скачайте его по прямой ссылке выше 👆"
                 )
                 return
 
@@ -383,12 +391,29 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await q.edit_message_text("✅ Документ отправлен.")
 
+        except NetworkError as e:
+            # Обработка ошибки 413 (файл слишком большой для Telegram API)
+            if "Request Entity Too Large" in str(e) or "413" in str(e):
+                logger.warning(f"[BOT] File too large for TG API: {e}")
+                await q.edit_message_text(
+                    "⚠️ Файл оказался слишком большим для серверов Telegram (>50 MB).\n\n"
+                    "📥 Используйте прямую ссылку для скачивания."
+                )
+            else:
+                logger.error(f"[BOT] Network error: {e}", exc_info=True)
+                await q.edit_message_text(f"❌ Ошибка сети при отправке в Telegram.")
+
         except Exception as e:
             logger.error(f"[BOT] Upload error: {e}", exc_info=True)
-            await q.edit_message_text(f"❌ Ошибка отправки: {str(e)[:120]}")
+            await q.edit_message_text(f"❌ Ошибка отправки: {str(e)[:100]}")
+            
         finally:
+            # Всегда удаляем временный файл
             if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
+                try:
+                    os.unlink(tmp_path)
+                except Exception as cleanup_err:
+                    logger.error(f"[BOT] Cleanup error: {cleanup_err}")
 
 
 def build_bot_app() -> Application:

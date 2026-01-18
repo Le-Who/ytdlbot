@@ -13,6 +13,7 @@ SUPPORTED_PLATFORMS = {
     "rutube.ru",
     "vk.com", "vkvideo.ru",
     "tiktok.com",
+    "pinterest.com", "pin.it",
 }
 
 # Форматы видео

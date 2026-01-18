@@ -24,7 +24,7 @@ from telegram.ext import (
 from telegram.error import NetworkError
 
 from .ytdlp_service import YtDlpService
-from .constants import CHUNK_SIZE
+from .constants import CHUNK_SIZE, SUPPORTED_PLATFORMS
 
 load_dotenv()
 
@@ -60,7 +60,8 @@ URL_RE = re.compile(r"^https?://", re.I)
 
 def is_supported_url(text: str) -> bool:
     if not URL_RE.search(text or ""): return False
-    return any(p in text.lower() for p in ["youtube.com", "youtu.be", "rutube.ru", "vk.com", "vkvideo.ru", "tiktok.com"])
+    text_lower = text.lower()
+    return any(platform in text_lower for platform in SUPPORTED_PLATFORMS)
 
 def check_rate_limit(user_id: int, limit: int = 5) -> bool:
     """Проверяет лимит запросов пользователя в минуту"""
@@ -189,7 +190,7 @@ if WEBHOOK_URL:
 # --- TELEGRAM HANDLERS ---
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Пришлите ссылку на видео (YouTube/TikTok/VK/RuTube).")
+    await update.message.reply_text("👋 Пришлите ссылку на видео (YouTube/TikTok/VK/RuTube/Pinterest).")
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user

@@ -113,9 +113,15 @@ class YtDlpService:
         return "tiktok.com" in url.lower()
     
     @staticmethod
-    def _format_duration(seconds: Optional[int]) -> str:
+    def _format_duration(seconds: Optional[float]) -> str:
+        """Форматирует длительность в формат HH:MM:SS или MM:SS
+        
+        Принимает int или float (yt-dlp может возвращать float для некоторых платформ)
+        """
         if not seconds: return "??"
-        m, s = divmod(seconds, 60)
+        # Конвертируем в int для корректного форматирования
+        total_seconds = int(seconds)
+        m, s = divmod(total_seconds, 60)
         h, m = divmod(m, 60)
         return f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
     
@@ -126,14 +132,17 @@ class YtDlpService:
             return int(match.group(1))
         return None
     
-    def _calculate_filesize(self, format_dict: Dict[str, Any], duration_sec: Optional[int]) -> Optional[int]:
+    def _calculate_filesize(self, format_dict: Dict[str, Any], duration_sec: Optional[float]) -> Optional[int]:
+        """Вычисляет размер файла, обрабатывая int и float для duration"""
         fs = format_dict.get("filesize")
-        if fs: return fs
+        if fs: return int(fs) if isinstance(fs, float) else fs
         fs = format_dict.get("filesize_approx")
-        if fs: return fs
+        if fs: return int(fs) if isinstance(fs, float) else fs
         tbr = format_dict.get("tbr")
         if tbr and duration_sec:
-            return int((tbr * self.BYTES_IN_KB / self.BITS_IN_BYTE) * duration_sec)
+            # Конвертируем duration в число для расчета
+            duration = float(duration_sec) if duration_sec else 0
+            return int((float(tbr) * self.BYTES_IN_KB / self.BITS_IN_BYTE) * duration)
         return None
     
     def _create_format_label(self, height: Optional[int], filesize: Optional[int], protocol: str, is_tiktok: bool) -> str:
@@ -156,7 +165,7 @@ class YtDlpService:
             label_parts.append("(?)")
         return " ".join(label_parts)
     
-    def _parse_format(self, format_dict: Dict[str, Any], duration_sec: Optional[int], is_tiktok: bool) -> Optional[FormatItem]:
+    def _parse_format(self, format_dict: Dict[str, Any], duration_sec: Optional[float], is_tiktok: bool) -> Optional[FormatItem]:
         if format_dict.get("vcodec") == "none" and not is_tiktok:
             return None
         ext = format_dict.get("ext")
@@ -192,8 +201,23 @@ class YtDlpService:
         return unique_formats
     
     def list_formats(self, url: str, max_items: int = 12) -> Tuple[str, List[FormatItem], FormatItem, str]:
-        info = self.extract(url)
+        """Извлекает форматы видео с обработкой ошибок для разных платформ"""
+        try:
+            info = self.extract(url)
+        except Exception as e:
+            # Специальная обработка для Pinterest и других платформ
+            error_msg = str(e).lower()
+            if "403" in error_msg or "forbidden" in error_msg:
+                raise Exception("Доступ запрещен. Возможно, контент приватный или требуется авторизация.")
+            elif "404" in error_msg or "not found" in error_msg:
+                raise Exception("Видео не найдено. Проверьте ссылку.")
+            elif "none" in error_msg or "nonetype" in error_msg:
+                raise Exception("Ошибка парсинга данных. Попробуйте позже или используйте другую ссылку.")
+            else:
+                raise Exception(f"Ошибка извлечения: {str(e)[:200]}")
+        
         title = info.get("title") or "Видео"
+        # yt-dlp может возвращать duration как int или float
         duration_sec = info.get("duration")
         duration_str = self._format_duration(duration_sec)
         

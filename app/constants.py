@@ -8,6 +8,8 @@ DOWNLOAD_TIMEOUT_SECONDS = 900  # 15 минут
 UPLOAD_TIMEOUT_SECONDS = 600    # 10 минут
 
 # Поддерживаемые платформы
+# Примечание: Pinterest поддерживается yt-dlp, но могут быть проблемы с 403/404 ошибками
+# для приватного контента или при отсутствии необходимых заголовков
 SUPPORTED_PLATFORMS = {
     "youtube.com", "youtu.be",
     "rutube.ru",

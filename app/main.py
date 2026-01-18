@@ -49,12 +49,12 @@ api = FastAPI()
 ytdlp = YtDlpService()
 tasks_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 
-# Кэши
-link_cache: TTLCache = TTLCache(maxsize=2000, ttl=LINK_TTL_MINUTES * 60)
-info_cache: TTLCache = TTLCache(maxsize=1000, ttl=600) # Кэш форматов на 10 минут
+# Кэши (оптимизировано для free tier - меньше памяти)
+link_cache: TTLCache = TTLCache(maxsize=500, ttl=LINK_TTL_MINUTES * 60)  # Уменьшено для экономии памяти
+info_cache: TTLCache = TTLCache(maxsize=200, ttl=600)  # Кэш форматов на 10 минут (уменьшено)
 
 # Rate Limiter (простой in-memory)
-user_rates: TTLCache = TTLCache(maxsize=1000, ttl=60) # Сброс каждую минуту
+user_rates: TTLCache = TTLCache(maxsize=500, ttl=60)  # Сброс каждую минуту (уменьшено)
 
 URL_RE = re.compile(r"^https?://", re.I)
 
@@ -143,29 +143,44 @@ async def download(token: str):
         )
         logger.info(f"[STREAM] {' '.join(cmd)}")
         
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        
+        proc = None
         try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+            )
+            
+            # Таймаут для всего стрима (15 минут для free tier)
+            stream_timeout = 900
+            start_time = time.time()
+            
             while True:
+                # Проверяем общий таймаут
+                if time.time() - start_time > stream_timeout:
+                    logger.error("[STREAM] Overall timeout exceeded")
+                    break
+                    
                 try:
                     chunk = await asyncio.wait_for(proc.stdout.read(CHUNK_SIZE), timeout=45.0)
                     if not chunk: break
                     yield chunk
                 except asyncio.TimeoutError:
-                    logger.error("[STREAM] Timeout")
-                    break
+                    logger.warning("[STREAM] Chunk read timeout, continuing...")
+                    # Продолжаем попытки, но проверяем общий таймаут
+                    continue
             
             await proc.wait()
             if proc.returncode != 0:
                 err = await proc.stderr.read()
-                logger.error(f"[STREAM] Error: {err.decode(errors='ignore')}")
+                error_text = err.decode(errors='ignore')[:500]  # Ограничиваем размер лога
+                logger.error(f"[STREAM] Error (code {proc.returncode}): {error_text}")
                 
         except Exception as e:
-            logger.error(f"[STREAM] Ex: {e}")
-            if proc:
-                try: proc.kill()
+            logger.error(f"[STREAM] Exception: {e}", exc_info=True)
+        finally:
+            if proc and proc.returncode is None:
+                try: 
+                    proc.kill()
+                    await proc.wait()
                 except: pass
 
     return StreamingResponse(
@@ -218,8 +233,17 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             title, formats, audio, duration = await asyncio.to_thread(ytdlp.list_formats, text)
             info_cache[text] = (title, formats, audio, duration) # Сохраняем в кэш
         except Exception as e:
-            logger.error(f"Parse error: {e}")
-            await msg.edit_text(f"❌ Ошибка: {str(e)[:100]}")
+            logger.error(f"Parse error: {e}", exc_info=True)
+            error_msg = str(e)
+            # Более понятные сообщения для пользователя
+            if "403" in error_msg or "forbidden" in error_msg.lower():
+                await msg.edit_text("❌ Доступ запрещен. Контент может быть приватным или требуется авторизация.")
+            elif "404" in error_msg or "not found" in error_msg.lower():
+                await msg.edit_text("❌ Видео не найдено. Проверьте правильность ссылки.")
+            elif "pinterest" in error_msg.lower() or "pin.it" in error_msg.lower():
+                await msg.edit_text("❌ Ошибка загрузки с Pinterest. Попробуйте позже или используйте прямую ссылку на видео.")
+            else:
+                await msg.edit_text(f"❌ Ошибка: {error_msg[:150]}")
             return
 
     # Сохраняем контекст
@@ -296,7 +320,9 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with tasks_sem:
         await q.edit_message_text("⏳ Начинаю загрузку...")
-        tmp_path = f"/tmp/{uuid.uuid4().hex}.mp4"
+        # Используем временную директорию с очисткой
+        tmp_dir = os.getenv("TMPDIR", "/tmp")
+        tmp_path = os.path.join(tmp_dir, f"ytdl_{uuid.uuid4().hex}.mp4")
 
         # Строим команду с Aria2c и MaxFilesize
         cmd = build_yt_dlp_command(
@@ -313,11 +339,23 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # --- ЧТЕНИЕ ПРОГРЕССА ---
             last_update = 0
+            download_start = time.time()
+            max_download_time = 600  # 10 минут максимум для free tier
+            
             while True:
+                # Проверяем общий таймаут загрузки
+                if time.time() - download_start > max_download_time:
+                    logger.warning("[DL-TG] Download timeout exceeded")
+                    break
+                    
                 try:
                     line = await asyncio.wait_for(proc.stdout.readline(), timeout=300.0)
                 except asyncio.TimeoutError:
-                    break
+                    logger.warning("[DL-TG] Read timeout, checking process...")
+                    # Проверяем, не завершился ли процесс
+                    if proc.returncode is not None:
+                        break
+                    continue
                 
                 if not line: break
                 
@@ -326,46 +364,99 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Парсим процент "[download]  45.0% of..."
                 if "[download]" in line_str and "%" in line_str:
                     now = time.time()
-                    if now - last_update > 3.0: # Обновляем раз в 3 сек
+                    if now - last_update > 3.0:  # Обновляем раз в 3 сек
                         match = re.search(r"(\d+\.\d+)%", line_str)
                         if match:
                             try:
                                 await q.edit_message_text(f"⏳ Скачиваю: {match.group(1)}%")
                                 last_update = now
-                            except Exception: pass # Игнорим ошибки редактирования (flood wait)
+                            except Exception: 
+                                pass  # Игнорим ошибки редактирования (flood wait)
             
             await proc.wait()
 
             if proc.returncode != 0:
-                # Ошибки часто связаны с размером файла
-                await q.edit_message_text("⚠️ Ошибка или файл > 50 МБ. Используйте ссылку.")
+                # Читаем ошибку для более информативного сообщения
+                stderr_data = await proc.stderr.read() if proc.stderr else b""
+                error_text = stderr_data.decode('utf-8', errors='ignore').lower()[:200]
+                logger.error(f"[DL-TG] Process failed with code {proc.returncode}: {error_text}")
+                
+                # Более понятные сообщения об ошибках
+                if "file larger" in error_text or "filesize" in error_text:
+                    await q.edit_message_text("⚠️ Файл слишком большой (>50 МБ). Используйте ссылку для скачивания.")
+                elif "403" in error_text or "forbidden" in error_text:
+                    await q.edit_message_text("⚠️ Доступ запрещен. Попробуйте скачать по ссылке.")
+                else:
+                    await q.edit_message_text("⚠️ Ошибка загрузки. Используйте ссылку для скачивания.")
+                
+                if os.path.exists(tmp_path):
+                    try: os.unlink(tmp_path)
+                    except: pass
                 return
 
-            if os.path.getsize(tmp_path) > 49.5 * 1024 * 1024:
-                 os.unlink(tmp_path)
-                 await q.edit_message_text("⚠️ Файл > 50 МБ. Используйте ссылку.")
-                 return
+            # Проверяем размер файла
+            try:
+                file_size = os.path.getsize(tmp_path)
+                if file_size > 49.5 * 1024 * 1024:
+                    os.unlink(tmp_path)
+                    await q.edit_message_text("⚠️ Файл > 50 МБ. Используйте ссылку.")
+                    return
+            except OSError as e:
+                logger.error(f"[DL-TG] Error checking file size: {e}")
+                await q.edit_message_text("⚠️ Ошибка проверки файла. Используйте ссылку.")
+                if os.path.exists(tmp_path):
+                    try: os.unlink(tmp_path)
+                    except: pass
+                return
 
             await q.edit_message_text("📤 Загружаю в Telegram...")
-            with open(tmp_path, "rb") as f:
-                await context.bot.send_document(
-                    chat_id=q.message.chat_id, document=f,
-                    filename=f"{payload.get('title', 'video')}.mp4",
-                    caption="✅ Готово!",
-                    read_timeout=60, write_timeout=60, connect_timeout=60
-                )
-            await q.edit_message_text("✅ Отправлено.")
+            
+            # Очищаем имя файла от недопустимых символов для Telegram
+            safe_title = re.sub(r'[<>:"/\\|?*]', '_', payload.get('title', 'video')[:100])
+            
+            try:
+                with open(tmp_path, "rb") as f:
+                    await context.bot.send_document(
+                        chat_id=q.message.chat_id, 
+                        document=f,
+                        filename=f"{safe_title}.mp4",
+                        caption="✅ Готово!",
+                        read_timeout=90,  # Увеличено для медленных соединений
+                        write_timeout=90,
+                        connect_timeout=30
+                    )
+                await q.edit_message_text("✅ Отправлено.")
+            except NetworkError as net_err:
+                # Более детальная обработка сетевых ошибок
+                error_str = str(net_err).lower()
+                if "413" in error_str or "request entity too large" in error_str:
+                    await q.edit_message_text("⚠️ Файл слишком большой для Telegram (>50 МБ). Скачайте по ссылке.")
+                elif "timeout" in error_str:
+                    await q.edit_message_text("⚠️ Таймаут загрузки. Попробуйте скачать по ссылке.")
+                else:
+                    await q.edit_message_text("❌ Ошибка отправки в Telegram. Используйте ссылку.")
+                logger.error(f"[DL-TG] Network error: {net_err}")
 
         except NetworkError as e:
-            if "413" in str(e): await q.edit_message_text("⚠️ Файл > 50 MB. Скачайте по ссылке.")
-            else: await q.edit_message_text("❌ Ошибка сети TG.")
+            error_str = str(e).lower()
+            if "413" in error_str or "request entity too large" in error_str:
+                await q.edit_message_text("⚠️ Файл > 50 MB. Скачайте по ссылке.")
+            elif "timeout" in error_str:
+                await q.edit_message_text("⚠️ Таймаут сети. Попробуйте скачать по ссылке.")
+            else:
+                await q.edit_message_text("❌ Ошибка сети Telegram. Используйте ссылку.")
+            logger.error(f"[DL-TG] Network error: {e}")
         except Exception as e:
-            logger.error(f"Upload error: {e}")
-            await q.edit_message_text("❌ Ошибка.")
+            logger.error(f"[DL-TG] Upload error: {e}", exc_info=True)
+            await q.edit_message_text("❌ Ошибка загрузки. Используйте ссылку для скачивания.")
         finally:
-            if os.path.exists(tmp_path):
-                try: os.unlink(tmp_path)
-                except: pass
+            # Гарантированная очистка временного файла
+            if tmp_path and os.path.exists(tmp_path):
+                try:
+                    os.unlink(tmp_path)
+                    logger.debug(f"[DL-TG] Cleaned up temp file: {tmp_path}")
+                except Exception as cleanup_err:
+                    logger.warning(f"[DL-TG] Failed to cleanup temp file {tmp_path}: {cleanup_err}")
 
 # --- APP BUILDER ---
 def build_bot_app() -> Application:

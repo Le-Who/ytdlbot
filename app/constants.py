@@ -21,6 +21,7 @@ SUPPORTED_PLATFORMS = {
 # Форматы видео
 VIDEO_EXTENSIONS = {"mp4", "webm"}
 AUDIO_FORMAT_ID = "bestaudio/best"
+GIF_FORMAT_ID = "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
 
 # Regex паттерны
 HEIGHT_PATTERN = r"(\d+)p"

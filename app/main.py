@@ -24,7 +24,7 @@ from telegram.ext import (
 from telegram.error import NetworkError
 
 from .ytdlp_service import YtDlpService
-from .constants import CHUNK_SIZE, SUPPORTED_PLATFORMS
+from .constants import CHUNK_SIZE, SUPPORTED_PLATFORMS, GIF_FORMAT_ID
 
 load_dotenv()
 
@@ -78,13 +78,33 @@ def build_yt_dlp_command(
 ) -> list:
     """Строит команду yt-dlp с поддержкой aria2c"""
     
+    # Проверяем, является ли это GIF форматом для Pinterest
+    is_gif_format = format_id == GIF_FORMAT_ID
+    
     # 1. Селектор видео
     if height:
         video_sel = f"bestvideo[height={height}]"
         prog_sel = f"best[height={height}]"
-    elif "+" not in format_id and format_id not in ("bestaudio/best", "best"):
+    elif "+" not in format_id and format_id not in ("bestaudio/best", "best") and not is_gif_format:
          video_sel = format_id
          prog_sel = f"best"
+    elif is_gif_format:
+        # Для GIF используем bestvideo без аудио
+        # yt-dlp скачает видео без аудио, затем нужно будет конвертировать в GIF через ffmpeg
+        cmd = [
+            "yt-dlp", "--format", "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best",
+            "--output", output,
+            "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4"
+        ]
+        if cookies_path: cmd.extend(["--cookies", cookies_path])
+        if max_filesize: cmd.extend(["--max-filesize", f"{max_filesize}M"])
+        # Для прогресс-бара
+        if output != "-":
+            cmd.extend(["--progress", "--newline"])
+            if use_aria2 and ytdlp.has_aria2:
+                cmd.extend(["--external-downloader", "aria2c", "--external-downloader-args", "-x 8 -k 1M"])
+        cmd.append(page_url)
+        return cmd
     else:
         # Аудио/Raw
         cmd = ["yt-dlp", "--format", format_id, "--output", output, "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4"]
@@ -134,59 +154,123 @@ async def download(token: str):
     if not payload: raise HTTPException(404, "Link expired")
     
     encoded_filename = quote(payload.get("title") or "video")
+    is_gif = payload["format_id"] == GIF_FORMAT_ID
+    file_ext = "gif" if is_gif else "mp4"
 
     async def stream_video_subprocess():
-        cmd = build_yt_dlp_command(
-            payload["page_url"], payload["format_id"], payload.get("height"),
-            output="-", cookies_path=ytdlp.cookies_path
-            # Aria2c не работает с pipe выходом
-        )
-        logger.info(f"[STREAM] {' '.join(cmd)}")
-        
-        proc = None
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-            )
+        if is_gif:
+            # Для GIF нужно сначала скачать видео, затем конвертировать в GIF
+            tmp_dir = os.getenv("TMPDIR", "/tmp")
+            video_tmp = os.path.join(tmp_dir, f"ytdl_video_{uuid.uuid4().hex}.mp4")
+            gif_tmp = os.path.join(tmp_dir, f"ytdl_gif_{uuid.uuid4().hex}.gif")
             
-            # Таймаут для всего стрима (15 минут для free tier)
-            stream_timeout = 900
-            start_time = time.time()
-            
-            while True:
-                # Проверяем общий таймаут
-                if time.time() - start_time > stream_timeout:
-                    logger.error("[STREAM] Overall timeout exceeded")
-                    break
-                    
-                try:
-                    chunk = await asyncio.wait_for(proc.stdout.read(CHUNK_SIZE), timeout=45.0)
-                    if not chunk: break
-                    yield chunk
-                except asyncio.TimeoutError:
-                    logger.warning("[STREAM] Chunk read timeout, continuing...")
-                    # Продолжаем попытки, но проверяем общий таймаут
-                    continue
-            
-            await proc.wait()
-            if proc.returncode != 0:
-                err = await proc.stderr.read()
-                error_text = err.decode(errors='ignore')[:500]  # Ограничиваем размер лога
-                logger.error(f"[STREAM] Error (code {proc.returncode}): {error_text}")
+            try:
+                # Скачиваем видео
+                cmd = build_yt_dlp_command(
+                    payload["page_url"], payload["format_id"], payload.get("height"),
+                    output=video_tmp, cookies_path=ytdlp.cookies_path
+                )
+                logger.info(f"[STREAM-GIF] Download: {' '.join(cmd)}")
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                await proc.wait()
                 
-        except Exception as e:
-            logger.error(f"[STREAM] Exception: {e}", exc_info=True)
-        finally:
-            if proc and proc.returncode is None:
-                try: 
-                    proc.kill()
-                    await proc.wait()
-                except: pass
+                if proc.returncode != 0:
+                    err = await proc.stderr.read()
+                    error_text = err.decode(errors='ignore')[:500]
+                    logger.error(f"[STREAM-GIF] Download error: {error_text}")
+                    return
+                
+                # Конвертируем в GIF
+                logger.info(f"[STREAM-GIF] Converting to GIF...")
+                ffmpeg_cmd = [
+                    "ffmpeg", "-i", video_tmp, "-vf", "fps=10,scale=320:-1:flags=lanczos",
+                    "-t", "10", "-y", "-pix_fmt", "rgb24", "-f", "gif", gif_tmp
+                ]
+                ffmpeg_proc = await asyncio.create_subprocess_exec(
+                    *ffmpeg_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                await ffmpeg_proc.wait()
+                
+                if ffmpeg_proc.returncode != 0:
+                    err = await ffmpeg_proc.stderr.read()
+                    error_text = err.decode(errors='ignore')[:500]
+                    logger.error(f"[STREAM-GIF] FFmpeg error: {error_text}")
+                    return
+                
+                # Стримим GIF
+                with open(gif_tmp, "rb") as f:
+                    while True:
+                        chunk = f.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        yield chunk
+                
+            except Exception as e:
+                logger.error(f"[STREAM-GIF] Exception: {e}", exc_info=True)
+            finally:
+                # Очистка временных файлов
+                for tmp_file in [video_tmp, gif_tmp]:
+                    if os.path.exists(tmp_file):
+                        try:
+                            os.unlink(tmp_file)
+                        except:
+                            pass
+        else:
+            # Обычное видео - стримим напрямую
+            cmd = build_yt_dlp_command(
+                payload["page_url"], payload["format_id"], payload.get("height"),
+                output="-", cookies_path=ytdlp.cookies_path
+                # Aria2c не работает с pipe выходом
+            )
+            logger.info(f"[STREAM] {' '.join(cmd)}")
+            
+            proc = None
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                
+                # Таймаут для всего стрима (15 минут для free tier)
+                stream_timeout = 900
+                start_time = time.time()
+                
+                while True:
+                    # Проверяем общий таймаут
+                    if time.time() - start_time > stream_timeout:
+                        logger.error("[STREAM] Overall timeout exceeded")
+                        break
+                        
+                    try:
+                        chunk = await asyncio.wait_for(proc.stdout.read(CHUNK_SIZE), timeout=45.0)
+                        if not chunk: break
+                        yield chunk
+                    except asyncio.TimeoutError:
+                        logger.warning("[STREAM] Chunk read timeout, continuing...")
+                        # Продолжаем попытки, но проверяем общий таймаут
+                        continue
+                
+                await proc.wait()
+                if proc.returncode != 0:
+                    err = await proc.stderr.read()
+                    error_text = err.decode(errors='ignore')[:500]  # Ограничиваем размер лога
+                    logger.error(f"[STREAM] Error (code {proc.returncode}): {error_text}")
+                    
+            except Exception as e:
+                logger.error(f"[STREAM] Exception: {e}", exc_info=True)
+            finally:
+                if proc and proc.returncode is None:
+                    try: 
+                        proc.kill()
+                        await proc.wait()
+                    except: pass
 
+    media_type = "image/gif" if is_gif else "application/octet-stream"
     return StreamingResponse(
         stream_video_subprocess(),
-        media_type="application/octet-stream",
-        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}.mp4"}
+        media_type=media_type,
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}.{file_ext}"}
     )
 
 # --- WEBHOOK ENDPOINT ---
@@ -322,7 +406,9 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("⏳ Начинаю загрузку...")
         # Используем временную директорию с очисткой
         tmp_dir = os.getenv("TMPDIR", "/tmp")
-        tmp_path = os.path.join(tmp_dir, f"ytdl_{uuid.uuid4().hex}.mp4")
+        is_gif = payload["format_id"] == GIF_FORMAT_ID
+        file_ext = "gif" if is_gif else "mp4"
+        tmp_path = os.path.join(tmp_dir, f"ytdl_{uuid.uuid4().hex}.{file_ext}")
 
         # Строим команду с Aria2c и MaxFilesize
         cmd = build_yt_dlp_command(
@@ -375,6 +461,43 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             await proc.wait()
 
+            # Если это GIF формат, конвертируем видео в GIF через ffmpeg
+            if is_gif and proc.returncode == 0:
+                # Сначала скачиваем видео во временный файл
+                video_tmp = tmp_path.replace(".gif", "_video.mp4")
+                if os.path.exists(tmp_path):
+                    os.rename(tmp_path, video_tmp)
+                
+                # Конвертируем в GIF через ffmpeg
+                await q.edit_message_text("⏳ Конвертирую в GIF...")
+                ffmpeg_cmd = [
+                    "ffmpeg", "-i", video_tmp, "-vf", "fps=10,scale=320:-1:flags=lanczos",
+                    "-t", "10", "-y", "-pix_fmt", "rgb24", "-f", "gif", tmp_path
+                ]
+                logger.info(f"[GIF] {' '.join(ffmpeg_cmd)}")
+                ffmpeg_proc = await asyncio.create_subprocess_exec(
+                    *ffmpeg_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                )
+                await ffmpeg_proc.wait()
+                
+                # Удаляем временный видео файл
+                if os.path.exists(video_tmp):
+                    try:
+                        os.unlink(video_tmp)
+                    except:
+                        pass
+                
+                if ffmpeg_proc.returncode != 0:
+                    error_text = (await ffmpeg_proc.stderr.read()).decode('utf-8', errors='ignore')[:200]
+                    logger.error(f"[GIF] FFmpeg error: {error_text}")
+                    await q.edit_message_text("⚠️ Ошибка конвертации в GIF. Используйте ссылку для скачивания.")
+                    if os.path.exists(tmp_path):
+                        try:
+                            os.unlink(tmp_path)
+                        except:
+                            pass
+                    return
+
             if proc.returncode != 0:
                 # Читаем ошибку для более информативного сообщения
                 stderr_data = await proc.stderr.read() if proc.stderr else b""
@@ -419,7 +542,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_document(
                         chat_id=q.message.chat_id, 
                         document=f,
-                        filename=f"{safe_title}.mp4",
+                        filename=f"{safe_title}.{file_ext}",
                         caption="✅ Готово!",
                         read_timeout=90,  # Увеличено для медленных соединений
                         write_timeout=90,

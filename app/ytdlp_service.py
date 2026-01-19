@@ -11,6 +11,7 @@ import yt_dlp
 
 from .constants import (
     AUDIO_FORMAT_ID,
+    GIF_FORMAT_ID,
     VIDEO_EXTENSIONS,
     HEIGHT_PATTERN,
 )
@@ -111,6 +112,10 @@ class YtDlpService:
     @staticmethod
     def _is_tiktok(url: str) -> bool:
         return "tiktok.com" in url.lower()
+    
+    @staticmethod
+    def _is_pinterest(url: str) -> bool:
+        return "pinterest.com" in url.lower() or "pin.it" in url.lower()
     
     @staticmethod
     def _format_duration(seconds: Optional[float]) -> str:
@@ -233,5 +238,10 @@ class YtDlpService:
         formats = self._deduplicate_formats(formats, is_tiktok)
         formats = formats[:max_items]
         
-        audio = FormatItem(format_id=AUDIO_FORMAT_ID, label="🎵 Только аудио (best)", ext="audio", height=None, filesize=None)
+        is_pinterest = self._is_pinterest(url)
+        if is_pinterest:
+            # Для Pinterest заменяем "Только аудио" на "Только GIF"
+            audio = FormatItem(format_id=GIF_FORMAT_ID, label="🎬 Только GIF", ext="gif", height=None, filesize=None)
+        else:
+            audio = FormatItem(format_id=AUDIO_FORMAT_ID, label="🎵 Только аудио (best)", ext="audio", height=None, filesize=None)
         return title, formats, audio, duration_str

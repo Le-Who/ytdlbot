@@ -247,3 +247,75 @@ class YtDlpService:
         else:
             audio = FormatItem(format_id=AUDIO_FORMAT_ID, label="🎵 Только аудио (best)", ext="audio", height=None, filesize=None)
         return title, formats, audio, duration_str
+
+    def build_command(
+        self,
+        page_url: str,
+        format_id: str,
+        height: Optional[int],
+        output: str,
+        max_filesize: Optional[int] = None,
+        use_aria2: bool = False
+    ) -> List[str]:
+        """Строит команду yt-dlp с поддержкой aria2c"""
+
+        # Проверяем, является ли это GIF форматом для Pinterest
+        is_gif_format = format_id == GIF_FORMAT_ID
+
+        # 1. Селектор видео
+        if height:
+            video_sel = f"bestvideo[height={height}]"
+            prog_sel = f"best[height={height}]"
+        elif "+" not in format_id and format_id not in ("bestaudio/best", "best") and not is_gif_format:
+             video_sel = format_id
+             prog_sel = f"best"
+        elif is_gif_format:
+            # Для GIF используем bestvideo без аудио
+            # yt-dlp скачает видео без аудио, затем нужно будет конвертировать в GIF через ffmpeg
+            cmd = [
+                "yt-dlp", "--format", "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best",
+                "--output", output,
+                "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4"
+            ]
+            if self.cookies_path: cmd.extend(["--cookies", self.cookies_path])
+            if max_filesize: cmd.extend(["--max-filesize", f"{max_filesize}M"])
+            # Для прогресс-бара
+            if output != "-":
+                cmd.extend(["--progress", "--newline"])
+                if use_aria2 and self.has_aria2:
+                    cmd.extend(["--external-downloader", "aria2c", "--external-downloader-args", "-x 8 -k 1M"])
+            cmd.append(page_url)
+            return cmd
+        else:
+            # Аудио/Raw
+            cmd = ["yt-dlp", "--format", format_id, "--output", output, "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4"]
+            if self.cookies_path: cmd.extend(["--cookies", self.cookies_path])
+            if max_filesize: cmd.extend(["--max-filesize", f"{max_filesize}M"])
+            cmd.append(page_url)
+            return cmd
+
+        # 2. Селектор аудио (Original -> English -> OrigTag -> Any)
+        audio_sel = "bestaudio[format_note*=original]/bestaudio[language^=en]/bestaudio[language^=orig]/bestaudio"
+        final_fmt = f"{video_sel}+({audio_sel})/{prog_sel}/best"
+
+        cmd = [
+            "yt-dlp", "--format", final_fmt, "--output", output,
+            "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4",
+            # Для прогресс-бара нам нужен вывод в stdout/stderr
+            "--progress", "--newline",
+            "--postprocessor-args", "Merger+ffmpeg:-movflags frag_keyframe+empty_moov"
+        ]
+
+        # Если стримим в pipe ("-"), то aria2c использовать нельзя, и прогресс тоже мешает
+        if output == "-":
+            # Убираем --progress для чистого стрима
+            cmd = [c for c in cmd if c not in ["--progress", "--newline"]]
+        elif use_aria2 and self.has_aria2:
+            # Ускорение для скачивания на диск
+            cmd.extend(["--external-downloader", "aria2c", "--external-downloader-args", "-x 8 -k 1M"])
+
+        if self.cookies_path: cmd.extend(["--cookies", self.cookies_path])
+        if max_filesize: cmd.extend(["--max-filesize", f"{max_filesize}M"])
+
+        cmd.append(page_url)
+        return cmd

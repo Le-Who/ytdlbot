@@ -289,14 +289,24 @@ if WEBHOOK_URL:
 # --- TELEGRAM HANDLERS ---
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Пришлите ссылку на видео (YouTube/TikTok/VK/RuTube/Pinterest).")
+    welcome_text = (
+        "👋 <b>Привет! Я помогу скачать видео.</b>\n\n"
+        "Просто отправь мне ссылку с:\n"
+        "• YouTube\n"
+        "• TikTok\n"
+        "• VK / VK Video\n"
+        "• RuTube\n"
+        "• Pinterest\n\n"
+        "<i>Я найду доступные форматы и отправлю видео прямо сюда.</i>"
+    )
+    await update.message.reply_text(welcome_text, parse_mode="HTML")
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = (update.message.text or "").strip()
     
     if not is_supported_url(text):
-        await update.message.reply_text("❌ Ссылка не поддерживается.")
+        await update.message.reply_text("❌ Ссылка не поддерживается. Попробуйте YouTube, TikTok, VK или Pinterest.")
         return
 
     # Rate Limit: 10 запросов в минуту
@@ -304,7 +314,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Слишком часто. Подождите минуту.")
         return
 
-    msg = await update.message.reply_text("⏳ Анализирую...")
+    msg = await update.message.reply_text("🔎 Ищу видео...")
 
     # 1. Проверяем КЭШ
     cached = info_cache.get(text)
@@ -357,7 +367,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = context.user_data
     if not data.get("page_url"):
-        await q.edit_message_text("⚠️ Данные устарели. Пришлите ссылку снова.")
+        await q.edit_message_text("⚠️ Данные устарели. Пожалуйста, отправьте ссылку на видео еще раз.")
         return
 
     token = uuid.uuid4().hex

@@ -162,7 +162,6 @@ async def download(token: str):
             # Для GIF нужно сначала скачать видео, затем конвертировать в GIF
             tmp_dir = os.getenv("TMPDIR", "/tmp")
             video_tmp = os.path.join(tmp_dir, f"ytdl_video_{uuid.uuid4().hex}.mp4")
-            gif_tmp = os.path.join(tmp_dir, f"ytdl_gif_{uuid.uuid4().hex}.gif")
             
             try:
                 # Скачиваем видео
@@ -186,37 +185,53 @@ async def download(token: str):
                 logger.info(f"[STREAM-GIF] Converting to GIF...")
                 ffmpeg_cmd = [
                     "ffmpeg", "-i", video_tmp, "-vf", "fps=10,scale=320:-1:flags=lanczos",
-                    "-t", "10", "-y", "-pix_fmt", "rgb24", "-f", "gif", gif_tmp
+                    "-t", "10", "-y", "-pix_fmt", "rgb24", "-f", "gif", "-"
                 ]
                 ffmpeg_proc = await asyncio.create_subprocess_exec(
                     *ffmpeg_cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
                 )
-                await ffmpeg_proc.wait()
                 
-                if ffmpeg_proc.returncode != 0:
-                    err = await ffmpeg_proc.stderr.read()
-                    error_text = err.decode(errors='ignore')[:500]
-                    logger.error(f"[STREAM-GIF] FFmpeg error: {error_text}")
-                    return
-                
-                # Стримим GIF
-                with open(gif_tmp, "rb") as f:
+                # Consume stderr asynchronously to avoid deadlock
+                stderr_data = []
+                async def consume_stderr():
                     while True:
-                        chunk = f.read(CHUNK_SIZE)
+                        line = await ffmpeg_proc.stderr.readline()
+                        if not line: break
+                        stderr_data.append(line)
+                        if len(stderr_data) > 50: stderr_data.pop(0) # Keep last 50 lines
+
+                stderr_task = asyncio.create_task(consume_stderr())
+                
+                try:
+                    # Stream directly from ffmpeg stdout
+                    while True:
+                        chunk = await ffmpeg_proc.stdout.read(CHUNK_SIZE)
                         if not chunk:
                             break
                         yield chunk
+                finally:
+                    if ffmpeg_proc.returncode is None:
+                        try:
+                            ffmpeg_proc.kill()
+                        except:
+                            pass
+                    await ffmpeg_proc.wait()
+                    await stderr_task
+
+                if ffmpeg_proc.returncode != 0:
+                    error_text = b"".join(stderr_data).decode(errors='ignore')[-500:]
+                    logger.error(f"[STREAM-GIF] FFmpeg error: {error_text}")
+                    return
                 
             except Exception as e:
                 logger.error(f"[STREAM-GIF] Exception: {e}", exc_info=True)
             finally:
                 # Очистка временных файлов
-                for tmp_file in [video_tmp, gif_tmp]:
-                    if os.path.exists(tmp_file):
-                        try:
-                            os.unlink(tmp_file)
-                        except:
-                            pass
+                if os.path.exists(video_tmp):
+                    try:
+                        os.unlink(video_tmp)
+                    except:
+                        pass
         else:
             # Обычное видео - стримим напрямую
             cmd = build_yt_dlp_command(

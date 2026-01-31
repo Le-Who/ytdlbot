@@ -57,6 +57,7 @@ info_cache: TTLCache = TTLCache(maxsize=200, ttl=600)  # Кэш форматов
 user_rates: TTLCache = TTLCache(maxsize=500, ttl=60)  # Сброс каждую минуту (уменьшено)
 
 URL_RE = re.compile(r"^https?://", re.I)
+SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*]')
 
 def is_supported_url(text: str) -> bool:
     if not URL_RE.search(text or ""): return False
@@ -572,7 +573,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("📤 Загружаю в Telegram...")
             
             # Очищаем имя файла от недопустимых символов для Telegram
-            safe_title = re.sub(r'[<>:"/\\|?*]', '_', payload.get('title', 'video')[:100])
+            safe_title = SAFE_FILENAME_RE.sub('_', payload.get('title', 'video')[:100])
             
             try:
                 with open(tmp_path, "rb") as f:

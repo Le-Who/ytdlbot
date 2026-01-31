@@ -6,6 +6,9 @@
 **Learning:** To verify streaming optimizations without heavy dependencies (like ffmpeg), mocking `asyncio.create_subprocess_exec` is effective. However, the mock script must accurately simulate the behavior of the real tool (e.g., handling stdout vs file output) to avoid false positives/negatives in tests.
 **Action:** When mocking CLI tools, ensure the mock script parses arguments to mimic the output destination (stdout or file) correctly.
 
+## 2026-01-31 - [Blocking File I/O in Async Loop]
+**Learning:** Synchronous file system operations (specifically `os.unlink`, `os.rename`, and `os.path.getsize`) are blocking calls that halt the asyncio event loop. In high-load async applications, this causes latency and can starve other concurrent tasks.
+**Action:** Offload these blocking file operations to a separate thread using `asyncio.to_thread`, preventing them from blocking the main event loop.
 ## 2026-01-31 - [Regex Compilation Overhead]
 **Learning:** Compiling regex patterns inside frequently called handlers (like loops or API endpoints) introduces unnecessary overhead. Although Python caches compiled regexes, calling `re.sub` repeatedly still incurs dictionary lookup and potential cache eviction costs.
 **Action:** Move constant regex patterns to the module level (global scope) using `re.compile()` to initialize them once at startup, achieving ~20% performance gain on those operations.

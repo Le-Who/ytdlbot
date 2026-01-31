@@ -44,6 +44,19 @@ if not BASE_URL: BASE_URL = "http://localhost:8000"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("app")
 
+def safe_remove(path: str) -> None:
+    """Удаляет файл, игнорируя ошибки если файл не найден"""
+    if path and os.path.exists(path):
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+def rename_if_exists(src: str, dst: str) -> None:
+    """Переименовывает файл если он существует"""
+    if src and os.path.exists(src):
+        os.rename(src, dst)
+
 # --- ИНИЦИАЛИЗАЦИЯ ---
 api = FastAPI()
 ytdlp = YtDlpService()
@@ -240,11 +253,7 @@ async def download(token: str):
                 logger.error(f"[STREAM-GIF] Exception: {e}", exc_info=True)
             finally:
                 # Очистка временных файлов
-                if os.path.exists(video_tmp):
-                    try:
-                        os.unlink(video_tmp)
-                    except:
-                        pass
+                await asyncio.to_thread(safe_remove, video_tmp)
         else:
             # Обычное видео - стримим напрямую
             cmd = build_yt_dlp_command(
@@ -503,8 +512,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if is_gif and proc.returncode == 0:
                 # Сначала скачиваем видео во временный файл
                 video_tmp = tmp_path.replace(".gif", "_video.mp4")
-                if os.path.exists(tmp_path):
-                    os.rename(tmp_path, video_tmp)
+                await asyncio.to_thread(rename_if_exists, tmp_path, video_tmp)
                 
                 # Конвертируем в GIF через ffmpeg
                 await q.edit_message_text("⏳ Конвертирую в GIF...")
@@ -519,21 +527,13 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await ffmpeg_proc.wait()
                 
                 # Удаляем временный видео файл
-                if os.path.exists(video_tmp):
-                    try:
-                        os.unlink(video_tmp)
-                    except:
-                        pass
+                await asyncio.to_thread(safe_remove, video_tmp)
                 
                 if ffmpeg_proc.returncode != 0:
                     error_text = (await ffmpeg_proc.stderr.read()).decode('utf-8', errors='ignore')[:200]
                     logger.error(f"[GIF] FFmpeg error: {error_text}")
                     await q.edit_message_text("⚠️ Ошибка конвертации в GIF. Используйте ссылку для скачивания.")
-                    if os.path.exists(tmp_path):
-                        try:
-                            os.unlink(tmp_path)
-                        except:
-                            pass
+                    await asyncio.to_thread(safe_remove, tmp_path)
                     return
 
             if proc.returncode != 0:
@@ -550,24 +550,20 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     await q.edit_message_text("⚠️ Ошибка загрузки. Используйте ссылку для скачивания.")
                 
-                if os.path.exists(tmp_path):
-                    try: os.unlink(tmp_path)
-                    except: pass
+                await asyncio.to_thread(safe_remove, tmp_path)
                 return
 
             # Проверяем размер файла
             try:
-                file_size = os.path.getsize(tmp_path)
+                file_size = await asyncio.to_thread(os.path.getsize, tmp_path)
                 if file_size > 49.5 * 1024 * 1024:
-                    os.unlink(tmp_path)
+                    await asyncio.to_thread(safe_remove, tmp_path)
                     await q.edit_message_text("⚠️ Файл > 50 МБ. Используйте ссылку.")
                     return
             except OSError as e:
                 logger.error(f"[DL-TG] Error checking file size: {e}")
                 await q.edit_message_text("⚠️ Ошибка проверки файла. Используйте ссылку.")
-                if os.path.exists(tmp_path):
-                    try: os.unlink(tmp_path)
-                    except: pass
+                await asyncio.to_thread(safe_remove, tmp_path)
                 return
 
             await q.edit_message_text("📤 Загружаю в Telegram...")
@@ -612,12 +608,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("❌ Ошибка загрузки. Используйте ссылку для скачивания.")
         finally:
             # Гарантированная очистка временного файла
-            if tmp_path and os.path.exists(tmp_path):
-                try:
-                    os.unlink(tmp_path)
-                    logger.debug(f"[DL-TG] Cleaned up temp file: {tmp_path}")
-                except Exception as cleanup_err:
-                    logger.warning(f"[DL-TG] Failed to cleanup temp file {tmp_path}: {cleanup_err}")
+            if tmp_path:
+                await asyncio.to_thread(safe_remove, tmp_path)
 
 # --- APP BUILDER ---
 def build_bot_app() -> Application:

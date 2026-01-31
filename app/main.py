@@ -5,7 +5,7 @@ import time
 import asyncio
 import logging
 from typing import Optional, Dict
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from cachetools import TTLCache
 from dotenv import load_dotenv
@@ -60,8 +60,20 @@ URL_RE = re.compile(r"^https?://", re.I)
 
 def is_supported_url(text: str) -> bool:
     if not URL_RE.search(text or ""): return False
-    text_lower = text.lower()
-    return any(platform in text_lower for platform in SUPPORTED_PLATFORMS)
+
+    try:
+        parsed = urlparse(text)
+        domain = parsed.hostname
+        if not domain:
+            return False
+
+        for platform in SUPPORTED_PLATFORMS:
+            # Check for exact match or subdomain
+            if domain == platform or domain.endswith(f".{platform}"):
+                return True
+        return False
+    except Exception:
+        return False
 
 def check_rate_limit(user_id: int, limit: int = 5) -> bool:
     """Проверяет лимит запросов пользователя в минуту"""

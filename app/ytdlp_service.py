@@ -16,6 +16,8 @@ from .constants import (
     HEIGHT_PATTERN,
 )
 
+HEIGHT_REGEX = re.compile(HEIGHT_PATTERN)
+
 logger = logging.getLogger("ytdlp_service")
 
 @dataclass
@@ -132,7 +134,7 @@ class YtDlpService:
     
     @staticmethod
     def _extract_height(format_note: str) -> Optional[int]:
-        match = re.search(HEIGHT_PATTERN, format_note or "")
+        match = HEIGHT_REGEX.search(format_note or "")
         if match:
             return int(match.group(1))
         return None

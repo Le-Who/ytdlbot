@@ -5,3 +5,7 @@
 ## 2024-10-12 - User-Centric Bot Status
 **Learning:** Users prefer 'Searching' or 'Processing' over technical terms like 'Analyzing' as it maps better to their mental model of retrieving a file.
 **Action:** Use active verbs that describe the user's intent rather than the system's internal process in status messages.
+
+## 2026-02-01 - Video Format Scannability
+**Learning:** Adding visual anchors (emojis like 📺, 📹, 🎵) to dense technical lists (video formats) significantly improves scanability and helps users quickly distinguish quality tiers.
+**Action:** Use consistent iconography for data types in list views (e.g., specific icons for resolution tiers).

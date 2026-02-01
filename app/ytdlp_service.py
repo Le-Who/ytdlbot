@@ -198,24 +198,34 @@ class YtDlpService:
         return None
     
     def _create_format_label(self, height: Optional[int], filesize: Optional[int], protocol: str, is_tiktok: bool) -> str:
-        label_parts = []
+        parts = []
+
+        # 1. Icon & Type
         if is_tiktok:
-            label_parts.append("TikTok Video")
+            parts.append("🎵 TikTok")
         else:
-            label_parts.append(f"{height or '??'}p")
-            label_parts.append("MP4")
-        
+            if height:
+                if height >= 1080: icon = "📺"
+                elif height >= 720: icon = "📹"
+                else: icon = "📱"
+                parts.append(f"{icon} {height}p")
+            else:
+                parts.append("📹 ???p")
+
+        # 2. Size / Protocol
         if filesize:
             mb = filesize / self.BYTES_IN_KB / self.BYTES_IN_KB
             if mb < 1:
-                label_parts.append(f"({int(filesize / self.BYTES_IN_KB)} KB)")
+                size_str = f"{int(filesize / self.BYTES_IN_KB)} KB"
             else:
-                label_parts.append(f"({mb:.1f} MB)")
+                size_str = f"{mb:.1f} MB"
+            parts.append(f"• {size_str}")
         elif "m3u8" in protocol:
-            label_parts.append("(~HLS)")
+            parts.append("• HLS")
         else:
-            label_parts.append("(?)")
-        return " ".join(label_parts)
+            parts.append("• ?")
+
+        return " ".join(parts)
     
     def _parse_format(self, format_dict: Dict[str, Any], duration_sec: Optional[float], is_tiktok: bool) -> Optional[FormatItem]:
         if format_dict.get("vcodec") == "none" and not is_tiktok:

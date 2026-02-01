@@ -99,8 +99,11 @@ class YtDlpService:
             "force_ipv4": True,
             "legacyserverconnect": True,
             "user_agent": self.USER_AGENT,
-            # Use specific clients to avoid bot detection
-            "extractor_args": {'youtube': {'player_client': ['android', 'web']}},
+            # Явный селектор формата с fallback — иначе yt-dlp падает на некоторых
+            # YouTube-видео (Shorts, ограничения региона) с "Requested format is not available"
+            "format": "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best",
+            # Player clients с fallback — android/web иногда не дают форматы для Shorts и др.
+            "extractor_args": {'youtube': {'player_client': ['android', 'web', 'mweb', 'ios']}},
         }
         
         if self.cookies_path:

@@ -4,6 +4,7 @@ import uuid
 import time
 import asyncio
 import logging
+from collections import deque
 from typing import Optional, Dict
 from urllib.parse import quote, urlparse
 
@@ -71,6 +72,7 @@ user_rates: TTLCache = TTLCache(maxsize=500, ttl=60)  # Сброс каждую 
 
 URL_RE = re.compile(r"https?://\S+", re.I)
 SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*]')
+PROGRESS_RE = re.compile(r"(\d+\.\d+)%")
 
 def is_supported_url(text: str) -> bool:
     if not URL_RE.search(text or ""): return False
@@ -150,13 +152,12 @@ async def download(token: str):
                 )
                 
                 # Consume stderr asynchronously to avoid deadlock
-                stderr_data = []
+                stderr_data = deque(maxlen=50)
                 async def consume_stderr():
                     while True:
                         line = await ffmpeg_proc.stderr.readline()
                         if not line: break
                         stderr_data.append(line)
-                        if len(stderr_data) > 50: stderr_data.pop(0) # Keep last 50 lines
 
                 stderr_task = asyncio.create_task(consume_stderr())
                 
@@ -201,13 +202,12 @@ async def download(token: str):
                 )
                 
                 # Consume stderr asynchronously to avoid deadlock
-                stderr_data = []
+                stderr_data = deque(maxlen=50)
                 async def consume_stderr():
                     while True:
                         line = await proc.stderr.readline()
                         if not line: break
                         stderr_data.append(line)
-                        if len(stderr_data) > 50: stderr_data.pop(0) # Keep last 50 lines
 
                 stderr_task = asyncio.create_task(consume_stderr())
 
@@ -452,7 +452,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if "[download]" in line_str and "%" in line_str:
                     now = time.time()
                     if now - last_update > 3.0:  # Обновляем раз в 3 сек
-                        match = re.search(r"(\d+\.\d+)%", line_str)
+                        match = PROGRESS_RE.search(line_str)
                         if match:
                             try:
                                 await q.edit_message_text(f"⏳ Скачиваю: {match.group(1)}%")

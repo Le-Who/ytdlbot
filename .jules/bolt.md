@@ -18,3 +18,7 @@
 ## 2026-01-31 - [Async Stderr Consumption for Reliability]
 **Learning:** Blocking reads on subprocess stderr can cause deadlocks if the buffer fills up while the main loop reads stdout. This is critical when streaming output from tools like yt-dlp.
 **Action:** Implemented asynchronous stderr consumption in `stream_video_subprocess` to ensure continuous stream processing and prevent deadlocks.
+
+## 2026-02-01 - [Deque for Stream Buffering]
+**Learning:** Using `list.pop(0)` to maintain a fixed-size buffer (e.g., for stderr logs) is O(N) because it shifts all elements. In high-throughput streaming loops, this adds unnecessary CPU overhead.
+**Action:** Use `collections.deque(maxlen=N)` which provides O(1) appends and automatic eviction of old elements, simplifying code and improving performance.

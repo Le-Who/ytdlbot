@@ -1,6 +1,8 @@
 import base64
+import json
 import os
 import re
+import subprocess
 import tempfile
 import atexit
 import logging
@@ -88,6 +90,10 @@ class YtDlpService:
     def cookies_path(self) -> Optional[str]:
         return self.cookies_manager.cookies_path
     
+    @staticmethod
+    def _is_youtube(url: str) -> bool:
+        return "youtube.com" in url.lower() or "youtu.be" in url.lower()
+
     def _base_opts(self, for_list_formats: bool = False) -> Dict[str, Any]:
         """Базовые опции для yt-dlp"""
         opts: Dict[str, Any] = {
@@ -105,22 +111,40 @@ class YtDlpService:
         
         if not for_list_formats:
             opts["format"] = "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
+        else:
+            # format=worst всегда находит формат, не падает с "Requested format is not available"
+            opts["format"] = "worst"
         
         if self.cookies_path:
             opts["cookiefile"] = self.cookies_path
         
         return opts
-    
+
+    def _extract_youtube_via_subprocess(self, url: str) -> Optional[Dict[str, Any]]:
+        """Извлечение через yt-dlp CLI для YouTube — надёжный обход ошибок API."""
+        cmd = [
+            "yt-dlp", "-f", "worst", "--dump-json", "--no-download",
+            "--no-warnings", "--no-playlist", "--force-ipv4",
+        ]
+        if self.cookies_path:
+            cmd.extend(["--cookies", self.cookies_path])
+        cmd.extend(["--extractor-args", "youtube:player_client=android,web,mweb,ios"])
+        cmd.append(url)
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=60
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return json.loads(result.stdout)
+        except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as e:
+            logger.debug("YouTube subprocess fallback failed: %s", e)
+        return None
+
     def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
-        """Извлекает метаданные видео.
-        
-        При for_list_formats=True использует process=False — обходит выбор формата
-        и возвращает сырой список форматов от экстрактора (без ошибки
-        "Requested format is not available" на YouTube).
-        """
+        """Извлекает метаданные видео."""
         opts = self._base_opts(for_list_formats=for_list_formats)
         with yt_dlp.YoutubeDL(opts) as ydl:
-            return ydl.extract_info(url, download=False, process=not for_list_formats)
+            return ydl.extract_info(url, download=False)
     
     @staticmethod
     def _is_tiktok(url: str) -> bool:
@@ -220,28 +244,33 @@ class YtDlpService:
     
     def list_formats(self, url: str, max_items: int = 12) -> Tuple[str, List[FormatItem], FormatItem, str]:
         """Извлекает форматы видео с обработкой ошибок для разных платформ"""
+        info: Optional[Dict[str, Any]] = None
         try:
             info = self.extract(url, for_list_formats=True)
         except Exception as e:
-            # Специальная обработка для Pinterest и других платформ
-            error_msg = str(e).lower()
-            if "403" in error_msg or "forbidden" in error_msg:
-                raise Exception("Доступ запрещен. Возможно, контент приватный или требуется авторизация.")
-            elif "404" in error_msg or "not found" in error_msg:
-                raise Exception("Видео не найдено. Проверьте ссылку.")
-            elif "none" in error_msg or "nonetype" in error_msg:
-                raise Exception("Ошибка парсинга данных. Попробуйте позже или используйте другую ссылку.")
-            else:
-                # Include more details in the error message, but keep it readable
-                logger.error(f"YtDlp Extraction Error: {e}", exc_info=True)
-                raise Exception(f"Ошибка извлечения: {str(e)[:300]}")
+            if self._is_youtube(url):
+                info = self._extract_youtube_via_subprocess(url)
+            if not info:
+                error_msg = str(e).lower()
+                if "403" in error_msg or "forbidden" in error_msg:
+                    raise Exception("Доступ запрещен. Возможно, контент приватный или требуется авторизация.")
+                elif "404" in error_msg or "not found" in error_msg:
+                    raise Exception("Видео не найдено. Проверьте ссылку.")
+                elif "none" in error_msg or "nonetype" in error_msg:
+                    raise Exception("Ошибка парсинга данных. Попробуйте позже или используйте другую ссылку.")
+                else:
+                    logger.error("YtDlp Extraction Error: %s", e, exc_info=True)
+                    raise Exception(f"Ошибка извлечения: {str(e)[:300]}")
         
         title = info.get("title") or "Видео"
-        # yt-dlp может возвращать duration как int или float
         duration_sec = info.get("duration")
         duration_str = self._format_duration(duration_sec)
         
         raw_formats = info.get("formats", [])
+        if not raw_formats and self._is_youtube(url):
+            info2 = self._extract_youtube_via_subprocess(url)
+            if info2:
+                raw_formats = info2.get("formats", [])
         is_tiktok = self._is_tiktok(url)
         
         formats: List[FormatItem] = []

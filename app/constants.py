@@ -18,8 +18,8 @@ SUPPORTED_PLATFORMS = {
     "pinterest.com", "pin.it",
 }
 
-# Форматы видео
-VIDEO_EXTENSIONS = {"mp4", "webm"}
+# Форматы видео (в т.ч. для YouTube DASH/HLS)
+VIDEO_EXTENSIONS = {"mp4", "webm", "3gp"}
 AUDIO_FORMAT_ID = "bestaudio/best"
 GIF_FORMAT_ID = "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
 

@@ -69,7 +69,7 @@ info_cache: TTLCache = TTLCache(maxsize=200, ttl=600)  # Кэш форматов
 # Rate Limiter (простой in-memory)
 user_rates: TTLCache = TTLCache(maxsize=500, ttl=60)  # Сброс каждую минуту (уменьшено)
 
-URL_RE = re.compile(r"^https?://", re.I)
+URL_RE = re.compile(r"https?://\S+", re.I)
 SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*]')
 
 def is_supported_url(text: str) -> bool:
@@ -291,6 +291,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = (update.message.text or "").strip()
     
+    # Попытка извлечь URL из текста (например, если отправлен "Check this https://...")
+    match = URL_RE.search(text)
+    if match:
+        text = match.group(0).rstrip(".,!:;)")
+
     if not is_supported_url(text):
         await update.message.reply_text("❌ Ссылка не поддерживается. Попробуйте YouTube, TikTok, VK или Pinterest.")
         return

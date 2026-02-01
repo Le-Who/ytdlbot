@@ -71,7 +71,7 @@ class YtDlpService:
     
     SOCKET_TIMEOUT = 30
     MAX_RETRIES = 5
-    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
     BYTES_IN_KB = 1024
     BITS_IN_BYTE = 8
     
@@ -99,6 +99,8 @@ class YtDlpService:
             "force_ipv4": True,
             "legacyserverconnect": True,
             "user_agent": self.USER_AGENT,
+            # Use specific clients to avoid bot detection
+            "extractor_args": {'youtube': {'player_client': ['android', 'web']}},
         }
         
         if self.cookies_path:
@@ -221,7 +223,9 @@ class YtDlpService:
             elif "none" in error_msg or "nonetype" in error_msg:
                 raise Exception("Ошибка парсинга данных. Попробуйте позже или используйте другую ссылку.")
             else:
-                raise Exception(f"Ошибка извлечения: {str(e)[:200]}")
+                # Include more details in the error message, but keep it readable
+                logger.error(f"YtDlp Extraction Error: {e}", exc_info=True)
+                raise Exception(f"Ошибка извлечения: {str(e)[:300]}")
         
         title = info.get("title") or "Видео"
         # yt-dlp может возвращать duration как int или float

@@ -6,3 +6,8 @@
 **Vulnerability:** A deadlock in subprocess communication could be triggered by a malicious or unusually verbose input causing the stderr buffer to fill up. This would cause the application thread to hang indefinitely, consuming resources and potentially leading to a Denial of Service (DoS).
 **Learning:** Synchronous waiting for stderr (`await proc.wait()`) while the process is blocked on writing to stderr creates a deadlock. Buffer limits (typically 64KB) are easily reached with verbose logging or errors.
 **Prevention:** Consume stderr asynchronously and continuously (e.g., using `asyncio.create_task` loop) while processing stdout, ensuring the subprocess is never blocked on I/O.
+
+## 2026-02-01 - [Critical] Missing Webhook Authentication
+**Vulnerability:** The `/webhook` endpoint was publicly accessible without authentication. Attackers could send fake update objects to the bot, potentially bypassing logic or causing DoS.
+**Learning:** Telegram recommends verifying the `X-Telegram-Bot-Api-Secret-Token` header. Relying solely on the secrecy of the webhook URL is insufficient, especially if the URL structure is predictable or leaked.
+**Prevention:** Implement `X-Telegram-Bot-Api-Secret-Token` check in the webhook handler. Use `secrets.compare_digest` for secure token comparison to prevent timing attacks.

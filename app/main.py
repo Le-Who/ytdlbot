@@ -2,6 +2,7 @@ import os
 import re
 import uuid
 import time
+import secrets
 import asyncio
 import logging
 from collections import deque
@@ -10,7 +11,7 @@ from urllib.parse import quote, urlparse
 
 from cachetools import TTLCache
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.responses import StreamingResponse
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -33,6 +34,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip() # Если есть - используем вебхук
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
 
 LINK_TTL_MINUTES = int(os.getenv("LINK_TTL_MINUTES", "30"))
 ENABLE_TELEGRAM_UPLOAD = os.getenv("ENABLE_TELEGRAM_UPLOAD", "0").strip() == "1"
@@ -262,8 +264,16 @@ async def download(token: str):
 # --- WEBHOOK ENDPOINT ---
 if WEBHOOK_URL:
     @api.post("/webhook")
-    async def telegram_webhook(request: Request):
+    async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: Optional[str] = Header(None, alias="X-Telegram-Bot-Api-Secret-Token")):
         """Обработка вебхука от Telegram"""
+
+        # Verify Secret Token
+        expected_secret = getattr(api.state, "webhook_secret", None)
+        if expected_secret:
+            if not x_telegram_bot_api_secret_token or not secrets.compare_digest(x_telegram_bot_api_secret_token, expected_secret):
+                logger.warning("Webhook authentication failed: invalid secret token")
+                raise HTTPException(401, "Invalid secret token")
+
         if bot_app:
             try:
                 update = Update.de_json(await request.json(), bot_app.bot)
@@ -585,8 +595,14 @@ async def _startup():
     
     if WEBHOOK_URL:
         # Режим Webhook
-        await bot_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
-        logger.info(f"Webhook set to {WEBHOOK_URL}")
+        secret_token = WEBHOOK_SECRET or uuid.uuid4().hex
+        api.state.webhook_secret = secret_token
+
+        await bot_app.bot.set_webhook(
+            f"{WEBHOOK_URL}/webhook",
+            secret_token=secret_token
+        )
+        logger.info(f"Webhook set to {WEBHOOK_URL} (secret token enabled)")
     else:
         # Режим Polling
         await bot_app.updater.start_polling(drop_pending_updates=True)

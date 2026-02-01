@@ -97,74 +97,6 @@ def check_rate_limit(user_id: int, limit: int = 5) -> bool:
     user_rates[user_id] = current + 1
     return True
 
-def build_yt_dlp_command(
-    page_url: str, format_id: str, height: Optional[int], output: str,
-    cookies_path: Optional[str] = None, max_filesize: Optional[int] = None,
-    use_aria2: bool = False
-) -> list:
-    """Строит команду yt-dlp с поддержкой aria2c"""
-    
-    # Проверяем, является ли это GIF форматом для Pinterest
-    is_gif_format = format_id == GIF_FORMAT_ID
-    
-    # 1. Селектор видео
-    if height:
-        video_sel = f"bestvideo[height={height}]"
-        prog_sel = f"best[height={height}]"
-    elif "+" not in format_id and format_id not in ("bestaudio/best", "best") and not is_gif_format:
-         video_sel = format_id
-         prog_sel = f"best"
-    elif is_gif_format:
-        # Для GIF используем bestvideo без аудио
-        # yt-dlp скачает видео без аудио, затем нужно будет конвертировать в GIF через ffmpeg
-        cmd = [
-            "yt-dlp", "--format", "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best",
-            "--output", output,
-            "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4"
-        ]
-        if cookies_path: cmd.extend(["--cookies", cookies_path])
-        if max_filesize: cmd.extend(["--max-filesize", f"{max_filesize}M"])
-        # Для прогресс-бара
-        if output != "-":
-            cmd.extend(["--progress", "--newline"])
-            if use_aria2 and ytdlp.has_aria2:
-                cmd.extend(["--external-downloader", "aria2c", "--external-downloader-args", "-x 8 -k 1M"])
-        cmd.append(page_url)
-        return cmd
-    else:
-        # Аудио/Raw
-        cmd = ["yt-dlp", "--format", format_id, "--output", output, "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4"]
-        if cookies_path: cmd.extend(["--cookies", cookies_path])
-        if max_filesize: cmd.extend(["--max-filesize", f"{max_filesize}M"])
-        cmd.append(page_url)
-        return cmd
-
-    # 2. Селектор аудио (Original -> English -> OrigTag -> Any)
-    audio_sel = "bestaudio[format_note*=original]/bestaudio[language^=en]/bestaudio[language^=orig]/bestaudio"
-    final_fmt = f"{video_sel}+({audio_sel})/{prog_sel}/best"
-
-    cmd = [
-        "yt-dlp", "--format", final_fmt, "--output", output,
-        "--quiet", "--no-warnings", "--no-playlist", "--force-ipv4",
-        # Для прогресс-бара нам нужен вывод в stdout/stderr
-        "--progress", "--newline", 
-        "--postprocessor-args", "Merger+ffmpeg:-movflags frag_keyframe+empty_moov"
-    ]
-    
-    # Если стримим в pipe ("-"), то aria2c использовать нельзя, и прогресс тоже мешает
-    if output == "-":
-        # Убираем --progress для чистого стрима
-        cmd = [c for c in cmd if c not in ["--progress", "--newline"]]
-    elif use_aria2 and ytdlp.has_aria2:
-        # Ускорение для скачивания на диск
-        cmd.extend(["--external-downloader", "aria2c", "--external-downloader-args", "-x 8 -k 1M"])
-    
-    if cookies_path: cmd.extend(["--cookies", cookies_path])
-    if max_filesize: cmd.extend(["--max-filesize", f"{max_filesize}M"])
-    
-    cmd.append(page_url)
-    return cmd
-
 # --- API ENDPOINTS ---
 
 @api.get("/health")
@@ -191,9 +123,9 @@ async def download(token: str):
             
             try:
                 # Скачиваем видео
-                cmd = build_yt_dlp_command(
+                cmd = ytdlp.build_command(
                     payload["page_url"], payload["format_id"], payload.get("height"),
-                    output=video_tmp, cookies_path=ytdlp.cookies_path
+                    output=video_tmp
                 )
                 logger.info(f"[STREAM-GIF] Download: {' '.join(cmd)}")
                 proc = await asyncio.create_subprocess_exec(
@@ -256,10 +188,9 @@ async def download(token: str):
                 await asyncio.to_thread(safe_remove, video_tmp)
         else:
             # Обычное видео - стримим напрямую
-            cmd = build_yt_dlp_command(
+            cmd = ytdlp.build_command(
                 payload["page_url"], payload["format_id"], payload.get("height"),
-                output="-", cookies_path=ytdlp.cookies_path
-                # Aria2c не работает с pipe выходом
+                output="-"
             )
             logger.info(f"[STREAM] {' '.join(cmd)}")
             
@@ -269,29 +200,47 @@ async def download(token: str):
                     *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
                 )
                 
+                # Consume stderr asynchronously to avoid deadlock
+                stderr_data = []
+                async def consume_stderr():
+                    while True:
+                        line = await proc.stderr.readline()
+                        if not line: break
+                        stderr_data.append(line)
+                        if len(stderr_data) > 50: stderr_data.pop(0) # Keep last 50 lines
+
+                stderr_task = asyncio.create_task(consume_stderr())
+
                 # Таймаут для всего стрима (15 минут для free tier)
                 stream_timeout = 900
                 start_time = time.time()
                 
-                while True:
-                    # Проверяем общий таймаут
-                    if time.time() - start_time > stream_timeout:
-                        logger.error("[STREAM] Overall timeout exceeded")
-                        break
-                        
-                    try:
-                        chunk = await asyncio.wait_for(proc.stdout.read(CHUNK_SIZE), timeout=45.0)
-                        if not chunk: break
-                        yield chunk
-                    except asyncio.TimeoutError:
-                        logger.warning("[STREAM] Chunk read timeout, continuing...")
-                        # Продолжаем попытки, но проверяем общий таймаут
-                        continue
-                
-                await proc.wait()
+                try:
+                    while True:
+                        # Проверяем общий таймаут
+                        if time.time() - start_time > stream_timeout:
+                            logger.error("[STREAM] Overall timeout exceeded")
+                            break
+
+                        try:
+                            chunk = await asyncio.wait_for(proc.stdout.read(CHUNK_SIZE), timeout=45.0)
+                            if not chunk: break
+                            yield chunk
+                        except asyncio.TimeoutError:
+                            logger.warning("[STREAM] Chunk read timeout, continuing...")
+                            # Продолжаем попытки, но проверяем общий таймаут
+                            continue
+                finally:
+                    if proc.returncode is None:
+                        try:
+                            proc.kill()
+                        except:
+                            pass
+                    await proc.wait()
+                    await stderr_task
+
                 if proc.returncode != 0:
-                    err = await proc.stderr.read()
-                    error_text = err.decode(errors='ignore')[:500]  # Ограничиваем размер лога
+                    error_text = b"".join(stderr_data).decode(errors='ignore')[-500:]
                     logger.error(f"[STREAM] Error (code {proc.returncode}): {error_text}")
                     
             except Exception as e:
@@ -458,9 +407,9 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         tmp_path = os.path.join(tmp_dir, f"ytdl_{uuid.uuid4().hex}.{file_ext}")
 
         # Строим команду с Aria2c и MaxFilesize
-        cmd = build_yt_dlp_command(
+        cmd = ytdlp.build_command(
             payload["page_url"], payload["format_id"], payload.get("height"),
-            output=tmp_path, cookies_path=ytdlp.cookies_path,
+            output=tmp_path,
             max_filesize=50, use_aria2=True # Используем aria2c для скорости!
         )
 

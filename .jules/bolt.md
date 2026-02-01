@@ -15,3 +15,6 @@
 ## 2026-02-01 - [Pre-compiling Regex in Hot Loops]
 **Learning:** Using `re.search` inside a frequently called method causes repeated cache lookups or recompilation of the regex pattern. Pre-compiling the regex into a module-level constant avoids this overhead and speeds up execution significantly (measured ~40% improvement in micro-benchmarks).
 **Action:** Identify regex patterns used in hot paths and compile them once using `re.compile()` at module or class level.
+## 2026-01-31 - [Async Stderr Consumption for Reliability]
+**Learning:** Blocking reads on subprocess stderr can cause deadlocks if the buffer fills up while the main loop reads stdout. This is critical when streaming output from tools like yt-dlp.
+**Action:** Implemented asynchronous stderr consumption in `stream_video_subprocess` to ensure continuous stream processing and prevent deadlocks.

@@ -122,22 +122,32 @@ class YtDlpService:
 
     def _extract_youtube_via_subprocess(self, url: str) -> Optional[Dict[str, Any]]:
         """Извлечение через yt-dlp CLI для YouTube — надёжный обход ошибок API."""
-        cmd = [
+        base_cmd = [
             "yt-dlp", "-f", "worst", "--dump-json", "--no-download",
             "--no-warnings", "--no-playlist", "--force-ipv4",
         ]
         if self.cookies_path:
-            cmd.extend(["--cookies", self.cookies_path])
-        cmd.extend(["--extractor-args", "youtube:player_client=android,web,mweb,ios"])
-        cmd.append(url)
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=60
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                return json.loads(result.stdout)
-        except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as e:
-            logger.debug("YouTube subprocess fallback failed: %s", e)
+            base_cmd.extend(["--cookies", self.cookies_path])
+
+        # Стратегия: 1. Спец. клиенты (android/web) 2. Без аргументов (стандартное поведение)
+        arg_variants = [
+            ["--extractor-args", "youtube:player_client=android,web,mweb,ios"],
+            []
+        ]
+
+        for args in arg_variants:
+            cmd = base_cmd + args + [url]
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=60
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    return json.loads(result.stdout)
+                else:
+                    logger.debug(f"Subprocess attempt failed (args={args}), retcode={result.returncode}")
+            except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError) as e:
+                logger.debug(f"YouTube subprocess fallback exception (args={args}): {e}")
+
         return None
 
     def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
@@ -245,11 +255,13 @@ class YtDlpService:
     def list_formats(self, url: str, max_items: int = 12) -> Tuple[str, List[FormatItem], FormatItem, str]:
         """Извлекает форматы видео с обработкой ошибок для разных платформ"""
         info: Optional[Dict[str, Any]] = None
+        used_subprocess = False
         try:
             info = self.extract(url, for_list_formats=True)
         except Exception as e:
             if self._is_youtube(url):
                 info = self._extract_youtube_via_subprocess(url)
+                used_subprocess = True
             if not info:
                 error_msg = str(e).lower()
                 if "403" in error_msg or "forbidden" in error_msg:
@@ -267,8 +279,9 @@ class YtDlpService:
         duration_str = self._format_duration(duration_sec)
         
         raw_formats = info.get("formats", [])
-        if not raw_formats and self._is_youtube(url):
+        if not raw_formats and self._is_youtube(url) and not used_subprocess:
             info2 = self._extract_youtube_via_subprocess(url)
+            used_subprocess = True
             if info2:
                 raw_formats = info2.get("formats", [])
         is_tiktok = self._is_tiktok(url)
@@ -277,6 +290,16 @@ class YtDlpService:
         for raw_fmt in raw_formats:
             fmt = self._parse_format(raw_fmt, duration_sec, is_tiktok)
             if fmt: formats.append(fmt)
+
+        # Если после фильтрации нет форматов (например, вернулось только аудио), пробуем fallback
+        if not formats and self._is_youtube(url) and not used_subprocess:
+            logger.info("No video formats parsed via API, trying subprocess fallback...")
+            info2 = self._extract_youtube_via_subprocess(url)
+            if info2:
+                 raw_formats2 = info2.get("formats", [])
+                 for raw_fmt in raw_formats2:
+                     fmt = self._parse_format(raw_fmt, duration_sec, is_tiktok)
+                     if fmt: formats.append(fmt)
         
         formats.sort(key=lambda x: (x.height or 0, x.filesize or 0), reverse=True)
         formats = self._deduplicate_formats(formats, is_tiktok)

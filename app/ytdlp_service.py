@@ -88,8 +88,13 @@ class YtDlpService:
     def cookies_path(self) -> Optional[str]:
         return self.cookies_manager.cookies_path
     
-    def _base_opts(self) -> Dict[str, Any]:
-        """Базовые опции для yt-dlp"""
+    def _base_opts(self, for_list_formats: bool = False) -> Dict[str, Any]:
+        """Базовые опции для yt-dlp
+        
+        При for_list_formats=True используется format='all' — селектор всегда находит
+        форматы и не падает с "Requested format is not available" на проблемных
+        YouTube-видео (Shorts, ограничения региона и т.п.).
+        """
         opts: Dict[str, Any] = {
             "quiet": True,
             "no_warnings": True,
@@ -99,21 +104,23 @@ class YtDlpService:
             "force_ipv4": True,
             "legacyserverconnect": True,
             "user_agent": self.USER_AGENT,
-            # Явный селектор формата с fallback — иначе yt-dlp падает на некоторых
-            # YouTube-видео (Shorts, ограничения региона) с "Requested format is not available"
-            "format": "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best",
             # Player clients с fallback — android/web иногда не дают форматы для Shorts и др.
             "extractor_args": {'youtube': {'player_client': ['android', 'web', 'mweb', 'ios']}},
         }
+        
+        if for_list_formats:
+            opts["format"] = "all"  # Не требует выбора — всегда есть форматы
+        else:
+            opts["format"] = "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
         
         if self.cookies_path:
             opts["cookiefile"] = self.cookies_path
         
         return opts
     
-    def extract(self, url: str) -> Dict[str, Any]:
+    def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
         """Извлекает метаданные видео"""
-        with yt_dlp.YoutubeDL(self._base_opts()) as ydl:
+        with yt_dlp.YoutubeDL(self._base_opts(for_list_formats=for_list_formats)) as ydl:
             return ydl.extract_info(url, download=False)
     
     @staticmethod
@@ -215,7 +222,7 @@ class YtDlpService:
     def list_formats(self, url: str, max_items: int = 12) -> Tuple[str, List[FormatItem], FormatItem, str]:
         """Извлекает форматы видео с обработкой ошибок для разных платформ"""
         try:
-            info = self.extract(url)
+            info = self.extract(url, for_list_formats=True)
         except Exception as e:
             # Специальная обработка для Pinterest и других платформ
             error_msg = str(e).lower()

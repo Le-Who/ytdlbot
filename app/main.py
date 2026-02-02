@@ -74,6 +74,13 @@ URL_RE = re.compile(r"https?://\S+", re.I)
 SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*]')
 PROGRESS_RE = re.compile(r"(\d+\.\d+)%")
 
+def render_progressbar(percent: float, width: int = 10) -> str:
+    """Renders a text-based progress bar."""
+    percent = max(0.0, min(100.0, percent))
+    filled_length = int(round(width * percent / 100))
+    bar = '█' * filled_length + '░' * (width - filled_length)
+    return bar
+
 def is_supported_url(text: str) -> bool:
     if not URL_RE.search(text or ""): return False
 
@@ -351,7 +358,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    await q.answer("⏳ Подготовка ссылки...")
     
     try: _, format_id = q.data.split("|", 1)
     except: return
@@ -455,7 +462,9 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         match = PROGRESS_RE.search(line_str)
                         if match:
                             try:
-                                await q.edit_message_text(f"⏳ Скачиваю: {match.group(1)}%")
+                                percent = float(match.group(1))
+                                bar = render_progressbar(percent)
+                                await q.edit_message_text(f"⏳ Скачиваю: [{bar}] {percent}%")
                                 last_update = now
                             except Exception: 
                                 pass  # Игнорим ошибки редактирования (flood wait)

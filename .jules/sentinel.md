@@ -6,3 +6,8 @@
 **Vulnerability:** A deadlock in subprocess communication could be triggered by a malicious or unusually verbose input causing the stderr buffer to fill up. This would cause the application thread to hang indefinitely, consuming resources and potentially leading to a Denial of Service (DoS).
 **Learning:** Synchronous waiting for stderr (`await proc.wait()`) while the process is blocked on writing to stderr creates a deadlock. Buffer limits (typically 64KB) are easily reached with verbose logging or errors.
 **Prevention:** Consume stderr asynchronously and continuously (e.g., using `asyncio.create_task` loop) while processing stdout, ensuring the subprocess is never blocked on I/O.
+
+## 2026-02-02 - [High] Unauthenticated Webhook Endpoint
+**Vulnerability:** The Telegram webhook endpoint `/webhook` was publicly accessible without any authentication. This allowed unauthorized actors to inject fake updates.
+**Learning:** Manual webhook integration in FastAPI/Starlette requires explicit validation of the `X-Telegram-Bot-Api-Secret-Token` header using constant-time comparison.
+**Prevention:** Use `secrets.compare_digest` to validate the secret token in the webhook handler.

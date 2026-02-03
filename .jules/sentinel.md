@@ -6,3 +6,7 @@
 **Vulnerability:** A deadlock in subprocess communication could be triggered by a malicious or unusually verbose input causing the stderr buffer to fill up. This would cause the application thread to hang indefinitely, consuming resources and potentially leading to a Denial of Service (DoS).
 **Learning:** Synchronous waiting for stderr (`await proc.wait()`) while the process is blocked on writing to stderr creates a deadlock. Buffer limits (typically 64KB) are easily reached with verbose logging or errors.
 **Prevention:** Consume stderr asynchronously and continuously (e.g., using `asyncio.create_task` loop) while processing stdout, ensuring the subprocess is never blocked on I/O.
+## 2026-02-03 - [Medium] Subprocess Deadlock via Unconsumed Stdout
+**Vulnerability:** Even when `stderr` is consumed asynchronously, leaving `stdout` as `PIPE` without consuming it (or redirecting to `DEVNULL`) can still cause a deadlock if the subprocess writes to stdout (e.g., progress bars).
+**Learning:** `asyncio.create_subprocess_exec` with `PIPE` requires **all** piped streams to be actively read. Disabling output flags in the command (like `--quiet`) is not always sufficient if the tool forces output (like `--progress`).
+**Prevention:** Explicitly set `stdout=asyncio.subprocess.DEVNULL` for subprocesses where output is not needed, or ensure a consumer task is running for it. Always ensure subprocesses are killed in a `finally` block to unblock stream readers.

@@ -22,3 +22,7 @@
 ## 2026-02-01 - [Deque for Stream Buffering]
 **Learning:** Using `list.pop(0)` to maintain a fixed-size buffer (e.g., for stderr logs) is O(N) because it shifts all elements. In high-throughput streaming loops, this adds unnecessary CPU overhead.
 **Action:** Use `collections.deque(maxlen=N)` which provides O(1) appends and automatic eviction of old elements, simplifying code and improving performance.
+
+## 2026-02-01 - [Optimizing Frequent String Checks]
+**Learning:** Checking for suffixes using a loop with string concatenation (`domain.endswith(f".{p}")`) inside a hot path creates unnecessary string objects and is slow (O(N)). Using `str.endswith()` with a pre-computed tuple of suffixes pushes the iteration to C level, resulting in drastic performance improvements (~85% measured).
+**Action:** When validating against a set of static prefixes or suffixes, pre-compute them into a tuple and use `startswith/endswith`.

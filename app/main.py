@@ -2,6 +2,7 @@ import os
 import re
 import uuid
 import time
+import secrets
 import asyncio
 import logging
 from collections import deque
@@ -25,7 +26,7 @@ from telegram.ext import (
 from telegram.error import NetworkError
 
 from .ytdlp_service import YtDlpService
-from .constants import CHUNK_SIZE, SUPPORTED_PLATFORMS, GIF_FORMAT_ID
+from .constants import CHUNK_SIZE, SUPPORTED_PLATFORMS, SUPPORTED_PLATFORMS_SUFFIXES, GIF_FORMAT_ID
 
 load_dotenv()
 
@@ -33,6 +34,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()  # Если есть - используем вебхук
+TELEGRAM_SECRET_TOKEN = os.getenv("TELEGRAM_SECRET_TOKEN", secrets.token_urlsafe(32))
 
 LINK_TTL_MINUTES = int(os.getenv("LINK_TTL_MINUTES", "30"))
 ENABLE_TELEGRAM_UPLOAD = os.getenv("ENABLE_TELEGRAM_UPLOAD", "0").strip() == "1"
@@ -85,6 +87,12 @@ URL_RE = re.compile(r"https?://\S+", re.I)
 SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*]')
 PROGRESS_RE = re.compile(r"(\d+\.\d+)%")
 
+def render_progressbar(percent: float, length: int = 15) -> str:
+    """Renders a text-based progress bar."""
+    percent = max(0.0, min(100.0, percent))
+    filled_length = int(length * percent // 100)
+    bar = "█" * filled_length + "░" * (length - filled_length)
+    return f"{bar} {percent:.1f}%"
 
 def is_supported_url(text: str) -> bool:
     if not URL_RE.search(text or ""):
@@ -96,10 +104,10 @@ def is_supported_url(text: str) -> bool:
         if not domain:
             return False
 
-        for platform in SUPPORTED_PLATFORMS:
-            # Check for exact match or subdomain
-            if domain == platform or domain.endswith(f".{platform}"):
-                return True
+        if domain in SUPPORTED_PLATFORMS:
+            return True
+        if domain.endswith(SUPPORTED_PLATFORMS_SUFFIXES):
+            return True
         return False
     except Exception:
         return False
@@ -445,12 +453,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
-
-    try:
-        _, format_id = q.data.split("|", 1)
-    except:
-        return
+    await q.answer("⏳ Подготовка ссылки...")
+    
+    try: _, format_id = q.data.split("|", 1)
+    except: return
 
     data = context.user_data
     if not data.get("page_url"):
@@ -568,9 +574,9 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         match = PROGRESS_RE.search(line_str)
                         if match:
                             try:
-                                await q.edit_message_text(
-                                    f"⏳ Скачиваю: {match.group(1)}%"
-                                )
+                                percent = float(match.group(1))
+                                bar_text = render_progressbar(percent)
+                                await q.edit_message_text(f"⏳ Скачиваю: {bar_text}")
                                 last_update = now
                             except Exception:
                                 pass  # Игнорим ошибки редактирования (flood wait)
@@ -742,7 +748,9 @@ async def _startup():
 
     if WEBHOOK_URL:
         # Режим Webhook
-        await bot_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+        await bot_app.bot.set_webhook(
+            f"{WEBHOOK_URL}/webhook", secret_token=TELEGRAM_SECRET_TOKEN
+        )
         logger.info(f"Webhook set to {WEBHOOK_URL}")
     else:
         # Режим Polling

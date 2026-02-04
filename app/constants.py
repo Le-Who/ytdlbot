@@ -18,6 +18,9 @@ SUPPORTED_PLATFORMS = {
     "pinterest.com", "pin.it",
 }
 
+# Tuple for efficient endswith check
+SUPPORTED_PLATFORMS_SUFFIXES = tuple(f".{p}" for p in SUPPORTED_PLATFORMS)
+
 # Форматы видео (в т.ч. для YouTube DASH/HLS)
 VIDEO_EXTENSIONS = {"mp4", "webm", "3gp"}
 AUDIO_FORMAT_ID = "bestaudio/best"

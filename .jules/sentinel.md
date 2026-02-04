@@ -10,3 +10,8 @@
 **Vulnerability:** Even when `stderr` is consumed asynchronously, leaving `stdout` as `PIPE` without consuming it (or redirecting to `DEVNULL`) can still cause a deadlock if the subprocess writes to stdout (e.g., progress bars).
 **Learning:** `asyncio.create_subprocess_exec` with `PIPE` requires **all** piped streams to be actively read. Disabling output flags in the command (like `--quiet`) is not always sufficient if the tool forces output (like `--progress`).
 **Prevention:** Explicitly set `stdout=asyncio.subprocess.DEVNULL` for subprocesses where output is not needed, or ensure a consumer task is running for it. Always ensure subprocesses are killed in a `finally` block to unblock stream readers.
+
+## 2026-02-02 - [High] Unauthenticated Webhook Endpoint
+**Vulnerability:** The Telegram webhook endpoint `/webhook` was publicly accessible without any authentication. This allowed unauthorized actors to inject fake updates.
+**Learning:** Manual webhook integration in FastAPI/Starlette requires explicit validation of the `X-Telegram-Bot-Api-Secret-Token` header using constant-time comparison.
+**Prevention:** Use `secrets.compare_digest` to validate the secret token in the webhook handler.

@@ -13,3 +13,6 @@
 ## 2026-02-03 - Visual Progress in Text Interfaces
 **Learning:** Users in chat interfaces often perceive "text-only" percentage updates (e.g. "45%") as "spammy" or easy to miss. Adding a block-character progress bar (████░░░) transforms the message into a recognizable "UI element" that anchors the eye and conveys status at a glance without reading numbers.
 **Action:** When working with chatbots or CLI tools, always prefer visual block bars over raw numbers for long-running operations.
+## 2026-02-02 - Localization Consistency
+**Learning:** Mixing languages in feedback (e.g. English toasts in a Russian interface) breaks immersion and trust, even for micro-interactions like toasts.
+**Action:** Always check existing UI language before adding new text and match the locale.

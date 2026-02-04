@@ -4,6 +4,7 @@ import uuid
 import time
 import asyncio
 import logging
+import secrets
 from collections import deque
 from typing import Optional, Dict
 from urllib.parse import quote, urlparse
@@ -33,6 +34,10 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip() # Если есть - используем вебхук
+
+TELEGRAM_SECRET_TOKEN = os.getenv("TELEGRAM_SECRET_TOKEN")
+if not TELEGRAM_SECRET_TOKEN:
+    TELEGRAM_SECRET_TOKEN = secrets.token_urlsafe(32)
 
 LINK_TTL_MINUTES = int(os.getenv("LINK_TTL_MINUTES", "30"))
 ENABLE_TELEGRAM_UPLOAD = os.getenv("ENABLE_TELEGRAM_UPLOAD", "0").strip() == "1"
@@ -264,6 +269,10 @@ if WEBHOOK_URL:
     @api.post("/webhook")
     async def telegram_webhook(request: Request):
         """Обработка вебхука от Telegram"""
+        token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if not token or not secrets.compare_digest(token, TELEGRAM_SECRET_TOKEN):
+            raise HTTPException(401, "Unauthorized")
+
         if bot_app:
             try:
                 update = Update.de_json(await request.json(), bot_app.bot)
@@ -585,7 +594,10 @@ async def _startup():
     
     if WEBHOOK_URL:
         # Режим Webhook
-        await bot_app.bot.set_webhook(f"{WEBHOOK_URL}/webhook")
+        await bot_app.bot.set_webhook(
+            f"{WEBHOOK_URL}/webhook",
+            secret_token=TELEGRAM_SECRET_TOKEN
+        )
         logger.info(f"Webhook set to {WEBHOOK_URL}")
     else:
         # Режим Polling

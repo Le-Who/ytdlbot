@@ -17,6 +17,7 @@ SUPPORTED_PLATFORMS = {
     "tiktok.com",
     "pinterest.com", "pin.it",
 }
+SUPPORTED_PLATFORMS_SUFFIXES = tuple(f".{p}" for p in SUPPORTED_PLATFORMS)
 
 # Tuple for efficient endswith check
 SUPPORTED_PLATFORMS_SUFFIXES = tuple(f".{p}" for p in SUPPORTED_PLATFORMS)

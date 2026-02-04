@@ -109,11 +109,7 @@ def is_supported_url(text: str) -> bool:
         if not domain:
             return False
 
-        if domain in SUPPORTED_PLATFORMS:
-            return True
-        if domain.endswith(SUPPORTED_PLATFORMS_SUFFIXES):
-            return True
-        return False
+        return domain in SUPPORTED_PLATFORMS or domain.endswith(SUPPORTED_PLATFORMS_SUFFIXES)
     except Exception:
         return False
 

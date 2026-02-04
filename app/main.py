@@ -162,13 +162,36 @@ async def download(token: str):
                 )
                 logger.info(f"[STREAM-GIF] Download: {' '.join(cmd)}")
                 proc = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+                    *cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-                await proc.wait()
+
+                # Consume stderr asynchronously to avoid deadlock
+                stderr_data = deque(maxlen=50)
+
+                async def consume_stderr():
+                    while True:
+                        line = await proc.stderr.readline()
+                        if not line:
+                            break
+                        stderr_data.append(line)
+
+                stderr_task = asyncio.create_task(consume_stderr())
+
+                try:
+                    await proc.wait()
+                finally:
+                    if proc.returncode is None:
+                        try:
+                            proc.kill()
+                        except:
+                            pass
+                    await proc.wait()
+                    await stderr_task
 
                 if proc.returncode != 0:
-                    err = await proc.stderr.read()
-                    error_text = err.decode(errors="ignore")[:500]
+                    error_text = b"".join(stderr_data).decode(errors="ignore")[-500:]
                     logger.error(f"[STREAM-GIF] Download error: {error_text}")
                     return
 
@@ -319,20 +342,18 @@ async def download(token: str):
 
 
 # --- WEBHOOK ENDPOINT ---
-@api.post("/webhook")
-async def telegram_webhook(request: Request):
-    """Обработка вебхука от Telegram"""
-    token = request.headers.get("X-Telegram-Bot-Api-Secret-Token") or ""
-    if not secrets.compare_digest(token, TELEGRAM_SECRET_TOKEN):
-        raise HTTPException(401, "Unauthorized")
+if WEBHOOK_URL:
 
-    if bot_app:
-        try:
-            update = Update.de_json(await request.json(), bot_app.bot)
-            await bot_app.process_update(update)
-        except Exception as e:
-            logger.error(f"Webhook update error: {e}")
-    return {"ok": True}
+    @api.post("/webhook")
+    async def telegram_webhook(request: Request):
+        """Обработка вебхука от Telegram"""
+        if bot_app:
+            try:
+                update = Update.de_json(await request.json(), bot_app.bot)
+                await bot_app.process_update(update)
+            except Exception as e:
+                logger.error(f"Webhook update error: {e}")
+        return {"ok": True}
 
 
 # --- TELEGRAM HANDLERS ---

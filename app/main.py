@@ -87,12 +87,12 @@ URL_RE = re.compile(r"https?://\S+", re.I)
 SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*]')
 PROGRESS_RE = re.compile(r"(\d+\.\d+)%")
 
-def render_progressbar(percent: float, width: int = 10) -> str:
+def render_progressbar(percent: float, length: int = 15) -> str:
     """Renders a text-based progress bar."""
     percent = max(0.0, min(100.0, percent))
-    filled_length = int(round(width * percent / 100))
-    bar = '█' * filled_length + '░' * (width - filled_length)
-    return bar
+    filled_length = int(length * percent // 100)
+    bar = "█" * filled_length + "░" * (length - filled_length)
+    return f"{bar} {percent:.1f}%"
 
 def is_supported_url(text: str) -> bool:
     if not URL_RE.search(text or ""):
@@ -554,8 +554,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         if match:
                             try:
                                 percent = float(match.group(1))
-                                bar = render_progressbar(percent)
-                                await q.edit_message_text(f"⏳ Скачиваю: [{bar}] {percent}%")
+                                bar_text = render_progressbar(percent)
+                                await q.edit_message_text(f"⏳ Скачиваю: {bar_text}")
                                 last_update = now
                             except Exception:
                                 pass  # Игнорим ошибки редактирования (flood wait)

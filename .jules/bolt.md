@@ -22,3 +22,7 @@
 ## 2026-02-01 - [Deque for Stream Buffering]
 **Learning:** Using `list.pop(0)` to maintain a fixed-size buffer (e.g., for stderr logs) is O(N) because it shifts all elements. In high-throughput streaming loops, this adds unnecessary CPU overhead.
 **Action:** Use `collections.deque(maxlen=N)` which provides O(1) appends and automatic eviction of old elements, simplifying code and improving performance.
+
+## 2026-02-04 - [Optimized Domain Matching]
+**Learning:** Using `str.endswith(tuple)` is significantly faster (~20%) and cleaner than iterating through a list and doing string concatenation (`f".{suffix}"`) inside the loop, especially for hot paths like message filtering.
+**Action:** Pre-compute suffixes as a tuple for `endswith` checks.

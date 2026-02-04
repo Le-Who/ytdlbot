@@ -26,7 +26,7 @@ from telegram.ext import (
 from telegram.error import NetworkError
 
 from .ytdlp_service import YtDlpService
-from .constants import CHUNK_SIZE, SUPPORTED_PLATFORMS, GIF_FORMAT_ID
+from .constants import CHUNK_SIZE, SUPPORTED_PLATFORMS, SUPPORTED_PLATFORMS_SUFFIXES, GIF_FORMAT_ID
 
 load_dotenv()
 
@@ -98,10 +98,10 @@ def is_supported_url(text: str) -> bool:
         if not domain:
             return False
 
-        for platform in SUPPORTED_PLATFORMS:
-            # Check for exact match or subdomain
-            if domain == platform or domain.endswith(f".{platform}"):
-                return True
+        if domain in SUPPORTED_PLATFORMS:
+            return True
+        if domain.endswith(SUPPORTED_PLATFORMS_SUFFIXES):
+            return True
         return False
     except Exception:
         return False

@@ -9,3 +9,7 @@
 ## 2026-02-01 - Video Format Scannability
 **Learning:** Adding visual anchors (emojis like 📺, 📹, 🎵) to dense technical lists (video formats) significantly improves scanability and helps users quickly distinguish quality tiers.
 **Action:** Use consistent iconography for data types in list views (e.g., specific icons for resolution tiers).
+
+## 2026-02-04 - Progress Indicators in Chat Interfaces
+**Learning:** In chat interfaces where real-time UI updates are limited, text-based visual progress bars (e.g., `[████░░]`) provide critical feedback for long-running processes, reducing user uncertainty compared to just percentage numbers.
+**Action:** Implement text-based visual bars for any process taking longer than 5 seconds in chat-based UIs.

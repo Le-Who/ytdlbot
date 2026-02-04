@@ -9,3 +9,7 @@
 ## 2026-02-01 - Video Format Scannability
 **Learning:** Adding visual anchors (emojis like 📺, 📹, 🎵) to dense technical lists (video formats) significantly improves scanability and helps users quickly distinguish quality tiers.
 **Action:** Use consistent iconography for data types in list views (e.g., specific icons for resolution tiers).
+
+## 2026-02-02 - Localization Consistency
+**Learning:** Mixing languages in feedback (e.g. English toasts in a Russian interface) breaks immersion and trust, even for micro-interactions like toasts.
+**Action:** Always check existing UI language before adding new text and match the locale.

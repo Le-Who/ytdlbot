@@ -15,3 +15,8 @@
 **Vulnerability:** The Telegram webhook endpoint `/webhook` was publicly accessible without any authentication. This allowed unauthorized actors to inject fake updates.
 **Learning:** Manual webhook integration in FastAPI/Starlette requires explicit validation of the `X-Telegram-Bot-Api-Secret-Token` header using constant-time comparison.
 **Prevention:** Use `secrets.compare_digest` to validate the secret token in the webhook handler.
+
+## 2026-02-05 - [High] HTML Injection in Telegram Messages
+**Vulnerability:** User-controlled input (video title) was inserted directly into an HTML-formatted Telegram message string without sanitization. This allowed attackers (or accidentally malicious titles) to inject invalid HTML tags, causing the Telegram API to reject the message and potentially disrupting service availability or spoofing content.
+**Learning:** When using `parse_mode='HTML'` (or Markdown) in messaging APIs, all dynamic content must be treated as untrusted and properly escaped. Assuming that third-party data (like YouTube titles) is safe or "plain text" is a common oversight.
+**Prevention:** Always use `html.escape()` for any variable interpolated into an HTML string sent to Telegram. Validate or sanitize all external inputs before rendering them in a markup format.

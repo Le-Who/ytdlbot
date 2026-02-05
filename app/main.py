@@ -1,5 +1,6 @@
 import os
 import re
+import html
 import uuid
 import time
 import secrets
@@ -450,7 +451,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await msg.edit_text(
-        f"📹 <b>{title}</b>\n⏱ {duration}",
+        f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}",
         reply_markup=InlineKeyboardMarkup(buttons),
         parse_mode="HTML",
     )

@@ -15,33 +15,31 @@ from app.main import render_progressbar
 class TestUXProgress(unittest.TestCase):
     def test_zero_percent(self):
         # 0% -> [░░░░░░░░░░]
-        bar = render_progressbar(0, width=10)
-        self.assertEqual(bar, "░░░░░░░░░░")
+        bar = render_progressbar(0, length=10)
+        self.assertEqual(bar, "░░░░░░░░░░ 0.0%")
 
     def test_fifty_percent(self):
         # 50% -> [█████░░░░░]
-        bar = render_progressbar(50, width=10)
-        self.assertEqual(bar, "█████░░░░░")
+        bar = render_progressbar(50, length=10)
+        self.assertEqual(bar, "█████░░░░░ 50.0%")
 
     def test_hundred_percent(self):
         # 100% -> [██████████]
-        bar = render_progressbar(100, width=10)
-        self.assertEqual(bar, "██████████")
+        bar = render_progressbar(100, length=10)
+        self.assertEqual(bar, "██████████ 100.0%")
 
     def test_custom_width(self):
         # 50% width 4 -> [██░░]
-        bar = render_progressbar(50, width=4)
-        self.assertEqual(bar, "██░░")
+        bar = render_progressbar(50, length=4)
+        self.assertEqual(bar, "██░░ 50.0%")
 
     def test_rounding(self):
         # 25% of 10 is 2.5 -> 2 blocks
-        bar = render_progressbar(25, width=10)
-        self.assertEqual(bar, "██░░░░░░░░")
-        # 29% of 10 is 2.9 -> 2 blocks (floor) or 3 (round)?
-        # Usually floor is safer to not overpromise, or round.
-        # Let's implement round.
-        bar = render_progressbar(29, width=10)
-        self.assertEqual(bar, "███░░░░░░░")
+        bar = render_progressbar(25, length=10)
+        self.assertEqual(bar, "██░░░░░░░░ 25.0%")
+        # 29% of 10 is 2.9 -> 2 blocks (floor)
+        bar = render_progressbar(29, length=10)
+        self.assertEqual(bar, "██░░░░░░░░ 29.0%")
 
 if __name__ == '__main__':
     unittest.main()

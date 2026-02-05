@@ -123,6 +123,18 @@ def check_rate_limit(user_id: int, limit: int = 5) -> bool:
     return True
 
 
+def build_format_keyboard(formats: list, audio) -> InlineKeyboardMarkup:
+    """Helper to build format selection buttons."""
+    buttons = [
+        [InlineKeyboardButton(f.label, callback_data=f"pick|{f.format_id}")]
+        for f in formats[:6]
+    ]
+    buttons.append(
+        [InlineKeyboardButton(audio.label, callback_data=f"pick|{audio.format_id}")]
+    )
+    return InlineKeyboardMarkup(buttons)
+
+
 # --- API ENDPOINTS ---
 
 
@@ -441,17 +453,39 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     # Клавиатура
-    buttons = [
-        [InlineKeyboardButton(f.label, callback_data=f"pick|{f.format_id}")]
-        for f in formats[:6]
-    ]
-    buttons.append(
-        [InlineKeyboardButton(audio.label, callback_data=f"pick|{audio.format_id}")]
-    )
+    reply_markup = build_format_keyboard(formats, audio)
 
     await msg.edit_text(
         f"📹 <b>{title}</b>\n⏱ {duration}",
-        reply_markup=InlineKeyboardMarkup(buttons),
+        reply_markup=reply_markup,
+        parse_mode="HTML",
+    )
+
+
+async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    data = context.user_data
+    page_url = data.get("page_url")
+    if not page_url:
+        await q.edit_message_text(
+            "⚠️ Данные устарели. Пожалуйста, отправьте ссылку заново."
+        )
+        return
+
+    cached = info_cache.get(page_url)
+    if not cached:
+        await q.edit_message_text("⚠️ Кэш истек. Пожалуйста, отправьте ссылку заново.")
+        return
+
+    title, formats, audio, duration = cached
+
+    reply_markup = build_format_keyboard(formats, audio)
+
+    await q.edit_message_text(
+        f"📹 <b>{title}</b>\n⏱ {duration}",
+        reply_markup=reply_markup,
         parse_mode="HTML",
     )
 
@@ -489,6 +523,8 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
             ]
         )
+
+    kb.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
 
     await q.edit_message_text(
         f"✅ Ссылка готова ({LINK_TTL_MINUTES} мин):\n\n{dl_link}",
@@ -738,6 +774,7 @@ def build_bot_app() -> Application:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^pick\|"))
     app.add_handler(CallbackQueryHandler(on_send, pattern=r"^send\|"))
+    app.add_handler(CallbackQueryHandler(on_back, pattern=r"^back$"))
     return app
 
 

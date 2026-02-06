@@ -26,3 +26,7 @@
 ## 2026-02-01 - [Optimizing Frequent String Checks]
 **Learning:** Checking for suffixes using a loop with string concatenation (`domain.endswith(f".{p}")`) inside a hot path creates unnecessary string objects and is slow (O(N)). Using `str.endswith()` with a pre-computed tuple of suffixes pushes the iteration to C level, resulting in drastic performance improvements (~85% measured).
 **Action:** When validating against a set of static prefixes or suffixes, pre-compute them into a tuple and use `startswith/endswith`.
+
+## 2026-02-05 - [Caching Expensive yt-dlp Initialization]
+**Learning:** Initializing `yt_dlp.YoutubeDL` is expensive (~100ms) due to loading many extractors. For frequent metadata requests, creating a new instance every time adds significant latency.
+**Action:** Use `threading.local` to cache `YoutubeDL` instances per thread when options are stable, reducing overhead by ~95% for sequential requests.

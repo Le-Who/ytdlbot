@@ -20,3 +20,7 @@
 ## 2026-02-05 - Interaction State Recovery
 **Learning:** In stateless bot flows (like selecting a download format), users frequently mis-click. Without a "Back" button, they are forced to restart the entire process (re-send link), creating high friction. Using cached metadata to restore previous menu states turns a "fatal error" into a simple correction.
 **Action:** In multi-step bot interactions, always implement a "Back" button that reconstructs the previous view using cached session data instead of asking for re-input.
+
+## 2026-02-06 - Preventing Dead Ends
+**Learning:** In async flows (like file uploads), error states often leave users stranded without a way to retry or access an alternative solution (e.g., direct link). Providing a "Download Link" button on failure ensures the user can still achieve their goal.
+**Action:** Always provide "Back" and "Alternative Action" buttons on error screens to prevent user frustration.

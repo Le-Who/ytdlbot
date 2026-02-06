@@ -37,7 +37,7 @@ class TestUXProgress(unittest.TestCase):
         # 25% of 10 is 2.5 -> 2 blocks
         bar = render_progressbar(25, length=10)
         self.assertEqual(bar, "██░░░░░░░░ 25.0%")
-        # 29% of 10 is 2.9 -> 2 blocks (floor)
+        # 29% of 10 is 2.9 -> 2 blocks (int conversion floors)
         bar = render_progressbar(29, length=10)
         self.assertEqual(bar, "██░░░░░░░░ 29.0%")
 

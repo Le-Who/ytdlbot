@@ -16,3 +16,7 @@
 ## 2026-02-02 - Localization Consistency
 **Learning:** Mixing languages in feedback (e.g. English toasts in a Russian interface) breaks immersion and trust, even for micro-interactions like toasts.
 **Action:** Always check existing UI language before adding new text and match the locale.
+
+## 2026-02-05 - Interaction State Recovery
+**Learning:** In stateless bot flows (like selecting a download format), users frequently mis-click. Without a "Back" button, they are forced to restart the entire process (re-send link), creating high friction. Using cached metadata to restore previous menu states turns a "fatal error" into a simple correction.
+**Action:** In multi-step bot interactions, always implement a "Back" button that reconstructs the previous view using cached session data instead of asking for re-input.

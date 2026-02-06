@@ -9,7 +9,7 @@ import logging
 import secrets
 from collections import deque
 from typing import Optional, Dict
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlsplit
 
 from cachetools import TTLCache
 from dotenv import load_dotenv
@@ -101,11 +101,8 @@ def render_progressbar(percent: float, length: int = 15) -> str:
     return f"{bar} {percent:.1f}%"
 
 def is_supported_url(text: str) -> bool:
-    if not URL_RE.search(text or ""):
-        return False
-
     try:
-        parsed = urlparse(text)
+        parsed = urlsplit(text)
         domain = parsed.hostname
         if not domain:
             return False
@@ -397,8 +394,13 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Попытка извлечь URL из текста (например, если отправлен "Check this https://...")
     match = URL_RE.search(text)
-    if match:
-        text = match.group(0).rstrip(".,!:;)")
+    if not match:
+        await update.message.reply_text(
+            "❌ Ссылка не поддерживается. Попробуйте YouTube, TikTok, VK или Pinterest."
+        )
+        return
+
+    text = match.group(0).rstrip(".,!:;)")
 
     if not is_supported_url(text):
         await update.message.reply_text(
@@ -457,7 +459,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = build_format_keyboard(formats, audio)
 
     await msg.edit_text(
-        f"📹 <b>{title}</b>\n⏱ {duration}",
+        f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}",
         reply_markup=reply_markup,
         parse_mode="HTML",
     )

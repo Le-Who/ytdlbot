@@ -7,7 +7,7 @@ from unittest import mock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Mock environment variables BEFORE importing app.main
-with mock.patch.dict(os.environ, {"BOT_TOKEN": "test_token"}):
+with mock.patch.dict(os.environ, {"BOT_TOKEN": "test_token", "WEBHOOK_URL": "https://example.com/webhook"}):
     from app.main import is_supported_url
 
 class TestMainUtils(unittest.TestCase):

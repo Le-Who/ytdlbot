@@ -6,6 +6,9 @@ from fastapi.testclient import TestClient
 # Ensure env vars are set before import if not already
 if "BOT_TOKEN" not in os.environ:
     os.environ["BOT_TOKEN"] = "test-token"
+# Set WEBHOOK_URL so the /webhook route is created
+if "WEBHOOK_URL" not in os.environ:
+    os.environ["WEBHOOK_URL"] = "https://example.com"
 
 from app.main import api
 

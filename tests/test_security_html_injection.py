@@ -7,7 +7,7 @@ import sys
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Mock environment variables BEFORE importing app.main
-with patch.dict(os.environ, {"BOT_TOKEN": "test_token"}):
+with patch.dict(os.environ, {"BOT_TOKEN": "test_token", "WEBHOOK_URL": "https://example.com/webhook"}):
     from app.main import on_message
 
 class TestHtmlInjection(unittest.IsolatedAsyncioTestCase):

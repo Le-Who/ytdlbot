@@ -8,11 +8,18 @@ os.environ["WEBHOOK_URL"] = "https://example.com/webhook"
 os.environ["TELEGRAM_SECRET_TOKEN"] = "super-secret-token"
 
 from fastapi.testclient import TestClient
+import app.main
 from app.main import api
 
 class TestWebhookSecurity(unittest.TestCase):
     def setUp(self):
+        # Patch the SECRET TOKEN in the already loaded module
+        self.token_patcher = patch.object(app.main, 'TELEGRAM_SECRET_TOKEN', 'super-secret-token')
+        self.token_patcher.start()
         self.client = TestClient(api)
+
+    def tearDown(self):
+        self.token_patcher.stop()
 
     def test_webhook_no_auth_header(self):
         """Test that webhook REJECTS request WITHOUT auth header"""

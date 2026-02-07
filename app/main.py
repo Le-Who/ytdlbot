@@ -4,6 +4,7 @@ import html
 import uuid
 import time
 import secrets
+import tempfile
 import asyncio
 import logging
 import secrets
@@ -25,6 +26,7 @@ from telegram.ext import (
     CallbackQueryHandler,
     filters,
 )
+from telegram.constants import ChatAction
 from telegram.error import NetworkError
 
 from .ytdlp_service import YtDlpService
@@ -77,6 +79,7 @@ def rename_if_exists(src: str, dst: str) -> None:
 api = FastAPI()
 ytdlp = YtDlpService()
 tasks_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+parsing_sem = asyncio.Semaphore(5)  # Лимит на одновременный парсинг форматов
 
 # Кэши (оптимизировано для free tier - меньше памяти)
 link_cache: TTLCache = TTLCache(
@@ -85,6 +88,9 @@ link_cache: TTLCache = TTLCache(
 info_cache: TTLCache = TTLCache(
     maxsize=200, ttl=600
 )  # Кэш форматов на 10 минут (уменьшено)
+
+# Кэш отмены загрузки: token -> bool (True = отменено)
+cancel_cache: TTLCache = TTLCache(maxsize=100, ttl=3600)
 
 # Rate Limiter (простой in-memory)
 user_rates: TTLCache = TTLCache(maxsize=500, ttl=60)  # Сброс каждую минуту (уменьшено)
@@ -122,11 +128,16 @@ def check_rate_limit(user_id: int, limit: int = 5) -> bool:
 
 
 def build_format_keyboard(formats: list, audio) -> InlineKeyboardMarkup:
-    """Helper to build format selection buttons."""
-    buttons = [
-        [InlineKeyboardButton(f.label, callback_data=f"pick|{f.format_id}")]
-        for f in formats[:6]
-    ]
+    """Helper to build format selection buttons in 2 columns."""
+    buttons = []
+    # Разбиваем форматы на пары для 2-колоночного лейаута
+    formats_slice = formats[:8] # Показываем больше форматов (было 6)
+    for i in range(0, len(formats_slice), 2):
+        row = [InlineKeyboardButton(formats_slice[i].label, callback_data=f"pick|{formats_slice[i].format_id}")]
+        if i + 1 < len(formats_slice):
+            row.append(InlineKeyboardButton(formats_slice[i+1].label, callback_data=f"pick|{formats_slice[i+1].format_id}"))
+        buttons.append(row)
+        
     buttons.append(
         [InlineKeyboardButton(audio.label, callback_data=f"pick|{audio.format_id}")]
     )
@@ -160,7 +171,7 @@ async def download(token: str):
     async def stream_video_subprocess():
         if is_gif:
             # Для GIF нужно сначала скачать видео, затем конвертировать в GIF
-            tmp_dir = os.getenv("TMPDIR", "/tmp")
+            tmp_dir = os.getenv("TMPDIR", tempfile.gettempdir())
             video_tmp = os.path.join(tmp_dir, f"ytdl_video_{uuid.uuid4().hex}.mp4")
 
             try:
@@ -388,6 +399,21 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(welcome_text, parse_mode="HTML")
 
 
+async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    help_text = (
+        "ℹ️ <b>Справка по боту</b>\n\n"
+        "<b>Поддерживаемые сервисы:</b>\n"
+        f"• {', '.join(sorted(SUPPORTED_PLATFORMS))}\n\n"
+        "<b>Инструкция:</b>\n"
+        "1. Скопируйте ссылку на видео.\n"
+        "2. Отправьте ссылку боту.\n"
+        "3. Выберите качество кнопок под сообщением.\n"
+        "4. Выберите: получить ссылку или файл в Telegram.\n\n"
+        "❗️ <i>Если файл > {MAX_TG_UPLOAD_MB} МБ, он не сможет быть загружен в Telegram (ограничение API). Используйте прямую ссылку.</i>"
+    )
+    await update.message.reply_text(help_text, parse_mode="HTML")
+
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = (update.message.text or "").strip()
@@ -413,6 +439,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Слишком часто. Подождите минуту.")
         return
 
+    # Индикатор набора текста для отзывчивости
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+
     msg = await update.message.reply_text("🔎 Ищу видео...")
 
     # 1. Проверяем КЭШ
@@ -423,9 +452,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         try:
             # Выполняем парсинг
-            title, formats, audio, duration = await asyncio.to_thread(
-                ytdlp.list_formats, text
-            )
+            async with parsing_sem:
+                title, formats, audio, duration = await asyncio.to_thread(
+                    ytdlp.list_formats, text
+                )
             info_cache[text] = (title, formats, audio, duration)  # Сохраняем в кэш
         except Exception as e:
             logger.error(f"Parse error: {e}", exc_info=True)
@@ -479,10 +509,20 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     cached = info_cache.get(page_url)
     if not cached:
-        await q.edit_message_text("⚠️ Кэш истек. Пожалуйста, отправьте ссылку заново.")
-        return
-
-    title, formats, audio, duration = cached
+        # Если кэш истек, пробуем распарсить заново
+        try:
+            await q.edit_message_text("⏳ Кэш истек. Обновляю данные...")
+            async with parsing_sem:
+                    title, formats, audio, duration = await asyncio.to_thread(
+                        ytdlp.list_formats, page_url
+                    )
+            info_cache[page_url] = (title, formats, audio, duration)
+        except Exception as e:
+            logger.error(f"[ON_BACK] Refresh error: {e}")
+            await q.edit_message_text("⚠️ Ошибка обновления данных. Отправьте ссылку заново.")
+            return
+    else:
+        title, formats, audio, duration = cached
 
     reply_markup = build_format_keyboard(formats, audio)
 
@@ -529,11 +569,25 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     kb.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
 
+
+
     await q.edit_message_text(
         f"✅ Ссылка готова ({LINK_TTL_MINUTES} мин):\n\n{dl_link}",
         reply_markup=InlineKeyboardMarkup(kb),
         disable_web_page_preview=True,
     )
+
+
+async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отмена текущей загрузки"""
+    q = update.callback_query
+    await q.answer("🚫 Отменяю...")
+    try:
+        _, token = q.data.split("|", 1)
+        cancel_cache[token] = True
+        await q.edit_message_text("❌ Загрузка отменена пользователем.")
+    except:
+        pass
 
 
 async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -566,6 +620,11 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     kb_back = InlineKeyboardMarkup(
         [[InlineKeyboardButton("🔙 Назад", callback_data="back")]]
     )
+    
+    # Кнопка отмены
+    kb_cancel = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("❌ Отмена", callback_data=f"cancel|{token}")]]
+    )
 
     if tasks_sem.locked():
         await q.edit_message_text(
@@ -576,7 +635,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async with tasks_sem:
         await q.edit_message_text("⏳ Начинаю загрузку...")
         # Используем временную директорию с очисткой
-        tmp_dir = os.getenv("TMPDIR", "/tmp")
+        tmp_dir = os.getenv("TMPDIR", tempfile.gettempdir())
         is_gif = payload["format_id"] == GIF_FORMAT_ID
         file_ext = "gif" if is_gif else "mp4"
         tmp_path = os.path.join(tmp_dir, f"ytdl_{uuid.uuid4().hex}.{file_ext}")
@@ -603,8 +662,22 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             last_update = 0
             download_start = time.time()
             max_download_time = 600  # 10 минут максимум для free tier
+            
+            # Сброс флага отмены
+            if token in cancel_cache:
+                del cancel_cache[token]
 
             while True:
+                # 0. Проверяем отмену
+                if cancel_cache.get(token):
+                    logger.info(f"[DL-TG] Cancelled by user: {token}")
+                    try:
+                        proc.kill()
+                    except:
+                        pass
+                    await asyncio.to_thread(safe_remove, tmp_path)
+                    return # Выходим молча, сообщение уже обновлено в on_cancel
+
                 # Проверяем общий таймаут загрузки
                 if time.time() - download_start > max_download_time:
                     logger.warning("[DL-TG] Download timeout exceeded")
@@ -633,7 +706,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             try:
                                 percent = float(match.group(1))
                                 bar_text = render_progressbar(percent)
-                                await q.edit_message_text(f"⏳ Скачиваю: {bar_text}")
+                                await q.edit_message_text(f"⏳ Скачиваю: {bar_text}\n❌ Нажмите отмена, если передумали.", reply_markup=kb_cancel)
                                 last_update = now
                             except Exception:
                                 pass  # Игнорим ошибки редактирования (flood wait)
@@ -800,9 +873,11 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def build_bot_app() -> Application:
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("help", cmd_help))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
     app.add_handler(CallbackQueryHandler(on_pick, pattern=r"^pick\|"))
     app.add_handler(CallbackQueryHandler(on_send, pattern=r"^send\|"))
+    app.add_handler(CallbackQueryHandler(on_cancel, pattern=r"^cancel\|"))
     app.add_handler(CallbackQueryHandler(on_back, pattern=r"^back$"))
     return app
 

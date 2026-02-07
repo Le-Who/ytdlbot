@@ -1,7 +1,7 @@
 import re
 from typing import List, Dict, Any, Optional
 from app.constants import VIDEO_EXTENSIONS, GIF_FORMAT_ID, AUDIO_FORMAT_ID, HEIGHT_PATTERN
-from .models import FormatItem
+from .models import FormatItem, FormatMetadata
 
 HEIGHT_REGEX = re.compile(HEIGHT_PATTERN)
 BYTES_IN_KB = 1024
@@ -83,11 +83,11 @@ def _create_format_label(
 
     return " ".join(parts)
 
-def parse_format(
+def parse_format_metadata(
     format_dict: Dict[str, Any],
     duration_sec: Optional[float],
     is_tiktok_url: bool,
-) -> Optional[FormatItem]:
+) -> Optional[FormatMetadata]:
     if format_dict.get("vcodec") == "none" and not is_tiktok_url:
         return None
     ext = format_dict.get("ext")
@@ -107,13 +107,28 @@ def parse_format(
             height = 720
 
     filesize = _calculate_filesize(format_dict, duration_sec)
-    label = _create_format_label(height, filesize, protocol, is_tiktok_url)
 
-    return FormatItem(
-        format_id=fid, label=label, ext="mp4", height=height or 0, filesize=filesize
+    return FormatMetadata(
+        format_id=fid, ext="mp4", height=height or 0, filesize=filesize, protocol=protocol
     )
 
-def deduplicate_formats(formats: List[FormatItem], is_tiktok_url: bool) -> List[FormatItem]:
+
+def create_format_item(metadata: FormatMetadata, is_tiktok: bool) -> FormatItem:
+    label = _create_format_label(
+        metadata.height, metadata.filesize, metadata.protocol, is_tiktok
+    )
+    return FormatItem(
+        format_id=metadata.format_id,
+        label=label,
+        ext=metadata.ext,
+        height=metadata.height,
+        filesize=metadata.filesize,
+    )
+
+
+def deduplicate_formats(
+    formats: List[FormatMetadata], is_tiktok_url: bool
+) -> List[FormatMetadata]:
     if is_tiktok_url:
         return formats
     unique_formats = []

@@ -8,16 +8,17 @@ from typing import Dict, Any, List, Optional, Tuple
 
 import yt_dlp
 
-from .models import FormatItem
+from .models import FormatItem, FormatMetadata
 from .cookies import CookiesManager
 from .builders import build_command
 from .parsers import (
-    parse_format, 
-    deduplicate_formats, 
-    _format_duration, 
+    parse_format_metadata,
+    create_format_item,
+    deduplicate_formats,
+    _format_duration,
     get_audio_format,
     _is_youtube,
-    _is_tiktok
+    _is_tiktok,
 )
 
 logger = logging.getLogger("ytdlp_service")
@@ -171,24 +172,26 @@ class YtDlpService:
                 raw_formats = info2.get("formats", [])
 
         is_tiktok_url = _is_tiktok(url)
-        formats: List[FormatItem] = []
+        formats_meta: List[FormatMetadata] = []
         for raw_fmt in raw_formats:
-            fmt = parse_format(raw_fmt, duration_sec, is_tiktok_url)
+            fmt = parse_format_metadata(raw_fmt, duration_sec, is_tiktok_url)
             if fmt:
-                formats.append(fmt)
+                formats_meta.append(fmt)
 
-        if not formats and _is_youtube(url) and not used_subprocess:
+        if not formats_meta and _is_youtube(url) and not used_subprocess:
             logger.info("No video formats parsed via API, trying subprocess fallback...")
             info2 = self._extract_youtube_via_subprocess(url)
             if info2:
                 for raw_fmt in info2.get("formats", []):
-                    fmt = parse_format(raw_fmt, duration_sec, is_tiktok_url)
+                    fmt = parse_format_metadata(raw_fmt, duration_sec, is_tiktok_url)
                     if fmt:
-                        formats.append(fmt)
+                        formats_meta.append(fmt)
 
-        formats.sort(key=lambda x: (x.height or 0, x.filesize or 0), reverse=True)
-        formats = deduplicate_formats(formats, is_tiktok_url)
-        formats = formats[:max_items]
+        formats_meta.sort(key=lambda x: (x.height or 0, x.filesize or 0), reverse=True)
+        formats_meta = deduplicate_formats(formats_meta, is_tiktok_url)
+        formats_meta = formats_meta[:max_items]
+
+        formats = [create_format_item(f, is_tiktok_url) for f in formats_meta]
 
         audio = get_audio_format(url)
         return title, formats, audio, duration_str

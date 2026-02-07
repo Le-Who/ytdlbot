@@ -3,11 +3,14 @@ import os
 import sys
 from unittest.mock import MagicMock, patch
 
+# Mock yt_dlp before importing app
+sys.modules["yt_dlp"] = MagicMock()
+
 # Add repo root to path so we can import app
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.services.ytdlp.service import YtDlpService
-from app.services.ytdlp.models import FormatItem
+from app.services.ytdlp.models import FormatItem, FormatMetadata
 from app.constants import GIF_FORMAT_ID
 
 class TestYtDlpService(unittest.TestCase):
@@ -97,35 +100,38 @@ class TestYtDlpService(unittest.TestCase):
         }
 
         with patch.object(self.service, 'extract', return_value=mock_info):
-            with patch('app.services.ytdlp.service.parse_format') as mock_parse:
-                mock_parse.return_value = FormatItem("1", "Label", "mp4", 720, 1000)
+            with patch('app.services.ytdlp.service.parse_format_metadata') as mock_parse:
+                mock_parse.return_value = FormatMetadata("1", "mp4", 720, 1000, "https")
 
                 with patch('app.services.ytdlp.service.deduplicate_formats') as mock_dedup:
-                    mock_dedup.return_value = [FormatItem("1", "Label", "mp4", 720, 1000)]
+                    mock_dedup.return_value = [FormatMetadata("1", "mp4", 720, 1000, "https")]
 
-                    # Test YouTube
-                    url = "https://youtube.com/watch?v=123"
-                    self.service.list_formats(url)
+                    with patch('app.services.ytdlp.service.create_format_item') as mock_create:
+                        mock_create.return_value = FormatItem("1", "Label", "mp4", 720, 1000)
 
-                    # Verify parse_format arg
-                    args_parse = mock_parse.call_args[0]
-                    self.assertFalse(args_parse[2], "parse_format: is_tiktok should be False for YouTube")
+                        # Test YouTube
+                        url = "https://youtube.com/watch?v=123"
+                        self.service.list_formats(url)
 
-                    # Verify deduplicate_formats arg
-                    args_dedup = mock_dedup.call_args[0]
-                    self.assertFalse(args_dedup[1], "deduplicate_formats: is_tiktok should be False for YouTube")
+                        # Verify parse_format_metadata arg
+                        args_parse = mock_parse.call_args[0]
+                        self.assertFalse(args_parse[2], "parse_format: is_tiktok should be False for YouTube")
 
-                    # Test TikTok
-                    url_tiktok = "https://tiktok.com/@user/video/123"
-                    self.service.list_formats(url_tiktok)
+                        # Verify deduplicate_formats arg
+                        args_dedup = mock_dedup.call_args[0]
+                        self.assertFalse(args_dedup[1], "deduplicate_formats: is_tiktok should be False for YouTube")
 
-                    # Verify parse_format arg
-                    args_parse = mock_parse.call_args[0]
-                    self.assertTrue(args_parse[2], "parse_format: is_tiktok should be True for TikTok")
+                        # Test TikTok
+                        url_tiktok = "https://tiktok.com/@user/video/123"
+                        self.service.list_formats(url_tiktok)
 
-                    # Verify deduplicate_formats arg
-                    args_dedup = mock_dedup.call_args[0]
-                    self.assertTrue(args_dedup[1], "deduplicate_formats: is_tiktok should be True for TikTok")
+                        # Verify parse_format_metadata arg
+                        args_parse = mock_parse.call_args[0]
+                        self.assertTrue(args_parse[2], "parse_format: is_tiktok should be True for TikTok")
+
+                        # Verify deduplicate_formats arg
+                        args_dedup = mock_dedup.call_args[0]
+                        self.assertTrue(args_dedup[1], "deduplicate_formats: is_tiktok should be True for TikTok")
 
 if __name__ == '__main__':
     unittest.main()

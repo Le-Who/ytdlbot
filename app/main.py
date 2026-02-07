@@ -556,8 +556,21 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("⚠️ Ссылка устарела.")
         return
 
+    dl_link = f"{BASE_URL}/dl/{token}"
+    kb_error = InlineKeyboardMarkup(
+        [
+            [InlineKeyboardButton("📥 Скачать (Ссылка)", url=dl_link)],
+            [InlineKeyboardButton("🔙 Назад", callback_data="back")],
+        ]
+    )
+    kb_back = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("🔙 Назад", callback_data="back")]]
+    )
+
     if tasks_sem.locked():
-        await q.edit_message_text("⚠️ Очередь переполнена. Скачайте по ссылке.")
+        await q.edit_message_text(
+            "⚠️ Очередь переполнена. Скачайте по ссылке.", reply_markup=kb_error
+        )
         return
 
     async with tasks_sem:
@@ -667,7 +680,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )[:200]
                     logger.error(f"[GIF] FFmpeg error: {error_text}")
                     await q.edit_message_text(
-                        "⚠️ Ошибка конвертации в GIF. Используйте ссылку для скачивания."
+                        "⚠️ Ошибка конвертации в GIF. Используйте ссылку для скачивания.",
+                        reply_markup=kb_error,
                     )
                     await asyncio.to_thread(safe_remove, tmp_path)
                     return
@@ -683,15 +697,17 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 # Более понятные сообщения об ошибках
                 if "file larger" in error_text or "filesize" in error_text:
                     await q.edit_message_text(
-                        "⚠️ Файл слишком большой (>50 МБ). Используйте ссылку для скачивания."
+                        "⚠️ Файл слишком большой (>50 МБ).", reply_markup=kb_error
                     )
                 elif "403" in error_text or "forbidden" in error_text:
                     await q.edit_message_text(
-                        "⚠️ Доступ запрещен. Попробуйте скачать по ссылке."
+                        "⚠️ Доступ запрещен. Попробуйте скачать по ссылке.",
+                        reply_markup=kb_error,
                     )
                 else:
                     await q.edit_message_text(
-                        "⚠️ Ошибка загрузки. Используйте ссылку для скачивания."
+                        "⚠️ Ошибка загрузки. Используйте ссылку для скачивания.",
+                        reply_markup=kb_error,
                     )
 
                 await asyncio.to_thread(safe_remove, tmp_path)
@@ -702,12 +718,15 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 file_size = await asyncio.to_thread(os.path.getsize, tmp_path)
                 if file_size > 49.5 * 1024 * 1024:
                     await asyncio.to_thread(safe_remove, tmp_path)
-                    await q.edit_message_text("⚠️ Файл > 50 МБ. Используйте ссылку.")
+                    await q.edit_message_text(
+                        "⚠️ Файл > 50 МБ.", reply_markup=kb_error
+                    )
                     return
             except OSError as e:
                 logger.error(f"[DL-TG] Error checking file size: {e}")
                 await q.edit_message_text(
-                    "⚠️ Ошибка проверки файла. Используйте ссылку."
+                    "⚠️ Ошибка проверки файла. Используйте ссылку.",
+                    reply_markup=kb_error,
                 )
                 await asyncio.to_thread(safe_remove, tmp_path)
                 return
@@ -728,41 +747,48 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         write_timeout=90,
                         connect_timeout=30,
                     )
-                await q.edit_message_text("✅ Отправлено.")
+                await q.edit_message_text("✅ Видео отправлено!", reply_markup=kb_back)
             except NetworkError as net_err:
                 # Более детальная обработка сетевых ошибок
                 error_str = str(net_err).lower()
                 if "413" in error_str or "request entity too large" in error_str:
                     await q.edit_message_text(
-                        "⚠️ Файл слишком большой для Telegram (>50 МБ). Скачайте по ссылке."
+                        "⚠️ Файл слишком большой для Telegram (>50 МБ).",
+                        reply_markup=kb_error,
                     )
                 elif "timeout" in error_str:
                     await q.edit_message_text(
-                        "⚠️ Таймаут загрузки. Попробуйте скачать по ссылке."
+                        "⚠️ Таймаут загрузки. Попробуйте скачать по ссылке.",
+                        reply_markup=kb_error,
                     )
                 else:
                     await q.edit_message_text(
-                        "❌ Ошибка отправки в Telegram. Используйте ссылку."
+                        "❌ Ошибка отправки в Telegram. Используйте ссылку.",
+                        reply_markup=kb_error,
                     )
                 logger.error(f"[DL-TG] Network error: {net_err}")
 
         except NetworkError as e:
             error_str = str(e).lower()
             if "413" in error_str or "request entity too large" in error_str:
-                await q.edit_message_text("⚠️ Файл > 50 MB. Скачайте по ссылке.")
+                await q.edit_message_text(
+                    "⚠️ Файл > 50 MB.", reply_markup=kb_error
+                )
             elif "timeout" in error_str:
                 await q.edit_message_text(
-                    "⚠️ Таймаут сети. Попробуйте скачать по ссылке."
+                    "⚠️ Таймаут сети. Попробуйте скачать по ссылке.",
+                    reply_markup=kb_error,
                 )
             else:
                 await q.edit_message_text(
-                    "❌ Ошибка сети Telegram. Используйте ссылку."
+                    "❌ Ошибка сети Telegram. Используйте ссылку.", reply_markup=kb_error
                 )
             logger.error(f"[DL-TG] Network error: {e}")
         except Exception as e:
             logger.error(f"[DL-TG] Upload error: {e}", exc_info=True)
             await q.edit_message_text(
-                "❌ Ошибка загрузки. Используйте ссылку для скачивания."
+                "❌ Ошибка загрузки. Используйте ссылку для скачивания.",
+                reply_markup=kb_error,
             )
         finally:
             # Гарантированная очистка временного файла

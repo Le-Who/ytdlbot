@@ -1,6 +1,12 @@
 import unittest
+import sys
 import threading
 from unittest.mock import MagicMock, patch
+
+# Mock dependencies before import
+if "yt_dlp" not in sys.modules:
+    sys.modules["yt_dlp"] = MagicMock()
+
 from app.services.ytdlp.service import YtDlpService
 import yt_dlp
 

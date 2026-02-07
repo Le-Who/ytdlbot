@@ -132,9 +132,10 @@ class YtDlpService:
             opts["format_sort"] = ["res:1080", "vcodec:vp9", "br", "size"]
             opts["format"] = "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
         else:
-            # Для list_formats убираем принудительную сортировку и задаем безопасный селектор
+            # Для list_formats ВООБЩЕ не задаем формат, чтобы получить чистый JSON со всеми форматами
+            # yt-dlp сам решит, что доступно, а мы уже отфильтруем
             opts.pop("format_sort", None)
-            opts["format"] = "best/bestvideo+bestaudio" # Гарантируем наличие метаданных
+            opts.pop("format", None)
 
         if self.cookies_path:
             opts["cookiefile"] = self.cookies_path

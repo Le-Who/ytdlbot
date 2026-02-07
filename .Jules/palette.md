@@ -24,3 +24,11 @@
 ## 2026-02-06 - Preventing Dead Ends
 **Learning:** In async flows (like file uploads), error states often leave users stranded without a way to retry or access an alternative solution (e.g., direct link). Providing a "Download Link" button on failure ensures the user can still achieve their goal.
 **Action:** Always provide "Back" and "Alternative Action" buttons on error screens to prevent user frustration.
+
+## 2026-02-07 - Immediate Feedback in Bots
+**Learning:** In async bot flows, silent operations (like starting a download) cause user uncertainty. A 'toast' notification (callback answer with text) provides immediate confirmation that bridging the gap before the first message edit.
+**Action:** Always provide immediate feedback (toast or message edit) upon button interaction to confirm the command was received.
+
+## 2026-02-07 - Cleaner Labels
+**Learning:** Technical suffixes like "(best)" or "(128k)" in format labels add cognitive load. Users generally assume "Audio" implies the best available quality unless specified otherwise.
+**Action:** Remove technical jargon from format labels where possible; use simple, descriptive terms like "Audio" or "HD".

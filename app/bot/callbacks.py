@@ -129,7 +129,7 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
+    await q.answer("🚀 Загрузка началась")
     user_id = q.from_user.id
 
     if not check_rate_limit(user_id, limit=3):

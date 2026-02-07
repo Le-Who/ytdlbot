@@ -1,6 +1,7 @@
 import base64
 import json
 import os
+import sys
 import re
 import subprocess
 import tempfile
@@ -112,10 +113,10 @@ class YtDlpService:
             "legacyserverconnect": True,
             "user_agent": self.USER_AGENT,
             "nocheckcertificate": True,
-            "prefer_free_formats": True,
+            "prefer_free_formats": False,  # Не заставляем использовать свободные форматы (WebM), если они глючат
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["android", "web", "mweb", "ios"],
+                    "player_client": ["ios", "android", "web", "mweb"], # iOS — самый стойкий
                 }
             },
             # --- Professional Refinements ---
@@ -131,8 +132,9 @@ class YtDlpService:
             opts["format_sort"] = ["res:1080", "vcodec:vp9", "br", "size"]
             opts["format"] = "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
         else:
-            # Для list_formats убираем принудительную сортировку, чтобы избежать "Requested format is not available"
+            # Для list_formats убираем принудительную сортировку и задаем безопасный селектор
             opts.pop("format_sort", None)
+            opts["format"] = "best/bestvideo+bestaudio" # Гарантируем наличие метаданных
 
         if self.cookies_path:
             opts["cookiefile"] = self.cookies_path
@@ -142,7 +144,7 @@ class YtDlpService:
     def _extract_youtube_via_subprocess(self, url: str) -> Optional[Dict[str, Any]]:
         """Извлечение через yt-dlp CLI для YouTube — надёжный обход ошибок API."""
         base_cmd = [
-            "yt-dlp",
+            sys.executable, "-m", "yt_dlp", # Более надежный запуск в Docker
             "--dump-json",
             "--no-download",
             "--no-warnings",
@@ -155,9 +157,11 @@ class YtDlpService:
         if self.cookies_path:
             base_cmd.extend(["--cookies", self.cookies_path])
 
-        # Стратегия: 1. Спец. клиенты (android/web) 2. Без аргументов (стандартное поведение)
+        # Стратегия: 1. iOS 2. Android 3. Web 4. Стандарт
         arg_variants = [
-            ["--extractor-args", "youtube:player_client=android,web,mweb,ios"],
+            ["--extractor-args", "youtube:player_client=ios"],
+            ["--extractor-args", "youtube:player_client=android"],
+            ["--extractor-args", "youtube:player_client=web"],
             [],
         ]
 

@@ -117,13 +117,13 @@ class YtDlpService:
 
     def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
         """Извлекает метаданные видео."""
-        opts = self._base_opts(for_list_formats=for_list_formats)
-
         if for_list_formats:
             if not hasattr(self._thread_local, "ydl_list"):
+                opts = self._base_opts(for_list_formats=True)
                 self._thread_local.ydl_list = yt_dlp.YoutubeDL(opts)
             return self._thread_local.ydl_list.extract_info(url, download=False)
 
+        opts = self._base_opts(for_list_formats=False)
         with yt_dlp.YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=False)
 

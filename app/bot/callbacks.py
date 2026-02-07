@@ -288,7 +288,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("📤 Отправляю в Telegram...")
 
             try:
-                with open(tmp_path, "rb") as f:
+                f = await asyncio.to_thread(open, tmp_path, "rb")
+                try:
                     if is_gif:
                         await context.bot.send_animation(
                             chat_id=q.message.chat_id,
@@ -308,6 +309,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             caption="📹",
                             supports_streaming=True,
                         )
+                finally:
+                    await asyncio.to_thread(f.close)
                 await q.delete_message()
             except NetworkError:
                 await q.edit_message_text("⚠️ Ошибка сети при отправке (возможно, файл слишком большой).", reply_markup=kb_error)

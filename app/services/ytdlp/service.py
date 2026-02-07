@@ -16,7 +16,8 @@ from .parsers import (
     deduplicate_formats, 
     _format_duration, 
     get_audio_format,
-    _is_youtube
+    _is_youtube,
+    _is_tiktok
 )
 
 logger = logging.getLogger("ytdlp_service")
@@ -166,9 +167,10 @@ class YtDlpService:
             if info2:
                 raw_formats = info2.get("formats", [])
 
+        is_tiktok_url = _is_tiktok(url)
         formats: List[FormatItem] = []
         for raw_fmt in raw_formats:
-            fmt = parse_format(raw_fmt, duration_sec, url)
+            fmt = parse_format(raw_fmt, duration_sec, is_tiktok_url)
             if fmt:
                 formats.append(fmt)
 
@@ -177,12 +179,12 @@ class YtDlpService:
             info2 = self._extract_youtube_via_subprocess(url)
             if info2:
                 for raw_fmt in info2.get("formats", []):
-                    fmt = parse_format(raw_fmt, duration_sec, url)
+                    fmt = parse_format(raw_fmt, duration_sec, is_tiktok_url)
                     if fmt:
                         formats.append(fmt)
 
         formats.sort(key=lambda x: (x.height or 0, x.filesize or 0), reverse=True)
-        formats = deduplicate_formats(formats, url)
+        formats = deduplicate_formats(formats, is_tiktok_url)
         formats = formats[:max_items]
 
         audio = get_audio_format(url)

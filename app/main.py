@@ -30,7 +30,7 @@ from telegram.constants import ChatAction
 from telegram.error import NetworkError
 
 from .ytdlp_service import YtDlpService
-from .constants import CHUNK_SIZE, SUPPORTED_PLATFORMS, SUPPORTED_PLATFORMS_SUFFIXES, GIF_FORMAT_ID
+from .constants import CHUNK_SIZE, SUPPORTED_PLATFORMS, SUPPORTED_PLATFORMS_SUFFIXES, GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
 load_dotenv()
 

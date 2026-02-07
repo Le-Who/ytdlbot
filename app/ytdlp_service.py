@@ -186,15 +186,7 @@ class YtDlpService:
         """Извлекает метаданные видео."""
         opts = self._base_opts(for_list_formats=for_list_formats)
 
-        # Optimization: Reuse YoutubeDL instance for list_formats (hot path)
-        # Avoids expensive re-initialization (~100ms) per request.
-        if for_list_formats:
-            if not hasattr(self._thread_local, "ydl_list_formats"):
-                self._thread_local.ydl_list_formats = yt_dlp.YoutubeDL(opts)
-            ydl = self._thread_local.ydl_list_formats
-            # Note: extract_info is generally stateless regarding the instance configuration
-            return ydl.extract_info(url, download=False)
-
+        # NOTE: Do NOT reuse YoutubeDL instances for meta-extraction if you want reliable dynamic opts.
         with yt_dlp.YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=False)
 

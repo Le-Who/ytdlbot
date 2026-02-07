@@ -50,3 +50,6 @@
 ## 2026-02-07 - [Offloading Blocking File I/O]
 **Learning:** Opening and closing files synchronously (`with open(...)`) in an `async` context blocks the event loop, causing latency for all concurrent tasks. Offloading these operations to a thread using `asyncio.to_thread` preserves event loop responsiveness even during disk I/O.
 **Action:** Replace blocking `open()` and `f.close()` calls in async handlers with `asyncio.to_thread`.
+## 2026-02-08 - [Redundant Dictionary Allocation]
+**Learning:** Creating a large configuration dictionary (~20 keys) inside a frequently called method (like `extract` for every user link) adds measurable overhead, especially when the dictionary is often discarded unused (due to caching).
+**Action:** Move the dictionary creation inside the conditional block where it is actually needed, avoiding the allocation entirely for the happy path (cached instance).

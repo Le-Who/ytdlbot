@@ -116,7 +116,12 @@ class YtDlpService:
             "prefer_free_formats": False,  # Не заставляем использовать свободные форматы (WebM), если они глючат
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["ios", "android", "web", "mweb"], # iOS — самый стойкий
+                    "player_client": [
+                        "ios",
+                        "android",
+                        "web",
+                        "mweb",
+                    ],  # iOS — самый стойкий
                 }
             },
             # --- Professional Refinements ---
@@ -127,14 +132,18 @@ class YtDlpService:
             "concurrent_fragment_downloads": 5,
             "hls_use_mpegts": True,
         }
-        
+
         if not for_list_formats:
             opts["format_sort"] = ["res:1080", "vcodec:vp9", "br", "size"]
-            opts["format"] = "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
+            opts["format"] = (
+                "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
+            )
         else:
             # Для list_formats убираем принудительную сортировку и задаем безопасный селектор
             opts.pop("format_sort", None)
-            opts["format"] = "best/bestvideo+bestaudio" # Гарантируем наличие метаданных
+            opts["format"] = (
+                "best/bestvideo+bestaudio"  # Гарантируем наличие метаданных
+            )
 
         if self.cookies_path:
             opts["cookiefile"] = self.cookies_path
@@ -144,7 +153,9 @@ class YtDlpService:
     def _extract_youtube_via_subprocess(self, url: str) -> Optional[Dict[str, Any]]:
         """Извлечение через yt-dlp CLI для YouTube — надёжный обход ошибок API."""
         base_cmd = [
-            sys.executable, "-m", "yt_dlp", # Более надежный запуск в Docker
+            sys.executable,
+            "-m",
+            "yt_dlp",  # Более надежный запуск в Docker
             "--dump-json",
             "--no-download",
             "--no-warnings",
@@ -188,11 +199,19 @@ class YtDlpService:
 
     def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
         """Извлекает метаданные видео."""
-        opts = self._base_opts(for_list_formats=for_list_formats)
+        # Use thread-local storage to cache YoutubeDL instances
+        if not hasattr(self._thread_local, "ydl_instances"):
+            self._thread_local.ydl_instances = {}
 
-        # NOTE: Do NOT reuse YoutubeDL instances for meta-extraction if you want reliable dynamic opts.
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            return ydl.extract_info(url, download=False)
+        # Key for caching based on options variation
+        cache_key = "list" if for_list_formats else "default"
+
+        if cache_key not in self._thread_local.ydl_instances:
+            opts = self._base_opts(for_list_formats=for_list_formats)
+            self._thread_local.ydl_instances[cache_key] = yt_dlp.YoutubeDL(opts)
+
+        ydl = self._thread_local.ydl_instances[cache_key]
+        return ydl.extract_info(url, download=False)
 
     @staticmethod
     def _is_tiktok(url: str) -> bool:
@@ -347,7 +366,9 @@ class YtDlpService:
                 elif "404" in error_msg or "not found" in error_msg:
                     raise Exception("Видео не найдено. Проверьте ссылку.")
                 elif "live" in error_msg and "available" not in error_msg:
-                    raise Exception("Прямые трансляции (Live) не поддерживаются. Дождитесь окончания стрима.")
+                    raise Exception(
+                        "Прямые трансляции (Live) не поддерживаются. Дождитесь окончания стрима."
+                    )
                 elif "none" in error_msg or "nonetype" in error_msg:
                     raise Exception(
                         "Ошибка парсинга данных. Попробуйте позже или используйте другую ссылку."
@@ -362,7 +383,9 @@ class YtDlpService:
 
         # Проверка на Live стрим
         if info.get("is_live") or info.get("live_status") == "is_live":
-             raise Exception("⚠️ Это прямая трансляция. Загрузка активных стримов не поддерживается.")
+            raise Exception(
+                "⚠️ Это прямая трансляция. Загрузка активных стримов не поддерживается."
+            )
 
         title = info.get("title") or "Видео"
         duration_sec = info.get("duration")
@@ -498,7 +521,7 @@ class YtDlpService:
 
         # 2. Селектор аудио (Original -> English -> OrigTag -> Any)
         audio_sel = "bestaudio[format_note*=original]/bestaudio[language^=en]/bestaudio[language^=orig]/bestaudio/bestaudio[ext=m4a]/bestaudio"
-        
+
         # 3. Финальный селектор с каскадным fallback
         final_fmt = f"{video_sel}+({audio_sel})/{prog_sel}/bestvideo+bestaudio/best"
 
@@ -516,7 +539,8 @@ class YtDlpService:
             "--geo-bypass",
             "--ignore-config",
             "--no-mtime",
-            "--concurrent-fragments", "5",
+            "--concurrent-fragments",
+            "5",
             # Для прогресс-бара нам нужен вывод в stdout/stderr
             "--progress",
             "--newline",

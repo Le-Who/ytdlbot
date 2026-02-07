@@ -141,7 +141,7 @@ def get_audio_format(url: str) -> FormatItem:
     else:
         return FormatItem(
             format_id=AUDIO_FORMAT_ID,
-            label="🎵 Только аудио (best)",
+            label="🎵 Только аудио",
             ext="audio",
             height=None,
             filesize=None,

@@ -46,3 +46,7 @@
 ## 2026-02-07 - [Pre-computed String Interpolation]
 **Learning:** In hot loops like progress bar rendering (called every ~3s per download), constructing strings with f-strings and multiplication (`"█" * N`) creates short-lived objects that pressure GC. For finite states (e.g., 0-15 blocks), a lookup table is ~14% faster and eliminates allocation overhead.
 **Action:** Identify finite-state string generations in loops and replace them with pre-computed lookup tables or constants.
+
+## 2026-02-08 - [Redundant Dictionary Allocation]
+**Learning:** Creating a large configuration dictionary (~20 keys) inside a frequently called method (like `extract` for every user link) adds measurable overhead, especially when the dictionary is often discarded unused (due to caching).
+**Action:** Move the dictionary creation inside the conditional block where it is actually needed, avoiding the allocation entirely for the happy path (cached instance).

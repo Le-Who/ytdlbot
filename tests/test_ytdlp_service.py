@@ -5,7 +5,7 @@ import sys
 # Add repo root to path so we can import app
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app.ytdlp_service import YtDlpService
+from app.services.ytdlp.service import YtDlpService
 from app.constants import GIF_FORMAT_ID
 
 class TestYtDlpService(unittest.TestCase):

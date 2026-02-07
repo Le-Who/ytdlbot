@@ -9,3 +9,12 @@ class FormatItem:
     ext: str
     height: Optional[int]
     filesize: Optional[int]
+
+@dataclass
+class FormatMetadata:
+    """Промежуточное представление формата видео без лейбла"""
+    format_id: str
+    ext: str
+    height: Optional[int]
+    filesize: Optional[int]
+    protocol: str

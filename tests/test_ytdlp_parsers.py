@@ -1,6 +1,6 @@
 import unittest
-from app.services.ytdlp.parsers import parse_format
-from app.services.ytdlp.models import FormatItem
+from app.services.ytdlp.parsers import parse_format_metadata, create_format_item
+from app.services.ytdlp.models import FormatItem, FormatMetadata
 
 class TestYtDlpParsers(unittest.TestCase):
     def test_parse_format_happy_path(self):
@@ -15,15 +15,18 @@ class TestYtDlpParsers(unittest.TestCase):
         }
         url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         is_tiktok = "tiktok.com" in url
-        result = parse_format(format_dict, None, is_tiktok)
+        metadata = parse_format_metadata(format_dict, None, is_tiktok)
 
-        self.assertIsNotNone(result)
-        self.assertEqual(result.format_id, "137")
-        self.assertEqual(result.height, 1080)
-        self.assertEqual(result.filesize, 100 * 1024 * 1024)
-        self.assertEqual(result.ext, "mp4")
-        self.assertIn("📺", result.label)
-        self.assertIn("100.0 MB", result.label)
+        self.assertIsNotNone(metadata)
+        self.assertEqual(metadata.format_id, "137")
+        self.assertEqual(metadata.height, 1080)
+        self.assertEqual(metadata.filesize, 100 * 1024 * 1024)
+        self.assertEqual(metadata.ext, "mp4")
+
+        # Verify label creation separately
+        item = create_format_item(metadata, is_tiktok)
+        self.assertIn("📺", item.label)
+        self.assertIn("100.0 MB", item.label)
 
     def test_parse_format_filtering_vcodec_none(self):
         """Non-TikTok URLs should filter out audio-only formats"""
@@ -35,7 +38,7 @@ class TestYtDlpParsers(unittest.TestCase):
         }
         url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         is_tiktok = "tiktok.com" in url
-        result = parse_format(format_dict, None, is_tiktok)
+        result = parse_format_metadata(format_dict, None, is_tiktok)
         self.assertIsNone(result)
 
     def test_parse_format_tiktok_vcodec_none(self):
@@ -49,12 +52,14 @@ class TestYtDlpParsers(unittest.TestCase):
         }
         url = "https://www.tiktok.com/@user/video/123"
         is_tiktok = "tiktok.com" in url
-        result = parse_format(format_dict, None, is_tiktok)
+        metadata = parse_format_metadata(format_dict, None, is_tiktok)
 
-        self.assertIsNotNone(result)
-        self.assertEqual(result.format_id, "tiktok_fmt")
-        self.assertEqual(result.height, 720) # Default for TikTok
-        self.assertIn("🎵 TikTok", result.label)
+        self.assertIsNotNone(metadata)
+        self.assertEqual(metadata.format_id, "tiktok_fmt")
+        self.assertEqual(metadata.height, 720) # Default for TikTok
+
+        item = create_format_item(metadata, is_tiktok)
+        self.assertIn("🎵 TikTok", item.label)
 
     def test_parse_format_unsupported_extension(self):
         """Should return None for unsupported extensions like jpg"""
@@ -65,7 +70,7 @@ class TestYtDlpParsers(unittest.TestCase):
         }
         url = "https://example.com/video"
         is_tiktok = "tiktok.com" in url
-        result = parse_format(format_dict, None, is_tiktok)
+        result = parse_format_metadata(format_dict, None, is_tiktok)
         self.assertIsNone(result)
 
     def test_parse_format_hls_protocol(self):
@@ -78,11 +83,13 @@ class TestYtDlpParsers(unittest.TestCase):
         }
         url = "https://example.com/video"
         is_tiktok = "tiktok.com" in url
-        result = parse_format(format_dict, None, is_tiktok)
+        metadata = parse_format_metadata(format_dict, None, is_tiktok)
 
-        self.assertIsNotNone(result)
-        self.assertEqual(result.format_id, "hls_fmt")
-        self.assertIn("HLS", result.label)
+        self.assertIsNotNone(metadata)
+        self.assertEqual(metadata.format_id, "hls_fmt")
+
+        item = create_format_item(metadata, is_tiktok)
+        self.assertIn("HLS", item.label)
 
     def test_parse_format_missing_id(self):
         """Should return None if format_id is missing"""
@@ -93,7 +100,7 @@ class TestYtDlpParsers(unittest.TestCase):
         }
         url = "https://example.com/video"
         is_tiktok = "tiktok.com" in url
-        result = parse_format(format_dict, None, is_tiktok)
+        result = parse_format_metadata(format_dict, None, is_tiktok)
         self.assertIsNone(result)
 
     def test_parse_format_extract_height_from_note(self):
@@ -107,10 +114,12 @@ class TestYtDlpParsers(unittest.TestCase):
         }
         url = "https://example.com/video"
         is_tiktok = "tiktok.com" in url
-        result = parse_format(format_dict, None, is_tiktok)
+        metadata = parse_format_metadata(format_dict, None, is_tiktok)
 
-        self.assertEqual(result.height, 720)
-        self.assertIn("📹 720p", result.label)
+        self.assertEqual(metadata.height, 720)
+
+        item = create_format_item(metadata, is_tiktok)
+        self.assertIn("📹 720p", item.label)
 
     def test_parse_format_filesize_approx(self):
         """Should use filesize_approx if filesize is missing"""
@@ -124,10 +133,12 @@ class TestYtDlpParsers(unittest.TestCase):
         }
         url = "https://example.com/video"
         is_tiktok = "tiktok.com" in url
-        result = parse_format(format_dict, None, is_tiktok)
+        metadata = parse_format_metadata(format_dict, None, is_tiktok)
 
-        self.assertEqual(result.filesize, 50 * 1024 * 1024)
-        self.assertIn("50.0 MB", result.label)
+        self.assertEqual(metadata.filesize, 50 * 1024 * 1024)
+
+        item = create_format_item(metadata, is_tiktok)
+        self.assertIn("50.0 MB", item.label)
 
     def test_parse_format_filesize_from_tbr(self):
         """Should calculate filesize from tbr and duration"""
@@ -142,27 +153,31 @@ class TestYtDlpParsers(unittest.TestCase):
         duration_sec = 10.0
         url = "https://example.com/video"
         is_tiktok = "tiktok.com" in url
-        result = parse_format(format_dict, duration_sec, is_tiktok)
+        metadata = parse_format_metadata(format_dict, duration_sec, is_tiktok)
 
         # Calculation: (1000 * 1024 / 8) * 10 = 128000 * 10 = 1,280,000 bytes
         expected_size = 1280000
-        self.assertEqual(result.filesize, expected_size)
-        # 1280000 / 1024 / 1024 = 1.22 MB -> "1.2 MB"
-        self.assertIn("1.2 MB", result.label)
+        self.assertEqual(metadata.filesize, expected_size)
+
+        item = create_format_item(metadata, is_tiktok)
+        self.assertIn("1.2 MB", item.label)
 
     def test_parse_format_label_icons(self):
         """Verify correct icons for different heights"""
         # 1080p -> 📺
-        f1080 = parse_format({"format_id": "1", "ext": "mp4", "height": 1080}, None, False)
-        self.assertIn("📺", f1080.label)
+        m1080 = parse_format_metadata({"format_id": "1", "ext": "mp4", "height": 1080}, None, False)
+        item1080 = create_format_item(m1080, False)
+        self.assertIn("📺", item1080.label)
 
         # 720p -> 📹
-        f720 = parse_format({"format_id": "2", "ext": "mp4", "height": 720}, None, False)
-        self.assertIn("📹", f720.label)
+        m720 = parse_format_metadata({"format_id": "2", "ext": "mp4", "height": 720}, None, False)
+        item720 = create_format_item(m720, False)
+        self.assertIn("📹", item720.label)
 
         # 480p -> 📱
-        f480 = parse_format({"format_id": "3", "ext": "mp4", "height": 480}, None, False)
-        self.assertIn("📱", f480.label)
+        m480 = parse_format_metadata({"format_id": "3", "ext": "mp4", "height": 480}, None, False)
+        item480 = create_format_item(m480, False)
+        self.assertIn("📱", item480.label)
 
     def test_parse_format_size_units(self):
         """Verify KB formatting for small files"""
@@ -172,8 +187,9 @@ class TestYtDlpParsers(unittest.TestCase):
             "filesize": 500 * 1024, # 500 KB
             "height": 360
         }
-        result = parse_format(format_dict, None, False)
-        self.assertIn("500 KB", result.label)
+        metadata = parse_format_metadata(format_dict, None, False)
+        item = create_format_item(metadata, False)
+        self.assertIn("500 KB", item.label)
 
 if __name__ == "__main__":
     unittest.main()

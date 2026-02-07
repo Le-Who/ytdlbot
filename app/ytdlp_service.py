@@ -119,20 +119,20 @@ class YtDlpService:
                 }
             },
             # --- Professional Refinements ---
-            "format_sort": ["res:1080", "vcodec:vp9", "br", "size"], # Приоритет качества и современных кодеков
-            "geo_bypass": True,          # Обход региональных ограничений
-            "ignoreconfig": True,        # Игнорировать системные конфиги
-            "noprogress": True,          # Quiet extraction
-            "no_mtime": True,            # Не сохранять время изменения (лучше для кэширования/fs)
-            "concurrent_fragment_downloads": 5, # Многопоточная загрузка фрагментов (HLS/DASH)
-            "hls_use_mpegts": True,      # Лучшая совместимость с ffmpeg и фрагментами
+            "geo_bypass": True,
+            "ignoreconfig": True,
+            "noprogress": True,
+            "no_mtime": True,
+            "concurrent_fragment_downloads": 5,
+            "hls_use_mpegts": True,
         }
-
+        
         if not for_list_formats:
-            opts["format"] = (
-                "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
-            )
-        # Для list_formats не задаем формат, чтобы получить полный список без ошибок селектора
+            opts["format_sort"] = ["res:1080", "vcodec:vp9", "br", "size"]
+            opts["format"] = "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
+        else:
+            # Для list_formats убираем принудительную сортировку, чтобы избежать "Requested format is not available"
+            opts.pop("format_sort", None)
 
         if self.cookies_path:
             opts["cookiefile"] = self.cookies_path

@@ -124,11 +124,7 @@ def is_supported_url(text: str) -> bool:
 
 
 def check_rate_limit(user_id: int, limit: int = 5) -> bool:
-    """Проверяет лимит запросов пользователя в минуту"""
-    current = user_rates.get(user_id, 0)
-    if current >= limit:
-        return False
-    user_rates[user_id] = current + 1
+    """Проверяет лимит запросов пользователя в минуту (Отключено пользователем)"""
     return True
 
 
@@ -209,8 +205,19 @@ async def download(token: str):
         raise HTTPException(404, "Link expired")
 
     encoded_filename = quote(payload.get("title") or "video")
-    is_gif = payload["format_id"] == GIF_FORMAT_ID
-    file_ext = "gif" if is_gif else "mp4"
+    format_id = payload.get("format_id")
+    is_gif = format_id == GIF_FORMAT_ID
+    is_audio = format_id == AUDIO_FORMAT_ID
+    
+    if is_gif:
+        file_ext = "gif"
+        media_type = "image/gif"
+    elif is_audio:
+        file_ext = "mp3"
+        media_type = "audio/mpeg"
+    else:
+        file_ext = "mp4"
+        media_type = "video/mp4"
 
     async def stream_video_subprocess():
         if is_gif:
@@ -285,7 +292,7 @@ async def download(token: str):
             except Exception as e:
                 logger.error(f"[STREAM] Exception: {e}", exc_info=True)
 
-    media_type = "image/gif" if is_gif else "application/octet-stream"
+    media_type = "image/gif" if is_gif else "video/mp4"
     return StreamingResponse(
         stream_video_subprocess(),
         media_type=media_type,
@@ -586,6 +593,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Предварительная проверка размера
+    data = context.user_data
     fmt_size = data.get("size_map", {}).get(payload["format_id"])
     if fmt_size and fmt_size > 50 * 1024 * 1024:
         mb = fmt_size / (1024 * 1024)
@@ -602,7 +610,15 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Используем временную директорию с очисткой
         tmp_dir = os.getenv("TMPDIR", tempfile.gettempdir())
         is_gif = payload["format_id"] == GIF_FORMAT_ID
-        file_ext = "gif" if is_gif else "mp4"
+        is_audio = payload["format_id"] == AUDIO_FORMAT_ID
+        
+        if is_gif:
+            file_ext = "gif"
+        elif is_audio:
+            file_ext = "mp3"
+        else:
+            file_ext = "mp4"
+            
         tmp_path = os.path.join(tmp_dir, f"ytdl_{uuid.uuid4().hex}.{file_ext}")
 
         # Строим команду с Aria2c и MaxFilesize
@@ -694,8 +710,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Проверяем размер перед отправкой
             try:
                 file_size = await asyncio.to_thread(os.path.getsize, tmp_path)
-                if file_size > 49.9 * 1024 * 1024:
-                    await q.edit_message_text("⚠️ Файл > 50 МБ.", reply_markup=kb_error)
+                if file_size > 49.9 * 1024 * 1024: # 50MB
+                    await q.edit_message_text("⚠️ Файл слишком большой (> 50 МБ).", reply_markup=kb_error)
                     return
             except OSError:
                 await q.edit_message_text("⚠️ Ошибка проверки файла.", reply_markup=kb_error)

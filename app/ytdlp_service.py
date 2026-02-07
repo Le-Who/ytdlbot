@@ -113,12 +113,19 @@ class YtDlpService:
             "user_agent": self.USER_AGENT,
             "nocheckcertificate": True,
             "prefer_free_formats": True,
-            # Player clients с fallback — android/web иногда не дают форматы для Shorts и др.
             "extractor_args": {
                 "youtube": {
                     "player_client": ["android", "web", "mweb", "ios"],
                 }
             },
+            # --- Professional Refinements ---
+            "format_sort": ["res:1080", "vcodec:vp9", "br", "size"], # Приоритет качества и современных кодеков
+            "geo_bypass": True,          # Обход региональных ограничений
+            "ignoreconfig": True,        # Игнорировать системные конфиги
+            "noprogress": True,          # Quiet extraction
+            "no_mtime": True,            # Не сохранять время изменения (лучше для кэширования/fs)
+            "concurrent_fragment_downloads": 5, # Многопоточная загрузка фрагментов (HLS/DASH)
+            "hls_use_mpegts": True,      # Лучшая совместимость с ffmpeg и фрагментами
         }
 
         if not for_list_formats:
@@ -141,6 +148,9 @@ class YtDlpService:
             "--no-warnings",
             "--no-playlist",
             "--force-ipv4",
+            "--geo-bypass",
+            "--ignore-config",
+            "--no-check-certificate",
         ]
         if self.cookies_path:
             base_cmd.extend(["--cookies", self.cookies_path])
@@ -340,6 +350,8 @@ class YtDlpService:
                     )
                 elif "404" in error_msg or "not found" in error_msg:
                     raise Exception("Видео не найдено. Проверьте ссылку.")
+                elif "live" in error_msg and "available" not in error_msg:
+                    raise Exception("Прямые трансляции (Live) не поддерживаются. Дождитесь окончания стрима.")
                 elif "none" in error_msg or "nonetype" in error_msg:
                     raise Exception(
                         "Ошибка парсинга данных. Попробуйте позже или используйте другую ссылку."
@@ -351,6 +363,10 @@ class YtDlpService:
                     if "format is not available" in msg.lower():
                         msg = "Выбранный формат или видео недоступны. Попробуйте другую ссылку."
                     raise Exception(f"Ошибка извлечения: {msg[:300]}")
+
+        # Проверка на Live стрим
+        if info.get("is_live") or info.get("live_status") == "is_live":
+             raise Exception("⚠️ Это прямая трансляция. Загрузка активных стримов не поддерживается.")
 
         title = info.get("title") or "Видео"
         duration_sec = info.get("duration")
@@ -501,6 +517,10 @@ class YtDlpService:
             "--no-playlist",
             "--force-ipv4",
             "--no-check-certificate",
+            "--geo-bypass",
+            "--ignore-config",
+            "--no-mtime",
+            "--concurrent-fragments", "5",
             # Для прогресс-бара нам нужен вывод в stdout/stderr
             "--progress",
             "--newline",
@@ -519,7 +539,7 @@ class YtDlpService:
                     "--external-downloader",
                     "aria2c",
                     "--external-downloader-args",
-                    "-x 8 -k 1M",
+                    "-x 16 -s 16 -k 1M",
                 ]
             )
 

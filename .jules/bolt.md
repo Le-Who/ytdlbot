@@ -30,3 +30,11 @@
 ## 2026-02-05 - [Caching Expensive yt-dlp Initialization]
 **Learning:** Initializing `yt_dlp.YoutubeDL` is expensive (~100ms) due to loading many extractors. For frequent metadata requests, creating a new instance every time adds significant latency.
 **Action:** Use `threading.local` to cache `YoutubeDL` instances per thread when options are stable, reducing overhead by ~95% for sequential requests.
+
+## 2026-02-06 - [Redundant Validation in Hot Paths]
+**Learning:** When validating input in a helper function (like `is_supported_url`), avoid re-validating preconditions (like "is it a URL?") that the caller has already enforced. Redundant regex checks in hot paths multiply overhead.
+**Action:** Trust the caller for structural validation or pass parsed objects directly to the validator.
+
+## 2026-02-06 - [HTML Injection in Telegram Messages]
+**Learning:** When using `parse_mode='HTML'` in Telegram bots, ANY user-controlled content (like video titles) interpolated into the message string MUST be escaped using `html.escape()`. Failing to do so allows injection of tags, breaking the message format.
+**Action:** Audit all `parse_mode='HTML'` usages and ensure `html.escape()` is applied to dynamic variables.

@@ -46,3 +46,7 @@
 ## 2026-02-07 - [Pre-computed String Interpolation]
 **Learning:** In hot loops like progress bar rendering (called every ~3s per download), constructing strings with f-strings and multiplication (`"█" * N`) creates short-lived objects that pressure GC. For finite states (e.g., 0-15 blocks), a lookup table is ~14% faster and eliminates allocation overhead.
 **Action:** Identify finite-state string generations in loops and replace them with pre-computed lookup tables or constants.
+
+## 2026-02-07 - [Offloading Blocking File I/O]
+**Learning:** Opening and closing files synchronously (`with open(...)`) in an `async` context blocks the event loop, causing latency for all concurrent tasks. Offloading these operations to a thread using `asyncio.to_thread` preserves event loop responsiveness even during disk I/O.
+**Action:** Replace blocking `open()` and `f.close()` calls in async handlers with `asyncio.to_thread`.

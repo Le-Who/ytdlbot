@@ -54,10 +54,10 @@ class TestUXBackButton(unittest.IsolatedAsyncioTestCase):
             self.assertIsInstance(reply_markup, InlineKeyboardMarkup)
             # Check if buttons are correct
             buttons = reply_markup.inline_keyboard
-            # formats[:6] + audio = 2 + 1 = 3 rows
-            self.assertEqual(len(buttons), 3)
+            # formats[:8] -> 2 items -> 1 row. + audio = 2 rows
+            self.assertEqual(len(buttons), 2)
             self.assertEqual(buttons[0][0].text, "720p")
-            self.assertEqual(buttons[2][0].text, "Audio")
+            self.assertEqual(buttons[1][0].text, "Audio")
         else:
             self.fail("main.on_back not implemented")
 
@@ -67,7 +67,8 @@ class TestUXBackButton(unittest.IsolatedAsyncioTestCase):
         context.user_data = {
             "page_url": "http://example.com/video",
             "title": "Test Video",
-            "format_map": {"137": 720}
+            "format_map": {"137": 720},
+            "size_map": {"137": 50*1024*1024}
         }
 
         update = MagicMock()

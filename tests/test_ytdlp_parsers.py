@@ -14,7 +14,8 @@ class TestYtDlpParsers(unittest.TestCase):
             "protocol": "https"
         }
         url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-        result = parse_format(format_dict, None, url)
+        is_tiktok = "tiktok.com" in url
+        result = parse_format(format_dict, None, is_tiktok)
 
         self.assertIsNotNone(result)
         self.assertEqual(result.format_id, "137")
@@ -33,7 +34,8 @@ class TestYtDlpParsers(unittest.TestCase):
             "protocol": "https"
         }
         url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-        result = parse_format(format_dict, None, url)
+        is_tiktok = "tiktok.com" in url
+        result = parse_format(format_dict, None, is_tiktok)
         self.assertIsNone(result)
 
     def test_parse_format_tiktok_vcodec_none(self):
@@ -46,7 +48,8 @@ class TestYtDlpParsers(unittest.TestCase):
             "height": None
         }
         url = "https://www.tiktok.com/@user/video/123"
-        result = parse_format(format_dict, None, url)
+        is_tiktok = "tiktok.com" in url
+        result = parse_format(format_dict, None, is_tiktok)
 
         self.assertIsNotNone(result)
         self.assertEqual(result.format_id, "tiktok_fmt")
@@ -61,7 +64,8 @@ class TestYtDlpParsers(unittest.TestCase):
             "protocol": "https"
         }
         url = "https://example.com/video"
-        result = parse_format(format_dict, None, url)
+        is_tiktok = "tiktok.com" in url
+        result = parse_format(format_dict, None, is_tiktok)
         self.assertIsNone(result)
 
     def test_parse_format_hls_protocol(self):
@@ -73,7 +77,8 @@ class TestYtDlpParsers(unittest.TestCase):
             "height": 720
         }
         url = "https://example.com/video"
-        result = parse_format(format_dict, None, url)
+        is_tiktok = "tiktok.com" in url
+        result = parse_format(format_dict, None, is_tiktok)
 
         self.assertIsNotNone(result)
         self.assertEqual(result.format_id, "hls_fmt")
@@ -87,7 +92,8 @@ class TestYtDlpParsers(unittest.TestCase):
             "height": 720
         }
         url = "https://example.com/video"
-        result = parse_format(format_dict, None, url)
+        is_tiktok = "tiktok.com" in url
+        result = parse_format(format_dict, None, is_tiktok)
         self.assertIsNone(result)
 
     def test_parse_format_extract_height_from_note(self):
@@ -100,7 +106,8 @@ class TestYtDlpParsers(unittest.TestCase):
             "protocol": "https"
         }
         url = "https://example.com/video"
-        result = parse_format(format_dict, None, url)
+        is_tiktok = "tiktok.com" in url
+        result = parse_format(format_dict, None, is_tiktok)
 
         self.assertEqual(result.height, 720)
         self.assertIn("📹 720p", result.label)
@@ -116,7 +123,8 @@ class TestYtDlpParsers(unittest.TestCase):
             "protocol": "https"
         }
         url = "https://example.com/video"
-        result = parse_format(format_dict, None, url)
+        is_tiktok = "tiktok.com" in url
+        result = parse_format(format_dict, None, is_tiktok)
 
         self.assertEqual(result.filesize, 50 * 1024 * 1024)
         self.assertIn("50.0 MB", result.label)
@@ -133,7 +141,8 @@ class TestYtDlpParsers(unittest.TestCase):
         }
         duration_sec = 10.0
         url = "https://example.com/video"
-        result = parse_format(format_dict, duration_sec, url)
+        is_tiktok = "tiktok.com" in url
+        result = parse_format(format_dict, duration_sec, is_tiktok)
 
         # Calculation: (1000 * 1024 / 8) * 10 = 128000 * 10 = 1,280,000 bytes
         expected_size = 1280000
@@ -144,15 +153,15 @@ class TestYtDlpParsers(unittest.TestCase):
     def test_parse_format_label_icons(self):
         """Verify correct icons for different heights"""
         # 1080p -> 📺
-        f1080 = parse_format({"format_id": "1", "ext": "mp4", "height": 1080}, None, "http://v.com")
+        f1080 = parse_format({"format_id": "1", "ext": "mp4", "height": 1080}, None, False)
         self.assertIn("📺", f1080.label)
 
         # 720p -> 📹
-        f720 = parse_format({"format_id": "2", "ext": "mp4", "height": 720}, None, "http://v.com")
+        f720 = parse_format({"format_id": "2", "ext": "mp4", "height": 720}, None, False)
         self.assertIn("📹", f720.label)
 
         # 480p -> 📱
-        f480 = parse_format({"format_id": "3", "ext": "mp4", "height": 480}, None, "http://v.com")
+        f480 = parse_format({"format_id": "3", "ext": "mp4", "height": 480}, None, False)
         self.assertIn("📱", f480.label)
 
     def test_parse_format_size_units(self):
@@ -163,7 +172,7 @@ class TestYtDlpParsers(unittest.TestCase):
             "filesize": 500 * 1024, # 500 KB
             "height": 360
         }
-        result = parse_format(format_dict, None, "http://v.com")
+        result = parse_format(format_dict, None, False)
         self.assertIn("500 KB", result.label)
 
 if __name__ == "__main__":

@@ -94,7 +94,6 @@ def build_command(
         "--no-warnings",
         "--no-playlist",
         "--force-ipv4",
-        "--no-check-certificate",
         "--geo-bypass",
         "--ignore-config",
         "--no-mtime",

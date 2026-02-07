@@ -111,9 +111,14 @@ class YtDlpService:
             "force_ipv4": True,
             "legacyserverconnect": True,
             "user_agent": self.USER_AGENT,
+            "nocheckcertificate": True,
+            "prefer_free_formats": True,
             # Player clients с fallback — android/web иногда не дают форматы для Shorts и др.
             "extractor_args": {
-                "youtube": {"player_client": ["android", "web", "mweb", "ios"]}
+                "youtube": {
+                    "player_client": ["android", "web", "mweb", "ios"],
+                    "skip": ["dash", "hls"],
+                }
             },
         }
 
@@ -481,8 +486,10 @@ class YtDlpService:
             return cmd
 
         # 2. Селектор аудио (Original -> English -> OrigTag -> Any)
-        audio_sel = "bestaudio[format_note*=original]/bestaudio[language^=en]/bestaudio[language^=orig]/bestaudio"
-        final_fmt = f"{video_sel}+({audio_sel})/{prog_sel}/best"
+        audio_sel = "bestaudio[format_note*=original]/bestaudio[language^=en]/bestaudio[language^=orig]/bestaudio/bestaudio[ext=m4a]/bestaudio"
+        
+        # 3. Финальный селектор с каскадным fallback
+        final_fmt = f"{video_sel}+({audio_sel})/{prog_sel}/bestvideo+bestaudio/best"
 
         cmd = [
             "yt-dlp",
@@ -494,6 +501,7 @@ class YtDlpService:
             "--no-warnings",
             "--no-playlist",
             "--force-ipv4",
+            "--no-check-certificate",
             # Для прогресс-бара нам нужен вывод в stdout/stderr
             "--progress",
             "--newline",

@@ -482,7 +482,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     format_map[audio.format_id] = None
 
     context.user_data.update(
-        {"page_url": text, "title": title, "format_map": format_map}
+        {
+            "page_url": text,
+            "title": title,
+            "format_map": format_map,
+            "size_map": {f.format_id: f.filesize for f in formats},
+        }
     )
 
     # Клавиатура
@@ -632,6 +637,18 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # Предварительная проверка размера
+    fmt_size = data.get("size_map", {}).get(payload["format_id"])
+    if fmt_size and fmt_size > 50 * 1024 * 1024:
+        mb = fmt_size / (1024 * 1024)
+        await q.edit_message_text(
+            f"⚠️ Файл слишком большой (~{mb:.1f} МБ).\n"
+            "Telegram Bot API не позволяет отправлять файлы больше 50 МБ.\n"
+            "Пожалуйста, используйте прямую ссылку ниже.",
+            reply_markup=kb_error
+        )
+        return
+
     async with tasks_sem:
         await q.edit_message_text("⏳ Начинаю загрузку...")
         # Используем временную директорию с очисткой
@@ -762,7 +779,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if proc.returncode != 0:
                 # Читаем ошибку для более информативного сообщения
                 stderr_data = await proc.stderr.read() if proc.stderr else b""
-                error_text = stderr_data.decode("utf-8", errors="ignore").lower()[:200]
+                error_text = stderr_data.decode("utf-8", errors="ignore").lower()
                 logger.error(
                     f"[DL-TG] Process failed with code {proc.returncode}: {error_text}"
                 )
@@ -772,14 +789,24 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await q.edit_message_text(
                         "⚠️ Файл слишком большой (>50 МБ).", reply_markup=kb_error
                     )
+                elif "sign in" in error_text or "cookies" in error_text:
+                    await q.edit_message_text(
+                        "⚠️ Требуется авторизация (Sign-in required). Возможно, видео ограничено по возрасту.",
+                        reply_markup=kb_error,
+                    )
+                elif "requested format is not available" in error_text:
+                    await q.edit_message_text(
+                        "⚠️ Выбранный формат недоступен. Попробуйте другое качество (🔙 Назад).",
+                        reply_markup=kb_error,
+                    )
                 elif "403" in error_text or "forbidden" in error_text:
                     await q.edit_message_text(
-                        "⚠️ Доступ запрещен. Попробуйте скачать по ссылке.",
+                        "⚠️ Доступ запрещен (403 Forbidden).",
                         reply_markup=kb_error,
                     )
                 else:
                     await q.edit_message_text(
-                        "⚠️ Ошибка загрузки. Используйте ссылку для скачивания.",
+                        "⚠️ Ошибка загрузки. Попробуйте другое качество или используйте ссылку.",
                         reply_markup=kb_error,
                     )
 

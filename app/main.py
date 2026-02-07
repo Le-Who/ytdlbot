@@ -2,7 +2,7 @@ import logging
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -23,18 +23,21 @@ logging.basicConfig(
 )
 logger = logging.getLogger("app.main")
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # --- STARTUP ---
     logger.info("Starting up...")
-    
+
     # Инициализация Telegram Bot
     bot_app = Application.builder().token(config.BOT_TOKEN).build()
-    
+
     # Регистрация хендлеров
     bot_app.add_handler(CommandHandler("start", commands.cmd_start))
     bot_app.add_handler(CommandHandler("help", commands.cmd_help))
-    bot_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, messages.on_message))
+    bot_app.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, messages.on_message)
+    )
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_back, pattern=r"^back$"))
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_pick, pattern=r"^pick\|"))
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_cancel, pattern=r"^cancel\|"))
@@ -56,7 +59,9 @@ async def lifespan(app: FastAPI):
             allowed_updates=["message", "callback_query"],
         )
     else:
-        logger.info("Webhook URL not found. Polling mode is not implemented in this refactor (assuming webhook).")
+        logger.info(
+            "Webhook URL not found. Polling mode is not implemented in this refactor (assuming webhook)."
+        )
         # Для поллинга нужно запускать bot_app.updater.start_polling(), но в режиме FastAPI
         # обычно используется вебхук. Если нужен поллинг, это можно добавить отдельным таском.
         pass
@@ -67,10 +72,29 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     if config.WEBHOOK_URL:
         await bot_app.bot.delete_webhook()
-    
+
     await bot_app.stop()
     await bot_app.shutdown()
+
 
 # Инициализация FastAPI
 api = FastAPI(lifespan=lifespan)
 api.include_router(api_router)
+
+
+@api.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
+    # Relax CSP for API docs (FastAPI uses CDN for Swagger UI)
+    if request.url.path.startswith(("/docs", "/redoc", "/openapi.json")):
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net data:"
+        )
+    else:
+        response.headers["Content-Security-Policy"] = "default-src 'none'"
+
+    return response

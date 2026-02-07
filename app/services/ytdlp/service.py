@@ -29,6 +29,21 @@ class YtDlpService:
     MAX_RETRIES = 5
     USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
 
+    _BASE_OPTS_TEMPLATE: Dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "force_ipv4": True,
+        "legacyserverconnect": True,
+        "prefer_free_formats": False,
+        "geo_bypass": True,
+        "ignoreconfig": True,
+        "noprogress": True,
+        "no_mtime": True,
+        "concurrent_fragment_downloads": 5,
+        "hls_use_mpegts": True,
+    }
+
     def __init__(self):
         self.cookies_manager = CookiesManager()
         self.has_aria2 = shutil.which("aria2c") is not None
@@ -45,36 +60,24 @@ class YtDlpService:
 
     def _base_opts(self, for_list_formats: bool = False) -> Dict[str, Any]:
         """Базовые опции для yt-dlp"""
-        opts: Dict[str, Any] = {
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "socket_timeout": self.SOCKET_TIMEOUT,
-            "retries": self.MAX_RETRIES,
-            "force_ipv4": True,
-            "legacyserverconnect": True,
-            "user_agent": self.USER_AGENT,
-            "prefer_free_formats": False,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["ios", "android", "web", "mweb"],
-                }
-            },
-            "geo_bypass": True,
-            "ignoreconfig": True,
-            "noprogress": True,
-            "no_mtime": True,
-            "concurrent_fragment_downloads": 5,
-            "hls_use_mpegts": True,
+        # Start with cached immutable options
+        opts = self._BASE_OPTS_TEMPLATE.copy()
+
+        # Add mutable/nested structures freshly to ensure independence
+        opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["ios", "android", "web", "mweb"],
+            }
         }
-        
+
+        # Add dynamic/instance options
+        opts["socket_timeout"] = self.SOCKET_TIMEOUT
+        opts["retries"] = self.MAX_RETRIES
+        opts["user_agent"] = self.USER_AGENT
+
         if not for_list_formats:
             opts["format_sort"] = ["res:1080", "vcodec:vp9", "br", "size"]
             opts["format"] = "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
-        else:
-            # Для list_formats ВООБЩЕ не задаем формат
-            opts.pop("format_sort", None)
-            opts.pop("format", None)
 
         if self.cookies_path:
             opts["cookiefile"] = self.cookies_path

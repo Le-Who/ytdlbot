@@ -56,3 +56,7 @@
 ## 2026-02-08 - [Loop-Invariant Computation Hoisting]
 **Learning:** Calculating derived values (e.g., `url.lower()` for domain checks) inside a tight loop processing many items (50+ video formats) multiplies the allocation cost unnecessarily.
 **Action:** Identify loop-invariant computations and hoist them out of the loop, passing the result as an argument. Measured ~23% speedup for format parsing.
+
+## 2026-02-09 - [Dictionary Template for Configuration]
+**Learning:** Constructing a large configuration dictionary (~20 keys) from scratch on every method call is inefficient, especially when most values are static.
+**Action:** Use a class-level constant template for immutable parts and copy it (`.copy()`) in the method, adding only dynamic or mutable values. This reduces allocation overhead and improves code clarity.

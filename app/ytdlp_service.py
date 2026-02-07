@@ -117,7 +117,6 @@ class YtDlpService:
             "extractor_args": {
                 "youtube": {
                     "player_client": ["android", "web", "mweb", "ios"],
-                    "skip": ["dash", "hls"],
                 }
             },
         }
@@ -126,9 +125,7 @@ class YtDlpService:
             opts["format"] = (
                 "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
             )
-        else:
-            # format=worst всегда находит формат, не падает с "Requested format is not available"
-            opts["format"] = "worst"
+        # Для list_formats не задаем формат, чтобы получить полный список без ошибок селектора
 
         if self.cookies_path:
             opts["cookiefile"] = self.cookies_path
@@ -139,8 +136,6 @@ class YtDlpService:
         """Извлечение через yt-dlp CLI для YouTube — надёжный обход ошибок API."""
         base_cmd = [
             "yt-dlp",
-            "-f",
-            "worst",
             "--dump-json",
             "--no-download",
             "--no-warnings",
@@ -351,7 +346,11 @@ class YtDlpService:
                     )
                 else:
                     logger.error("YtDlp Extraction Error: %s", e, exc_info=True)
-                    raise Exception(f"Ошибка извлечения: {str(e)[:300]}")
+                    # Если subprocess тоже не дал инфо, выбрасываем оригинальную ошибку или уточнение
+                    msg = str(e)
+                    if "format is not available" in msg.lower():
+                        msg = "Выбранный формат или видео недоступны. Попробуйте другую ссылку."
+                    raise Exception(f"Ошибка извлечения: {msg[:300]}")
 
         title = info.get("title") or "Видео"
         duration_sec = info.get("duration")

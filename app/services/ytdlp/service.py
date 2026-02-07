@@ -53,7 +53,6 @@ class YtDlpService:
             "force_ipv4": True,
             "legacyserverconnect": True,
             "user_agent": self.USER_AGENT,
-            "nocheckcertificate": True,
             "prefer_free_formats": False,
             "extractor_args": {
                 "youtube": {
@@ -92,7 +91,6 @@ class YtDlpService:
             "--force-ipv4",
             "--geo-bypass",
             "--ignore-config",
-            "--no-check-certificate",
         ]
         if self.cookies_path:
             base_cmd.extend(["--cookies", self.cookies_path])

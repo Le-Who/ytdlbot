@@ -7,7 +7,7 @@ from unittest.mock import MagicMock
 # Add repo root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app.ytdlp_service import YtDlpService
+from app.services.ytdlp.service import YtDlpService
 
 def test_base_opts_listing():
     service = YtDlpService()

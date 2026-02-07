@@ -1,7 +1,7 @@
 import unittest
 import threading
 from unittest.mock import MagicMock, patch
-from app.ytdlp_service import YtDlpService
+from app.services.ytdlp.service import YtDlpService
 import yt_dlp
 
 

@@ -20,3 +20,8 @@
 **Vulnerability:** User-controlled input (video title) was inserted directly into an HTML-formatted Telegram message string without sanitization. This allowed attackers (or accidentally malicious titles) to inject invalid HTML tags, causing the Telegram API to reject the message and potentially disrupting service availability or spoofing content.
 **Learning:** When using `parse_mode='HTML'` (or Markdown) in messaging APIs, all dynamic content must be treated as untrusted and properly escaped. Assuming that third-party data (like YouTube titles) is safe or "plain text" is a common oversight.
 **Prevention:** Always use `html.escape()` for any variable interpolated into an HTML string sent to Telegram. Validate or sanitize all external inputs before rendering them in a markup format.
+
+## 2026-02-07 - [High] SSL Certificate Verification Disabled
+**Vulnerability:** The `yt-dlp` command and service configuration had SSL certificate verification disabled via `--no-check-certificate` and `'nocheckcertificate': True`. This exposed the application to Man-In-The-Middle (MITM) attacks when communicating with video platforms or fetching metadata.
+**Learning:** Disabling SSL verification removes the primary defense against interception and tampering of HTTPS traffic. While often done to "fix" connection issues with legacy or misconfigured servers, it creates a significant security risk for the entire application.
+**Prevention:** Never disable SSL certificate verification in production. If connection issues occur, investigate the root cause (e.g., outdated CA certificates, local network issues) rather than bypassing security checks. Ensure the system trust store is up to date.

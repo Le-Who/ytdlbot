@@ -11,7 +11,6 @@ def debug_extraction():
         "no_warnings": True,
         "noplaylist": True,
         "force_ipv4": True,
-        "nocheckcertificate": True,
         "prefer_free_formats": False,
         "extractor_args": {
             "youtube": {

@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 os.environ["BOT_TOKEN"] = "123456:ABC-DEF"
 os.environ["BASE_URL"] = "http://localhost:8000"
 
-from app.ytdlp_service import YtDlpService
+from app.services.ytdlp.service import YtDlpService
 # from app.main import build_format_keyboard # Remove for now if not used
 
 class TestFixesVerification(unittest.TestCase):
@@ -31,7 +31,7 @@ class TestFixesVerification(unittest.TestCase):
         # We expect: 137+(audio_sel)/best[height=1080]/bestvideo+bestaudio/best
         # wait, the code does: f"{video_sel}+({audio_sel})/{prog_sel}/bestvideo+bestaudio/best"
         self.assertTrue(any("bestvideo+bestaudio/best" in arg for arg in cmd))
-        self.assertIn("--no-check-certificate", cmd)
+        self.assertNotIn("--no-check-certificate", cmd)
         
     def test_audio_selector_robustness(self):
         cmd = self.service.build_command(

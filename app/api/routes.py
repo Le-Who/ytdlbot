@@ -22,10 +22,6 @@ router = APIRouter()
 async def health():
     return {"ok": True}
 
-@router.get("/favicon.ico")
-async def favicon():
-    raise HTTPException(404)
-
 @router.get("/dl/{token}")
 async def download(token: str):
     logger.info(f"[DOWNLOAD] Token: {token}")

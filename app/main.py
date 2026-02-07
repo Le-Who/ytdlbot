@@ -502,12 +502,15 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     format_map = {f.format_id: f.height for f in formats}
     format_map[audio.format_id] = None
 
+    size_map = {f.format_id: f.filesize for f in formats}
+    size_map[audio.format_id] = audio.filesize
+
     context.user_data.update(
         {
             "page_url": text,
             "title": title,
             "format_map": format_map,
-            "size_map": {f.format_id: f.filesize for f in formats},
+            "size_map": size_map,
         }
     )
 
@@ -599,10 +602,31 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     kb.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
 
+
+
+    # Формируем строку с деталями формата
+    height = data["format_map"].get(format_id)
+    filesize = data.get("size_map", {}).get(format_id)
+
+    quality_parts = []
+    if height:
+        quality_parts.append(f"{height}p")
+    elif format_id == AUDIO_FORMAT_ID:
+        quality_parts.append("Audio")
+    elif format_id == GIF_FORMAT_ID:
+        quality_parts.append("GIF")
+
+    if filesize:
+        mb = filesize / (1024 * 1024)
+        quality_parts.append(f"{mb:.1f} MB")
+
+    quality_str = f" ({' • '.join(quality_parts)})" if quality_parts else ""
+
     await q.edit_message_text(
-        f"✅ Ссылка готова ({LINK_TTL_MINUTES} мин):\n\n{dl_link}",
+        f"✅ <b>Готово{quality_str}</b>\n🔗 Ссылка ({LINK_TTL_MINUTES} мин):\n{html.escape(dl_link)}",
         reply_markup=InlineKeyboardMarkup(kb),
         disable_web_page_preview=True,
+        parse_mode="HTML",
     )
 
 

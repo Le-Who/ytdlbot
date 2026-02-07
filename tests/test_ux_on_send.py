@@ -3,6 +3,7 @@ import sys
 import os
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
+from collections import deque
 
 # Ensure app can be imported
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -14,9 +15,11 @@ with patch.dict(os.environ, {"BOT_TOKEN": "test_token"}):
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 class TestUXOnSend(unittest.IsolatedAsyncioTestCase):
-    async def test_on_send_success_has_back_button(self):
+    @patch("app.main.run_subprocess")
+    async def test_on_send_success_has_back_button(self, mock_run_subprocess):
         # Mock Context
         context = MagicMock()
+        context.user_data = {"size_map": {"137": 1024}}
         context.bot.send_document = AsyncMock()
 
         # Mock Update
@@ -34,27 +37,28 @@ class TestUXOnSend(unittest.IsolatedAsyncioTestCase):
             "title": "Test Video"
         }
 
-        # Mock ytdlp and subprocess
-        # We need to mock build_command and asyncio.create_subprocess_exec
+        # Mock ytdlp
         main.ytdlp.build_command = MagicMock(return_value=["echo", "fake_download"])
 
-        # Mock asyncio.create_subprocess_exec to return a process that finishes successfully
+        # Mock process
         proc_mock = MagicMock()
         proc_mock.returncode = 0
-        proc_mock.stdout.readline = AsyncMock(side_effect=[b"", b""]) # End of stream
-        proc_mock.stderr.read = AsyncMock(return_value=b"")
+        proc_mock.stdout.readline = AsyncMock(side_effect=[b"[download] 50.0% of 10MiB", b""])
         proc_mock.wait = AsyncMock()
 
-        # Mock os.path.getsize to return small size
-        with patch("asyncio.create_subprocess_exec", return_value=proc_mock), \
-             patch("os.path.getsize", return_value=1024), \
+        # Mock run_subprocess generator
+        async def gen(*args, **kwargs):
+            yield proc_mock, deque()
+        mock_run_subprocess.side_effect = gen
+
+        # Mock os.path.getsize
+        with patch("os.path.getsize", return_value=1024), \
              patch("builtins.open", MagicMock()), \
              patch("app.main.safe_remove", MagicMock()):
 
             await main.on_send(update, context)
 
             # Check calls to edit_message_text
-            # The last call should be "✅ Видео отправлено!" with reply_markup
             calls = update.callback_query.edit_message_text.call_args_list
             last_call = calls[-1]
             args, kwargs = last_call
@@ -71,9 +75,11 @@ class TestUXOnSend(unittest.IsolatedAsyncioTestCase):
                         found_back = True
             self.assertTrue(found_back)
 
-    async def test_on_send_error_has_download_link(self):
+    @patch("app.main.run_subprocess")
+    async def test_on_send_error_has_download_link(self, mock_run_subprocess):
         # Mock Context
         context = MagicMock()
+        context.user_data = {"size_map": {"137": 1024}}
 
         # Mock Update
         update = MagicMock()
@@ -91,18 +97,18 @@ class TestUXOnSend(unittest.IsolatedAsyncioTestCase):
 
         main.ytdlp.build_command = MagicMock(return_value=["echo", "fake_download"])
 
-        # Mock process failure (return code 1)
+        # Mock process failure
         proc_mock = MagicMock()
         proc_mock.returncode = 1
-        # Set stderr to simulate file size error
-        # Note: app.main logic checks error_text.lower()
-        proc_mock.stderr.read = AsyncMock(return_value=b"Error: File larger than max size")
         proc_mock.stdout.readline = AsyncMock(return_value=b"")
         proc_mock.wait = AsyncMock()
 
-        with patch("asyncio.create_subprocess_exec", return_value=proc_mock), \
-             patch("app.main.safe_remove", MagicMock()):
+        # Mock run_subprocess to return stderr error
+        async def gen(*args, **kwargs):
+            yield proc_mock, deque([b"Error: File larger than max size"])
+        mock_run_subprocess.side_effect = gen
 
+        with patch("app.main.safe_remove", MagicMock()):
             await main.on_send(update, context)
 
             calls = update.callback_query.edit_message_text.call_args_list

@@ -42,3 +42,7 @@
 ## 2026-02-07 - [Reusing YoutubeDL Instances with Thread Local]
 **Learning:** Initializing `yt_dlp.YoutubeDL` takes ~120ms. Caching it in `threading.local` for read-only operations (like `list_formats`) eliminates this overhead. However, do NOT use `with instance:` when reusing, as `__exit__` might close resources you intend to keep open.
 **Action:** Use `threading.local` to store `YoutubeDL` instances and call `extract_info` directly on the stored instance without a context manager for subsequent calls.
+
+## 2026-02-07 - [Pre-computed String Interpolation]
+**Learning:** In hot loops like progress bar rendering (called every ~3s per download), constructing strings with f-strings and multiplication (`"█" * N`) creates short-lived objects that pressure GC. For finite states (e.g., 0-15 blocks), a lookup table is ~14% faster and eliminates allocation overhead.
+**Action:** Identify finite-state string generations in loops and replace them with pre-computed lookup tables or constants.

@@ -95,6 +95,11 @@ cancel_cache: TTLCache = TTLCache(maxsize=100, ttl=3600)
 # Rate Limiter (простой in-memory)
 user_rates: TTLCache = TTLCache(maxsize=500, ttl=60)  # Сброс каждую минуту (уменьшено)
 
+# Глобальные контейнеры для управления ресурсами
+active_processes = set()
+inflight_parsing = {}  # url -> asyncio.Event
+active_processes_lock = asyncio.Lock()
+
 URL_RE = re.compile(r"https?://\S+", re.I)
 SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*]')
 PROGRESS_RE = re.compile(r"(\d+\.\d+)%")
@@ -144,6 +149,45 @@ def build_format_keyboard(formats: list, audio) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
+async def run_subprocess(cmd: list, collect_stderr: bool = True):
+    """Стандартизированный запуск subprocess с отслеживанием и очисткой"""
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE if collect_stderr else asyncio.subprocess.DEVNULL,
+    )
+    
+    async with active_processes_lock:
+        active_processes.add(proc)
+        
+    stderr_data = deque(maxlen=100)
+    stderr_task = None
+    
+    if collect_stderr:
+        async def consume_stderr():
+            while True:
+                line = await proc.stderr.readline()
+                if not line: break
+                stderr_data.append(line)
+        stderr_task = asyncio.create_task(consume_stderr())
+        
+    try:
+        yield proc, stderr_data
+    finally:
+        if proc.returncode is None:
+            try:
+                proc.terminate()
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            except:
+                try: proc.kill()
+                except: pass
+        await proc.wait()
+        if stderr_task:
+            await stderr_task
+        async with active_processes_lock:
+            active_processes.discard(proc)
+
+
 # --- API ENDPOINTS ---
 
 
@@ -170,12 +214,10 @@ async def download(token: str):
 
     async def stream_video_subprocess():
         if is_gif:
-            # Для GIF нужно сначала скачать видео, затем конвертировать в GIF
             tmp_dir = os.getenv("TMPDIR", tempfile.gettempdir())
             video_tmp = os.path.join(tmp_dir, f"ytdl_video_{uuid.uuid4().hex}.mp4")
 
             try:
-                # Скачиваем видео
                 cmd = ytdlp.build_command(
                     payload["page_url"],
                     payload["format_id"],
@@ -183,175 +225,65 @@ async def download(token: str):
                     output=video_tmp,
                 )
                 logger.info(f"[STREAM-GIF] Download: {' '.join(cmd)}")
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-
-                # Consume stderr asynchronously to avoid deadlock
-                stderr_data = deque(maxlen=50)
-
-                async def consume_stderr():
-                    while True:
-                        line = await proc.stderr.readline()
-                        if not line:
-                            break
-                        stderr_data.append(line)
-
-                stderr_task = asyncio.create_task(consume_stderr())
-
-                try:
+                
+                async for proc, stderr in run_subprocess(cmd):
                     await proc.wait()
-                finally:
-                    if proc.returncode is None:
-                        try:
-                            proc.kill()
-                        except:
-                            pass
-                    await proc.wait()
-                    await stderr_task
+                    if proc.returncode != 0:
+                        err = b"".join(stderr).decode(errors="ignore")[-500:]
+                        logger.error(f"[STREAM-GIF] Download error: {err}")
+                        return
 
-                if proc.returncode != 0:
-                    error_text = b"".join(stderr_data).decode(errors="ignore")[-500:]
-                    logger.error(f"[STREAM-GIF] Download error: {error_text}")
-                    return
-
-                # Конвертируем в GIF
                 logger.info(f"[STREAM-GIF] Converting to GIF...")
                 ffmpeg_cmd = [
-                    "ffmpeg",
-                    "-i",
-                    video_tmp,
-                    "-vf",
-                    "fps=10,scale=320:-1:flags=lanczos",
-                    "-t",
-                    "10",
-                    "-y",
-                    "-pix_fmt",
-                    "rgb24",
-                    "-f",
-                    "gif",
-                    "-",
+                    "ffmpeg", "-i", video_tmp,
+                    "-vf", "fps=10,scale=320:-1:flags=lanczos",
+                    "-t", "10", "-y", "-pix_fmt", "rgb24", "-f", "gif", "-"
                 ]
-                ffmpeg_proc = await asyncio.create_subprocess_exec(
-                    *ffmpeg_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-
-                # Consume stderr asynchronously to avoid deadlock
-                stderr_data = deque(maxlen=50)
-
-                async def consume_stderr():
+                
+                async for proc, stderr in run_subprocess(ffmpeg_cmd):
                     while True:
-                        line = await ffmpeg_proc.stderr.readline()
-                        if not line:
-                            break
-                        stderr_data.append(line)
-
-                stderr_task = asyncio.create_task(consume_stderr())
-
-                try:
-                    # Stream directly from ffmpeg stdout
-                    while True:
-                        chunk = await ffmpeg_proc.stdout.read(CHUNK_SIZE)
-                        if not chunk:
-                            break
+                        chunk = await proc.stdout.read(CHUNK_SIZE)
+                        if not chunk: break
                         yield chunk
-                finally:
-                    if ffmpeg_proc.returncode is None:
-                        try:
-                            ffmpeg_proc.kill()
-                        except:
-                            pass
-                    await ffmpeg_proc.wait()
-                    await stderr_task
-
-                if ffmpeg_proc.returncode != 0:
-                    error_text = b"".join(stderr_data).decode(errors="ignore")[-500:]
-                    logger.error(f"[STREAM-GIF] FFmpeg error: {error_text}")
-                    return
+                    if proc.returncode != 0:
+                        err = b"".join(stderr).decode(errors="ignore")[-500:]
+                        logger.error(f"[STREAM-GIF] FFmpeg error: {err}")
 
             except Exception as e:
                 logger.error(f"[STREAM-GIF] Exception: {e}", exc_info=True)
             finally:
-                # Очистка временных файлов
                 await asyncio.to_thread(safe_remove, video_tmp)
         else:
             # Обычное видео - стримим напрямую
             cmd = ytdlp.build_command(
-                payload["page_url"],
-                payload["format_id"],
-                payload.get("height"),
-                output="-",
+                payload["page_url"], payload["format_id"], payload.get("height"), output="-"
             )
             logger.info(f"[STREAM] {' '.join(cmd)}")
 
-            proc = None
             try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-                )
+                async for proc, stderr in run_subprocess(cmd):
+                    stream_timeout = 900
+                    start_time = time.time()
 
-                # Consume stderr asynchronously to avoid deadlock
-                stderr_data = deque(maxlen=50)
-
-                async def consume_stderr():
                     while True:
-                        line = await proc.stderr.readline()
-                        if not line:
-                            break
-                        stderr_data.append(line)
-
-                stderr_task = asyncio.create_task(consume_stderr())
-
-                # Таймаут для всего стрима (15 минут для free tier)
-                stream_timeout = 900
-                start_time = time.time()
-
-                try:
-                    while True:
-                        # Проверяем общий таймаут
                         if time.time() - start_time > stream_timeout:
                             logger.error("[STREAM] Overall timeout exceeded")
                             break
 
                         try:
-                            chunk = await asyncio.wait_for(
-                                proc.stdout.read(CHUNK_SIZE), timeout=45.0
-                            )
-                            if not chunk:
-                                break
+                            chunk = await asyncio.wait_for(proc.stdout.read(CHUNK_SIZE), timeout=45.0)
+                            if not chunk: break
                             yield chunk
                         except asyncio.TimeoutError:
                             logger.warning("[STREAM] Chunk read timeout, continuing...")
-                            # Продолжаем попытки, но проверяем общий таймаут
                             continue
-                finally:
-                    if proc.returncode is None:
-                        try:
-                            proc.kill()
-                        except:
-                            pass
-                    await proc.wait()
-                    await stderr_task
 
-                if proc.returncode != 0:
-                    error_text = b"".join(stderr_data).decode(errors="ignore")[-500:]
-                    logger.error(
-                        f"[STREAM] Error (code {proc.returncode}): {error_text}"
-                    )
+                    if proc.returncode != 0 and proc.returncode is not None:
+                        err = b"".join(stderr).decode(errors="ignore")[-500:]
+                        logger.error(f"[STREAM] Error (code {proc.returncode}): {err}")
 
             except Exception as e:
                 logger.error(f"[STREAM] Exception: {e}", exc_info=True)
-            finally:
-                if proc and proc.returncode is None:
-                    try:
-                        proc.kill()
-                        await proc.wait()
-                    except:
-                        pass
 
     media_type = "image/gif" if is_gif else "application/octet-stream"
     return StreamingResponse(
@@ -450,32 +382,48 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info(f"[CACHE] Hit: {text}")
         title, formats, audio, duration = cached
     else:
-        try:
-            # Выполняем парсинг
-            async with parsing_sem:
-                title, formats, audio, duration = await asyncio.to_thread(
-                    ytdlp.list_formats, text
-                )
-            info_cache[text] = (title, formats, audio, duration)  # Сохраняем в кэш
-        except Exception as e:
-            logger.error(f"Parse error: {e}", exc_info=True)
-            error_msg = str(e)
-            # Более понятные сообщения для пользователя
-            if "403" in error_msg or "forbidden" in error_msg.lower():
-                await msg.edit_text(
-                    "❌ Доступ запрещен. Контент может быть приватным или требуется авторизация."
-                )
-            elif "404" in error_msg or "not found" in error_msg.lower():
-                await msg.edit_text(
-                    "❌ Видео не найдено. Проверьте правильность ссылки."
-                )
-            elif "pinterest" in error_msg.lower() or "pin.it" in error_msg.lower():
-                await msg.edit_text(
-                    "❌ Ошибка загрузки с Pinterest. Попробуйте позже или используйте прямую ссылку на видео."
-                )
+        # Пытаемся избежать дублирования парсинга одного и того же URL
+        if text in inflight_parsing:
+            logger.info(f"[PARSING] Waiting for inflight task: {text}")
+            await inflight_parsing[text].wait()
+            cached = info_cache.get(text)
+            if cached:
+                title, formats, audio, duration = cached
             else:
-                await msg.edit_text(f"❌ Ошибка: {error_msg[:150]}")
-            return
+                await msg.edit_text("❌ Ошибка при получении данных. Попробуйте еще раз.")
+                return
+        else:
+            event = asyncio.Event()
+            inflight_parsing[text] = event
+            try:
+                # Выполняем парсинг
+                async with parsing_sem:
+                    title, formats, audio, duration = await asyncio.to_thread(
+                        ytdlp.list_formats, text
+                    )
+                info_cache[text] = (title, formats, audio, duration)  # Сохраняем в кэш
+            except Exception as e:
+                logger.error(f"Parse error: {e}", exc_info=True)
+                error_msg = str(e)
+                # Более понятные сообщения для пользователя
+                if "403" in error_msg or "forbidden" in error_msg.lower():
+                    await msg.edit_text(
+                        "❌ Доступ запрещен. Контент может быть приватным или требуется авторизация."
+                    )
+                elif "404" in error_msg or "not found" in error_msg.lower():
+                    await msg.edit_text(
+                        "❌ Видео не найдено. Проверьте правильность ссылки."
+                    )
+                elif "pinterest" in error_msg.lower() or "pin.it" in error_msg.lower():
+                    await msg.edit_text(
+                        "❌ Ошибка загрузки с Pinterest. Попробуйте позже или используйте прямую ссылку на видео."
+                    )
+                else:
+                    await msg.edit_text(f"❌ Ошибка: {error_msg[:150]}")
+                return
+            finally:
+                event.set()
+                inflight_parsing.pop(text, None)
 
     # Сохраняем контекст
     format_map = {f.format_id: f.height for f in formats}
@@ -668,167 +616,89 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         try:
-            logger.info(f"[DL-TG] {' '.join(cmd)}")
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.STDOUT,  # Объединяем stdout/stderr для парсинга
-            )
+            async for proc, stderr in run_subprocess(cmd):
+                last_update = 0
+                download_start = time.time()
+                max_download_time = 600
+                
+                if token in cancel_cache:
+                    del cancel_cache[token]
 
-            # --- ЧТЕНИЕ ПРОГРЕССА ---
-            last_update = 0
-            download_start = time.time()
-            max_download_time = 600  # 10 минут максимум для free tier
-            
-            # Сброс флага отмены
-            if token in cancel_cache:
-                del cancel_cache[token]
+                while True:
+                    if cancel_cache.get(token):
+                        logger.info(f"[DL-TG] Cancelled by user: {token}")
+                        return 
 
-            while True:
-                # 0. Проверяем отмену
-                if cancel_cache.get(token):
-                    logger.info(f"[DL-TG] Cancelled by user: {token}")
-                    try:
-                        proc.kill()
-                    except:
-                        pass
-                    await asyncio.to_thread(safe_remove, tmp_path)
-                    return # Выходим молча, сообщение уже обновлено в on_cancel
-
-                # Проверяем общий таймаут загрузки
-                if time.time() - download_start > max_download_time:
-                    logger.warning("[DL-TG] Download timeout exceeded")
-                    break
-
-                try:
-                    line = await asyncio.wait_for(proc.stdout.readline(), timeout=300.0)
-                except asyncio.TimeoutError:
-                    logger.warning("[DL-TG] Read timeout, checking process...")
-                    # Проверяем, не завершился ли процесс
-                    if proc.returncode is not None:
+                    if time.time() - download_start > max_download_time:
+                        logger.warning("[DL-TG] Download timeout exceeded")
                         break
-                    continue
 
-                if not line:
-                    break
+                    try:
+                        line = await asyncio.wait_for(proc.stdout.readline(), timeout=300.0)
+                    except asyncio.TimeoutError:
+                        if proc.returncode is not None: break
+                        continue
 
-                line_str = line.decode("utf-8", errors="ignore").strip()
+                    if not line: break
+                    line_str = line.decode("utf-8", errors="ignore").strip()
 
-                # Парсим процент "[download]  45.0% of..."
-                if "[download]" in line_str and "%" in line_str:
-                    now = time.time()
-                    if now - last_update > 3.0:  # Обновляем раз в 3 сек
-                        match = PROGRESS_RE.search(line_str)
-                        if match:
-                            try:
-                                percent = float(match.group(1))
-                                bar_text = render_progressbar(percent)
-                                await q.edit_message_text(f"⏳ Скачиваю: {bar_text}\n❌ Нажмите отмена, если передумали.", reply_markup=kb_cancel)
-                                last_update = now
-                            except Exception:
-                                pass  # Игнорим ошибки редактирования (flood wait)
+                    if "[download]" in line_str and "%" in line_str:
+                        now = time.time()
+                        if now - last_update > 3.0:
+                            match = PROGRESS_RE.search(line_str)
+                            if match:
+                                try:
+                                    percent = float(match.group(1))
+                                    await q.edit_message_text(
+                                        f"⏳ Скачиваю: {render_progressbar(percent)}\n❌ Нажмите отмена, если передумали.", 
+                                        reply_markup=kb_cancel
+                                    )
+                                    last_update = now
+                                except: pass
 
-            await proc.wait()
+                await proc.wait()
+                if proc.returncode != 0:
+                    err = b"".join(stderr).decode("utf-8", errors="ignore").lower()
+                    logger.error(f"[DL-TG] yt-dlp failed: {err}")
+                    
+                    if "file larger" in err or "filesize" in err:
+                        await q.edit_message_text("⚠️ Файл слишком большой (>50 МБ).", reply_markup=kb_error)
+                    elif "sign in" in err or "cookies" in err:
+                        await q.edit_message_text("⚠️ Требуется авторизация (Sign-in required).", reply_markup=kb_error)
+                    elif "requested format is not available" in err:
+                        await q.edit_message_text("⚠️ Формат недоступен. Попробуйте другое качество (🔙 Назад).", reply_markup=kb_error)
+                    else:
+                        await q.edit_message_text("⚠️ Ошибка загрузки. Попробуйте другое качество или ссылку.", reply_markup=kb_error)
+                    return
 
-            # Если это GIF формат, конвертируем видео в GIF через ffmpeg
-            if is_gif and proc.returncode == 0:
-                # Сначала скачиваем видео во временный файл
+            # Если это GIF формат, конвертируем
+            if is_gif:
                 video_tmp = tmp_path.replace(".gif", "_video.mp4")
                 await asyncio.to_thread(rename_if_exists, tmp_path, video_tmp)
-
-                # Конвертируем в GIF через ffmpeg
                 await q.edit_message_text("⏳ Конвертирую в GIF...")
+                
                 ffmpeg_cmd = [
-                    "ffmpeg",
-                    "-i",
-                    video_tmp,
-                    "-vf",
-                    "fps=10,scale=320:-1:flags=lanczos",
-                    "-t",
-                    "10",
-                    "-y",
-                    "-pix_fmt",
-                    "rgb24",
-                    "-f",
-                    "gif",
-                    tmp_path,
+                    "ffmpeg", "-i", video_tmp, "-vf", "fps=10,scale=320:-1:flags=lanczos",
+                    "-t", "10", "-y", "-pix_fmt", "rgb24", "-f", "gif", tmp_path
                 ]
-                logger.info(f"[GIF] {' '.join(ffmpeg_cmd)}")
-                ffmpeg_proc = await asyncio.create_subprocess_exec(
-                    *ffmpeg_cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                await ffmpeg_proc.wait()
-
-                # Удаляем временный видео файл
+                
+                async for proc, stderr in run_subprocess(ffmpeg_cmd):
+                    await proc.wait()
+                    if proc.returncode != 0:
+                        logger.error(f"[GIF] FFmpeg failed")
+                        await q.edit_message_text("⚠️ Ошибка конвертации в GIF. Используйте ссылку.", reply_markup=kb_error)
+                        return
+                    
                 await asyncio.to_thread(safe_remove, video_tmp)
 
-                if ffmpeg_proc.returncode != 0:
-                    error_text = (await ffmpeg_proc.stderr.read()).decode(
-                        "utf-8", errors="ignore"
-                    )[:200]
-                    logger.error(f"[GIF] FFmpeg error: {error_text}")
-                    await q.edit_message_text(
-                        "⚠️ Ошибка конвертации в GIF. Используйте ссылку для скачивания.",
-                        reply_markup=kb_error,
-                    )
-                    await asyncio.to_thread(safe_remove, tmp_path)
-                    return
-
-            if proc.returncode != 0:
-                # Читаем ошибку для более информативного сообщения
-                stderr_data = await proc.stderr.read() if proc.stderr else b""
-                error_text = stderr_data.decode("utf-8", errors="ignore").lower()
-                logger.error(
-                    f"[DL-TG] Process failed with code {proc.returncode}: {error_text}"
-                )
-
-                # Более понятные сообщения об ошибках
-                if "file larger" in error_text or "filesize" in error_text:
-                    await q.edit_message_text(
-                        "⚠️ Файл слишком большой (>50 МБ).", reply_markup=kb_error
-                    )
-                elif "sign in" in error_text or "cookies" in error_text:
-                    await q.edit_message_text(
-                        "⚠️ Требуется авторизация (Sign-in required). Возможно, видео ограничено по возрасту.",
-                        reply_markup=kb_error,
-                    )
-                elif "requested format is not available" in error_text:
-                    await q.edit_message_text(
-                        "⚠️ Выбранный формат недоступен. Попробуйте другое качество (🔙 Назад).",
-                        reply_markup=kb_error,
-                    )
-                elif "403" in error_text or "forbidden" in error_text:
-                    await q.edit_message_text(
-                        "⚠️ Доступ запрещен (403 Forbidden).",
-                        reply_markup=kb_error,
-                    )
-                else:
-                    await q.edit_message_text(
-                        "⚠️ Ошибка загрузки. Попробуйте другое качество или используйте ссылку.",
-                        reply_markup=kb_error,
-                    )
-
-                await asyncio.to_thread(safe_remove, tmp_path)
-                return
-
-            # Проверяем размер файла
+            # Проверяем размер перед отправкой
             try:
                 file_size = await asyncio.to_thread(os.path.getsize, tmp_path)
-                if file_size > 49.5 * 1024 * 1024:
-                    await asyncio.to_thread(safe_remove, tmp_path)
-                    await q.edit_message_text(
-                        "⚠️ Файл > 50 МБ.", reply_markup=kb_error
-                    )
+                if file_size > 49.9 * 1024 * 1024:
+                    await q.edit_message_text("⚠️ Файл > 50 МБ.", reply_markup=kb_error)
                     return
-            except OSError as e:
-                logger.error(f"[DL-TG] Error checking file size: {e}")
-                await q.edit_message_text(
-                    "⚠️ Ошибка проверки файла. Используйте ссылку.",
-                    reply_markup=kb_error,
-                )
-                await asyncio.to_thread(safe_remove, tmp_path)
+            except OSError:
+                await q.edit_message_text("⚠️ Ошибка проверки файла.", reply_markup=kb_error)
                 return
 
             await q.edit_message_text("📤 Загружаю в Telegram...")
@@ -934,6 +804,22 @@ async def _startup():
 @api.on_event("shutdown")
 async def _shutdown():
     global bot_app
+    logger.info("Shutdown initiated...")
+    
+    # 1. Завершаем все активные subprocess
+    async with active_processes_lock:
+        if active_processes:
+            logger.info(f"Terminating {len(active_processes)} active processes...")
+            for proc in active_processes:
+                try:
+                    proc.terminate()
+                except:
+                    pass
+            # Даем процессам немного времени на завершение
+            await asyncio.gather(*(proc.wait() for proc in active_processes), return_exceptions=True)
+            active_processes.clear()
+
+    # 2. Останавливаем Bot API
     if bot_app:
         if WEBHOOK_URL:
             await bot_app.bot.delete_webhook()
@@ -941,3 +827,4 @@ async def _shutdown():
             await bot_app.updater.stop()
         await bot_app.stop()
         await bot_app.shutdown()
+    logger.info("Shutdown complete.")

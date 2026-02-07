@@ -86,10 +86,8 @@ def _create_format_label(
 def parse_format(
     format_dict: Dict[str, Any],
     duration_sec: Optional[float],
-    url: str,
+    is_tiktok_url: bool,
 ) -> Optional[FormatItem]:
-    is_tiktok_url = _is_tiktok(url)
-    
     if format_dict.get("vcodec") == "none" and not is_tiktok_url:
         return None
     ext = format_dict.get("ext")
@@ -115,8 +113,8 @@ def parse_format(
         format_id=fid, label=label, ext="mp4", height=height or 0, filesize=filesize
     )
 
-def deduplicate_formats(formats: List[FormatItem], url: str) -> List[FormatItem]:
-    if _is_tiktok(url):
+def deduplicate_formats(formats: List[FormatItem], is_tiktok_url: bool) -> List[FormatItem]:
+    if is_tiktok_url:
         return formats
     unique_formats = []
     seen_heights = set()

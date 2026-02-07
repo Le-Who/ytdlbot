@@ -38,3 +38,7 @@
 ## 2026-02-06 - [HTML Injection in Telegram Messages]
 **Learning:** When using `parse_mode='HTML'` in Telegram bots, ANY user-controlled content (like video titles) interpolated into the message string MUST be escaped using `html.escape()`. Failing to do so allows injection of tags, breaking the message format.
 **Action:** Audit all `parse_mode='HTML'` usages and ensure `html.escape()` is applied to dynamic variables.
+
+## 2026-02-07 - [Reusing YoutubeDL Instances with Thread Local]
+**Learning:** Initializing `yt_dlp.YoutubeDL` takes ~120ms. Caching it in `threading.local` for read-only operations (like `list_formats`) eliminates this overhead. However, do NOT use `with instance:` when reusing, as `__exit__` might close resources you intend to keep open.
+**Action:** Use `threading.local` to store `YoutubeDL` instances and call `extract_info` directly on the stored instance without a context manager for subsequent calls.

@@ -8,7 +8,7 @@ import subprocess
 # Add repo root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from app.ytdlp_service import YtDlpService
+from app.services.ytdlp.service import YtDlpService
 
 async def debug_youtube_video(url):
     service = YtDlpService()

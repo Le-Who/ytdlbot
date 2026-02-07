@@ -457,7 +457,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = build_format_keyboard(formats, audio)
 
     await msg.edit_text(
-        f"📹 <b>{title}</b>\n⏱ {duration}",
+        f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}",
         reply_markup=reply_markup,
         parse_mode="HTML",
     )

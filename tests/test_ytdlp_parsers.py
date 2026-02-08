@@ -1,5 +1,5 @@
 import unittest
-from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, get_audio_format
+from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, get_audio_format, deduplicate_formats
 from app.services.ytdlp.models import FormatItem, FormatMetadata
 from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
@@ -217,6 +217,52 @@ class TestYtDlpParsers(unittest.TestCase):
         item = create_format_item(metadata, False)
         self.assertIn("500 KB", item.label)
 
+class TestDeduplicateFormats(unittest.TestCase):
+    def test_deduplicate_formats_tiktok(self):
+        """TikTok formats should not be deduplicated"""
+        formats = [
+            FormatMetadata(format_id="1", ext="mp4", height=720, filesize=100, protocol="https"),
+            FormatMetadata(format_id="2", ext="mp4", height=720, filesize=200, protocol="https"),
+        ]
+        result = deduplicate_formats(formats, is_tiktok_url=True)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result, formats)
+
+    def test_deduplicate_formats_standard(self):
+        """Standard deduplication based on height"""
+        formats = [
+            FormatMetadata(format_id="1", ext="mp4", height=1080, filesize=100, protocol="https"),
+            FormatMetadata(format_id="2", ext="mp4", height=1080, filesize=200, protocol="https"), # Duplicate height
+            FormatMetadata(format_id="3", ext="mp4", height=720, filesize=300, protocol="https"),
+        ]
+        result = deduplicate_formats(formats, is_tiktok_url=False)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].format_id, "1")
+        self.assertEqual(result[1].format_id, "3")
+
+    def test_deduplicate_formats_none_height(self):
+        """Formats with None height should all be kept"""
+        formats = [
+            FormatMetadata(format_id="1", ext="mp4", height=None, filesize=100, protocol="https"),
+            FormatMetadata(format_id="2", ext="mp4", height=None, filesize=200, protocol="https"),
+            FormatMetadata(format_id="3", ext="mp4", height=720, filesize=300, protocol="https"),
+        ]
+        result = deduplicate_formats(formats, is_tiktok_url=False)
+        self.assertEqual(len(result), 3)
+
+    def test_deduplicate_formats_mixed(self):
+        """Mixed scenario with duplicates and None heights"""
+        formats = [
+            FormatMetadata(format_id="1", ext="mp4", height=1080, filesize=100, protocol="https"),
+            FormatMetadata(format_id="2", ext="mp4", height=1080, filesize=200, protocol="https"), # Dup
+            FormatMetadata(format_id="3", ext="mp4", height=None, filesize=300, protocol="https"),
+            FormatMetadata(format_id="4", ext="mp4", height=None, filesize=400, protocol="https"),
+            FormatMetadata(format_id="5", ext="mp4", height=720, filesize=500, protocol="https"),
+        ]
+        result = deduplicate_formats(formats, is_tiktok_url=False)
+        self.assertEqual(len(result), 4)
+        ids = [f.format_id for f in result]
+        self.assertEqual(ids, ["1", "3", "4", "5"])
 
 class TestGetAudioFormat(unittest.TestCase):
     def test_get_audio_format_pinterest(self):

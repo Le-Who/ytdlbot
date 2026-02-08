@@ -61,7 +61,8 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         _, format_id = q.data.split("|", 1)
-    except:
+    except (ValueError, AttributeError) as e:
+        logger.error(f"Invalid callback data in on_pick: {e}")
         return
 
     data = context.user_data
@@ -124,8 +125,8 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _, token = q.data.split("|", 1)
         state.cancel_cache[token] = True
         await q.edit_message_text("❌ Загрузка отменена пользователем.")
-    except:
-        pass
+    except (ValueError, AttributeError) as e:
+        logger.error(f"Invalid callback data in on_cancel: {e}")
 
 async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -138,7 +139,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         _, token = q.data.split("|", 1)
-    except:
+    except (ValueError, AttributeError) as e:
+        logger.error(f"Invalid callback data in on_send: {e}")
         return
 
     payload = state.link_cache.get(token)

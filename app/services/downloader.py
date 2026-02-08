@@ -291,3 +291,6 @@ class MediaSender:
                 return None
                 
             return gif_path
+        except Exception as e:
+            logger.error(f"FFmpeg exception: {e}")
+            return None

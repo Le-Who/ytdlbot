@@ -275,24 +275,11 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     state.processing_gifs.add(token)
     
-    try:
-        # 2. Convert
-        gif_path = await MediaSender.convert_to_gif_ffmpeg(video_path)
-    finally:
-        state.processing_gifs.discard(token)
+    # Pass-through: Send original video as GIF (Telegram handles MP4 as animation)
+    # This matches the "Private Chat" behavior: Instant, High Quality, and often optimized by source.
+    gif_path = video_path 
 
-    if not gif_path:
-        # q.answer() was already called, so we can't show_alert=True via answer.
-        # Send a temporary message or just log/fail silently if we don't want spam.
-        # But user wants to know why it failed.
-        try:
-             await q.message.reply_text("⚠️ Ошибка конвертации (файл поврежден или слишком большой).", quote=True)
-        except:
-             pass
-        return
-
-    # 3. Send as Reply to the VIDEO message (since original user message is deleted)
-    # This keeps the GIF contextually linked to the video.
+    # 3. Send as Reply to the VIDEO message
     target_msg_id = q.message.message_id
 
     # Sending GIF
@@ -313,5 +300,6 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
          except:
              pass
     
-    # Cleanup GIF file immediately as it's derivative
-    await asyncio.to_thread(safe_remove, gif_path)
+    # Do NOT delete gif_path if it is the same as video_path (cached source)
+    if gif_path != video_path:
+        await asyncio.to_thread(safe_remove, gif_path)

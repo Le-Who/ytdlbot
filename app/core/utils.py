@@ -1,10 +1,11 @@
 import os
 import asyncio
 import re
+import time
 from collections import deque
 from urllib.parse import urlsplit
 from app.constants import SUPPORTED_PLATFORMS, SUPPORTED_PLATFORMS_SUFFIXES
-from app.core.state import active_processes_lock, active_processes
+from app.core.state import active_processes_lock, active_processes, user_rates
 
 # Regex паттерны
 URL_RE = re.compile(r"https?://\S+", re.I)
@@ -58,7 +59,18 @@ def extract_supported_url(text: str) -> str | None:
     return None
 
 def check_rate_limit(user_id: int, limit: int = 5) -> bool:
-    """Проверяет лимит запросов пользователя в минуту (Отключено пользователем)"""
+    """Проверяет лимит запросов пользователя в минуту"""
+    now = time.time()
+    user_requests = user_rates.get(user_id, [])
+
+    # Filter for requests in the last 60 seconds
+    user_requests = [t for t in user_requests if now - t < 60]
+
+    if len(user_requests) >= limit:
+        return False
+
+    user_requests.append(now)
+    user_rates[user_id] = user_requests
     return True
 
 def safe_remove(path: str) -> None:

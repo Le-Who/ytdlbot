@@ -21,7 +21,7 @@ def _is_pinterest(url: str) -> bool:
 def _format_duration(seconds: Optional[float]) -> str:
     """Форматирует длительность в формат HH:MM:SS или MM:SS"""
     if not seconds:
-        return "??"
+        return "--:--"
     total_seconds = int(seconds)
     m, s = divmod(total_seconds, 60)
     h, m = divmod(m, 60)
@@ -79,8 +79,6 @@ def _create_format_label(
         parts.append(f"• {size_str}")
     elif "m3u8" in protocol:
         parts.append("• HLS")
-    else:
-        parts.append("• ?")
 
     return " ".join(parts)
 
@@ -155,7 +153,7 @@ def get_special_format(url: str) -> FormatItem:
     else:
         return FormatItem(
             format_id=AUDIO_FORMAT_ID,
-            label="🎵 Только аудио",
+            label="🎵 Audio",
             ext="audio",
             height=None,
             filesize=None,

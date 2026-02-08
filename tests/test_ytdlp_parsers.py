@@ -7,9 +7,9 @@ class TestYtDlpParsers(unittest.TestCase):
     def test_format_duration(self):
         """Test duration formatting (HH:MM:SS or MM:SS)"""
         # None or 0 cases
-        self.assertEqual(_format_duration(None), "??")
-        self.assertEqual(_format_duration(0), "??")
-        self.assertEqual(_format_duration(0.0), "??")
+        self.assertEqual(_format_duration(None), "--:--")
+        self.assertEqual(_format_duration(0), "--:--")
+        self.assertEqual(_format_duration(0.0), "--:--")
 
         # Seconds only (< 60)
         self.assertEqual(_format_duration(59), "00:59")
@@ -296,7 +296,7 @@ class TestGetSpecialFormat(unittest.TestCase):
             with self.subTest(url=url):
                 item = get_special_format(url)
                 self.assertEqual(item.format_id, AUDIO_FORMAT_ID)
-                self.assertIn("аудио", item.label)
+                self.assertIn("Audio", item.label)
                 self.assertEqual(item.ext, "audio")
                 self.assertIsNone(item.height)
                 self.assertIsNone(item.filesize)

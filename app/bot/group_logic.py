@@ -70,7 +70,8 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     
     if is_pinterest:
         # Relaxed format for Pinterest: just best video/audio, relying on max-filesize flag
-        video_format = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+        # Pinterest often has single stream, so 'best' is safer than forcing verify/merge
+        video_format = "best[ext=mp4]/best"
     else:
         # Standard strict format for YouTube/TikTok
         video_format = GROUP_VIDEO_FORMAT

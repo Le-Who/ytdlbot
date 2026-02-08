@@ -247,7 +247,10 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles 'Send GIF' button press from Group Mode."""
     q = update.callback_query
-    await q.answer("⏳ Конвертирую в GIF...")
+    try:
+        await q.answer("⏳ Конвертирую в GIF...")
+    except Exception as e:
+        logger.warning(f"Callback answer failed (query too old?): {e}")
     
     try:
         _, token = q.data.split("|", 1)

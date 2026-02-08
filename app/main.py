@@ -59,12 +59,13 @@ async def lifespan(app: FastAPI):
             allowed_updates=["message", "callback_query"],
         )
     else:
-        logger.info(
-            "Webhook URL not found. Polling mode is not implemented in this refactor (assuming webhook)."
+        logger.info("Webhook URL not found. Starting polling mode...")
+        # Удаляем вебхук (если был) перед запуском поллинга
+        await bot_app.bot.delete_webhook()
+        # Запускаем поллинг в фоне
+        await bot_app.updater.start_polling(
+            allowed_updates=["message", "callback_query"]
         )
-        # Для поллинга нужно запускать bot_app.updater.start_polling(), но в режиме FastAPI
-        # обычно используется вебхук. Если нужен поллинг, это можно добавить отдельным таском.
-        pass
 
     yield
 
@@ -72,6 +73,8 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down...")
     if config.WEBHOOK_URL:
         await bot_app.bot.delete_webhook()
+    else:
+        await bot_app.updater.stop()
 
     await bot_app.stop()
     await bot_app.shutdown()

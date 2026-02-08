@@ -59,6 +59,9 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer("⏳ Подготовка ссылки...")
 
+    if not q.data:
+        return
+
     try:
         _, format_id = q.data.split("|", 1)
     except (ValueError, AttributeError) as e:
@@ -121,6 +124,10 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer("🚫 Отменяю...")
+
+    if not q.data:
+        return
+
     try:
         _, token = q.data.split("|", 1)
         state.cancel_cache[token] = True
@@ -135,6 +142,9 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not check_rate_limit(user_id, limit=3):
         await q.edit_message_text("⚠️ Слишком часто скачиваете. Подождите.")
+        return
+
+    if not q.data:
         return
 
     try:

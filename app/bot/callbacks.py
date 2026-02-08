@@ -254,8 +254,10 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                         reply_markup=kb_cancel,
                                     )
                                     last_update = now
-                                except:
-                                    pass
+                                except Exception as e:
+                                    logger.warning(
+                                        f"Failed to parse progress or update message: {e}"
+                                    )
 
                 await proc.wait()
                 if proc.returncode != 0:

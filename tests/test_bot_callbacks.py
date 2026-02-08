@@ -367,6 +367,55 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             args, _ = self.update.callback_query.edit_message_text.call_args
             self.assertIn("Файл слишком большой", args[0])
 
+    async def test_on_send_progress_update_exception_handling(self):
+        # Setup
+        token = "progress_token"
+        self.update.callback_query.data = f"send|{token}"
+        state.link_cache[token] = {
+            "page_url": "http://example.com",
+            "format_id": "137",
+            "title": "Video"
+        }
+
+        # Mock subprocess yielding a progress line
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+
+        # line that matches PROGRESS_RE: "(\d+\.\d+)%"
+        progress_line = b"[download]  45.5% of 10.00MiB at  2.00MiB/s ETA 00:05"
+
+        mock_proc.stdout.readline = AsyncMock(side_effect=[progress_line, b""])
+        mock_proc.wait = AsyncMock()
+
+        async def mock_subprocess_gen(*args, **kwargs):
+            yield mock_proc, []
+
+        # Mock edit_message_text to raise Exception ONLY when updating progress
+        async def edit_side_effect(*args, **kwargs):
+            text = args[0] if args else kwargs.get("text", "")
+            if "Скачиваю" in text:
+                raise Exception("Telegram Error")
+            return MagicMock()
+
+        self.update.callback_query.edit_message_text.side_effect = edit_side_effect
+
+        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+             patch("app.bot.callbacks.check_rate_limit", return_value=True), \
+             patch("app.bot.callbacks.logger") as mock_logger, \
+             patch("app.bot.callbacks.safe_remove", MagicMock()), \
+             patch("os.path.getsize", return_value=1000), \
+             patch("builtins.open", MagicMock()):
+
+            await callbacks.on_send(self.update, self.context)
+
+            # Verify that we tried to update
+            # We can't assert_awaited because side_effect raises exception, but in the code it is caught.
+            # So the call happens.
+
+            # Verify that logger WAS called (expected behavior)
+            mock_logger.warning.assert_called_with(
+                "Failed to parse progress or update message: Telegram Error"
+            )
     async def test_on_send_malformed_data(self):
         self.update.callback_query.data = "invalid_data"
         with patch("app.bot.callbacks.check_rate_limit", return_value=True), \

@@ -123,20 +123,3 @@ def build_command(
 
     _append_common_opts(cmd, page_url, cookies_path, max_filesize)
     return cmd
-
-
-def get_group_format_string(url: str) -> str:
-    """
-    Returns the appropriate format string for Group Mode (Auto-quality).
-    Handles platform-specific optimizations (e.g. Pinterest).
-    """
-    is_pinterest = "pinterest" in url or "pin.it" in url
-
-    if is_pinterest:
-        # Relaxed format for Pinterest: just best video/audio.
-        # Pinterest often has single stream, so 'best' is safer than forcing verify/merge
-        return "best[ext=mp4]/best"
-    
-    # Standard strict format for YouTube/TikTok to stay under 45MB
-    return "bestvideo[ext=mp4][filesize<45M]+bestaudio[ext=m4a]/best[ext=mp4][filesize<45M]/best[filesize<45M]"
-

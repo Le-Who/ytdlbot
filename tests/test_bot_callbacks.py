@@ -416,6 +416,39 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             mock_logger.warning.assert_called_with(
                 "Failed to parse progress or update message: Telegram Error"
             )
+    async def test_on_send_malformed_data(self):
+        self.update.callback_query.data = "invalid_data"
+        with patch("app.bot.callbacks.check_rate_limit", return_value=True), \
+             patch("app.bot.callbacks.logger") as mock_logger:
+            await callbacks.on_send(self.update, self.context)
+            mock_logger.error.assert_called()
+            args, _ = mock_logger.error.call_args
+            self.assertIn("Invalid callback data in on_send", args[0])
+
+        self.update.callback_query.answer.assert_awaited()
+        self.update.callback_query.edit_message_text.assert_not_called()
+
+    async def test_on_pick_malformed_data(self):
+        self.update.callback_query.data = "invalid_data"
+        with patch("app.bot.callbacks.logger") as mock_logger:
+            await callbacks.on_pick(self.update, self.context)
+            mock_logger.error.assert_called()
+            args, _ = mock_logger.error.call_args
+            self.assertIn("Invalid callback data in on_pick", args[0])
+
+        self.update.callback_query.answer.assert_awaited()
+        self.update.callback_query.edit_message_text.assert_not_called()
+
+    async def test_on_cancel_malformed_data(self):
+        self.update.callback_query.data = "invalid_data"
+        with patch("app.bot.callbacks.logger") as mock_logger:
+            await callbacks.on_cancel(self.update, self.context)
+            mock_logger.error.assert_called()
+            args, _ = mock_logger.error.call_args
+            self.assertIn("Invalid callback data in on_cancel", args[0])
+
+        self.update.callback_query.answer.assert_awaited()
+        self.update.callback_query.edit_message_text.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main()

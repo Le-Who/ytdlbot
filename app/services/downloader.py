@@ -22,6 +22,13 @@ from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 
 logger = logging.getLogger("app.services.downloader")
 
+from app.core.exceptions import (
+    DownloadError,
+    FileTooLargeError,
+    FormatNotAvailableError,
+    AuthRequiredError,
+)
+
 class MediaSender:
     """
     Service to handle downloading media via yt-dlp, converting to GIF,
@@ -35,7 +42,7 @@ class MediaSender:
         height: Optional[int],
         token: str,
         progress_callback=None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> str:
         """
         Downloads a video.
         
@@ -47,9 +54,10 @@ class MediaSender:
             progress_callback: Async function(text, markup) to update UI.
 
         Returns:
-            (file_path, error_message)
-            If success: file_path is str, error_message is None.
-            If fail: file_path is None, error_message is str.
+            file_path: str (on success)
+            
+        Raises:
+            DownloadError: On failure (includes specific subclasses)
         """
         tmp_dir = TEMP_DIR
         is_gif = format_id == GIF_FORMAT_ID
@@ -66,27 +74,32 @@ class MediaSender:
         cached_path = state.file_cache.get(token)
         if cached_path and os.path.exists(cached_path):
             logger.info(f"[CACHE] Reusing downloaded file: {cached_path}")
-            return cached_path, None
+            return cached_path
 
-        tmp_path = os.path.join(tmp_dir, f"ytdl_{uuid.uuid4().hex}.{file_ext}")
+        # Encapsulate concurrency limit here
+        if state.tasks_sem.locked():
+             logger.warning("Task semaphore locked, waiting...")
+        
+        async with state.tasks_sem:
+            tmp_path = os.path.join(tmp_dir, f"ytdl_{uuid.uuid4().hex}.{file_ext}")
 
-        cmd = state.ytdlp.build_command(
-            page_url,
-            format_id,
-            height,
-            output=tmp_path,
-            max_filesize=50,
-            use_aria2=True,
-        )
+            cmd = state.ytdlp.build_command(
+                page_url,
+                format_id,
+                height,
+                output=tmp_path,
+                max_filesize=50,
+                use_aria2=True,
+            )
 
-        kb_cancel = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("❌ Отмена", callback_data=f"cancel|{token}")]]
-        )
+            kb_cancel = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("❌ Отмена", callback_data=f"cancel|{token}")]]
+            )
 
-        try:
-            async for proc, stderr in run_subprocess(cmd):
-                last_update = 0
-                download_start = time.time()
+            try:
+                async for proc, stderr in run_subprocess(cmd):
+                    last_update = 0
+                    download_start = time.time()
                 max_download_time = 600
 
                 # Clear previous cancel state for this token
@@ -96,11 +109,11 @@ class MediaSender:
                 while True:
                     if state.cancel_cache.get(token):
                         logger.info(f"[DL-TG] Cancelled by user: {token}")
-                        return None, "❌ Загрузка отменена пользователем."
+                        raise DownloadError("❌ Загрузка отменена пользователем.")
 
                     if time.time() - download_start > max_download_time:
                         logger.warning("[DL-TG] Download timeout exceeded")
-                        return None, "⚠️ Время ожидания загрузки истекло."
+                        raise DownloadError("⚠️ Время ожидания загрузки истекло.")
 
                     try:
                         line = await asyncio.wait_for(
@@ -146,35 +159,39 @@ class MediaSender:
                     logger.error(f"[DL-TG] yt-dlp failed: {err}")
 
                     if "file larger" in err or "filesize" in err:
-                        return None, "⚠️ Файл слишком большой (>50 МБ)."
+                        raise FileTooLargeError("⚠️ Файл слишком большой (>50 МБ).")
                     elif "sign in" in err or "cookies" in err:
-                        return None, "⚠️ Требуется авторизация (Sign-in required)."
+                        raise AuthRequiredError("⚠️ Требуется авторизация (Sign-in required).")
                     elif "requested format is not available" in err:
-                         return None, "⚠️ Формат недоступен. Попробуйте другое качество."
+                         raise FormatNotAvailableError("⚠️ Формат недоступен. Попробуйте другое качество.")
                     else:
-                        return None, "⚠️ Ошибка загрузки. Попробуйте другое качество или ссылку."
+                        raise DownloadError("⚠️ Ошибка загрузки. Попробуйте другое качество или ссылку.")
 
             # Verify file
             try:
                 if not os.path.exists(tmp_path):
-                     return None, "⚠️ Файл не был создан."
+                     raise DownloadError("⚠️ Файл не был создан.")
                      
                 file_size = await asyncio.to_thread(os.path.getsize, tmp_path)
                 if file_size > 49.9 * 1024 * 1024:
                     await asyncio.to_thread(safe_remove, tmp_path)
-                    return None, "⚠️ Файл слишком большой (> 50 МБ)."
+                    raise FileTooLargeError("⚠️ Файл слишком большой (> 50 МБ).")
             except OSError:
                 await asyncio.to_thread(safe_remove, tmp_path)
-                return None, "⚠️ Ошибка проверки файла."
+                raise DownloadError("⚠️ Ошибка проверки файла.")
 
             # Save to cache
             state.file_cache[token] = tmp_path
-            return tmp_path, None
+            return tmp_path
 
+        except DownloadError:
+            # Re-raise known download errors
+            await asyncio.to_thread(safe_remove, tmp_path)
+            raise
         except Exception as e:
             logger.error(f"Download exception: {e}", exc_info=True)
             await asyncio.to_thread(safe_remove, tmp_path)
-            return None, "⚠️ Внутренняя ошибка при загрузке."
+            raise DownloadError("⚠️ Внутренняя ошибка при загрузке.")
 
     @staticmethod
     async def send_file(

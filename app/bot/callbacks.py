@@ -172,12 +172,6 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
     )
 
-    if state.tasks_sem.locked():
-        await q.edit_message_text(
-            "⚠️ Очередь переполнена. Скачайте по ссылке.", reply_markup=kb_error
-        )
-        return
-
     data = context.user_data
     fmt_size = data.get("size_map", {}).get(payload["format_id"])
     if fmt_size and fmt_size > 50 * 1024 * 1024:
@@ -196,21 +190,25 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception as e:
             logger.warning(f"UI Update failed: {e}")
 
-    async with state.tasks_sem:
-        await q.edit_message_text("⏳ Начинаю загрузку...")
-        
-        from app.services.downloader import MediaSender # Lazy import to avoid circular dep if any
+    await q.edit_message_text("⏳ Начинаю загрузку...")
+    
+    from app.services.downloader import MediaSender # Lazy import to avoid circular dep if any
+    from app.core.exceptions import DownloadError
 
-        file_path, error = await MediaSender.download_video(
-            payload["page_url"],
-            payload["format_id"],
-            payload.get("height"),
-            token,
-            progress_callback=update_progress_ui
-        )
-
-        if error or not file_path:
-            await q.edit_message_text(error or "⚠️ Ошибка.", reply_markup=kb_error)
+    try:
+        file_path = await MediaSender.download_video(
+                payload["page_url"],
+                payload["format_id"],
+                payload.get("height"),
+                token,
+                progress_callback=update_progress_ui
+            )
+        except DownloadError as e:
+            await q.edit_message_text(str(e), reply_markup=kb_error)
+            return
+        except Exception as e:
+            logger.error(f"Error in on_send: {e}")
+            await q.edit_message_text("⚠️ Неизвестная ошибка.", reply_markup=kb_error)
             return
 
         await q.edit_message_text("📤 Отправляю в Telegram...")

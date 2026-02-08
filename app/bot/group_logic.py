@@ -12,7 +12,7 @@ from app.services.downloader import MediaSender
 
 logger = logging.getLogger("app.bot.group_logic")
 
-GROUP_VIDEO_FORMAT = "bestvideo[ext=mp4][filesize<45M]+bestaudio[ext=m4a]/best[ext=mp4][filesize<45M]/best[filesize<45M]"
+logger = logging.getLogger("app.bot.group_logic")
 
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -65,34 +65,31 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     # We use a specific format for groups to ensure size < 45MB
     # We pass height=None so builders.py falls through to raw command.
 
-    # Detect Pinterest to use a simpler format (Pinterest often lacks detailed metadata)
-    is_pinterest = "pinterest" in url or "pin.it" in url
-    
-    if is_pinterest:
-        # Relaxed format for Pinterest: just best video/audio, relying on max-filesize flag
-        # Pinterest often has single stream, so 'best' is safer than forcing verify/merge
-        video_format = "best[ext=mp4]/best"
-    else:
-        # Standard strict format for YouTube/TikTok
-        video_format = GROUP_VIDEO_FORMAT
-    
-    file_path, error = await MediaSender.download_video(
-        page_url=url,
-        format_id=video_format,
-        height=None, 
-        token=token,
-        progress_callback=update_ui
-    )
+    from app.services.ytdlp.builders import get_group_format_string
+    from app.core.exceptions import DownloadError
 
-    if error or not file_path:
-        # If error, we might want to delete the status message or show error
-        # In groups, clutter is bad. Show error for 5s then delete?
+    video_format = get_group_format_string(url)
+    
+    try:
+        file_path = await MediaSender.download_video(
+            page_url=url,
+            format_id=video_format,
+            height=None, 
+            token=token,
+            progress_callback=update_ui
+        )
+    except DownloadError as e:
         try:
-            await status_msg.edit_text(error or "❌ Ошибка.")
-            # await asyncio.sleep(5)
-            # await status_msg.delete() 
+            await status_msg.edit_text(str(e))
         except:
             pass
+        return
+    except Exception as e:
+        logger.error(f"Group download failed: {e}")
+        try:
+             await status_msg.edit_text("❌ Внутренняя ошибка.")
+        except:
+             pass
         return
 
     # Success! Send video in Silent Mode (Delete original, Tag user)

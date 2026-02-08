@@ -273,7 +273,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if is_gif:
                 video_tmp = tmp_path.replace(".gif", "_video.mp4")
-                if os.path.exists(video_tmp):
+                if await asyncio.to_thread(os.path.exists, video_tmp):
                      pass 
 
             try:

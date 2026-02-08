@@ -171,9 +171,6 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🔙 Назад", callback_data="back")],
         ]
     )
-    kb_cancel = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("❌ Отмена", callback_data=f"cancel|{token}")]]
-    )
 
     if state.tasks_sem.locked():
         await q.edit_message_text(
@@ -193,161 +190,108 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    async def update_progress_ui(text, markup):
+        try:
+            await q.edit_message_text(text, reply_markup=markup)
+        except Exception as e:
+            logger.warning(f"UI Update failed: {e}")
+
     async with state.tasks_sem:
         await q.edit_message_text("⏳ Начинаю загрузку...")
-        tmp_dir = TEMP_DIR
-        is_gif = payload["format_id"] == GIF_FORMAT_ID
-        is_audio = payload["format_id"] == AUDIO_FORMAT_ID
+        
+        from app.services.downloader import MediaSender # Lazy import to avoid circular dep if any
 
-        if is_gif:
-            file_ext = "gif"
-        elif is_audio:
-            file_ext = "mp3"
-        else:
-            file_ext = "mp4"
-
-        tmp_path = os.path.join(tmp_dir, f"ytdl_{uuid.uuid4().hex}.{file_ext}")
-
-        cmd = state.ytdlp.build_command(
+        file_path, error = await MediaSender.download_video(
             payload["page_url"],
             payload["format_id"],
             payload.get("height"),
-            output=tmp_path,
-            max_filesize=50,
-            use_aria2=True,
+            token,
+            progress_callback=update_progress_ui
         )
 
-        try:
-            async for proc, stderr in run_subprocess(cmd):
-                last_update = 0
-                download_start = time.time()
-                max_download_time = 600
+        if error or not file_path:
+            await q.edit_message_text(error or "⚠️ Ошибка.", reply_markup=kb_error)
+            return
 
-                if token in state.cancel_cache:
-                    del state.cancel_cache[token]
+        await q.edit_message_text("📤 Отправляю в Telegram...")
 
-                while True:
-                    if state.cancel_cache.get(token):
-                        logger.info(f"[DL-TG] Cancelled by user: {token}")
-                        return
+        is_gif = payload["format_id"] == GIF_FORMAT_ID
+        is_audio = payload["format_id"] == AUDIO_FORMAT_ID
+        
+        success = await MediaSender.send_file(
+            context.bot,
+            q.message.chat_id,
+            file_path,
+            is_audio=is_audio,
+            is_gif=is_gif,
+            caption="📹" if not is_audio else "🎵"
+        )
 
-                    if time.time() - download_start > max_download_time:
-                        logger.warning("[DL-TG] Download timeout exceeded")
-                        break
+        if success:
+            await q.delete_message()
+        else:
+            await q.edit_message_text("⚠️ Ошибка при отправке файла.", reply_markup=kb_error)
+        
+        # Cleanup is handled by MediaSender if it created a new file, but we should ensure cache policy
+        # If it was a cached file, don't remove. 
+        # Actually MediaSender returns path. If it was from cache, existing logic holds.
+        # If we want to remove after send to save space (unless reused for GIF), we might need logic.
+        # For now, let TTLCache handle cleanup or periodic cleanup task (not in scope).
+        # But wait, original code removed tmp_path immediately.
+        # If we rely on cache, we must not remove it yet.
+        # We can implement a cleanup job or rely on OS temp cleaner, but for now we follow the "Reuse" requirement.
+        # To avoid disk fill up, we could remove if it's NOT in file_cache, but MediaSender puts it there.
+        # We'll leave it in cache.
 
-                    try:
-                        line = await asyncio.wait_for(
-                            proc.stdout.readline(), timeout=300.0
-                        )
-                    except asyncio.TimeoutError:
-                        if proc.returncode is not None:
-                            break
-                        continue
 
-                    if not line:
-                        break
-                    line_str = line.decode("utf-8", errors="ignore").strip()
+async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles 'Send GIF' button press from Group Mode."""
+    q = update.callback_query
+    await q.answer("⏳ Конвертирую в GIF...")
+    
+    try:
+        _, token = q.data.split("|", 1)
+    except ValueError:
+        return
 
-                    if "[download]" in line_str and "%" in line_str:
-                        now = time.time()
-                        if now - last_update > 3.0:
-                            match = PROGRESS_RE.search(line_str)
-                            if match:
-                                try:
-                                    percent = float(match.group(1))
-                                    details = ""
+    from app.services.downloader import MediaSender
+    
+    # 1. Get file path from cache
+    video_path = state.file_cache.get(token)
+    if not video_path or not os.path.exists(video_path):
+        await q.answer("⚠️ Файл не найден или устарел.", show_alert=True)
+        return
 
-                                    det_match = PROGRESS_DETAILS_RE.search(line_str)
-                                    if det_match:
-                                        speed = det_match.group(1)
-                                        eta = det_match.group(2)
-                                        details = f"\n🚀 {speed} • ⏱ ETA {eta}"
+    # 2. Convert
+    gif_path = await MediaSender.convert_to_gif_ffmpeg(video_path)
+    if not gif_path:
+        await q.answer("⚠️ Ошибка конвертации.", show_alert=True)
+        return
 
-                                    await q.edit_message_text(
-                                        f"⏳ Скачиваю: {render_progressbar(percent)}{details}\n❌ Нажмите отмена, если передумали.",
-                                        reply_markup=kb_cancel,
-                                    )
-                                    last_update = now
-                                except Exception as e:
-                                    logger.warning(
-                                        f"Failed to parse progress or update message: {e}"
-                                    )
+    # 3. Send as Reply to original message
+    # We need access to original message id.
+    # The button is attached to the bot's video message.
+    # The bot's video message is a reply to the User's message.
+    # So q.message.reply_to_message should be the User's message.
+    
+    original_msg = q.message.reply_to_message
+    target_msg_id = original_msg.message_id if original_msg else None
 
-                await proc.wait()
-                if proc.returncode != 0:
-                    err = b"".join(stderr).decode("utf-8", errors="ignore").lower()
-                    logger.error(f"[DL-TG] yt-dlp failed: {err}")
+    # Sending GIF
+    success = await MediaSender.send_file(
+        context.bot,
+        q.message.chat_id,
+        gif_path,
+        is_gif=True,
+        reply_to_message_id=target_msg_id,
+        caption="🎬 GIF"
+    )
 
-                    if "file larger" in err or "filesize" in err:
-                        await q.edit_message_text(
-                            "⚠️ Файл слишком большой (>50 МБ).", reply_markup=kb_error
-                        )
-                    elif "sign in" in err or "cookies" in err:
-                        await q.edit_message_text(
-                            "⚠️ Требуется авторизация (Sign-in required).",
-                            reply_markup=kb_error,
-                        )
-                    elif "requested format is not available" in err:
-                        await q.edit_message_text(
-                            "⚠️ Формат недоступен. Попробуйте другое качество (🔙 Назад).",
-                            reply_markup=kb_error,
-                        )
-                    else:
-                        await q.edit_message_text(
-                            "⚠️ Ошибка загрузки. Попробуйте другое качество или ссылку.",
-                            reply_markup=kb_error,
-                        )
-                    return
-
-            if is_gif:
-                video_tmp = tmp_path.replace(".gif", "_video.mp4")
-                if await asyncio.to_thread(os.path.exists, video_tmp):
-                     pass 
-
-            try:
-                file_size = await asyncio.to_thread(os.path.getsize, tmp_path)
-                if file_size > 49.9 * 1024 * 1024:
-                    await q.edit_message_text("⚠️ Файл слишком большой (> 50 МБ).", reply_markup=kb_error)
-                    return
-            except OSError:
-                await q.edit_message_text("⚠️ Ошибка проверки файла.", reply_markup=kb_error)
-                return
-
-            await q.edit_message_text("📤 Отправляю в Telegram...")
-
-            try:
-                f = await asyncio.to_thread(open, tmp_path, "rb")
-                try:
-                    if is_gif:
-                        await context.bot.send_animation(
-                            chat_id=q.message.chat_id,
-                            animation=f,
-                            caption="🎬",
-                        )
-                    elif is_audio:
-                         await context.bot.send_audio(
-                            chat_id=q.message.chat_id,
-                            audio=f,
-                            caption="🎵",
-                        )
-                    else:
-                        await context.bot.send_video(
-                            chat_id=q.message.chat_id,
-                            video=f,
-                            caption="📹",
-                            supports_streaming=True,
-                        )
-                finally:
-                    await asyncio.to_thread(f.close)
-                await q.delete_message()
-            except NetworkError:
-                await q.edit_message_text("⚠️ Ошибка сети при отправке (возможно, файл слишком большой).", reply_markup=kb_error)
-            except Exception as e:
-                logger.error(f"Send error: {e}", exc_info=True)
-                await q.edit_message_text("⚠️ Ошибка при отправке файла.", reply_markup=kb_error)
-
-        except Exception as e:
-            logger.error(f"TG download error: {e}", exc_info=True)
-            await q.edit_message_text("⚠️ Внутренняя ошибка.", reply_markup=kb_error)
-        finally:
-            await asyncio.to_thread(safe_remove, tmp_path)
+    if success:
+        # We don't delete the video message, we just sent the GIF as requested.
+        pass
+    else:
+        await q.answer("⚠️ Не удалось отправить GIF.", show_alert=True)
+    
+    # Cleanup GIF file immediately as it's derivative
+    await asyncio.to_thread(safe_remove, gif_path)

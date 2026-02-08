@@ -157,5 +157,35 @@ class TestCoreUtils(unittest.IsolatedAsyncioTestCase):
             args, kwargs = mock_exec.call_args
             self.assertEqual(kwargs['stderr'], asyncio.subprocess.DEVNULL)
 
+    def test_render_progressbar(self):
+        """Test render_progressbar with various inputs."""
+        # Test 0%
+        # 0% of 15 is 0 blocks.
+        # "░░░░░░░░░░░░░░░ 0.0%"
+        self.assertEqual(self.utils.render_progressbar(0), "░" * 15 + " 0.0%")
+
+        # Test 100%
+        # "███████████████ 100.0%"
+        self.assertEqual(self.utils.render_progressbar(100), "█" * 15 + " 100.0%")
+
+        # Test 50%
+        # 50% of 15 is 7.5 -> 7 blocks
+        # "███████░░░░░░░░ 50.0%"
+        self.assertEqual(self.utils.render_progressbar(50), "█" * 7 + "░" * 8 + " 50.0%")
+
+        # Test negative (clamp to 0)
+        self.assertEqual(self.utils.render_progressbar(-10), "░" * 15 + " 0.0%")
+
+        # Test overflow (clamp to 100)
+        self.assertEqual(self.utils.render_progressbar(150), "█" * 15 + " 100.0%")
+
+        # Test custom length
+        # 50% of 10 is 5
+        self.assertEqual(self.utils.render_progressbar(50, length=10), "█" * 5 + "░" * 5 + " 50.0%")
+
+        # Test rounding
+        # 25% of 10 is 2.5 -> 2
+        self.assertEqual(self.utils.render_progressbar(25, length=10), "█" * 2 + "░" * 8 + " 25.0%")
+
 if __name__ == '__main__':
     unittest.main()

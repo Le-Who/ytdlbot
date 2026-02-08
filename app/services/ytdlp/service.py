@@ -20,6 +20,12 @@ from .parsers import (
     _is_youtube,
     _is_tiktok,
 )
+from .exceptions import (
+    AccessDeniedError,
+    VideoNotFoundError,
+    LiveStreamError,
+    ExtractionError,
+)
 
 logger = logging.getLogger("ytdlp_service")
 
@@ -155,20 +161,20 @@ class YtDlpService:
             if not info:
                 error_msg = str(e).lower()
                 if "403" in error_msg or "forbidden" in error_msg:
-                    raise Exception("Доступ запрещен. Возможно, контент приватный или требуется авторизация.")
+                    raise AccessDeniedError("Доступ запрещен. Возможно, контент приватный или требуется авторизация.")
                 elif "404" in error_msg or "not found" in error_msg:
-                    raise Exception("Видео не найдено. Проверьте ссылку.")
+                    raise VideoNotFoundError("Видео не найдено. Проверьте ссылку.")
                 elif "live" in error_msg and "available" not in error_msg:
-                    raise Exception("Прямые трансляции (Live) не поддерживаются.")
+                    raise LiveStreamError("Прямые трансляции (Live) не поддерживаются.")
                 else:
                     logger.error("YtDlp Extraction Error: %s", e, exc_info=True)
                     msg = str(e)
                     if "format is not available" in msg.lower():
                         msg = "Выбранный формат или видео недоступны. Попробуйте другую ссылку."
-                    raise Exception(f"Ошибка извлечения: {msg[:300]}")
+                    raise ExtractionError(f"Ошибка извлечения: {msg[:300]}")
 
         if info.get("is_live") or info.get("live_status") == "is_live":
-             raise Exception("⚠️ Это прямая трансляция. Загрузка активных стримов не поддерживается.")
+             raise LiveStreamError("⚠️ Это прямая трансляция. Загрузка активных стримов не поддерживается.")
 
         title = info.get("title") or "Видео"
         duration_sec = info.get("duration")

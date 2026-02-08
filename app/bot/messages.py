@@ -8,6 +8,12 @@ from telegram.constants import ChatAction
 from app.core import state
 from app.core.utils import check_rate_limit, extract_supported_url
 from app.bot.keyboards import build_format_keyboard
+from app.services.ytdlp.exceptions import (
+    AccessDeniedError,
+    VideoNotFoundError,
+    LiveStreamError,
+    ExtractionError,
+)
 
 logger = logging.getLogger("app.bot.messages")
 
@@ -59,23 +65,34 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         state.ytdlp.list_formats, text
                     )
                 state.info_cache[text] = (title, formats, special_format, duration)
-            except Exception as e:
-                logger.error(f"Parse error: {e}", exc_info=True)
-                error_msg = str(e)
-                if "403" in error_msg or "forbidden" in error_msg.lower():
-                    await msg.edit_text(
-                        "❌ Доступ запрещен. Контент может быть приватным или требуется авторизация."
-                    )
-                elif "404" in error_msg or "not found" in error_msg.lower():
-                    await msg.edit_text(
-                        "❌ Видео не найдено. Проверьте правильность ссылки."
-                    )
-                elif "pinterest" in error_msg.lower() or "pin.it" in error_msg.lower():
+            except AccessDeniedError:
+                await msg.edit_text(
+                    "❌ Доступ запрещен. Контент может быть приватным или требуется авторизация."
+                )
+                return
+            except VideoNotFoundError:
+                await msg.edit_text(
+                    "❌ Видео не найдено. Проверьте правильность ссылки."
+                )
+                return
+            except LiveStreamError:
+                await msg.edit_text(
+                    "❌ Прямые трансляции (Live) не поддерживаются."
+                )
+                return
+            except ExtractionError as e:
+                error_msg = str(e).lower()
+                if "pinterest" in error_msg or "pin.it" in error_msg:
                     await msg.edit_text(
                         "❌ Ошибка загрузки с Pinterest. Попробуйте позже или используйте прямую ссылку на видео."
                     )
                 else:
-                    await msg.edit_text(f"❌ Ошибка: {error_msg[:150]}")
+                    # e already contains the localized error message prefix
+                    await msg.edit_text(f"❌ {e}")
+                return
+            except Exception as e:
+                logger.error(f"Parse error: {e}", exc_info=True)
+                await msg.edit_text(f"❌ Ошибка: {str(e)[:150]}")
                 return
             finally:
                 event.set()

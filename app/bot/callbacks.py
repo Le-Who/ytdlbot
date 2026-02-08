@@ -10,7 +10,14 @@ from telegram.error import NetworkError
 
 from app.core import state
 from app.core.config import BASE_URL, LINK_TTL_MINUTES, ENABLE_TELEGRAM_UPLOAD, TEMP_DIR
-from app.core.utils import check_rate_limit, safe_remove, run_subprocess, render_progressbar, PROGRESS_RE
+from app.core.utils import (
+    check_rate_limit,
+    safe_remove,
+    run_subprocess,
+    render_progressbar,
+    PROGRESS_RE,
+    PROGRESS_DETAILS_RE,
+)
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from app.bot.keyboards import build_format_keyboard
 
@@ -248,8 +255,16 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             if match:
                                 try:
                                     percent = float(match.group(1))
+                                    details = ""
+
+                                    det_match = PROGRESS_DETAILS_RE.search(line_str)
+                                    if det_match:
+                                        speed = det_match.group(1)
+                                        eta = det_match.group(2)
+                                        details = f"\n🚀 {speed} • ⏱ ETA {eta}"
+
                                     await q.edit_message_text(
-                                        f"⏳ Скачиваю: {render_progressbar(percent)}\n❌ Нажмите отмена, если передумали.",
+                                        f"⏳ Скачиваю: {render_progressbar(percent)}{details}\n❌ Нажмите отмена, если передумали.",
                                         reply_markup=kb_cancel,
                                     )
                                     last_update = now

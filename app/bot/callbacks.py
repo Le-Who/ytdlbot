@@ -275,9 +275,19 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     state.processing_gifs.add(token)
     
-    # Pass-through: Send original video as GIF (Telegram handles MP4 as animation)
-    # This matches the "Private Chat" behavior: Instant, High Quality, and often optimized by source.
-    gif_path = video_path 
+    try:
+        # 2. Convert (Strip Audio)
+        gif_path = await MediaSender.convert_to_gif_ffmpeg(video_path)
+    finally:
+        state.processing_gifs.discard(token)
+
+    if not gif_path:
+        # q.answer() was already called, so we can't show_alert=True via answer.
+        try:
+             await q.message.reply_text("⚠️ Ошибка конвертации.", quote=True)
+        except:
+             pass
+        return
 
     # 3. Send as Reply to the VIDEO message
     target_msg_id = q.message.message_id

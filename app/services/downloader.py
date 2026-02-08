@@ -241,26 +241,20 @@ class MediaSender:
         # Output as MP4, not GIF. Telegram send_animation supports MP4.
         gif_path = video_path.rsplit(".", 1)[0] + "_gif.mp4"
         
-        # Optimization: MP4-as-GIF
+        # Optimization: Stream Copy (Fastest)
+        # -c:v copy: Copy video stream directly (no re-encoding, original quality)
         # -an: Remove audio
-        # -c:v libx264: Efficient video encoding
-        # -preset veryfast: Low CPU usage
-        # -crf 26: Decent quality, small size
-        # -vf scale=480:-1: Good resolution for chat
-        # -threads 1: Strict CPU throttling
-        # -t 60: Safety cap (though 43s is now fine)
+        # -t 60: Safety cut (though usually redundant if copy)
+        # This resolves "Video has sound" AND "Re-encoding makes it bigger/worse" issues.
+        # It is instant (IO bound).
         
         cmd = [
             "ffmpeg",
             "-y",
             "-t", "60", 
             "-i", video_path,
-            "-vf", "fps=15,scale=320:-2:flags=lanczos", 
-            "-c:v", "libx264",
+            "-c:v", "copy",
             "-an",
-            "-preset", "ultrafast",
-            "-crf", "32",
-            "-threads", "1",
             gif_path
         ]
         

@@ -59,9 +59,12 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer("⏳ Подготовка ссылки...")
 
+    if not q.data:
+        return
+
     try:
         _, format_id = q.data.split("|", 1)
-    except:
+    except ValueError:
         return
 
     data = context.user_data
@@ -120,11 +123,15 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer("🚫 Отменяю...")
+
+    if not q.data:
+        return
+
     try:
         _, token = q.data.split("|", 1)
         state.cancel_cache[token] = True
         await q.edit_message_text("❌ Загрузка отменена пользователем.")
-    except:
+    except ValueError:
         pass
 
 async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -136,9 +143,12 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("⚠️ Слишком часто скачиваете. Подождите.")
         return
 
+    if not q.data:
+        return
+
     try:
         _, token = q.data.split("|", 1)
-    except:
+    except ValueError:
         return
 
     payload = state.link_cache.get(token)

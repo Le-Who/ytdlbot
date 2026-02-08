@@ -25,10 +25,10 @@ class TestHtmlInjection(unittest.IsolatedAsyncioTestCase):
         update.message.reply_text = AsyncMock(return_value=msg_mock)
 
         # Mock ytdlp service to return malicious title
-        # title, formats, audio, duration
+        # title, formats, special_format, duration
         malicious_title = "<b>Bold</b> & <script>alert(1)</script>"
         formats = [MagicMock(format_id="1", label="720p", height=720)]
-        audio = MagicMock(format_id="audio", label="Audio")
+        special_format = MagicMock(format_id="audio", label="Audio")
         duration = "1:00"
 
         # We need to mock asyncio.to_thread because it executes the function
@@ -40,7 +40,7 @@ class TestHtmlInjection(unittest.IsolatedAsyncioTestCase):
              patch("app.main.info_cache", {}) as mock_cache, \
              patch("app.main.check_rate_limit", return_value=True):
 
-            mock_ytdlp.list_formats = MagicMock(return_value=(malicious_title, formats, audio, duration))
+            mock_ytdlp.list_formats = MagicMock(return_value=(malicious_title, formats, special_format, duration))
 
             # Call the handler
             await on_message(update, context)

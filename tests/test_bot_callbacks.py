@@ -73,8 +73,8 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         # Mock cache hit
         mock_formats = [MagicMock(format_id="137", label="1080p")]
-        mock_audio = MagicMock(format_id="audio", label="Audio")
-        state.info_cache[page_url] = ("Test Title", mock_formats, mock_audio, "10:00")
+        mock_special_format = MagicMock(format_id="audio", label="Audio")
+        state.info_cache[page_url] = ("Test Title", mock_formats, mock_special_format, "10:00")
 
         # Mock build_format_keyboard
         with patch("app.bot.callbacks.build_format_keyboard") as mock_build_kb:
@@ -98,8 +98,8 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         # Mock cache miss & successful refresh
         mock_formats = [MagicMock(format_id="137", label="1080p")]
-        mock_audio = MagicMock(format_id="audio", label="Audio")
-        state.ytdlp.list_formats.return_value = ("Refreshed Title", mock_formats, mock_audio, "5:00")
+        mock_special_format = MagicMock(format_id="audio", label="Audio")
+        state.ytdlp.list_formats.return_value = ("Refreshed Title", mock_formats, mock_special_format, "5:00")
 
         # Execute
         with patch("app.bot.callbacks.build_format_keyboard") as mock_build_kb:

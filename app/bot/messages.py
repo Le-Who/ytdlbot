@@ -43,14 +43,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cached = state.info_cache.get(text)
     if cached:
         logger.info(f"[CACHE] Hit: {text}")
-        title, formats, audio, duration = cached
+        title, formats, special_format, duration = cached
     else:
         if text in state.inflight_parsing:
             logger.info(f"[PARSING] Waiting for inflight task: {text}")
             await state.inflight_parsing[text].wait()
             cached = state.info_cache.get(text)
             if cached:
-                title, formats, audio, duration = cached
+                title, formats, special_format, duration = cached
             else:
                 await msg.edit_text(
                     "❌ Ошибка при получении данных. Попробуйте еще раз."
@@ -61,10 +61,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state.inflight_parsing[text] = event
             try:
                 async with state.parsing_sem:
-                    title, formats, audio, duration = await asyncio.to_thread(
+                    title, formats, special_format, duration = await asyncio.to_thread(
                         state.ytdlp.list_formats, text
                     )
-                state.info_cache[text] = (title, formats, audio, duration)
+                state.info_cache[text] = (title, formats, special_format, duration)
             except Exception as e:
                 logger.error(f"Parse error: {e}", exc_info=True)
                 error_msg = str(e)
@@ -88,10 +88,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 state.inflight_parsing.pop(text, None)
 
     format_map = {f.format_id: f.height for f in formats}
-    format_map[audio.format_id] = None
+    format_map[special_format.format_id] = None
 
     size_map = {f.format_id: f.filesize for f in formats}
-    size_map[audio.format_id] = audio.filesize
+    size_map[special_format.format_id] = special_format.filesize
 
     context.user_data.update(
         {
@@ -102,7 +102,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
     )
 
-    reply_markup = build_format_keyboard(formats, audio)
+    reply_markup = build_format_keyboard(formats, special_format)
 
     await msg.edit_text(
         f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}",

@@ -14,7 +14,7 @@ async def debug_youtube():
     url = "https://www.youtube.com/watch?v=NjW8iy5OP2g"
     print(f"DEBUG: Extracting formats for {url}")
     try:
-        title, formats, audio, duration = service.list_formats(url)
+        title, formats, special_format, duration = service.list_formats(url)
         print(f"SUCCESS: Found {len(formats)} formats for '{title}'")
     except Exception as e:
         print(f"FAILURE: {e}")

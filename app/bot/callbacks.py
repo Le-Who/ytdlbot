@@ -34,10 +34,10 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await q.edit_message_text("⏳ Кэш истек. Обновляю данные...")
             async with state.parsing_sem:
-                title, formats, audio, duration = await asyncio.to_thread(
+                title, formats, special_format, duration = await asyncio.to_thread(
                     state.ytdlp.list_formats, page_url
                 )
-            state.info_cache[page_url] = (title, formats, audio, duration)
+            state.info_cache[page_url] = (title, formats, special_format, duration)
         except Exception as e:
             logger.error(f"[ON_BACK] Refresh error: {e}")
             await q.edit_message_text(
@@ -45,9 +45,9 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
     else:
-        title, formats, audio, duration = cached
+        title, formats, special_format, duration = cached
 
-    reply_markup = build_format_keyboard(formats, audio)
+    reply_markup = build_format_keyboard(formats, special_format)
 
     await q.edit_message_text(
         f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}",

@@ -255,11 +255,11 @@ class MediaSender:
             "-y",
             "-t", "60", 
             "-i", video_path,
-            "-vf", "scale=480:-2:flags=lanczos", 
+            "-vf", "fps=15,scale=320:-2:flags=lanczos", 
             "-c:v", "libx264",
             "-an",
             "-preset", "ultrafast",
-            "-crf", "28",
+            "-crf", "32",
             "-threads", "1",
             gif_path
         ]

@@ -265,8 +265,22 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("⚠️ Файл не найден или устарел.", show_alert=True)
         return
 
-    # 2. Convert
-    gif_path = await MediaSender.convert_to_gif_ffmpeg(video_path)
+    # Check/Add to processing set (Debounce)
+    if hasattr(state, "processing_gifs") and token in state.processing_gifs:
+        await q.answer("⏳ У вас уже идет генерация...", show_alert=True)
+        return
+        
+    if not hasattr(state, "processing_gifs"):
+        state.processing_gifs = set()
+        
+    state.processing_gifs.add(token)
+    
+    try:
+        # 2. Convert
+        gif_path = await MediaSender.convert_to_gif_ffmpeg(video_path)
+    finally:
+        state.processing_gifs.discard(token)
+
     if not gif_path:
         # q.answer() was already called, so we can't show_alert=True via answer.
         # Send a temporary message or just log/fail silently if we don't want spam.

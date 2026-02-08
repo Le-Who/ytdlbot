@@ -15,6 +15,7 @@ tasks_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 parsing_sem = asyncio.Semaphore(5)  # Лимит на одновременный парсинг форматов
 active_processes_lock = asyncio.Lock()
 active_processes = set()
+conversion_lock = asyncio.Lock() # Lock for CPU-intensive conversions
 
 # Глобальный объект приложения Telegram (инициализируется в main.py)
 bot_app = None

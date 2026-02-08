@@ -232,56 +232,62 @@ class MediaSender:
     @staticmethod
     async def convert_to_gif_ffmpeg(video_path: str) -> Optional[str]:
         """
-        Converts a video to a GIF using ffmpeg (fast 1-pass conversion).
+        Converts a video to a mute MP4 (Telegram treats as GIF).
+        Uses a lock to prevent CPU overload.
         """
         if not video_path or not os.path.exists(video_path):
             return None
 
-        gif_path = video_path.rsplit(".", 1)[0] + ".gif"
+        # Output as MP4, not GIF. Telegram send_animation supports MP4.
+        gif_path = video_path.rsplit(".", 1)[0] + "_gif.mp4"
         
-        # Fast conversion settings:
-        # - fps=12: Smooth enough for reaction GIFs but faster to process
-        # - scale=320:-1: Good size for chats, reduces processing load significantly
-        # - flags=lanczos: Still good scaling quality
-        # - dither: Using default dither is faster than palettegen
+        # Optimization: MP4-as-GIF
+        # -an: Remove audio
+        # -c:v libx264: Efficient video encoding
+        # -preset veryfast: Low CPU usage
+        # -crf 26: Decent quality, small size
+        # -vf scale=480:-1: Good resolution for chat
+        # -threads 1: Strict CPU throttling
+        # -t 60: Safety cap (though 43s is now fine)
         
         cmd = [
             "ffmpeg",
             "-y",
+            "-t", "60", 
             "-i", video_path,
-            "-vf", "fps=12,scale=320:-1:flags=lanczos", 
-            "-c:v", "gif",
-            "-f", "gif",
+            "-vf", "scale=480:-1:flags=lanczos", 
+            "-c:v", "libx264",
+            "-an",
+            "-preset", "veryfast",
+            "-crf", "26",
+            "-threads", "1",
             gif_path
         ]
         
         try:
-            # Increased timeout for ffmpeg process separately just in case
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE
-            )
-            # Wait with a timeout to avoid hanging indefinitely if ffmpeg stalls
-            try:
-                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=45.0)
-            except asyncio.TimeoutError:
+            # Acquire lock to ensure we only burn CPU for one task at a time
+            async with state.conversion_lock:
+                proc = await asyncio.create_subprocess_exec(
+                    *cmd,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE
+                )
                 try:
-                    proc.kill()
-                except:
-                    pass
-                logger.error("FFmpeg GIF conversion timed out")
-                return None
+                    # MP4 encoding is fast, but give it enough time
+                    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+                except asyncio.TimeoutError:
+                    try:
+                        proc.kill()
+                    except:
+                        pass
+                    logger.error("FFmpeg conversion timed out")
+                    return None
             
             if proc.returncode != 0:
-                logger.error(f"FFmpeg GIF conversion failed: {stderr.decode()}")
+                logger.error(f"FFmpeg conversion failed: {stderr.decode()}")
                 return None
             
-            # Check if file exists and has size
             if not os.path.exists(gif_path) or os.path.getsize(gif_path) == 0:
                 return None
                 
             return gif_path
-        except Exception as e:
-            logger.error(f"FFmpeg exception: {e}")
-            return None

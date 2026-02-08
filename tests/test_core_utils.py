@@ -48,6 +48,31 @@ class TestCoreUtils(unittest.IsolatedAsyncioTestCase):
 
     @patch("os.path.exists")
     @patch("os.unlink")
+    def test_safe_remove_empty_or_none(self, mock_unlink, mock_exists):
+        # Empty string
+        self.utils.safe_remove("")
+        mock_exists.assert_not_called()
+        mock_unlink.assert_not_called()
+
+        # None
+        self.utils.safe_remove(None)
+        mock_exists.assert_not_called()
+        mock_unlink.assert_not_called()
+
+    @patch("os.path.exists")
+    @patch("os.unlink")
+    def test_safe_remove_unexpected_error(self, mock_unlink, mock_exists):
+        mock_exists.return_value = True
+        mock_unlink.side_effect = RuntimeError("Unexpected error")
+
+        # Should raise RuntimeError
+        with self.assertRaises(RuntimeError):
+            self.utils.safe_remove("test_file")
+
+        mock_unlink.assert_called_once_with("test_file")
+
+    @patch("os.path.exists")
+    @patch("os.unlink")
     def test_safe_remove_not_exists(self, mock_unlink, mock_exists):
         mock_exists.return_value = False
         self.utils.safe_remove("test_file")

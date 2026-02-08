@@ -120,6 +120,17 @@ class YtDlpService:
 
         return None
 
+    def _attempt_youtube_fallback(self, url: str, used_subprocess: bool) -> Tuple[Optional[Dict[str, Any]], bool]:
+        """
+        Attempts to fetch info via subprocess if allowed (YouTube) and needed (not already used).
+        Returns (info, new_used_subprocess_state).
+        """
+        if not used_subprocess and _is_youtube(url):
+            logger.info("Attempting YouTube subprocess fallback...")
+            info = self._extract_youtube_via_subprocess(url)
+            return info, True
+        return None, used_subprocess
+
     def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
         """Извлекает метаданные видео."""
         if for_list_formats:
@@ -139,9 +150,8 @@ class YtDlpService:
         try:
             info = self.extract(url, for_list_formats=True)
         except Exception as e:
-            if _is_youtube(url):
-                info = self._extract_youtube_via_subprocess(url)
-                used_subprocess = True
+            info, used_subprocess = self._attempt_youtube_fallback(url, used_subprocess)
+
             if not info:
                 error_msg = str(e).lower()
                 if "403" in error_msg or "forbidden" in error_msg:
@@ -165,9 +175,8 @@ class YtDlpService:
         duration_str = _format_duration(duration_sec)
 
         raw_formats = info.get("formats", [])
-        if not raw_formats and _is_youtube(url) and not used_subprocess:
-            info2 = self._extract_youtube_via_subprocess(url)
-            used_subprocess = True
+        if not raw_formats:
+            info2, used_subprocess = self._attempt_youtube_fallback(url, used_subprocess)
             if info2:
                 raw_formats = info2.get("formats", [])
 
@@ -178,9 +187,8 @@ class YtDlpService:
             if fmt:
                 formats_meta.append(fmt)
 
-        if not formats_meta and _is_youtube(url) and not used_subprocess:
-            logger.info("No video formats parsed via API, trying subprocess fallback...")
-            info2 = self._extract_youtube_via_subprocess(url)
+        if not formats_meta:
+            info2, used_subprocess = self._attempt_youtube_fallback(url, used_subprocess)
             if info2:
                 for raw_fmt in info2.get("formats", []):
                     fmt = parse_format_metadata(raw_fmt, duration_sec, is_tiktok_url)

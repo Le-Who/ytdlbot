@@ -232,38 +232,53 @@ class MediaSender:
     @staticmethod
     async def convert_to_gif_ffmpeg(video_path: str) -> Optional[str]:
         """
-        Converts a video to a GIF using ffmpeg (palettegen + paletteuse for quality).
+        Converts a video to a GIF using ffmpeg (fast 1-pass conversion).
         """
         if not video_path or not os.path.exists(video_path):
             return None
 
         gif_path = video_path.rsplit(".", 1)[0] + ".gif"
         
-        # Simple high quality gif conversion
-        # filters: fps=15, scale=320:-1:flags=lanczos, split [s0][s1];[s0]palettegen [p];[s1][p]paletteuse
-        # We use a simpler approach for speed:
-        # ffmpeg -i input.mp4 -vf "fps=15,scale=320:-1:flags=lanczos" -c:v gif output.gif
+        # Fast conversion settings:
+        # - fps=12: Smooth enough for reaction GIFs but faster to process
+        # - scale=320:-1: Good size for chats, reduces processing load significantly
+        # - flags=lanczos: Still good scaling quality
+        # - dither: Using default dither is faster than palettegen
         
         cmd = [
             "ffmpeg",
             "-y",
             "-i", video_path,
-            "-vf", "fps=15,scale=480:-1:flags=lanczos", 
+            "-vf", "fps=12,scale=320:-1:flags=lanczos", 
             "-c:v", "gif",
             "-f", "gif",
             gif_path
         ]
         
         try:
+            # Increased timeout for ffmpeg process separately just in case
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.PIPE
             )
-            _, stderr = await proc.communicate()
+            # Wait with a timeout to avoid hanging indefinitely if ffmpeg stalls
+            try:
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=45.0)
+            except asyncio.TimeoutError:
+                try:
+                    proc.kill()
+                except:
+                    pass
+                logger.error("FFmpeg GIF conversion timed out")
+                return None
             
             if proc.returncode != 0:
                 logger.error(f"FFmpeg GIF conversion failed: {stderr.decode()}")
+                return None
+            
+            # Check if file exists and has size
+            if not os.path.exists(gif_path) or os.path.getsize(gif_path) == 0:
                 return None
                 
             return gif_path

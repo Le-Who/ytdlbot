@@ -64,10 +64,20 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     # Prepare download task
     # We use a specific format for groups to ensure size < 45MB
     # We pass height=None so builders.py falls through to raw command.
+
+    # Detect Pinterest to use a simpler format (Pinterest often lacks detailed metadata)
+    is_pinterest = "pinterest" in url or "pin.it" in url
+    
+    if is_pinterest:
+        # Relaxed format for Pinterest: just best video/audio, relying on max-filesize flag
+        video_format = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+    else:
+        # Standard strict format for YouTube/TikTok
+        video_format = GROUP_VIDEO_FORMAT
     
     file_path, error = await MediaSender.download_video(
         page_url=url,
-        format_id=GROUP_VIDEO_FORMAT,
+        format_id=video_format,
         height=None, 
         token=token,
         progress_callback=update_ui
@@ -84,7 +94,22 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             pass
         return
 
-    # Success! Send video.
+    # Success! Send video in Silent Mode (Delete original, Tag user)
+    
+    # 1. Delete original user message (Silent Mode)
+    try:
+        await update.message.delete()
+    except Exception as e:
+        logger.debug(f"Could not delete user message: {e}")
+
+    # 2. Tag user in caption
+    if update.effective_user.username:
+        user_tag = f"@{update.effective_user.username}"
+    else:
+        user_tag = update.effective_user.mention_html()
+        
+    caption = f"👤 {user_tag}"
+
     await status_msg.edit_text("📤 Отправляю...")
     
     # Create "Send GIF" button
@@ -99,9 +124,9 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         file_path,
         is_audio=False, # Prioritize video
         is_gif=False,
-        caption="",
+        caption=caption,
         reply_markup=kb,
-        reply_to_message_id=update.message.message_id
+        # reply_to_message_id=update.message.message_id # Cannot reply if deleted
     )
 
     if success:

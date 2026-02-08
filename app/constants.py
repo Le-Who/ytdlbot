@@ -4,7 +4,6 @@
 CHUNK_SIZE = 1024 * 1024  # 1 MB (Оптимизация: меньше вызовов read/write)
 
 MAX_FORMATS_DISPLAY = 6
-DOWNLOAD_TIMEOUT_SECONDS = 5  
 UPLOAD_TIMEOUT_SECONDS = 600    # 10 минут
 
 # Поддерживаемые платформы

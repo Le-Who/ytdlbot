@@ -6,6 +6,8 @@ from .models import FormatItem, FormatMetadata
 HEIGHT_REGEX = re.compile(HEIGHT_PATTERN)
 BYTES_IN_KB = 1024
 BITS_IN_BYTE = 8
+BYTES_IN_MB = 1024 * 1024
+BITRATE_COEFFICIENT = 128.0  # 1024 / 8
 
 def _is_tiktok(url: str) -> bool:
     return "tiktok.com" in url.lower()
@@ -42,7 +44,7 @@ def _calculate_filesize(format_dict: Dict[str, Any], duration_sec: Optional[floa
     tbr = format_dict.get("tbr")
     if tbr and duration_sec:
         duration = float(duration_sec) if duration_sec else 0
-        return int((float(tbr) * BYTES_IN_KB / BITS_IN_BYTE) * duration)
+        return int((float(tbr) * BITRATE_COEFFICIENT) * duration)
     return None
 
 def _create_format_label(
@@ -70,7 +72,7 @@ def _create_format_label(
 
     # 2. Size / Protocol
     if filesize:
-        mb = filesize / BYTES_IN_KB / BYTES_IN_KB
+        mb = filesize / BYTES_IN_MB
         if mb < 1:
             size_str = f"{int(filesize / BYTES_IN_KB)} KB"
         else:

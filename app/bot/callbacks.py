@@ -3,14 +3,13 @@ import uuid
 import asyncio
 import time
 import logging
-import tempfile
 import html
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.error import NetworkError
 
 from app.core import state
-from app.core.config import BASE_URL, LINK_TTL_MINUTES, ENABLE_TELEGRAM_UPLOAD
+from app.core.config import BASE_URL, LINK_TTL_MINUTES, ENABLE_TELEGRAM_UPLOAD, TEMP_DIR
 from app.core.utils import check_rate_limit, safe_remove, run_subprocess, render_progressbar, PROGRESS_RE
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from app.bot.keyboards import build_format_keyboard
@@ -189,7 +188,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with state.tasks_sem:
         await q.edit_message_text("⏳ Начинаю загрузку...")
-        tmp_dir = os.getenv("TMPDIR", tempfile.gettempdir())
+        tmp_dir = TEMP_DIR
         is_gif = payload["format_id"] == GIF_FORMAT_ID
         is_audio = payload["format_id"] == AUDIO_FORMAT_ID
 

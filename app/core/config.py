@@ -1,10 +1,12 @@
 import os
 import secrets
+import tempfile
 from dotenv import load_dotenv
 
 load_dotenv()
 
 # --- КОНФИГУРАЦИЯ ---
+TEMP_DIR = os.getenv("TMPDIR", tempfile.gettempdir())
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()

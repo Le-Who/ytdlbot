@@ -1,7 +1,6 @@
 import os
 import secrets
 import uuid
-import tempfile
 import asyncio
 import time
 import logging
@@ -11,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from telegram import Update
 
 from app.core import state
-from app.core.config import TELEGRAM_SECRET_TOKEN
+from app.core.config import TELEGRAM_SECRET_TOKEN, TEMP_DIR
 from app.core.utils import run_subprocess, safe_remove
 from app.constants import CHUNK_SIZE, GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
@@ -46,7 +45,7 @@ async def download(token: str):
 
     async def stream_video_subprocess():
         if is_gif:
-            tmp_dir = os.getenv("TMPDIR", tempfile.gettempdir())
+            tmp_dir = TEMP_DIR
             video_tmp = os.path.join(tmp_dir, f"ytdl_video_{uuid.uuid4().hex}.mp4")
 
             try:

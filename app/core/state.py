@@ -5,9 +5,6 @@ from app.core.config import LINK_TTL_MINUTES, MAX_CONCURRENT_TASKS
 from app.services.ytdlp.service import YtDlpService
 
 # Инициализация логгера
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
 logger = logging.getLogger("app")
 
 # Сервисы

@@ -1,5 +1,5 @@
 import unittest
-from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, get_special_format, deduplicate_formats, _format_duration
+from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, get_special_format, deduplicate_formats, _extract_height, _format_duration
 from app.services.ytdlp.models import FormatItem, FormatMetadata
 from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
@@ -299,6 +299,38 @@ class TestGetSpecialFormat(unittest.TestCase):
                 self.assertEqual(item.ext, "audio")
                 self.assertIsNone(item.height)
                 self.assertIsNone(item.filesize)
+
+class TestExtractHeight(unittest.TestCase):
+    def test_extract_height_valid(self):
+        """Should extract height from standard format notes"""
+        self.assertEqual(_extract_height("720p"), 720)
+        self.assertEqual(_extract_height("1080p"), 1080)
+        self.assertEqual(_extract_height("480p"), 480)
+        self.assertEqual(_extract_height("2160p"), 2160)
+
+    def test_extract_height_with_text(self):
+        """Should extract height when surrounded by other text"""
+        self.assertEqual(_extract_height("720p HD"), 720)
+        self.assertEqual(_extract_height("Quality: 480p"), 480)
+        self.assertEqual(_extract_height("video 1080p60"), 1080)
+        self.assertEqual(_extract_height("720p, 30fps"), 720)
+
+    def test_extract_height_no_match(self):
+        """Should return None for strings without valid height pattern"""
+        self.assertIsNone(_extract_height("audio"))
+        self.assertIsNone(_extract_height("unknown"))
+        self.assertIsNone(_extract_height("p720")) # Pattern expects digits then p
+        self.assertIsNone(_extract_height("1080")) # Missing p
+        self.assertIsNone(_extract_height("myp"))
+
+    def test_extract_height_none_empty(self):
+        """Should handle None and empty strings gracefully"""
+        self.assertIsNone(_extract_height(None))
+        self.assertIsNone(_extract_height(""))
+
+    def test_extract_height_zero(self):
+        """Should handle 0p edge case"""
+        self.assertEqual(_extract_height("0p"), 0)
 
 if __name__ == "__main__":
     unittest.main()

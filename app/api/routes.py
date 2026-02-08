@@ -58,6 +58,10 @@ async def download(token: str):
                 logger.info(f"[STREAM-GIF] Download: {' '.join(cmd)}")
                 
                 async for proc, stderr in run_subprocess(cmd):
+                    # Consume stdout to prevent deadlock
+                    while await proc.stdout.read(4096):
+                        pass
+
                     await proc.wait()
                     if proc.returncode != 0:
                         err = b"".join(stderr).decode(errors="ignore")[-500:]

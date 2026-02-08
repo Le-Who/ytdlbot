@@ -102,19 +102,31 @@ async def download(token: str):
                 async for proc, stderr in run_subprocess(cmd):
                     stream_timeout = 900
                     start_time = time.time()
+                    loop = asyncio.get_running_loop()
 
+                    chunk = None
                     while True:
                         if time.time() - start_time > stream_timeout:
                             logger.error("[STREAM] Overall timeout exceeded")
                             break
 
                         try:
-                            chunk = await asyncio.wait_for(
-                                proc.stdout.read(CHUNK_SIZE), timeout=45.0
-                            )
-                            if not chunk: break
-                            yield chunk
-                        except asyncio.TimeoutError:
+                            async with asyncio.timeout(45.0) as cm:
+                                while True:
+                                    if time.time() - start_time > stream_timeout:
+                                        break
+
+                                    chunk = await proc.stdout.read(CHUNK_SIZE)
+                                    if not chunk:
+                                        break
+
+                                    cm.reschedule(None)
+                                    yield chunk
+                                    cm.reschedule(loop.time() + 45.0)
+
+                                if not chunk or (time.time() - start_time > stream_timeout):
+                                    break
+                        except TimeoutError:
                             logger.warning("[STREAM] Chunk read timeout, continuing...")
                             continue
 

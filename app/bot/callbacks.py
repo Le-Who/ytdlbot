@@ -268,17 +268,17 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # 2. Convert
     gif_path = await MediaSender.convert_to_gif_ffmpeg(video_path)
     if not gif_path:
-        await q.answer("⚠️ Ошибка конвертации.", show_alert=True)
+        # q.answer() was already called, so we can't show_alert=True via answer.
+        # Send a temporary message or just log/fail silently if we don't want spam.
+        # But user wants to know why it failed.
+        try:
+             await q.message.reply_text("⚠️ Ошибка конвертации (файл поврежден или слишком большой).", quote=True)
+        except:
+             pass
         return
 
     # 3. Send as Reply to original message
-    # We need access to original message id.
-    # The button is attached to the bot's video message.
-    # The bot's video message is a reply to the User's message.
-    # So q.message.reply_to_message should be the User's message.
-    
-    original_msg = q.message.reply_to_message
-    target_msg_id = original_msg.message_id if original_msg else None
+    # ... (rest of code) ...
 
     # Sending GIF
     success = await MediaSender.send_file(
@@ -291,10 +291,12 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if success:
-        # We don't delete the video message, we just sent the GIF as requested.
         pass
     else:
-        await q.answer("⚠️ Не удалось отправить GIF.", show_alert=True)
+         try:
+             await q.message.reply_text("⚠️ Не удалось отправить GIF.", quote=True)
+         except:
+             pass
     
     # Cleanup GIF file immediately as it's derivative
     await asyncio.to_thread(safe_remove, gif_path)

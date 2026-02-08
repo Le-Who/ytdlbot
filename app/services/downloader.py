@@ -255,7 +255,7 @@ class MediaSender:
             "-y",
             "-t", "60", 
             "-i", video_path,
-            "-vf", "scale=480:-1:flags=lanczos", 
+            "-vf", "scale=480:-2:flags=lanczos", 
             "-c:v", "libx264",
             "-an",
             "-preset", "veryfast",

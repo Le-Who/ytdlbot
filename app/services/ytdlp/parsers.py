@@ -33,18 +33,17 @@ def _extract_height(format_note: str) -> Optional[int]:
         return int(match.group(1))
     return None
 
-def _calculate_filesize(format_dict: Dict[str, Any], duration_sec: Optional[float]) -> Optional[int]:
-    """Вычисляет размер файла"""
+def _calculate_filesize(format_dict: Dict[str, Any], duration_factor: Optional[float]) -> Optional[int]:
+    """Вычисляет размер файла используя pre-calculated duration factor"""
     fs = format_dict.get("filesize")
     if fs:
-        return int(fs) if isinstance(fs, float) else fs
+        return int(fs)
     fs = format_dict.get("filesize_approx")
     if fs:
-        return int(fs) if isinstance(fs, float) else fs
+        return int(fs)
     tbr = format_dict.get("tbr")
-    if tbr and duration_sec:
-        duration = float(duration_sec) if duration_sec else 0
-        return int((float(tbr) * BITRATE_COEFFICIENT) * duration)
+    if tbr and duration_factor:
+        return int(float(tbr) * duration_factor)
     return None
 
 def _create_format_label(
@@ -87,7 +86,7 @@ def _create_format_label(
 
 def parse_format_metadata(
     format_dict: Dict[str, Any],
-    duration_sec: Optional[float],
+    duration_factor: Optional[float],
     is_tiktok_url: bool,
 ) -> Optional[FormatMetadata]:
     if format_dict.get("vcodec") == "none" and not is_tiktok_url:
@@ -108,7 +107,7 @@ def parse_format_metadata(
         if not height and is_tiktok_url:
             height = 720
 
-    filesize = _calculate_filesize(format_dict, duration_sec)
+    filesize = _calculate_filesize(format_dict, duration_factor)
 
     return FormatMetadata(
         format_id=fid, ext="mp4", height=height or 0, filesize=filesize, protocol=protocol

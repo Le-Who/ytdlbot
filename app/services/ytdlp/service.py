@@ -19,6 +19,7 @@ from .parsers import (
     get_special_format,
     _is_youtube,
     _is_tiktok,
+    BITRATE_COEFFICIENT,
 )
 from .exceptions import (
     AccessDeniedError,
@@ -180,6 +181,13 @@ class YtDlpService:
         duration_sec = info.get("duration")
         duration_str = _format_duration(duration_sec)
 
+        duration_factor = None
+        if duration_sec:
+            try:
+                duration_factor = float(duration_sec) * BITRATE_COEFFICIENT
+            except (ValueError, TypeError):
+                duration_factor = None
+
         raw_formats = info.get("formats", [])
         if not raw_formats:
             info2, used_subprocess = self._attempt_youtube_fallback(url, used_subprocess)
@@ -189,7 +197,7 @@ class YtDlpService:
         is_tiktok_url = _is_tiktok(url)
         formats_meta: List[FormatMetadata] = []
         for raw_fmt in raw_formats:
-            fmt = parse_format_metadata(raw_fmt, duration_sec, is_tiktok_url)
+            fmt = parse_format_metadata(raw_fmt, duration_factor, is_tiktok_url)
             if fmt:
                 formats_meta.append(fmt)
 
@@ -197,7 +205,7 @@ class YtDlpService:
             info2, used_subprocess = self._attempt_youtube_fallback(url, used_subprocess)
             if info2:
                 for raw_fmt in info2.get("formats", []):
-                    fmt = parse_format_metadata(raw_fmt, duration_sec, is_tiktok_url)
+                    fmt = parse_format_metadata(raw_fmt, duration_factor, is_tiktok_url)
                     if fmt:
                         formats_meta.append(fmt)
 

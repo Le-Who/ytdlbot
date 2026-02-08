@@ -258,8 +258,8 @@ class MediaSender:
             "-vf", "scale=480:-2:flags=lanczos", 
             "-c:v", "libx264",
             "-an",
-            "-preset", "veryfast",
-            "-crf", "26",
+            "-preset", "ultrafast",
+            "-crf", "28",
             "-threads", "1",
             gif_path
         ]
@@ -273,8 +273,8 @@ class MediaSender:
                     stderr=asyncio.subprocess.PIPE
                 )
                 try:
-                    # MP4 encoding is fast, but give it enough time
-                    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=60.0)
+                    # MP4 encoding is fast, but give it enough time on weak CPU
+                    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
                 except asyncio.TimeoutError:
                     try:
                         proc.kill()

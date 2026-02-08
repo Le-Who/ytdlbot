@@ -11,6 +11,12 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app.services.ytdlp.service import YtDlpService
 from app.services.ytdlp.models import FormatItem
+from app.services.ytdlp.exceptions import (
+    AccessDeniedError,
+    VideoNotFoundError,
+    LiveStreamError,
+    ExtractionError
+)
 
 class TestYtDlpServiceListFormats(unittest.TestCase):
     def setUp(self):
@@ -71,28 +77,28 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
             "title": "Live Stream"
         }
         with patch.object(self.service, 'extract', return_value=mock_info):
-            with self.assertRaises(Exception) as cm:
+            with self.assertRaises(LiveStreamError) as cm:
                 self.service.list_formats("http://example.com/live")
             self.assertIn("прямая трансляция", str(cm.exception))
 
     def test_access_denied_exception(self):
         """Test that 403 Forbidden raises a user-friendly exception."""
         with patch.object(self.service, 'extract', side_effect=Exception("HTTP Error 403: Forbidden")):
-            with self.assertRaises(Exception) as cm:
+            with self.assertRaises(AccessDeniedError) as cm:
                 self.service.list_formats("http://example.com/private")
             self.assertIn("Доступ запрещен", str(cm.exception))
 
     def test_not_found_exception(self):
         """Test that 404 Not Found raises a user-friendly exception."""
         with patch.object(self.service, 'extract', side_effect=Exception("HTTP Error 404: Not Found")):
-            with self.assertRaises(Exception) as cm:
+            with self.assertRaises(VideoNotFoundError) as cm:
                 self.service.list_formats("http://example.com/missing")
             self.assertIn("Видео не найдено", str(cm.exception))
 
     def test_generic_extraction_error(self):
         """Test that generic errors are wrapped."""
         with patch.object(self.service, 'extract', side_effect=Exception("Some random error")):
-            with self.assertRaises(Exception) as cm:
+            with self.assertRaises(ExtractionError) as cm:
                 self.service.list_formats("http://example.com/error")
             self.assertIn("Ошибка извлечения", str(cm.exception))
             self.assertIn("Some random error", str(cm.exception))

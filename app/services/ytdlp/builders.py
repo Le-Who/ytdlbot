@@ -1,6 +1,36 @@
 from typing import List, Optional
 from app.constants import GIF_FORMAT_ID
 
+
+def _get_base_cmd(format_arg: str, output: str) -> List[str]:
+    """Возвращает базовую команду yt-dlp с общими флагами"""
+    return [
+        "yt-dlp",
+        "--format",
+        format_arg,
+        "--output",
+        output,
+        "--quiet",
+        "--no-warnings",
+        "--no-playlist",
+        "--force-ipv4",
+    ]
+
+
+def _append_common_opts(
+    cmd: List[str],
+    page_url: str,
+    cookies_path: Optional[str] = None,
+    max_filesize: Optional[int] = None,
+) -> None:
+    """Добавляет cookies, лимит размера и URL в конец команды"""
+    if cookies_path:
+        cmd.extend(["--cookies", cookies_path])
+    if max_filesize:
+        cmd.extend(["--max-filesize", f"{max_filesize}M"])
+    cmd.append(page_url)
+
+
 def build_command(
     page_url: str,
     format_id: str,
@@ -26,24 +56,11 @@ def build_command(
         and not is_gif_format
     ):
         video_sel = format_id
-        prog_sel = f"best"
+        prog_sel = "best"
     elif is_gif_format:
         # Для GIF используем bestvideo без аудио
-        cmd = [
-            "yt-dlp",
-            "--format",
-            "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best",
-            "--output",
-            output,
-            "--quiet",
-            "--no-warnings",
-            "--no-playlist",
-            "--force-ipv4",
-        ]
-        if cookies_path:
-            cmd.extend(["--cookies", cookies_path])
-        if max_filesize:
-            cmd.extend(["--max-filesize", f"{max_filesize}M"])
+        cmd = _get_base_cmd("bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best", output)
+
         # Для прогресс-бара
         if output != "-":
             cmd.extend(["--progress", "--newline"])
@@ -56,60 +73,44 @@ def build_command(
                         "-x 8 -k 1M",
                     ]
                 )
-        cmd.append(page_url)
+        _append_common_opts(cmd, page_url, cookies_path, max_filesize)
         return cmd
     else:
         # Аудио/Raw
-        cmd = [
-            "yt-dlp",
-            "--format",
-            format_id,
-            "--output",
-            output,
-            "--quiet",
-            "--no-warnings",
-            "--no-playlist",
-            "--force-ipv4",
-        ]
-        if cookies_path:
-            cmd.extend(["--cookies", cookies_path])
-        if max_filesize:
-            cmd.extend(["--max-filesize", f"{max_filesize}M"])
-        cmd.append(page_url)
+        cmd = _get_base_cmd(format_id, output)
+        _append_common_opts(cmd, page_url, cookies_path, max_filesize)
         return cmd
 
     # 2. Селектор аудио (Original -> English -> OrigTag -> Any)
     audio_sel = "bestaudio[format_note*=original]/bestaudio[language^=en]/bestaudio[language^=orig]/bestaudio/bestaudio[ext=m4a]/bestaudio"
-    
+
     # 3. Финальный селектор с каскадным fallback
     final_fmt = f"{video_sel}+({audio_sel})/{prog_sel}/bestvideo+bestaudio/best"
 
-    cmd = [
-        "yt-dlp",
-        "--format",
-        final_fmt,
-        "--output",
-        output,
-        "--quiet",
-        "--no-warnings",
-        "--no-playlist",
-        "--force-ipv4",
-        "--geo-bypass",
-        "--ignore-config",
-        "--no-mtime",
-        "--concurrent-fragments", "5",
-        # Для прогресс-бара нам нужен вывод в stdout/stderr
-        "--progress",
-        "--newline",
-        "--postprocessor-args",
-        "Merger+ffmpeg:-movflags frag_keyframe+empty_moov",
-    ]
+    cmd = _get_base_cmd(final_fmt, output)
+    cmd.extend(
+        [
+            "--geo-bypass",
+            "--ignore-config",
+            "--no-mtime",
+            "--concurrent-fragments",
+            "5",
+        ]
+    )
 
     # Если стримим в pipe ("-"), то aria2c использовать нельзя, и прогресс тоже мешает
-    if output == "-":
-        # Убираем --progress для чистого стрима
-        cmd = [c for c in cmd if c not in ["--progress", "--newline"]]
-    elif use_aria2 and has_aria2_installed:
+    if output != "-":
+        # Для прогресс-бара нам нужен вывод в stdout/stderr
+        cmd.extend(["--progress", "--newline"])
+
+    cmd.extend(
+        [
+            "--postprocessor-args",
+            "Merger+ffmpeg:-movflags frag_keyframe+empty_moov",
+        ]
+    )
+
+    if output != "-" and use_aria2 and has_aria2_installed:
         # Ускорение для скачивания на диск
         cmd.extend(
             [
@@ -120,10 +121,5 @@ def build_command(
             ]
         )
 
-    if cookies_path:
-        cmd.extend(["--cookies", cookies_path])
-    if max_filesize:
-        cmd.extend(["--max-filesize", f"{max_filesize}M"])
-
-    cmd.append(page_url)
+    _append_common_opts(cmd, page_url, cookies_path, max_filesize)
     return cmd

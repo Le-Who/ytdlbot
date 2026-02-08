@@ -44,6 +44,18 @@ def is_supported_url(text: str) -> bool:
     except Exception:
         return False
 
+
+def extract_supported_url(text: str) -> str | None:
+    """Извлекает и валидирует поддерживаемую ссылку из текста."""
+    match = URL_RE.search(text)
+    if not match:
+        return None
+
+    url = match.group(0).rstrip(".,!:;)")
+    if is_supported_url(url):
+        return url
+    return None
+
 def check_rate_limit(user_id: int, limit: int = 5) -> bool:
     """Проверяет лимит запросов пользователя в минуту (Отключено пользователем)"""
     return True

@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 
 from app.core import state
-from app.core.utils import URL_RE, check_rate_limit, is_supported_url
+from app.core.utils import check_rate_limit, extract_supported_url
 from app.bot.keyboards import build_format_keyboard
 
 logger = logging.getLogger("app.bot.messages")
@@ -15,20 +15,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = (update.message.text or "").strip()
 
-    match = URL_RE.search(text)
-    if not match:
+    url = extract_supported_url(text)
+    if not url:
         await update.message.reply_text(
             "❌ Ссылка не поддерживается. Попробуйте YouTube, TikTok, VK или Pinterest."
         )
         return
 
-    text = match.group(0).rstrip(".,!:;)")
-
-    if not is_supported_url(text):
-        await update.message.reply_text(
-            "❌ Ссылка не поддерживается. Попробуйте YouTube, TikTok, VK или Pinterest."
-        )
-        return
+    text = url
 
     if not check_rate_limit(user.id, limit=10):
         await update.message.reply_text("⚠️ Слишком часто. Подождите минуту.")

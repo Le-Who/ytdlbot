@@ -10,6 +10,7 @@ from app.core.state import active_processes_lock, active_processes
 URL_RE = re.compile(r"https?://\S+", re.I)
 SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*]')
 PROGRESS_RE = re.compile(r"(\d+\.\d+)%")
+PROGRESS_DETAILS_RE = re.compile(r"at\s+(\S+).*?ETA\s+(\S+)")
 
 # --- PROGRESS BAR CACHE ---
 BLOCK_FULL = "█"

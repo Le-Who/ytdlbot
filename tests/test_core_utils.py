@@ -48,6 +48,31 @@ class TestCoreUtils(unittest.IsolatedAsyncioTestCase):
 
     @patch("os.path.exists")
     @patch("os.unlink")
+    def test_safe_remove_empty_or_none(self, mock_unlink, mock_exists):
+        # Empty string
+        self.utils.safe_remove("")
+        mock_exists.assert_not_called()
+        mock_unlink.assert_not_called()
+
+        # None
+        self.utils.safe_remove(None)
+        mock_exists.assert_not_called()
+        mock_unlink.assert_not_called()
+
+    @patch("os.path.exists")
+    @patch("os.unlink")
+    def test_safe_remove_unexpected_error(self, mock_unlink, mock_exists):
+        mock_exists.return_value = True
+        mock_unlink.side_effect = RuntimeError("Unexpected error")
+
+        # Should raise RuntimeError
+        with self.assertRaises(RuntimeError):
+            self.utils.safe_remove("test_file")
+
+        mock_unlink.assert_called_once_with("test_file")
+
+    @patch("os.path.exists")
+    @patch("os.unlink")
     def test_safe_remove_not_exists(self, mock_unlink, mock_exists):
         mock_exists.return_value = False
         self.utils.safe_remove("test_file")
@@ -156,6 +181,36 @@ class TestCoreUtils(unittest.IsolatedAsyncioTestCase):
             # Check create_subprocess_exec called with stderr=DEVNULL
             args, kwargs = mock_exec.call_args
             self.assertEqual(kwargs['stderr'], asyncio.subprocess.DEVNULL)
+
+    def test_render_progressbar(self):
+        """Test render_progressbar with various inputs."""
+        # Test 0%
+        # 0% of 15 is 0 blocks.
+        # "░░░░░░░░░░░░░░░ 0.0%"
+        self.assertEqual(self.utils.render_progressbar(0), "░" * 15 + " 0.0%")
+
+        # Test 100%
+        # "███████████████ 100.0%"
+        self.assertEqual(self.utils.render_progressbar(100), "█" * 15 + " 100.0%")
+
+        # Test 50%
+        # 50% of 15 is 7.5 -> 7 blocks
+        # "███████░░░░░░░░ 50.0%"
+        self.assertEqual(self.utils.render_progressbar(50), "█" * 7 + "░" * 8 + " 50.0%")
+
+        # Test negative (clamp to 0)
+        self.assertEqual(self.utils.render_progressbar(-10), "░" * 15 + " 0.0%")
+
+        # Test overflow (clamp to 100)
+        self.assertEqual(self.utils.render_progressbar(150), "█" * 15 + " 100.0%")
+
+        # Test custom length
+        # 50% of 10 is 5
+        self.assertEqual(self.utils.render_progressbar(50, length=10), "█" * 5 + "░" * 5 + " 50.0%")
+
+        # Test rounding
+        # 25% of 10 is 2.5 -> 2
+        self.assertEqual(self.utils.render_progressbar(25, length=10), "█" * 2 + "░" * 8 + " 25.0%")
 
 if __name__ == '__main__':
     unittest.main()

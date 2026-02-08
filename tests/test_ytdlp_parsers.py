@@ -1,8 +1,34 @@
 import unittest
-from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, deduplicate_formats
+from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, get_audio_format, deduplicate_formats
 from app.services.ytdlp.models import FormatItem, FormatMetadata
+from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
 class TestYtDlpParsers(unittest.TestCase):
+    def test_format_duration(self):
+        """Test duration formatting (HH:MM:SS or MM:SS)"""
+        # None or 0 cases
+        self.assertEqual(_format_duration(None), "??")
+        self.assertEqual(_format_duration(0), "??")
+        self.assertEqual(_format_duration(0.0), "??")
+
+        # Seconds only (< 60)
+        self.assertEqual(_format_duration(59), "00:59")
+        self.assertEqual(_format_duration(5), "00:05")
+
+        # Minutes and seconds (>= 60, < 3600)
+        self.assertEqual(_format_duration(60), "01:00")
+        self.assertEqual(_format_duration(61), "01:01")
+        self.assertEqual(_format_duration(3599), "59:59")
+
+        # Hours, minutes, and seconds (>= 3600)
+        self.assertEqual(_format_duration(3600), "1:00:00")
+        self.assertEqual(_format_duration(3661), "1:01:01")
+        self.assertEqual(_format_duration(7322), "2:02:02")
+
+        # Float input (should be truncated/converted to int)
+        self.assertEqual(_format_duration(123.45), "02:03")
+        self.assertEqual(_format_duration(123.99), "02:03")
+
     def test_parse_format_happy_path(self):
         """Standard video format from YouTube"""
         format_dict = {
@@ -237,6 +263,42 @@ class TestDeduplicateFormats(unittest.TestCase):
         self.assertEqual(len(result), 4)
         ids = [f.format_id for f in result]
         self.assertEqual(ids, ["1", "3", "4", "5"])
+
+class TestGetAudioFormat(unittest.TestCase):
+    def test_get_audio_format_pinterest(self):
+        """Should return GIF format for Pinterest URLs"""
+        urls = [
+            "https://www.pinterest.com/pin/123456789/",
+            "https://pin.it/1234567",
+            "https://www.Pinterest.com/pin/123/",
+            "http://pin.it/abc",
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                item = get_audio_format(url)
+                self.assertEqual(item.format_id, GIF_FORMAT_ID)
+                self.assertIn("GIF", item.label)
+                self.assertEqual(item.ext, "gif")
+                self.assertIsNone(item.height)
+                self.assertIsNone(item.filesize)
+
+    def test_get_audio_format_default(self):
+        """Should return Audio format for non-Pinterest URLs"""
+        urls = [
+            "https://www.youtube.com/watch?v=123",
+            "https://youtu.be/123",
+            "https://www.tiktok.com/@user/video/123",
+            "https://example.com/video",
+            ""
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                item = get_audio_format(url)
+                self.assertEqual(item.format_id, AUDIO_FORMAT_ID)
+                self.assertIn("аудио", item.label)
+                self.assertEqual(item.ext, "audio")
+                self.assertIsNone(item.height)
+                self.assertIsNone(item.filesize)
 
 if __name__ == "__main__":
     unittest.main()

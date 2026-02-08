@@ -1,5 +1,5 @@
 import unittest
-from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, get_audio_format, deduplicate_formats
+from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, get_special_format, deduplicate_formats, _format_duration
 from app.services.ytdlp.models import FormatItem, FormatMetadata
 from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
@@ -264,8 +264,8 @@ class TestDeduplicateFormats(unittest.TestCase):
         ids = [f.format_id for f in result]
         self.assertEqual(ids, ["1", "3", "4", "5"])
 
-class TestGetAudioFormat(unittest.TestCase):
-    def test_get_audio_format_pinterest(self):
+class TestGetSpecialFormat(unittest.TestCase):
+    def test_get_special_format_pinterest(self):
         """Should return GIF format for Pinterest URLs"""
         urls = [
             "https://www.pinterest.com/pin/123456789/",
@@ -275,14 +275,14 @@ class TestGetAudioFormat(unittest.TestCase):
         ]
         for url in urls:
             with self.subTest(url=url):
-                item = get_audio_format(url)
+                item = get_special_format(url)
                 self.assertEqual(item.format_id, GIF_FORMAT_ID)
                 self.assertIn("GIF", item.label)
                 self.assertEqual(item.ext, "gif")
                 self.assertIsNone(item.height)
                 self.assertIsNone(item.filesize)
 
-    def test_get_audio_format_default(self):
+    def test_get_special_format_default(self):
         """Should return Audio format for non-Pinterest URLs"""
         urls = [
             "https://www.youtube.com/watch?v=123",
@@ -293,7 +293,7 @@ class TestGetAudioFormat(unittest.TestCase):
         ]
         for url in urls:
             with self.subTest(url=url):
-                item = get_audio_format(url)
+                item = get_special_format(url)
                 self.assertEqual(item.format_id, AUDIO_FORMAT_ID)
                 self.assertIn("аудио", item.label)
                 self.assertEqual(item.ext, "audio")

@@ -144,7 +144,7 @@ def deduplicate_formats(
             unique_formats.append(fmt)
     return unique_formats
 
-def get_audio_format(url: str) -> FormatItem:
+def get_special_format(url: str) -> FormatItem:
     if _is_pinterest(url):
          return FormatItem(
             format_id=GIF_FORMAT_ID,

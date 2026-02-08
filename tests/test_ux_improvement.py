@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # We need to manually mock specific classes if used in base classes or decorators
 sys.modules["cachetools"].TTLCache = MagicMock
 
-from app.services.ytdlp.parsers import get_audio_format
+from app.services.ytdlp.parsers import get_special_format
 
 # Now we can safely import app.bot.callbacks because dependencies are mocked
 from app.bot.callbacks import on_send
@@ -33,14 +33,14 @@ class TestUXImprovement(unittest.TestCase):
     def test_audio_label_clean(self):
         """Verify audio label is clean '🎵 Только аудио' without '(best)'"""
         # Test generic URL (should return audio)
-        fmt = get_audio_format("https://youtube.com/watch?v=123")
+        fmt = get_special_format("https://youtube.com/watch?v=123")
         self.assertEqual(fmt.label, "🎵 Только аудио")
         self.assertNotIn("(best)", fmt.label)
 
     def test_pinterest_label(self):
         """Verify Pinterest returns GIF format"""
         # Test Pinterest URL
-        fmt = get_audio_format("https://pinterest.com/pin/123")
+        fmt = get_special_format("https://pinterest.com/pin/123")
         self.assertEqual(fmt.label, "🎬 Только GIF")
 
 class TestOnSendUX(unittest.IsolatedAsyncioTestCase):

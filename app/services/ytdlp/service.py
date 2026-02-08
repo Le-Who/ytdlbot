@@ -16,7 +16,7 @@ from .parsers import (
     create_format_item,
     deduplicate_formats,
     _format_duration,
-    get_audio_format,
+    get_special_format,
     _is_youtube,
     _is_tiktok,
 )
@@ -193,8 +193,8 @@ class YtDlpService:
 
         formats = [create_format_item(f, is_tiktok_url) for f in formats_meta]
 
-        audio = get_audio_format(url)
-        return title, formats, audio, duration_str
+        special_format = get_special_format(url)
+        return title, formats, special_format, duration_str
 
     def build_command(
         self,

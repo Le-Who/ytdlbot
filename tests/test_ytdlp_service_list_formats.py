@@ -44,7 +44,7 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
         }
 
         with patch.object(self.service, 'extract', return_value=mock_info) as mock_extract:
-            title, formats, audio, duration = self.service.list_formats("http://example.com/video")
+            title, formats, special_format, duration = self.service.list_formats("http://example.com/video")
 
             self.assertEqual(title, "Test Video")
             self.assertEqual(duration, "02:00")
@@ -62,7 +62,7 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
             self.assertEqual(formats[0].format_id, "137")
             self.assertIn("📺 1080p", formats[0].label)
 
-            self.assertEqual(audio.format_id, "bestaudio/best")
+            self.assertEqual(special_format.format_id, "bestaudio/best")
 
     def test_live_stream_exception(self):
         """Test that live streams raise a specific exception."""

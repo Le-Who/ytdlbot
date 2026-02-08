@@ -1,6 +1,7 @@
 import unittest
-from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, _format_duration
+from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, get_audio_format
 from app.services.ytdlp.models import FormatItem, FormatMetadata
+from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
 class TestYtDlpParsers(unittest.TestCase):
     def test_format_duration(self):
@@ -215,6 +216,43 @@ class TestYtDlpParsers(unittest.TestCase):
         metadata = parse_format_metadata(format_dict, None, False)
         item = create_format_item(metadata, False)
         self.assertIn("500 KB", item.label)
+
+
+class TestGetAudioFormat(unittest.TestCase):
+    def test_get_audio_format_pinterest(self):
+        """Should return GIF format for Pinterest URLs"""
+        urls = [
+            "https://www.pinterest.com/pin/123456789/",
+            "https://pin.it/1234567",
+            "https://www.Pinterest.com/pin/123/",
+            "http://pin.it/abc",
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                item = get_audio_format(url)
+                self.assertEqual(item.format_id, GIF_FORMAT_ID)
+                self.assertIn("GIF", item.label)
+                self.assertEqual(item.ext, "gif")
+                self.assertIsNone(item.height)
+                self.assertIsNone(item.filesize)
+
+    def test_get_audio_format_default(self):
+        """Should return Audio format for non-Pinterest URLs"""
+        urls = [
+            "https://www.youtube.com/watch?v=123",
+            "https://youtu.be/123",
+            "https://www.tiktok.com/@user/video/123",
+            "https://example.com/video",
+            ""
+        ]
+        for url in urls:
+            with self.subTest(url=url):
+                item = get_audio_format(url)
+                self.assertEqual(item.format_id, AUDIO_FORMAT_ID)
+                self.assertIn("аудио", item.label)
+                self.assertEqual(item.ext, "audio")
+                self.assertIsNone(item.height)
+                self.assertIsNone(item.filesize)
 
 if __name__ == "__main__":
     unittest.main()

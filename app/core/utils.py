@@ -74,6 +74,22 @@ def rename_if_exists(src: str, dst: str) -> None:
     if src and os.path.exists(src):
         os.rename(src, dst)
 
+def sanitize_command(cmd: list) -> str:
+    """Redacts URLs in command for logging, keeping only the domain."""
+    sanitized = []
+    for arg in cmd:
+        if arg.startswith("http://") or arg.startswith("https://"):
+            try:
+                parsed = urlsplit(arg)
+                # Keep only scheme and hostname (domain)
+                domain = parsed.hostname or ""
+                sanitized.append(f"{parsed.scheme}://{domain}/[REDACTED]")
+            except Exception:
+                sanitized.append("[REDACTED-URL]")
+        else:
+            sanitized.append(arg)
+    return " ".join(sanitized)
+
 async def run_subprocess(cmd: list, collect_stderr: bool = True):
     """Стандартизированный запуск subprocess с отслеживанием и очисткой"""
     proc = await asyncio.create_subprocess_exec(

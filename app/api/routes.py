@@ -11,7 +11,7 @@ from telegram import Update
 
 from app.core import state
 from app.core.config import TELEGRAM_SECRET_TOKEN, TEMP_DIR
-from app.core.utils import run_subprocess, safe_remove
+from app.core.utils import run_subprocess, safe_remove, sanitize_command
 from app.constants import CHUNK_SIZE, GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
 logger = logging.getLogger("app.api")
@@ -55,7 +55,7 @@ async def download(token: str):
                     payload.get("height"),
                     output=video_tmp,
                 )
-                logger.info(f"[STREAM-GIF] Download: {' '.join(cmd)}")
+                logger.info(f"[STREAM-GIF] Download: {sanitize_command(cmd)}")
                 
                 async for proc, stderr in run_subprocess(cmd):
                     # Consume stdout to prevent deadlock
@@ -96,7 +96,7 @@ async def download(token: str):
                 payload.get("height"),
                 output="-",
             )
-            logger.info(f"[STREAM] {' '.join(cmd)}")
+            logger.info(f"[STREAM] {sanitize_command(cmd)}")
 
             try:
                 async for proc, stderr in run_subprocess(cmd):

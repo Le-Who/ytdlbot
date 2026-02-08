@@ -212,5 +212,33 @@ class TestCoreUtils(unittest.IsolatedAsyncioTestCase):
         # 25% of 10 is 2.5 -> 2
         self.assertEqual(self.utils.render_progressbar(25, length=10), "█" * 2 + "░" * 8 + " 25.0%")
 
+    def test_sanitize_command(self):
+        """Test sanitize_command with various URLs."""
+        # Standard case
+        cmd = ["yt-dlp", "--format", "best", "https://www.youtube.com/watch?v=dQw4w9WgXcQ"]
+        expected = "yt-dlp --format best https://www.youtube.com/[REDACTED]"
+        self.assertEqual(self.utils.sanitize_command(cmd), expected)
+
+        # URL with credentials
+        cmd = ["cmd", "https://user:pass@example.com/path"]
+        expected = "cmd https://example.com/[REDACTED]"
+        self.assertEqual(self.utils.sanitize_command(cmd), expected)
+
+        # Multiple URLs
+        cmd = ["cmd", "http://example.com/a?b=c", "https://test.com/path"]
+        expected = "cmd http://example.com/[REDACTED] https://test.com/[REDACTED]"
+        self.assertEqual(self.utils.sanitize_command(cmd), expected)
+
+        # No URLs
+        cmd = ["ls", "-la", "/tmp"]
+        expected = "ls -la /tmp"
+        self.assertEqual(self.utils.sanitize_command(cmd), expected)
+
+        # Malformed URL
+        cmd = ["curl", "https://"]
+        # Actually urlsplit("https://") works and hostname is None -> ""
+        # sanitized.append(f"{parsed.scheme}://{domain}/[REDACTED]") -> "https:///[REDACTED]"
+        self.assertEqual(self.utils.sanitize_command(cmd), "curl https:///[REDACTED]")
+
 if __name__ == '__main__':
     unittest.main()

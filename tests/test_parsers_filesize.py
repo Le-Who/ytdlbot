@@ -28,37 +28,38 @@ class TestCalculateFilesize(unittest.TestCase):
         self.assertEqual(_calculate_filesize(format_dict, None), 1000)
 
     def test_calculate_from_tbr(self):
-        """Should calculate from tbr and duration if sizes missing"""
+        """Should calculate from tbr and duration factor if sizes missing"""
         tbr = 1000  # 1000 kbps
         duration = 10.0
-        # Expected: tbr * BITRATE_COEFFICIENT * duration
-        # BITRATE_COEFFICIENT = 128.0 (1024/8)
-        expected = int(1000 * BITRATE_COEFFICIENT * 10.0)
+        duration_factor = duration * BITRATE_COEFFICIENT
+        # Expected: tbr * duration_factor
+        expected = int(1000 * duration_factor)
         format_dict = {"tbr": tbr}
-        self.assertEqual(_calculate_filesize(format_dict, duration), expected)
+        self.assertEqual(_calculate_filesize(format_dict, duration_factor), expected)
 
     def test_calculate_from_tbr_float(self):
         """Should handle float tbr correctly"""
         tbr = 500.5
         duration = 2.0
-        expected = int(500.5 * BITRATE_COEFFICIENT * 2.0)
+        duration_factor = duration * BITRATE_COEFFICIENT
+        expected = int(500.5 * duration_factor)
         format_dict = {"tbr": tbr}
-        self.assertEqual(_calculate_filesize(format_dict, duration), expected)
+        self.assertEqual(_calculate_filesize(format_dict, duration_factor), expected)
 
     def test_tbr_missing_duration(self):
-        """Should return None if duration is missing/None for tbr calc"""
+        """Should return None if duration factor is missing/None for tbr calc"""
         format_dict = {"tbr": 1000}
         self.assertIsNone(_calculate_filesize(format_dict, None))
 
     def test_tbr_zero_duration(self):
-        """Should return None if duration is 0 (as 0 is falsy)"""
+        """Should return None if duration factor is 0"""
         format_dict = {"tbr": 1000}
         self.assertIsNone(_calculate_filesize(format_dict, 0))
 
     def test_all_missing(self):
         """Should return None if all fields missing"""
         format_dict = {"other": "value"}
-        self.assertIsNone(_calculate_filesize(format_dict, 10.0))
+        self.assertIsNone(_calculate_filesize(format_dict, 10.0 * BITRATE_COEFFICIENT))
 
     def test_filesize_zero(self):
         """Should skip filesize=0 and try approx"""
@@ -69,8 +70,9 @@ class TestCalculateFilesize(unittest.TestCase):
         """Should fallback to tbr if both sizes are 0"""
         format_dict = {"filesize": 0, "filesize_approx": 0, "tbr": 100}
         duration = 10
-        expected = int(100 * BITRATE_COEFFICIENT * 10)
-        self.assertEqual(_calculate_filesize(format_dict, duration), expected)
+        duration_factor = duration * BITRATE_COEFFICIENT
+        expected = int(100 * duration_factor)
+        self.assertEqual(_calculate_filesize(format_dict, duration_factor), expected)
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,5 @@
 import unittest
-from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, get_special_format, deduplicate_formats, _extract_height, _format_duration
+from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, get_special_format, deduplicate_formats, _extract_height, _format_duration, BITRATE_COEFFICIENT
 from app.services.ytdlp.models import FormatItem, FormatMetadata
 from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
@@ -167,7 +167,7 @@ class TestYtDlpParsers(unittest.TestCase):
         self.assertIn("50.0 MB", item.label)
 
     def test_parse_format_filesize_from_tbr(self):
-        """Should calculate filesize from tbr and duration"""
+        """Should calculate filesize from tbr and duration factor"""
         format_dict = {
             "format_id": "fmt_tbr",
             "ext": "mp4",
@@ -177,9 +177,10 @@ class TestYtDlpParsers(unittest.TestCase):
             "protocol": "https"
         }
         duration_sec = 10.0
+        duration_factor = duration_sec * BITRATE_COEFFICIENT
         url = "https://example.com/video"
         is_tiktok = "tiktok.com" in url
-        metadata = parse_format_metadata(format_dict, duration_sec, is_tiktok)
+        metadata = parse_format_metadata(format_dict, duration_factor, is_tiktok)
 
         # Calculation: (1000 * 1024 / 8) * 10 = 128000 * 10 = 1,280,000 bytes
         expected_size = 1280000

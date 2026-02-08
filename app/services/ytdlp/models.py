@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional
 
-@dataclass
+@dataclass(slots=True)
 class FormatItem:
     """Представление формата видео"""
     format_id: str
@@ -10,7 +10,7 @@ class FormatItem:
     height: Optional[int]
     filesize: Optional[int]
 
-@dataclass
+@dataclass(slots=True)
 class FormatMetadata:
     """Промежуточное представление формата видео без лейбла"""
     format_id: str

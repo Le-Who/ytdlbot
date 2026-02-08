@@ -277,8 +277,9 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
              pass
         return
 
-    # 3. Send as Reply to original message
-    # ... (rest of code) ...
+    # 3. Send as Reply to the VIDEO message (since original user message is deleted)
+    # This keeps the GIF contextually linked to the video.
+    target_msg_id = q.message.message_id
 
     # Sending GIF
     success = await MediaSender.send_file(

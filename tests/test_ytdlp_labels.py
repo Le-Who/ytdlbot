@@ -23,7 +23,7 @@ class TestCreateFormatLabel(unittest.TestCase):
             protocol="http",
             is_tiktok=False
         )
-        self.assertEqual(label_1080, "📺 1080p • ?")
+        self.assertEqual(label_1080, "📺 1080p")
 
         # >= 720p -> 📹
         label_720 = _create_format_label(
@@ -32,7 +32,7 @@ class TestCreateFormatLabel(unittest.TestCase):
             protocol="http",
             is_tiktok=False
         )
-        self.assertEqual(label_720, "📹 720p • ?")
+        self.assertEqual(label_720, "📹 720p")
 
         # < 720p -> 📱
         label_480 = _create_format_label(
@@ -41,7 +41,7 @@ class TestCreateFormatLabel(unittest.TestCase):
             protocol="http",
             is_tiktok=False
         )
-        self.assertEqual(label_480, "📱 480p • ?")
+        self.assertEqual(label_480, "📱 480p")
 
         # Unknown height -> 📹 ???p
         label_none = _create_format_label(
@@ -50,7 +50,7 @@ class TestCreateFormatLabel(unittest.TestCase):
             protocol="http",
             is_tiktok=False
         )
-        self.assertEqual(label_none, "📹 ???p • ?")
+        self.assertEqual(label_none, "📹 ???p")
 
     def test_filesize_formatting(self):
         """Test filesize formatting (MB vs KB)"""
@@ -92,7 +92,7 @@ class TestCreateFormatLabel(unittest.TestCase):
             protocol="https",
             is_tiktok=False
         )
-        self.assertEqual(label_other, "📹 720p • ?")
+        self.assertEqual(label_other, "📹 720p")
 
     def test_combinations(self):
         """Test combinations of parameters"""

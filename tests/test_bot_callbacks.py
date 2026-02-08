@@ -367,5 +367,52 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             args, _ = self.update.callback_query.edit_message_text.call_args
             self.assertIn("Файл слишком большой", args[0])
 
+    async def test_on_pick_malformed_data(self):
+        # Case 1: No pipe
+        self.update.callback_query.data = "malformed"
+        await callbacks.on_pick(self.update, self.context)
+        # Should return early, no side effects
+        self.update.callback_query.answer.assert_awaited()
+        self.update.callback_query.edit_message_text.assert_not_awaited()
+
+        # Case 2: None
+        self.update.callback_query.data = None
+        await callbacks.on_pick(self.update, self.context)
+        self.update.callback_query.answer.assert_awaited()
+
+    async def test_on_send_malformed_data(self):
+        with patch("app.bot.callbacks.check_rate_limit", return_value=True):
+            # Case 1: No pipe
+            self.update.callback_query.data = "malformed"
+            await callbacks.on_send(self.update, self.context)
+            self.update.callback_query.answer.assert_awaited()
+
+            # Case 2: None
+            self.update.callback_query.data = None
+            await callbacks.on_send(self.update, self.context)
+            self.update.callback_query.answer.assert_awaited()
+
+    async def test_on_cancel_malformed_data(self):
+        # Case 1: No pipe
+        self.update.callback_query.data = "malformed"
+        await callbacks.on_cancel(self.update, self.context)
+        self.update.callback_query.answer.assert_awaited()
+        # on_cancel edits message only on success
+        self.update.callback_query.edit_message_text.assert_not_awaited()
+
+        # Case 2: None
+        self.update.callback_query.data = None
+        await callbacks.on_cancel(self.update, self.context)
+        self.update.callback_query.answer.assert_awaited()
+
+    async def test_on_cancel_edit_error(self):
+        self.update.callback_query.data = "cancel|token"
+        self.update.callback_query.edit_message_text.side_effect = Exception("Network Error")
+
+        await callbacks.on_cancel(self.update, self.context)
+
+        # Should not raise exception, and cancel_cache should be set
+        self.assertTrue(state.cancel_cache.get("token"))
+
 if __name__ == "__main__":
     unittest.main()

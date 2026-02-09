@@ -30,6 +30,7 @@ from .exceptions import (
 
 logger = logging.getLogger("ytdlp_service")
 
+
 class YtDlpService:
     """Сервис для работы с yt-dlp (Facade)"""
 
@@ -72,11 +73,7 @@ class YtDlpService:
         opts = self._BASE_OPTS_TEMPLATE.copy()
 
         # Add mutable/nested structures freshly to ensure independence
-        opts["extractor_args"] = {
-            "youtube": {
-                "player_client": ["ios", "android", "web", "mweb"],
-            }
-        }
+        opts["extractor_args"] = {}
 
         # Add dynamic/instance options
         opts["socket_timeout"] = self.SOCKET_TIMEOUT
@@ -85,7 +82,9 @@ class YtDlpService:
 
         if not for_list_formats:
             opts["format_sort"] = ["res:1080", "vcodec:vp9", "br", "size"]
-            opts["format"] = "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
+            opts["format"] = (
+                "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
+            )
 
         if self.cookies_path:
             opts["cookiefile"] = self.cookies_path
@@ -95,7 +94,9 @@ class YtDlpService:
     def _extract_youtube_via_subprocess(self, url: str) -> Optional[Dict[str, Any]]:
         """Извлечение через yt-dlp CLI для YouTube — надёжный обход ошибок API."""
         base_cmd = [
-            sys.executable, "-m", "yt_dlp",
+            sys.executable,
+            "-m",
+            "yt_dlp",
             "--dump-json",
             "--no-download",
             "--no-warnings",
@@ -121,13 +122,19 @@ class YtDlpService:
                 if result.returncode == 0 and result.stdout.strip():
                     return json.loads(result.stdout)
                 else:
-                    logger.debug(f"Subprocess attempt failed (args={args}), retcode={result.returncode}")
+                    logger.debug(
+                        f"Subprocess attempt failed (args={args}), retcode={result.returncode}"
+                    )
             except Exception as e:
-                logger.debug(f"YouTube subprocess fallback exception (args={args}): {e}")
+                logger.debug(
+                    f"YouTube subprocess fallback exception (args={args}): {e}"
+                )
 
         return None
 
-    def _attempt_youtube_fallback(self, url: str, used_subprocess: bool) -> Tuple[Optional[Dict[str, Any]], bool]:
+    def _attempt_youtube_fallback(
+        self, url: str, used_subprocess: bool
+    ) -> Tuple[Optional[Dict[str, Any]], bool]:
         """
         Attempts to fetch info via subprocess if allowed (YouTube) and needed (not already used).
         Returns (info, new_used_subprocess_state).
@@ -150,7 +157,9 @@ class YtDlpService:
         with yt_dlp.YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=False)
 
-    def list_formats(self, url: str, max_items: int = 12) -> Tuple[str, List[FormatItem], FormatItem, str]:
+    def list_formats(
+        self, url: str, max_items: int = 12
+    ) -> Tuple[str, List[FormatItem], FormatItem, str]:
         """Извлекает форматы видео с обработкой ошибок"""
         info: Optional[Dict[str, Any]] = None
         used_subprocess = False
@@ -162,7 +171,9 @@ class YtDlpService:
             if not info:
                 error_msg = str(e).lower()
                 if "403" in error_msg or "forbidden" in error_msg:
-                    raise AccessDeniedError("Доступ запрещен. Возможно, контент приватный или требуется авторизация.")
+                    raise AccessDeniedError(
+                        "Доступ запрещен. Возможно, контент приватный или требуется авторизация."
+                    )
                 elif "404" in error_msg or "not found" in error_msg:
                     raise VideoNotFoundError("Видео не найдено. Проверьте ссылку.")
                 elif "live" in error_msg and "available" not in error_msg:
@@ -175,7 +186,9 @@ class YtDlpService:
                     raise ExtractionError(f"Ошибка извлечения: {msg[:300]}")
 
         if info.get("is_live") or info.get("live_status") == "is_live":
-             raise LiveStreamError("⚠️ Это прямая трансляция. Загрузка активных стримов не поддерживается.")
+            raise LiveStreamError(
+                "⚠️ Это прямая трансляция. Загрузка активных стримов не поддерживается."
+            )
 
         title = info.get("title") or "Видео"
         duration_sec = info.get("duration")
@@ -190,7 +203,9 @@ class YtDlpService:
 
         raw_formats = info.get("formats", [])
         if not raw_formats:
-            info2, used_subprocess = self._attempt_youtube_fallback(url, used_subprocess)
+            info2, used_subprocess = self._attempt_youtube_fallback(
+                url, used_subprocess
+            )
             if info2:
                 raw_formats = info2.get("formats", [])
 
@@ -202,7 +217,9 @@ class YtDlpService:
                 formats_meta.append(fmt)
 
         if not formats_meta:
-            info2, used_subprocess = self._attempt_youtube_fallback(url, used_subprocess)
+            info2, used_subprocess = self._attempt_youtube_fallback(
+                url, used_subprocess
+            )
             if info2:
                 for raw_fmt in info2.get("formats", []):
                     fmt = parse_format_metadata(raw_fmt, duration_factor, is_tiktok_url)
@@ -236,5 +253,5 @@ class YtDlpService:
             cookies_path=self.cookies_path,
             max_filesize=max_filesize,
             use_aria2=use_aria2,
-            has_aria2_installed=self.has_aria2
+            has_aria2_installed=self.has_aria2,
         )

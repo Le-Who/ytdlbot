@@ -1,3 +1,4 @@
+import gzip
 import os
 import tempfile
 import base64
@@ -24,6 +25,16 @@ class CookiesManager:
         try:
             # Декодируем base64 в байты
             raw_data = base64.b64decode(b64)
+
+            # Проверяем на GZIP (магические байты 1f 8b)
+            if raw_data.startswith(b"\x1f\x8b"):
+                try:
+                    logger.info("GZIP compressed cookies detected, decompressing...")
+                    raw_data = gzip.decompress(raw_data)
+                except Exception as e:
+                    logger.error(f"Failed to decompress GZIP cookies: {e}")
+                    # Fallback to original data just in case it was a false positive?
+                    # Or fail? Better to try to proceed or log clearly.
 
             # Пытаемся декодировать байты в строку, используя разные кодировки
             try:

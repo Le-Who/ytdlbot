@@ -1,4 +1,3 @@
-import gzip
 import os
 import tempfile
 import base64
@@ -26,16 +25,6 @@ class CookiesManager:
             # Декодируем base64 в байты
             raw_data = base64.b64decode(b64)
 
-            # Проверяем на GZIP (магические байты 1f 8b)
-            if raw_data.startswith(b"\x1f\x8b"):
-                try:
-                    logger.info("GZIP compressed cookies detected, decompressing...")
-                    raw_data = gzip.decompress(raw_data)
-                except Exception as e:
-                    logger.error(f"Failed to decompress GZIP cookies: {e}")
-                    # Fallback to original data just in case it was a false positive?
-                    # Or fail? Better to try to proceed or log clearly.
-
             # Пытаемся декодировать байты в строку, используя разные кодировки
             try:
                 content = raw_data.decode("utf-8")
@@ -49,47 +38,11 @@ class CookiesManager:
                     )
                     content = raw_data.decode("latin1")
 
-            # Санитизация контента (исправление TRUD -> TRUE и т.д.)
-            sanitized_lines = []
-            for line in content.splitlines():
-                if not line.strip() or line.strip().startswith("#"):
-                    sanitized_lines.append(line)
-                    continue
-
-                parts = line.split("\t")
-                if len(parts) >= 7:
-                    # Поля: domain, flag, path, secure, expiration, name, value
-                    # Исправляем поле flag (index 1)
-                    if parts[1] not in ("TRUE", "FALSE"):
-                        if parts[1] == "TRUD":  # Известная ошибка
-                            parts[1] = "TRUE"
-                        elif parts[1].upper() == "TRUE":
-                            parts[1] = "TRUE"
-                        elif parts[1].upper() == "FALSE":
-                            parts[1] = "FALSE"
-                        # Можно добавить эвристику: если начинается с T -> TRUE
-
-                    # Исправляем поле secure (index 3)
-                    if parts[3] not in ("TRUE", "FALSE"):
-                        if parts[3].upper() == "TRUE":
-                            parts[3] = "TRUE"
-                        elif parts[3].upper() == "FALSE":
-                            parts[3] = "FALSE"
-
-                    sanitized_lines.append("\t".join(parts))
-                else:
-                    sanitized_lines.append(line)
-
-            final_content = "\n".join(sanitized_lines)
-
             fd, self.cookies_path = tempfile.mkstemp(prefix="cookies_", suffix=".txt")
 
             # Записываем как гарантированный UTF-8
             with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(final_content)
-                # Убедимся, что файл заканчивается новой строкой
-                if not final_content.endswith("\n"):
-                    f.write("\n")
+                f.write(content)
 
             logger.info(f"Cookies initialized at {self.cookies_path}")
             atexit.register(self.cleanup)

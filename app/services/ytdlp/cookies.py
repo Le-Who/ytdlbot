@@ -7,6 +7,7 @@ from typing import Optional
 
 logger = logging.getLogger("ytdlp_service.cookies")
 
+
 class CookiesManager:
     """Управление временным файлом cookies"""
 

@@ -22,11 +22,27 @@ class CookiesManager:
             return
 
         try:
-            data = base64.b64decode(b64.encode("utf-8"))
+            # Декодируем base64 в байты
+            raw_data = base64.b64decode(b64)
+
+            # Пытаемся декодировать байты в строку, используя разные кодировки
+            try:
+                content = raw_data.decode("utf-8")
+            except UnicodeDecodeError:
+                logger.warning("Cookies content is not UTF-8, falling back to cp1252")
+                try:
+                    content = raw_data.decode("cp1252")
+                except UnicodeDecodeError:
+                    logger.warning(
+                        "Cookies content is not cp1252, falling back to latin1"
+                    )
+                    content = raw_data.decode("latin1")
+
             fd, self.cookies_path = tempfile.mkstemp(prefix="cookies_", suffix=".txt")
 
-            with os.fdopen(fd, "wb") as f:
-                f.write(data)
+            # Записываем как гарантированный UTF-8
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(content)
 
             logger.info(f"Cookies initialized at {self.cookies_path}")
             atexit.register(self.cleanup)

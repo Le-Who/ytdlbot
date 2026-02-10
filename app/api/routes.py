@@ -44,98 +44,99 @@ async def download(token: str):
         media_type = "video/mp4"
 
     async def stream_video_subprocess():
-        if is_gif:
-            tmp_dir = TEMP_DIR
-            video_tmp = os.path.join(tmp_dir, f"ytdl_video_{uuid.uuid4().hex}.mp4")
+        async with state.tasks_sem:
+            if is_gif:
+                tmp_dir = TEMP_DIR
+                video_tmp = os.path.join(tmp_dir, f"ytdl_video_{uuid.uuid4().hex}.mp4")
 
-            try:
+                try:
+                    cmd = state.ytdlp.build_command(
+                        payload["page_url"],
+                        payload["format_id"],
+                        payload.get("height"),
+                        output=video_tmp,
+                    )
+                    logger.info(f"[STREAM-GIF] Download: {' '.join(cmd)}")
+
+                    async for proc, stderr in run_subprocess(cmd):
+                        # Consume stdout to prevent deadlock
+                        while await proc.stdout.read(4096):
+                            pass
+
+                        await proc.wait()
+                        if proc.returncode != 0:
+                            err = b"".join(stderr).decode(errors="ignore")[-500:]
+                            logger.error(f"[STREAM-GIF] Download error: {err}")
+                            return
+
+                    logger.info(f"[STREAM-GIF] Converting to GIF...")
+                    ffmpeg_cmd = [
+                        "ffmpeg", "-i", video_tmp,
+                        "-vf", "fps=10,scale=320:-1:flags=lanczos",
+                        "-t", "10", "-y", "-pix_fmt", "rgb24", "-f", "gif", "-"
+                    ]
+
+                    async for proc, stderr in run_subprocess(ffmpeg_cmd):
+                        while True:
+                            chunk = await proc.stdout.read(CHUNK_SIZE)
+                            if not chunk: break
+                            yield chunk
+                        if proc.returncode != 0:
+                            err = b"".join(stderr).decode(errors="ignore")[-500:]
+                            logger.error(f"[STREAM-GIF] FFmpeg error: {err}")
+
+                except Exception as e:
+                    logger.error(f"[STREAM-GIF] Exception: {e}", exc_info=True)
+                finally:
+                    await asyncio.to_thread(safe_remove, video_tmp)
+            else:
+                # Обычное видео - стримим напрямую
                 cmd = state.ytdlp.build_command(
                     payload["page_url"],
                     payload["format_id"],
                     payload.get("height"),
-                    output=video_tmp,
+                    output="-",
                 )
-                logger.info(f"[STREAM-GIF] Download: {' '.join(cmd)}")
-                
-                async for proc, stderr in run_subprocess(cmd):
-                    # Consume stdout to prevent deadlock
-                    while await proc.stdout.read(4096):
-                        pass
+                logger.info(f"[STREAM] {' '.join(cmd)}")
 
-                    await proc.wait()
-                    if proc.returncode != 0:
-                        err = b"".join(stderr).decode(errors="ignore")[-500:]
-                        logger.error(f"[STREAM-GIF] Download error: {err}")
-                        return
+                try:
+                    async for proc, stderr in run_subprocess(cmd):
+                        stream_timeout = 900
+                        start_time = time.time()
+                        loop = asyncio.get_running_loop()
 
-                logger.info(f"[STREAM-GIF] Converting to GIF...")
-                ffmpeg_cmd = [
-                    "ffmpeg", "-i", video_tmp,
-                    "-vf", "fps=10,scale=320:-1:flags=lanczos",
-                    "-t", "10", "-y", "-pix_fmt", "rgb24", "-f", "gif", "-"
-                ]
-                
-                async for proc, stderr in run_subprocess(ffmpeg_cmd):
-                    while True:
-                        chunk = await proc.stdout.read(CHUNK_SIZE)
-                        if not chunk: break
-                        yield chunk
-                    if proc.returncode != 0:
-                        err = b"".join(stderr).decode(errors="ignore")[-500:]
-                        logger.error(f"[STREAM-GIF] FFmpeg error: {err}")
+                        chunk = None
+                        while True:
+                            if time.time() - start_time > stream_timeout:
+                                logger.error("[STREAM] Overall timeout exceeded")
+                                break
 
-            except Exception as e:
-                logger.error(f"[STREAM-GIF] Exception: {e}", exc_info=True)
-            finally:
-                await asyncio.to_thread(safe_remove, video_tmp)
-        else:
-            # Обычное видео - стримим напрямую
-            cmd = state.ytdlp.build_command(
-                payload["page_url"],
-                payload["format_id"],
-                payload.get("height"),
-                output="-",
-            )
-            logger.info(f"[STREAM] {' '.join(cmd)}")
+                            try:
+                                async with asyncio.timeout(45.0) as cm:
+                                    while True:
+                                        if time.time() - start_time > stream_timeout:
+                                            break
 
-            try:
-                async for proc, stderr in run_subprocess(cmd):
-                    stream_timeout = 900
-                    start_time = time.time()
-                    loop = asyncio.get_running_loop()
+                                        chunk = await proc.stdout.read(CHUNK_SIZE)
+                                        if not chunk:
+                                            break
 
-                    chunk = None
-                    while True:
-                        if time.time() - start_time > stream_timeout:
-                            logger.error("[STREAM] Overall timeout exceeded")
-                            break
+                                        cm.reschedule(None)
+                                        yield chunk
+                                        cm.reschedule(loop.time() + 45.0)
 
-                        try:
-                            async with asyncio.timeout(45.0) as cm:
-                                while True:
-                                    if time.time() - start_time > stream_timeout:
+                                    if not chunk or (time.time() - start_time > stream_timeout):
                                         break
+                            except TimeoutError:
+                                logger.warning("[STREAM] Chunk read timeout, continuing...")
+                                continue
 
-                                    chunk = await proc.stdout.read(CHUNK_SIZE)
-                                    if not chunk:
-                                        break
+                        if proc.returncode != 0 and proc.returncode is not None:
+                            err = b"".join(stderr).decode(errors="ignore")[-500:]
+                            logger.error(f"[STREAM] Error (code {proc.returncode}): {err}")
 
-                                    cm.reschedule(None)
-                                    yield chunk
-                                    cm.reschedule(loop.time() + 45.0)
-
-                                if not chunk or (time.time() - start_time > stream_timeout):
-                                    break
-                        except TimeoutError:
-                            logger.warning("[STREAM] Chunk read timeout, continuing...")
-                            continue
-
-                    if proc.returncode != 0 and proc.returncode is not None:
-                        err = b"".join(stderr).decode(errors="ignore")[-500:]
-                        logger.error(f"[STREAM] Error (code {proc.returncode}): {err}")
-
-            except Exception as e:
-                logger.error(f"[STREAM] Exception: {e}", exc_info=True)
+                except Exception as e:
+                    logger.error(f"[STREAM] Exception: {e}", exc_info=True)
 
     return StreamingResponse(
         stream_video_subprocess(),

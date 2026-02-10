@@ -23,4 +23,10 @@ def build_format_keyboard(formats: list, special_format) -> InlineKeyboardMarkup
     buttons.append(
         [InlineKeyboardButton(special_format.label, callback_data=f"pick|{special_format.format_id}")]
     )
+
+    # Add a Close button
+    buttons.append(
+        [InlineKeyboardButton("❌ Закрыть", callback_data="close")]
+    )
+
     return InlineKeyboardMarkup(buttons)

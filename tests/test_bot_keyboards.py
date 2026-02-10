@@ -11,11 +11,6 @@ sys.modules["telegram.ext"] = MagicMock()
 # Ensure app can be imported
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Import app modules after mocking
-# Note: We need to import the function to test
-# But we also need to ensure that the mocked InlineKeyboardButton/Markup are used.
-# Since app.bot.keyboards imports them at module level, we must ensure sys.modules has our mock BEFORE import.
-
 from app.bot.keyboards import build_format_keyboard
 
 class TestBuildFormatKeyboard(unittest.TestCase):
@@ -33,17 +28,21 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         build_format_keyboard([], audio)
 
         # Verify InlineKeyboardMarkup was called
-        # The structure should be [[Audio Button]]
+        # The structure should be [[Audio Button], [Close Button]]
         telegram_mock.InlineKeyboardMarkup.assert_called_once()
         args, _ = telegram_mock.InlineKeyboardMarkup.call_args
         buttons = args[0]
 
-        self.assertEqual(len(buttons), 1) # One row (audio)
-        self.assertEqual(len(buttons[0]), 1) # One button in row
+        self.assertEqual(len(buttons), 2) # 1 row (audio) + 1 row (close)
+        self.assertEqual(len(buttons[0]), 1) # One button in audio row
+        self.assertEqual(len(buttons[1]), 1) # One button in close row
 
         # Verify button creation
         telegram_mock.InlineKeyboardButton.assert_any_call(
             "Audio Only", callback_data="pick|audio_id"
+        )
+        telegram_mock.InlineKeyboardButton.assert_any_call(
+            "❌ Закрыть", callback_data="close"
         )
 
     def test_single_format(self):
@@ -56,12 +55,14 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         args, _ = telegram_mock.InlineKeyboardMarkup.call_args
         buttons = args[0]
 
-        self.assertEqual(len(buttons), 2) # 1 video row + 1 audio row
+        self.assertEqual(len(buttons), 3) # 1 video row + 1 audio row + 1 close row
         self.assertEqual(len(buttons[0]), 1) # 1 button in video row
         self.assertEqual(len(buttons[1]), 1) # 1 button in audio row
+        self.assertEqual(len(buttons[2]), 1) # 1 button in close row
 
         telegram_mock.InlineKeyboardButton.assert_any_call("720p", callback_data="pick|fmt_1")
         telegram_mock.InlineKeyboardButton.assert_any_call("Audio Only", callback_data="pick|audio_id")
+        telegram_mock.InlineKeyboardButton.assert_any_call("❌ Закрыть", callback_data="close")
 
     def test_multiple_formats_even(self):
         """Test with even number of formats (4)."""
@@ -82,10 +83,12 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         # Row 1: f1, f2
         # Row 2: f3, f4
         # Row 3: Audio
-        self.assertEqual(len(buttons), 3)
+        # Row 4: Close
+        self.assertEqual(len(buttons), 4)
         self.assertEqual(len(buttons[0]), 2)
         self.assertEqual(len(buttons[1]), 2)
         self.assertEqual(len(buttons[2]), 1)
+        self.assertEqual(len(buttons[3]), 1)
 
     def test_multiple_formats_odd(self):
         """Test with odd number of formats (3)."""
@@ -105,10 +108,12 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         # Row 1: f1, f2
         # Row 2: f3
         # Row 3: Audio
-        self.assertEqual(len(buttons), 3)
+        # Row 4: Close
+        self.assertEqual(len(buttons), 4)
         self.assertEqual(len(buttons[0]), 2)
         self.assertEqual(len(buttons[1]), 1)
         self.assertEqual(len(buttons[2]), 1)
+        self.assertEqual(len(buttons[3]), 1)
 
     def test_formats_limit(self):
         """Test that formats are limited to 8."""
@@ -123,20 +128,18 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         # Expect:
         # 4 rows of 2 (8 items)
         # 1 row of audio
-        # Total 5 rows
-        self.assertEqual(len(buttons), 5)
+        # 1 row of Close
+        # Total 6 rows
+        self.assertEqual(len(buttons), 6)
 
         # Check that the 9th item was NOT added
-        # id_8 corresponds to the 9th item (0-indexed)
-        # callback_data="pick|id_8" should NOT be called
-
-        # We can check all calls to InlineKeyboardButton
         calls = telegram_mock.InlineKeyboardButton.call_args_list
         # Extract callback_data from calls
         callback_datas = [c.kwargs.get('callback_data') for c in calls]
 
         self.assertIn("pick|id_7", callback_datas)
         self.assertNotIn("pick|id_8", callback_datas)
+        self.assertIn("close", callback_datas)
 
     def test_callback_data_structure(self):
         """Verify callback data format."""
@@ -150,6 +153,9 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         )
         telegram_mock.InlineKeyboardButton.assert_any_call(
             "Audio", callback_data="pick|MY_AUDIO_ID"
+        )
+        telegram_mock.InlineKeyboardButton.assert_any_call(
+            "❌ Закрыть", callback_data="close"
         )
 
 if __name__ == "__main__":

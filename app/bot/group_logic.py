@@ -89,8 +89,6 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         # In groups, clutter is bad. Show error for 5s then delete?
         try:
             await status_msg.edit_text(error or "❌ Ошибка.")
-            # await asyncio.sleep(5)
-            # await status_msg.delete() 
         except:
             pass
         return
@@ -126,8 +124,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         is_audio=False, # Prioritize video
         is_gif=False,
         caption=caption,
-        reply_markup=kb,
-        # reply_to_message_id=update.message.message_id # Cannot reply if deleted
+        reply_markup=kb
     )
 
     if success:

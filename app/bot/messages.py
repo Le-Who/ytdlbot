@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 
 from app.core import state
-from app.core.utils import check_rate_limit, extract_supported_url
+from app.core.utils import extract_supported_url
 from app.bot.keyboards import build_format_keyboard
 from app.services.ytdlp.exceptions import (
     AccessDeniedError,
@@ -30,7 +30,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = url
 
-    if not check_rate_limit(user.id, limit=10):
+    if not state.limiter.allow_user(user.id) or not state.limiter.allow_chat(update.effective_chat.id):
         await update.message.reply_text("⚠️ Слишком часто. Подождите минуту.")
         return
 

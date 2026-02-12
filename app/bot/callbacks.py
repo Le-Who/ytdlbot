@@ -313,3 +313,9 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Do NOT delete gif_path if it is the same as video_path (cached source)
     if gif_path != video_path:
         await asyncio.to_thread(safe_remove, gif_path)
+
+
+async def on_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.message.delete()

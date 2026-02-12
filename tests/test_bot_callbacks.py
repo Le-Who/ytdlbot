@@ -139,6 +139,49 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         self.assertIn("✅ <b>Готово", args[0])
         self.assertIn("1080p", args[0])
 
+
+    async def test_on_pick_shows_send_to_tg_button_by_default(self):
+        self.update.callback_query.data = "pick|137"
+        self.context.user_data = {
+            "page_url": "http://example.com/video",
+            "format_map": {"137": 1080},
+            "title": "Test Video",
+            "size_map": {"137": 1024 * 1024 * 10},
+        }
+
+        with patch("app.bot.callbacks.InlineKeyboardButton", side_effect=lambda text, **kwargs: {"text": text, **kwargs}), \
+             patch("app.bot.callbacks.InlineKeyboardMarkup", side_effect=lambda kb: {"inline_keyboard": kb}), \
+             patch("app.bot.callbacks.ENABLE_TELEGRAM_UPLOAD", True):
+            await callbacks.on_pick(self.update, self.context)
+
+        _, kwargs = self.update.callback_query.edit_message_text.call_args
+        keyboard = kwargs["reply_markup"]["inline_keyboard"]
+        self.assertTrue(
+            any(btn.get("text") == "📤 Отправить файл в TG" for row in keyboard for btn in row),
+            "Кнопка отправки в TG должна быть показана при дефолтной конфигурации",
+        )
+
+    async def test_on_pick_hides_send_to_tg_button_when_flag_disabled(self):
+        self.update.callback_query.data = "pick|137"
+        self.context.user_data = {
+            "page_url": "http://example.com/video",
+            "format_map": {"137": 1080},
+            "title": "Test Video",
+            "size_map": {"137": 1024 * 1024 * 10},
+        }
+
+        with patch("app.bot.callbacks.InlineKeyboardButton", side_effect=lambda text, **kwargs: {"text": text, **kwargs}), \
+             patch("app.bot.callbacks.InlineKeyboardMarkup", side_effect=lambda kb: {"inline_keyboard": kb}), \
+             patch("app.bot.callbacks.ENABLE_TELEGRAM_UPLOAD", False):
+            await callbacks.on_pick(self.update, self.context)
+
+        _, kwargs = self.update.callback_query.edit_message_text.call_args
+        keyboard = kwargs["reply_markup"]["inline_keyboard"]
+        self.assertFalse(
+            any(btn.get("text") == "📤 Отправить файл в TG" for row in keyboard for btn in row),
+            "Кнопка отправки в TG не должна отображаться при отключенном флаге",
+        )
+
     async def test_on_send_rate_limit(self):
         # Setup
         self.update.callback_query.data = "send|token123"

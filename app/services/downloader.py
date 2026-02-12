@@ -10,10 +10,10 @@ from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import NetworkError
 
 from app.core import state
-from app.core.process import run_subprocess
-from app.core.config import TEMP_DIR, MAX_TG_UPLOAD_MB
+from app.core.config import TEMP_DIR
 from app.core.utils import (
     safe_remove,
+    run_subprocess,
     render_progressbar,
     PROGRESS_RE,
     PROGRESS_DETAILS_RE,
@@ -75,7 +75,7 @@ class MediaSender:
             format_id,
             height,
             output=tmp_path,
-            max_filesize=MAX_TG_UPLOAD_MB,
+            max_filesize=50,
             use_aria2=True,
         )
 
@@ -84,28 +84,28 @@ class MediaSender:
         )
 
         try:
-            async with run_subprocess(cmd, timeout=600) as process:
-                proc = process.proc
+            async for proc, stderr in run_subprocess(cmd):
                 last_update = 0
                 download_start = time.time()
                 max_download_time = 600
 
+                # Clear previous cancel state for this token
                 if token in state.cancel_cache:
                     del state.cancel_cache[token]
 
                 while True:
                     if state.cancel_cache.get(token):
                         logger.info(f"[DL-TG] Cancelled by user: {token}")
-                        await process.cancel()
                         return None, "❌ Загрузка отменена пользователем."
 
                     if time.time() - download_start > max_download_time:
                         logger.warning("[DL-TG] Download timeout exceeded")
-                        await process.cancel()
                         return None, "⚠️ Время ожидания загрузки истекло."
 
                     try:
-                        line = await asyncio.wait_for(proc.stdout.readline(), timeout=300.0)
+                        line = await asyncio.wait_for(
+                            proc.stdout.readline(), timeout=300.0
+                        )
                     except asyncio.TimeoutError:
                         if proc.returncode is not None:
                             break
@@ -136,19 +136,21 @@ class MediaSender:
                                     )
                                     last_update = now
                                 except Exception as e:
-                                    logger.warning(f"Failed to parse progress or update message: {e}")
+                                    logger.warning(
+                                        f"Failed to parse progress or update message: {e}"
+                                    )
 
-                await process.wait()
-                if process.exit_code != 0:
-                    err = b"".join(process.stderr_buffer).decode("utf-8", errors="ignore").lower()
+                await proc.wait()
+                if proc.returncode != 0:
+                    err = b"".join(stderr).decode("utf-8", errors="ignore").lower()
                     logger.error(f"[DL-TG] yt-dlp failed: {err}")
 
                     if "file larger" in err or "filesize" in err:
-                        return None, f"⚠️ Файл слишком большой (>{MAX_TG_UPLOAD_MB} МБ)."
+                        return None, "⚠️ Файл слишком большой (>50 МБ)."
                     elif "sign in" in err or "cookies" in err:
                         return None, "⚠️ Требуется авторизация (Sign-in required)."
                     elif "requested format is not available" in err:
-                        return None, "⚠️ Формат недоступен. Попробуйте другое качество."
+                         return None, "⚠️ Формат недоступен. Попробуйте другое качество."
                     else:
                         return None, "⚠️ Ошибка загрузки. Попробуйте другое качество или ссылку."
 
@@ -158,9 +160,9 @@ class MediaSender:
                      return None, "⚠️ Файл не был создан."
                      
                 file_size = await asyncio.to_thread(os.path.getsize, tmp_path)
-                if file_size > MAX_TG_UPLOAD_MB * 1024 * 1024:
+                if file_size > 49.9 * 1024 * 1024:
                     await asyncio.to_thread(safe_remove, tmp_path)
-                    return None, f"⚠️ Файл слишком большой (> {MAX_TG_UPLOAD_MB} МБ)."
+                    return None, "⚠️ Файл слишком большой (> 50 МБ)."
             except OSError:
                 await asyncio.to_thread(safe_remove, tmp_path)
                 return None, "⚠️ Ошибка проверки файла."

@@ -26,6 +26,6 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "2. Отправьте ссылку боту.\n"
         "3. Выберите качество кнопок под сообщением.\n"
         "4. Выберите: получить ссылку или файл в Telegram.\n\n"
-        f"❗️ <i>Если файл > {MAX_TG_UPLOAD_MB} МБ, он не сможет быть загружен в Telegram (ограничение API). Используйте прямую ссылку.</i>"
+        "❗️ <i>Если файл > {MAX_TG_UPLOAD_MB} МБ, он не сможет быть загружен в Telegram (ограничение API). Используйте прямую ссылку.</i>"
     )
     await update.message.reply_text(help_text, parse_mode="HTML")

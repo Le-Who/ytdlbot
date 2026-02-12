@@ -135,15 +135,3 @@ Contributions are welcome! Please follow these steps:
 ## 📄 License
 
 Distributed under the MIT License. See `LICENSE` for more information.
-
-## 🔧 Runtime controls (P0)
-
-- `MAX_TG_UPLOAD_MB`, `MAX_DL_MB`, `GROUP_DEFAULT_TARGET_MB` — unified size policy for help text and upload checks.
-- `LIMITER_*` variables — token-bucket rate limits (user/chat/IP).
-- `JANITOR_INTERVAL_SEC`, `MAX_TEMP_AGE_SEC`, `DISK_USAGE_HIGH_WATERMARK` — temporary file janitor lifecycle.
-
-### Local checks
-
-```bash
-pytest tests/test_core_utils.py tests/test_security_main.py
-```

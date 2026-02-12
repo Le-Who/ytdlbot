@@ -9,11 +9,10 @@ from telegram.constants import ChatAction
 from app.core import state
 from app.core.utils import extract_supported_url, check_rate_limit
 from app.services.downloader import MediaSender
-from app.core.config import GROUP_DEFAULT_TARGET_MB
 
 logger = logging.getLogger("app.bot.group_logic")
 
-GROUP_VIDEO_FORMAT = f"bestvideo[ext=mp4][filesize<{GROUP_DEFAULT_TARGET_MB}M]+bestaudio[ext=m4a]/best[ext=mp4][filesize<{GROUP_DEFAULT_TARGET_MB}M]/best[filesize<{GROUP_DEFAULT_TARGET_MB}M]"
+GROUP_VIDEO_FORMAT = "bestvideo[ext=mp4][filesize<45M]+bestaudio[ext=m4a]/best[ext=mp4][filesize<45M]/best[filesize<45M]"
 
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -36,7 +35,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     # Rate limiting for groups (per chat or per user?)
     # Let's limit per user to avoid spam.
     user = update.effective_user
-    if not check_rate_limit(user.id, chat_id=update.effective_chat.id, limit=3):
+    if not check_rate_limit(user.id, limit=3):
         # In groups, better to just ignore than spam "wait".
         # Or maybe send a disappearing message?
         return

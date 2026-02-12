@@ -1,5 +1,5 @@
 import os
-import secrets
+import hmac
 import uuid
 import asyncio
 import time
@@ -10,8 +10,9 @@ from fastapi.responses import StreamingResponse
 from telegram import Update
 
 from app.core import state
+from app.core.process import run_subprocess
 from app.core.config import TELEGRAM_SECRET_TOKEN, TEMP_DIR
-from app.core.utils import run_subprocess, safe_remove
+from app.core.utils import safe_remove, check_rate_limit
 from app.constants import CHUNK_SIZE, GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
 logger = logging.getLogger("app.api")
@@ -22,8 +23,12 @@ async def health():
     return {"ok": True}
 
 @router.get("/dl/{token}")
-async def download(token: str):
+async def download(token: str, request: Request):
     logger.info(f"[DOWNLOAD] Token: {token}")
+    ip = request.client.host if request.client else "unknown"
+    if not check_rate_limit(ip=ip):
+        raise HTTPException(429, "Rate limit exceeded")
+
     payload = state.link_cache.get(token)
     if not payload:
         raise HTTPException(404, "Link expired")
@@ -57,14 +62,14 @@ async def download(token: str):
                 )
                 logger.info(f"[STREAM-GIF] Download: {' '.join(cmd)}")
                 
-                async for proc, stderr in run_subprocess(cmd):
-                    # Consume stdout to prevent deadlock
+                async with run_subprocess(cmd, timeout=600) as process:
+                    proc = process.proc
                     while await proc.stdout.read(4096):
                         pass
 
-                    await proc.wait()
-                    if proc.returncode != 0:
-                        err = b"".join(stderr).decode(errors="ignore")[-500:]
+                    await process.wait()
+                    if process.exit_code != 0:
+                        err = b"".join(process.stderr_buffer).decode(errors="ignore")[-500:]
                         logger.error(f"[STREAM-GIF] Download error: {err}")
                         return
 
@@ -75,13 +80,15 @@ async def download(token: str):
                     "-t", "10", "-y", "-pix_fmt", "rgb24", "-f", "gif", "-"
                 ]
                 
-                async for proc, stderr in run_subprocess(ffmpeg_cmd):
+                async with run_subprocess(ffmpeg_cmd, timeout=300) as process:
+                    proc = process.proc
                     while True:
                         chunk = await proc.stdout.read(CHUNK_SIZE)
-                        if not chunk: break
+                        if not chunk:
+                            break
                         yield chunk
-                    if proc.returncode != 0:
-                        err = b"".join(stderr).decode(errors="ignore")[-500:]
+                    if process.exit_code != 0:
+                        err = b"".join(process.stderr_buffer).decode(errors="ignore")[-500:]
                         logger.error(f"[STREAM-GIF] FFmpeg error: {err}")
 
             except Exception as e:
@@ -99,7 +106,8 @@ async def download(token: str):
             logger.info(f"[STREAM] {' '.join(cmd)}")
 
             try:
-                async for proc, stderr in run_subprocess(cmd):
+                async with run_subprocess(cmd, timeout=900) as process:
+                    proc = process.proc
                     stream_timeout = 900
                     start_time = time.time()
                     loop = asyncio.get_running_loop()
@@ -108,6 +116,7 @@ async def download(token: str):
                     while True:
                         if time.time() - start_time > stream_timeout:
                             logger.error("[STREAM] Overall timeout exceeded")
+                            await process.cancel()
                             break
 
                         try:
@@ -130,9 +139,9 @@ async def download(token: str):
                             logger.warning("[STREAM] Chunk read timeout, continuing...")
                             continue
 
-                    if proc.returncode != 0 and proc.returncode is not None:
-                        err = b"".join(stderr).decode(errors="ignore")[-500:]
-                        logger.error(f"[STREAM] Error (code {proc.returncode}): {err}")
+                    if process.exit_code != 0 and process.exit_code is not None:
+                        err = b"".join(process.stderr_buffer).decode(errors="ignore")[-500:]
+                        logger.error(f"[STREAM] Error (code {process.exit_code}): {err}")
 
             except Exception as e:
                 logger.error(f"[STREAM] Exception: {e}", exc_info=True)
@@ -149,7 +158,7 @@ async def download(token: str):
 async def telegram_webhook(request: Request):
     """Обработка вебхука от Telegram"""
     token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-    if not token or not secrets.compare_digest(token, TELEGRAM_SECRET_TOKEN):
+    if not token or not hmac.compare_digest(token, TELEGRAM_SECRET_TOKEN):
         raise HTTPException(401, "Unauthorized")
 
     if state.bot_app:

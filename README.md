@@ -135,3 +135,25 @@ Contributions are welcome! Please follow these steps:
 ## 📄 License
 
 Distributed under the MIT License. See `LICENSE` for more information.
+
+
+## 🔧 New operational settings
+
+Use `.env.example` as baseline. Key variables:
+- `MAX_TG_UPLOAD_MB`, `MAX_DL_MB`, `GROUP_DEFAULT_TARGET_MB`
+- `LIMITER_*` token-bucket limits for users/chats/IP/token
+- `MAX_TEMP_AGE_SECONDS`, `JANITOR_INTERVAL_SECONDS`
+
+Run locally:
+```bash
+cp .env.example .env
+uvicorn app.main:api --reload
+```
+
+Run tests:
+```bash
+BOT_TOKEN=test BASE_URL=http://localhost:8000 pytest tests/test_core_process.py tests/test_limiter.py tests/test_janitor.py tests/test_core_utils.py
+```
+
+### Structured logging schema
+JSON logs include: `correlation_id`, `op`, `duration_ms`, `error_type`, and optional context fields (`token`, `chat_id`, `user_id`, `url_host`).

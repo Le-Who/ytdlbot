@@ -1,7 +1,7 @@
 from telegram import Update
 from telegram.ext import ContextTypes
 from app.constants import SUPPORTED_PLATFORMS
-from app.core.config import MAX_TG_UPLOAD_MB
+from app.core.config import MAX_TG_UPLOAD_MB, MAX_DL_MB
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -26,6 +26,7 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "2. Отправьте ссылку боту.\n"
         "3. Выберите качество кнопок под сообщением.\n"
         "4. Выберите: получить ссылку или файл в Telegram.\n\n"
-        "❗️ <i>Если файл > {MAX_TG_UPLOAD_MB} МБ, он не сможет быть загружен в Telegram (ограничение API). Используйте прямую ссылку.</i>"
+        f"❗️ <i>Если файл > {MAX_TG_UPLOAD_MB} МБ, он не сможет быть загружен в Telegram (ограничение API). Используйте прямую ссылку.</i>\n"
+        f"📦 Максимальный размер для прямой загрузки: {MAX_DL_MB} МБ."
     )
     await update.message.reply_text(help_text, parse_mode="HTML")

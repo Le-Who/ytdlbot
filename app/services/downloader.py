@@ -10,7 +10,7 @@ from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import NetworkError
 
 from app.core import state
-from app.core.config import TEMP_DIR
+from app.core.config import TEMP_DIR, MAX_TG_UPLOAD_MB
 from app.core.utils import (
     safe_remove,
     run_subprocess,
@@ -18,6 +18,7 @@ from app.core.utils import (
     PROGRESS_RE,
     PROGRESS_DETAILS_RE,
 )
+from app.core.policy import size_allowed
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 
 logger = logging.getLogger("app.services.downloader")
@@ -75,7 +76,7 @@ class MediaSender:
             format_id,
             height,
             output=tmp_path,
-            max_filesize=50,
+            max_filesize=MAX_TG_UPLOAD_MB,
             use_aria2=True,
         )
 
@@ -84,7 +85,9 @@ class MediaSender:
         )
 
         try:
-            async for proc, stderr in run_subprocess(cmd):
+            async with run_subprocess(cmd) as handle:
+                proc = handle.proc
+                stderr = handle.stderr_data
                 last_update = 0
                 download_start = time.time()
                 max_download_time = 600
@@ -160,9 +163,9 @@ class MediaSender:
                      return None, "⚠️ Файл не был создан."
                      
                 file_size = await asyncio.to_thread(os.path.getsize, tmp_path)
-                if file_size > 49.9 * 1024 * 1024:
+                if not size_allowed(file_size, target="telegram"):
                     await asyncio.to_thread(safe_remove, tmp_path)
-                    return None, "⚠️ Файл слишком большой (> 50 МБ)."
+                    return None, f"⚠️ Файл слишком большой (> {MAX_TG_UPLOAD_MB} МБ)."
             except OSError:
                 await asyncio.to_thread(safe_remove, tmp_path)
                 return None, "⚠️ Ошибка проверки файла."

@@ -9,17 +9,14 @@ from telegram.ext import ContextTypes
 from telegram.error import NetworkError
 
 from app.core import state
-from app.core.config import BASE_URL, LINK_TTL_MINUTES, ENABLE_TELEGRAM_UPLOAD, TEMP_DIR
+from app.core.config import BASE_URL, LINK_TTL_MINUTES, ENABLE_TELEGRAM_UPLOAD, MAX_TG_UPLOAD_MB
 from app.core.utils import (
-    check_rate_limit,
     safe_remove,
-    run_subprocess,
-    render_progressbar,
-    PROGRESS_RE,
-    PROGRESS_DETAILS_RE,
 )
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from app.bot.keyboards import build_format_keyboard
+from app.core.policy import size_allowed
+from app.core.logging import set_correlation_id
 
 logger = logging.getLogger("app.bot.callbacks")
 
@@ -146,8 +143,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer("🚀 Загрузка началась")
     user_id = q.from_user.id
 
-    if not check_rate_limit(user_id, limit=3):
-        await q.edit_message_text("⚠️ Слишком часто скачиваете. Подождите.")
+    if not state.limiter.allow_user(user_id) or not state.limiter.allow_chat(q.message.chat_id):
+        await q.edit_message_text("⚠️ Слишком много запросов. Подождите немного.")
         return
 
     if not q.data:
@@ -159,6 +156,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Invalid callback data in on_send: {e}")
         return
 
+    set_correlation_id(token)
     payload = state.link_cache.get(token)
     if not payload:
         await q.edit_message_text("⚠️ Ссылка устарела.")
@@ -180,11 +178,11 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = context.user_data
     fmt_size = data.get("size_map", {}).get(payload["format_id"])
-    if fmt_size and fmt_size > 50 * 1024 * 1024:
+    if not size_allowed(fmt_size, target="telegram"):
         mb = fmt_size / (1024 * 1024)
         await q.edit_message_text(
             f"⚠️ Файл слишком большой (~{mb:.1f} МБ).\n"
-            "Telegram Bot API не позволяет отправлять файлы больше 50 МБ.\n"
+            f"Telegram Bot API не позволяет отправлять файлы больше {MAX_TG_UPLOAD_MB} МБ.\n"
             "Пожалуйста, используйте прямую ссылку ниже.",
             reply_markup=kb_error,
         )

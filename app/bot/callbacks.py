@@ -137,7 +137,22 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         _, token = q.data.split("|", 1)
         state.cancel_cache[token] = True
-        await q.edit_message_text("❌ Загрузка отменена пользователем.")
+
+        dl_link = f"{BASE_URL}/dl/{token}"
+        kb = [[InlineKeyboardButton("📥 Скачать (Ссылка)", url=dl_link)]]
+        if ENABLE_TELEGRAM_UPLOAD:
+            kb.append(
+                [
+                    InlineKeyboardButton(
+                        "📤 Отправить в TG", callback_data=f"send|{token}"
+                    )
+                ]
+            )
+        kb.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
+
+        await q.edit_message_text(
+            "❌ Загрузка отменена пользователем.", reply_markup=InlineKeyboardMarkup(kb)
+        )
     except (ValueError, AttributeError) as e:
         logger.error(f"Invalid callback data in on_cancel: {e}")
 
@@ -165,16 +180,28 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     dl_link = f"{BASE_URL}/dl/{token}"
-    kb_error = InlineKeyboardMarkup(
+
+    # kb_final: For non-retryable errors (e.g. file too big)
+    kb_final = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton("📥 Скачать (Ссылка)", url=dl_link)],
             [InlineKeyboardButton("🔙 Назад", callback_data="back")],
         ]
     )
 
+    # kb_retry: For retryable errors (e.g. queue full, network error)
+    kb_list_retry = [[InlineKeyboardButton("📥 Скачать (Ссылка)", url=dl_link)]]
+    if ENABLE_TELEGRAM_UPLOAD:
+        kb_list_retry.append(
+            [InlineKeyboardButton("📤 Отправить в TG", callback_data=f"send|{token}")]
+        )
+    kb_list_retry.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
+    kb_retry = InlineKeyboardMarkup(kb_list_retry)
+
     if state.tasks_sem.locked():
         await q.edit_message_text(
-            "⚠️ Очередь переполнена. Скачайте по ссылке.", reply_markup=kb_error
+            "⚠️ Очередь переполнена. Скачайте по ссылке или попробуйте позже.",
+            reply_markup=kb_retry,
         )
         return
 
@@ -186,7 +213,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"⚠️ Файл слишком большой (~{mb:.1f} МБ).\n"
             "Telegram Bot API не позволяет отправлять файлы больше 50 МБ.\n"
             "Пожалуйста, используйте прямую ссылку ниже.",
-            reply_markup=kb_error,
+            reply_markup=kb_final,
         )
         return
 
@@ -198,39 +225,41 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with state.tasks_sem:
         await q.edit_message_text("⏳ Начинаю загрузку...")
-        
-        from app.services.downloader import MediaSender # Lazy import to avoid circular dep if any
+
+        from app.services.downloader import MediaSender  # Lazy import to avoid circular dep if any
 
         file_path, error = await MediaSender.download_video(
             payload["page_url"],
             payload["format_id"],
             payload.get("height"),
             token,
-            progress_callback=update_progress_ui
+            progress_callback=update_progress_ui,
         )
 
         if error or not file_path:
-            await q.edit_message_text(error or "⚠️ Ошибка.", reply_markup=kb_error)
+            await q.edit_message_text(error or "⚠️ Ошибка.", reply_markup=kb_retry)
             return
 
         await q.edit_message_text("📤 Отправляю в Telegram...")
 
         is_gif = payload["format_id"] == GIF_FORMAT_ID
         is_audio = payload["format_id"] == AUDIO_FORMAT_ID
-        
+
         success = await MediaSender.send_file(
             context.bot,
             q.message.chat_id,
             file_path,
             is_audio=is_audio,
             is_gif=is_gif,
-            caption="📹" if not is_audio else "🎵"
+            caption="📹" if not is_audio else "🎵",
         )
 
         if success:
             await q.delete_message()
         else:
-            await q.edit_message_text("⚠️ Ошибка при отправке файла.", reply_markup=kb_error)
+            await q.edit_message_text(
+                "⚠️ Ошибка при отправке файла.", reply_markup=kb_retry
+            )
         
         # Cleanup is handled by MediaSender if it created a new file, but we should ensure cache policy
         # If it was a cached file, don't remove. 

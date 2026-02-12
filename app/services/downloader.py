@@ -143,7 +143,6 @@ class MediaSender:
                 await proc.wait()
                 if proc.returncode != 0:
                     err = b"".join(stderr).decode("utf-8", errors="ignore").lower()
-                    logger.error(f"[DL-TG] yt-dlp failed: {err}")
 
                     if "file larger" in err or "filesize" in err:
                         return None, "⚠️ Файл слишком большой (>50 МБ)."

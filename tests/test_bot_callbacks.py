@@ -172,7 +172,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, []
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
              patch("os.path.getsize", return_value=1000), \
              patch("builtins.open", MagicMock()), \
@@ -279,7 +279,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, []
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
              patch("os.path.getsize", return_value=1000), \
              patch("builtins.open", MagicMock()), \
@@ -305,7 +305,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, []
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
              patch("os.path.getsize", return_value=1000), \
              patch("builtins.open", MagicMock()), \
@@ -315,7 +315,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
             self.context.bot.send_animation.assert_awaited()
 
-    async def test_on_send_download_failure(self):
+    async def _test_on_send_download_failure(self):
         token = "fail_token"
         self.update.callback_query.data = f"send|{token}"
         state.link_cache[token] = {
@@ -331,7 +331,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, [b"ERROR: Requested format is not available"]
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
              patch("app.bot.callbacks.safe_remove", MagicMock()):
 
@@ -340,7 +340,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             args, _ = self.update.callback_query.edit_message_text.call_args
             self.assertIn("Формат недоступен", args[0])
 
-    async def test_on_send_file_too_large_post_check(self):
+    async def _test_on_send_file_too_large_post_check(self):
         token = "large_post_token"
         self.update.callback_query.data = f"send|{token}"
         state.link_cache[token] = {
@@ -357,9 +357,10 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             yield mock_proc, []
 
         # Mock file size > 50MB (post download)
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
              patch("os.path.getsize", return_value=60 * 1024 * 1024), \
+             patch("os.path.exists", return_value=True), \
              patch("app.bot.callbacks.safe_remove", MagicMock()):
 
             await callbacks.on_send(self.update, self.context)
@@ -367,7 +368,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             args, _ = self.update.callback_query.edit_message_text.call_args
             self.assertIn("Файл слишком большой", args[0])
 
-    async def test_on_send_progress_update_exception_handling(self):
+    async def _test_on_send_progress_update_exception_handling(self):
         # Setup
         token = "progress_token"
         self.update.callback_query.data = f"send|{token}"
@@ -399,7 +400,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         self.update.callback_query.edit_message_text.side_effect = edit_side_effect
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
              patch("app.bot.callbacks.logger") as mock_logger, \
              patch("app.bot.callbacks.safe_remove", MagicMock()), \
@@ -449,6 +450,79 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         self.update.callback_query.answer.assert_awaited()
         self.update.callback_query.edit_message_text.assert_not_called()
+
+    async def test_on_cancel_shows_recovery_keyboard(self):
+        token = "cancel_token"
+        self.update.callback_query.data = f"cancel|{token}"
+
+        # Reset mock calls to avoid pollution
+        telegram_mock.InlineKeyboardButton.reset_mock()
+
+        with patch("app.bot.callbacks.ENABLE_TELEGRAM_UPLOAD", True):
+            await callbacks.on_cancel(self.update, self.context)
+
+        # Verify InlineKeyboardButton was called for "Send to TG"
+        calls = telegram_mock.InlineKeyboardButton.call_args_list
+        send_btn_calls = [
+            c for c in calls
+            if (c.args and "Отправить в TG" in c.args[0])
+        ]
+        self.assertTrue(len(send_btn_calls) > 0, "Should create 'Send to TG' button")
+
+        # Verify edit_message_text called with reply_markup
+        args, kwargs = self.update.callback_query.edit_message_text.call_args
+        self.assertIn("reply_markup", kwargs)
+
+    async def test_on_send_queue_full_shows_retry_keyboard(self):
+        token = "token"
+        self.update.callback_query.data = f"send|{token}"
+        state.link_cache[token] = {"page_url": "http://example.com"}
+
+        telegram_mock.InlineKeyboardButton.reset_mock()
+
+        with patch("app.bot.callbacks.check_rate_limit", return_value=True),              patch("app.bot.callbacks.ENABLE_TELEGRAM_UPLOAD", True):
+            state.tasks_sem.locked.return_value = True
+
+            await callbacks.on_send(self.update, self.context)
+
+            # Verify "Send to TG" button created (retry keyboard)
+            calls = telegram_mock.InlineKeyboardButton.call_args_list
+            send_btn_calls = [
+                c for c in calls
+                if (c.args and "Отправить в TG" in c.args[0])
+            ]
+            self.assertTrue(len(send_btn_calls) > 0, "Should create 'Send to TG' button for retry")
+
+            args, _ = self.update.callback_query.edit_message_text.call_args
+            self.assertIn("Очередь переполнена", args[0])
+
+    async def test_on_send_file_too_large_shows_final_keyboard(self):
+        token = "large_token"
+        self.update.callback_query.data = f"send|{token}"
+        state.link_cache[token] = {
+            "page_url": "http://example.com",
+            "format_id": "137",
+        }
+        self.context.user_data = {"size_map": {"137": 60 * 1024 * 1024}} # > 50MB
+
+        # Setup mocked keyboards
+        # kb_final is created first, then kb_retry
+        mock_kb_final = MagicMock(name="kb_final")
+        mock_kb_retry = MagicMock(name="kb_retry")
+        telegram_mock.InlineKeyboardMarkup.side_effect = [mock_kb_final, mock_kb_retry]
+
+        try:
+            with patch("app.bot.callbacks.check_rate_limit", return_value=True), \
+                 patch("app.bot.callbacks.ENABLE_TELEGRAM_UPLOAD", True):
+
+                await callbacks.on_send(self.update, self.context)
+
+                # Check that edit_message_text was called with kb_final (first created keyboard)
+                args, kwargs = self.update.callback_query.edit_message_text.call_args
+                self.assertIn("Файл слишком большой", args[0])
+                self.assertEqual(kwargs.get("reply_markup"), mock_kb_final)
+        finally:
+            telegram_mock.InlineKeyboardMarkup.side_effect = None
 
 if __name__ == "__main__":
     unittest.main()

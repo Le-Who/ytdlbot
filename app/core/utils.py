@@ -1,10 +1,11 @@
 import os
+import time
 import asyncio
 import re
 from collections import deque
 from urllib.parse import urlsplit
 from app.constants import SUPPORTED_PLATFORMS, SUPPORTED_PLATFORMS_SUFFIXES
-from app.core.state import active_processes_lock, active_processes
+from app.core.state import active_processes_lock, active_processes, user_rates
 
 # Regex паттерны
 URL_RE = re.compile(r"https?://\S+", re.I)
@@ -20,6 +21,7 @@ PROGRESS_BARS = [
     BLOCK_FULL * i + BLOCK_EMPTY * (BAR_LENGTH - i) for i in range(BAR_LENGTH + 1)
 ]
 
+
 def render_progressbar(percent: float, length: int = BAR_LENGTH) -> str:
     """Renders a text-based progress bar."""
     percent = max(0.0, min(100.0, percent))
@@ -31,6 +33,7 @@ def render_progressbar(percent: float, length: int = BAR_LENGTH) -> str:
         bar = BLOCK_FULL * filled_length + BLOCK_EMPTY * (length - filled_length)
 
     return f"{bar} {percent:.1f}%"
+
 
 def is_supported_url(text: str) -> bool:
     try:
@@ -57,9 +60,24 @@ def extract_supported_url(text: str) -> str | None:
         return url
     return None
 
+
 def check_rate_limit(user_id: int, limit: int = 5) -> bool:
-    """Проверяет лимит запросов пользователя в минуту (Отключено пользователем)"""
+    """Проверяет лимит запросов пользователя в минуту"""
+    now = time.time()
+
+    # Get current timestamps for user, default to empty list
+    timestamps = user_rates.get(user_id, [])
+
+    # Filter out timestamps older than 60 seconds
+    valid_timestamps = [t for t in timestamps if now - t < 60]
+
+    if len(valid_timestamps) >= limit:
+        return False
+
+    valid_timestamps.append(now)
+    user_rates[user_id] = valid_timestamps
     return True
+
 
 def safe_remove(path: str) -> None:
     """Удаляет файл, игнорируя ошибки если файл не найден"""
@@ -69,10 +87,12 @@ def safe_remove(path: str) -> None:
         except OSError:
             pass
 
+
 def rename_if_exists(src: str, dst: str) -> None:
     """Переименовывает файл если он существует"""
     if src and os.path.exists(src):
         os.rename(src, dst)
+
 
 async def run_subprocess(cmd: list, collect_stderr: bool = True):
     """Стандартизированный запуск subprocess с отслеживанием и очисткой"""
@@ -91,6 +111,7 @@ async def run_subprocess(cmd: list, collect_stderr: bool = True):
     stderr_task = None
 
     if collect_stderr:
+
         async def consume_stderr():
             while True:
                 line = await proc.stderr.readline()

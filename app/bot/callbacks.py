@@ -9,15 +9,14 @@ from telegram.ext import ContextTypes
 from telegram.error import NetworkError
 
 from app.core import state
-from app.core.process import run_subprocess
 from app.core.config import BASE_URL, LINK_TTL_MINUTES, ENABLE_TELEGRAM_UPLOAD, TEMP_DIR
 from app.core.utils import (
     check_rate_limit,
     safe_remove,
+    run_subprocess,
     render_progressbar,
     PROGRESS_RE,
     PROGRESS_DETAILS_RE,
-    size_allowed,
 )
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from app.bot.keyboards import build_format_keyboard
@@ -89,7 +88,6 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "height": data["format_map"].get(format_id),
         "title": data["title"],
     }
-    logger.info("token_created", extra={"token": token, "user_id": q.from_user.id, "chat_id": q.message.chat_id, "op": "token_create"})
 
     dl_link = f"{BASE_URL}/dl/{token}"
 
@@ -148,7 +146,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer("🚀 Загрузка началась")
     user_id = q.from_user.id
 
-    if not check_rate_limit(user_id, chat_id=q.message.chat_id, limit=3):
+    if not check_rate_limit(user_id, limit=3):
         await q.edit_message_text("⚠️ Слишком часто скачиваете. Подождите.")
         return
 
@@ -182,10 +180,12 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = context.user_data
     fmt_size = data.get("size_map", {}).get(payload["format_id"])
-    allowed, size_error = size_allowed(fmt_size)
-    if not allowed:
+    if fmt_size and fmt_size > 50 * 1024 * 1024:
+        mb = fmt_size / (1024 * 1024)
         await q.edit_message_text(
-            size_error + "\nПожалуйста, используйте прямую ссылку ниже.",
+            f"⚠️ Файл слишком большой (~{mb:.1f} МБ).\n"
+            "Telegram Bot API не позволяет отправлять файлы больше 50 МБ.\n"
+            "Пожалуйста, используйте прямую ссылку ниже.",
             reply_markup=kb_error,
         )
         return

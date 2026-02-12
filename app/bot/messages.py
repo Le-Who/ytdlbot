@@ -30,7 +30,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = url
 
-    if not check_rate_limit(user.id, limit=10):
+    if not check_rate_limit(user.id, chat_id=update.effective_chat.id, limit=10):
         await update.message.reply_text("⚠️ Слишком часто. Подождите минуту.")
         return
 

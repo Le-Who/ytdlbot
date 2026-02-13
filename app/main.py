@@ -1,5 +1,4 @@
 import logging
-import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -36,23 +35,33 @@ async def lifespan(app: FastAPI):
     # Регистрация хендлеров
     bot_app.add_handler(CommandHandler("start", commands.cmd_start))
     bot_app.add_handler(CommandHandler("help", commands.cmd_help))
-    
+
     # Private chat messages
     bot_app.add_handler(
-        MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, messages.on_message)
+        MessageHandler(
+            filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
+            messages.on_message,
+        )
     )
-    
+
     # Group chat messages (importing inside function to avoid circular imports at top level if needed, or lazily)
     from app.bot import group_logic
+
     bot_app.add_handler(
-        MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, group_logic.handle_group_message)
+        MessageHandler(
+            filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND,
+            group_logic.handle_group_message,
+        )
     )
 
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_back, pattern=r"^back$"))
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_pick, pattern=r"^pick\|"))
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_cancel, pattern=r"^cancel\|"))
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_send, pattern=r"^send\|"))
-    bot_app.add_handler(CallbackQueryHandler(callbacks.on_convert_to_gif, pattern=r"^gif\|"))
+    bot_app.add_handler(
+        CallbackQueryHandler(callbacks.on_convert_to_gif, pattern=r"^gif\|")
+    )
+    bot_app.add_handler(CallbackQueryHandler(callbacks.on_close, pattern=r"^close$"))
 
     # Инициализация бота
     await bot_app.initialize()

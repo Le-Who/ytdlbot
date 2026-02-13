@@ -6,7 +6,16 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- КОНФИГУРАЦИЯ ---
-TEMP_DIR = os.getenv("TMPDIR", tempfile.gettempdir())
+_base_temp = os.getenv("TMPDIR", tempfile.gettempdir())
+TEMP_DIR = os.path.join(_base_temp, "ytdlbot_safe")
+
+try:
+    os.makedirs(TEMP_DIR, mode=0o700, exist_ok=True)
+    os.chmod(TEMP_DIR, 0o700)
+except Exception as e:
+    import sys
+    print(f"Warning: Could not set secure permissions on {TEMP_DIR}: {e}", file=sys.stderr)
+
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()

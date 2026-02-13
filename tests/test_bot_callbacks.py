@@ -34,11 +34,15 @@ from app.bot import callbacks
 from app.core import state
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 
+# Explicit import for patching
+import app.services.downloader
+
 class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # Reset state mocks for each test
         state.info_cache = {}
         state.link_cache = {}
+        state.file_cache = {}
         state.cancel_cache = {}
         state.ytdlp = MagicMock()
         state.tasks_sem = MagicMock()
@@ -172,8 +176,9 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, []
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
+             patch("os.path.exists", return_value=True), \
              patch("os.path.getsize", return_value=1000), \
              patch("builtins.open", MagicMock()), \
              patch("app.bot.callbacks.safe_remove", MagicMock()):
@@ -279,8 +284,9 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, []
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
+             patch("os.path.exists", return_value=True), \
              patch("os.path.getsize", return_value=1000), \
              patch("builtins.open", MagicMock()), \
              patch("app.bot.callbacks.safe_remove", MagicMock()):
@@ -305,8 +311,9 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, []
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
+             patch("os.path.exists", return_value=True), \
              patch("os.path.getsize", return_value=1000), \
              patch("builtins.open", MagicMock()), \
              patch("app.bot.callbacks.safe_remove", MagicMock()):
@@ -331,7 +338,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, [b"ERROR: Requested format is not available"]
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
              patch("app.bot.callbacks.safe_remove", MagicMock()):
 
@@ -357,8 +364,9 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             yield mock_proc, []
 
         # Mock file size > 50MB (post download)
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
+             patch("os.path.exists", return_value=True), \
              patch("os.path.getsize", return_value=60 * 1024 * 1024), \
              patch("app.bot.callbacks.safe_remove", MagicMock()):
 
@@ -399,10 +407,11 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         self.update.callback_query.edit_message_text.side_effect = edit_side_effect
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
              patch("app.bot.callbacks.logger") as mock_logger, \
              patch("app.bot.callbacks.safe_remove", MagicMock()), \
+             patch("os.path.exists", return_value=True), \
              patch("os.path.getsize", return_value=1000), \
              patch("builtins.open", MagicMock()):
 
@@ -414,7 +423,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
             # Verify that logger WAS called (expected behavior)
             mock_logger.warning.assert_called_with(
-                "Failed to parse progress or update message: Telegram Error"
+                "UI Update failed: Telegram Error"
             )
     async def test_on_send_malformed_data(self):
         self.update.callback_query.data = "invalid_data"

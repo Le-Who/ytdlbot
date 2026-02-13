@@ -93,52 +93,61 @@ class MediaSender:
                 if token in state.cancel_cache:
                     del state.cancel_cache[token]
 
-                while True:
-                    if state.cancel_cache.get(token):
-                        logger.info(f"[DL-TG] Cancelled by user: {token}")
-                        return None, "❌ Загрузка отменена пользователем."
+                try:
+                    # Performance optimization: use asyncio.timeout with reschedule
+                    # instead of creating a new Task for every line read with wait_for.
+                    async with asyncio.timeout(300.0) as cm:
+                        while True:
+                            if state.cancel_cache.get(token):
+                                logger.info(f"[DL-TG] Cancelled by user: {token}")
+                                return None, "❌ Загрузка отменена пользователем."
 
-                    if time.time() - download_start > max_download_time:
-                        logger.warning("[DL-TG] Download timeout exceeded")
-                        return None, "⚠️ Время ожидания загрузки истекло."
+                            if time.time() - download_start > max_download_time:
+                                logger.warning("[DL-TG] Download timeout exceeded")
+                                return None, "⚠️ Время ожидания загрузки истекло."
 
-                    try:
-                        line = await asyncio.wait_for(
-                            proc.stdout.readline(), timeout=300.0
-                        )
-                    except asyncio.TimeoutError:
-                        if proc.returncode is not None:
-                            break
-                        continue
+                            line = await proc.stdout.readline()
 
-                    if not line:
-                        break
-                    line_str = line.decode("utf-8", errors="ignore").strip()
+                            # Reset inactivity timer
+                            cm.reschedule(asyncio.get_running_loop().time() + 300.0)
 
-                    if progress_callback and "[download]" in line_str and "%" in line_str:
-                        now = time.time()
-                        if now - last_update > 3.0:
-                            match = PROGRESS_RE.search(line_str)
-                            if match:
-                                try:
-                                    percent = float(match.group(1))
-                                    details = ""
+                            if not line:
+                                break
 
-                                    det_match = PROGRESS_DETAILS_RE.search(line_str)
-                                    if det_match:
-                                        speed = det_match.group(1)
-                                        eta = det_match.group(2)
-                                        details = f"\n🚀 {speed} • ⏱ ETA {eta}"
+                            line_str = line.decode("utf-8", errors="ignore").strip()
 
-                                    await progress_callback(
-                                        f"⏳ Скачиваю: {render_progressbar(percent)}{details}\n❌ Нажмите отмена, если передумали.",
-                                        kb_cancel,
-                                    )
-                                    last_update = now
-                                except Exception as e:
-                                    logger.warning(
-                                        f"Failed to parse progress or update message: {e}"
-                                    )
+                            if progress_callback and "[download]" in line_str and "%" in line_str:
+                                now = time.time()
+                                if now - last_update > 3.0:
+                                    match = PROGRESS_RE.search(line_str)
+                                    if match:
+                                        try:
+                                            percent = float(match.group(1))
+                                            details = ""
+
+                                            det_match = PROGRESS_DETAILS_RE.search(line_str)
+                                            if det_match:
+                                                speed = det_match.group(1)
+                                                eta = det_match.group(2)
+                                                details = f"\n🚀 {speed} • ⏱ ETA {eta}"
+
+                                            await progress_callback(
+                                                f"⏳ Скачиваю: {render_progressbar(percent)}{details}\n❌ Нажмите отмена, если передумали.",
+                                                kb_cancel,
+                                            )
+                                            last_update = now
+                                        except Exception as e:
+                                            logger.warning(
+                                                f"Failed to parse progress or update message: {e}"
+                                            )
+                except asyncio.TimeoutError:
+                    if proc.returncode is None:
+                        logger.warning("[DL-TG] Inactivity timeout (300s) exceeded")
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        return None, "⚠️ Время ожидания загрузки истекло (нет данных)."
 
                 await proc.wait()
                 if proc.returncode != 0:

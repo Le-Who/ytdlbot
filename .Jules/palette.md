@@ -32,3 +32,7 @@
 ## 2026-02-07 - Cleaner Labels
 **Learning:** Technical suffixes like "(best)" or "(128k)" in format labels add cognitive load. Users generally assume "Audio" implies the best available quality unless specified otherwise.
 **Action:** Remove technical jargon from format labels where possible; use simple, descriptive terms like "Audio" or "HD".
+
+## 2026-02-08 - Dismissive Actions in Chat UIs
+**Learning:** Users often trigger bot commands by mistake or change their mind after seeing options. Without a clear "Close" or "Dismiss" action, the chat history becomes cluttered with stale interactive elements.
+**Action:** Always include a "Close" (❌) button in persistent bot menus to allow users to clean up their interface.

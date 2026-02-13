@@ -1,5 +1,6 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+
 def build_format_keyboard(formats: list, special_format) -> InlineKeyboardMarkup:
     """Helper to build format selection buttons in 2 columns."""
     buttons = []
@@ -21,6 +22,11 @@ def build_format_keyboard(formats: list, special_format) -> InlineKeyboardMarkup
         buttons.append(row)
 
     buttons.append(
-        [InlineKeyboardButton(special_format.label, callback_data=f"pick|{special_format.format_id}")]
+        [
+            InlineKeyboardButton(
+                special_format.label, callback_data=f"pick|{special_format.format_id}"
+            )
+        ]
     )
+    buttons.append([InlineKeyboardButton("❌ Закрыть", callback_data="close")])
     return InlineKeyboardMarkup(buttons)

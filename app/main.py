@@ -16,6 +16,7 @@ from app.core import config
 from app.core import state
 from app.api.routes import router as api_router
 from app.bot import commands, messages, callbacks
+from app.services.cleanup import cleanup_loop
 
 # Настройка логирования
 logging.basicConfig(
@@ -77,10 +78,20 @@ async def lifespan(app: FastAPI):
             allowed_updates=["message", "callback_query"]
         )
 
+    # Запускаем задачу очистки временных файлов
+    cleanup_task = asyncio.create_task(cleanup_loop())
+
     yield
 
     # --- SHUTDOWN ---
     logger.info("Shutting down...")
+
+    # Останавливаем задачу очистки
+    cleanup_task.cancel()
+    try:
+        await cleanup_task
+    except asyncio.CancelledError:
+        pass
     if config.WEBHOOK_URL:
         await bot_app.bot.delete_webhook()
     else:

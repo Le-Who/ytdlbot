@@ -188,6 +188,8 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
             # Verify
             self.context.bot.send_video.assert_awaited()
+            args, kwargs = self.context.bot.send_video.call_args
+            self.assertEqual(kwargs["caption"], "📹 Video")
             self.update.callback_query.delete_message.assert_awaited()
 
     async def test_on_send_file_too_large_pre_check(self):
@@ -294,6 +296,8 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             await callbacks.on_send(self.update, self.context)
 
             self.context.bot.send_audio.assert_awaited()
+            args, kwargs = self.context.bot.send_audio.call_args
+            self.assertEqual(kwargs["caption"], "🎵 Audio")
 
     async def test_on_send_success_gif(self):
         token = "gif_token"
@@ -321,6 +325,8 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             await callbacks.on_send(self.update, self.context)
 
             self.context.bot.send_animation.assert_awaited()
+            args, kwargs = self.context.bot.send_animation.call_args
+            self.assertEqual(kwargs["caption"], "🎬 GIF")
 
     async def test_on_send_download_failure(self):
         token = "fail_token"
@@ -458,6 +464,36 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         self.update.callback_query.answer.assert_awaited()
         self.update.callback_query.edit_message_text.assert_not_called()
+
+    async def test_on_send_missing_title(self):
+        token = "missing_title_token"
+        self.update.callback_query.data = f"send|{token}"
+        state.link_cache[token] = {
+            "page_url": "http://example.com",
+            "format_id": AUDIO_FORMAT_ID,
+            # Missing "title"
+        }
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        mock_proc.stdout.readline = AsyncMock(side_effect=[b"", b""])
+        mock_proc.wait = AsyncMock()
+        async def mock_subprocess_gen(*args, **kwargs):
+            yield mock_proc, []
+
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
+             patch("app.bot.callbacks.check_rate_limit", return_value=True), \
+             patch("os.path.exists", return_value=True), \
+             patch("os.path.getsize", return_value=1000), \
+             patch("builtins.open", MagicMock()), \
+             patch("app.bot.callbacks.safe_remove", MagicMock()):
+
+            await callbacks.on_send(self.update, self.context)
+
+            self.context.bot.send_audio.assert_awaited()
+            args, kwargs = self.context.bot.send_audio.call_args
+            # Should fall back to "Audio"
+            self.assertEqual(kwargs["caption"], "🎵 Audio")
 
 if __name__ == "__main__":
     unittest.main()

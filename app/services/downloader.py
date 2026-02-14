@@ -114,6 +114,13 @@ class MediaSender:
                             if not line:
                                 break
 
+                            # Optimization: Skip decoding lines that are not progress updates
+                            if not progress_callback:
+                                continue
+
+                            if b"[download]" not in line or b"%" not in line:
+                                continue
+
                             line_str = line.decode("utf-8", errors="ignore").strip()
 
                             if progress_callback and "[download]" in line_str and "%" in line_str:

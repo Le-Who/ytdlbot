@@ -30,6 +30,7 @@ class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
         state.info_cache = {}
         state.link_cache = {}
         state.cancel_cache = {}
+        state.file_cache = {}
         state.tasks_sem = MagicMock()
         state.tasks_sem.locked.return_value = False
         state.tasks_sem.__aenter__.return_value = None
@@ -67,11 +68,13 @@ class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, []
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        # Patch where it is used: app.services.downloader
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
-             patch("os.path.getsize", return_value=1000), \
+             patch("app.services.downloader.os.path.getsize", return_value=1000), \
+             patch("app.services.downloader.os.path.exists", return_value=True), \
              patch("builtins.open", MagicMock()), \
-             patch("app.bot.callbacks.safe_remove", MagicMock()):
+             patch("app.services.downloader.safe_remove", MagicMock()):
 
             await callbacks.on_send(self.update, self.context)
 

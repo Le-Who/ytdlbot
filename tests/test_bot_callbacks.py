@@ -255,6 +255,27 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         args, _ = self.update.callback_query.edit_message_text.call_args
         self.assertIn("Загрузка отменена", args[0])
 
+    async def test_on_cancel_with_recovery(self):
+        token = "recovery_token"
+        self.update.callback_query.data = f"cancel|{token}"
+        # Populate link cache to trigger recovery options
+        state.link_cache[token] = {
+            "page_url": "http://example.com",
+            "format_id": "137",
+        }
+
+        await callbacks.on_cancel(self.update, self.context)
+
+        self.assertTrue(state.cancel_cache.get(token))
+        args, kwargs = self.update.callback_query.edit_message_text.call_args
+        # Check text
+        self.assertIn("попробовать снова", args[0])
+        # Check reply_markup
+        reply_markup = kwargs.get("reply_markup")
+        self.assertIsNotNone(reply_markup)
+
+        self.assertIn("Загрузка отменена", args[0])
+
     async def test_on_send_queue_full(self):
         token = "token"
         self.update.callback_query.data = f"send|{token}"

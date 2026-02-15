@@ -4,7 +4,7 @@ import re
 from collections import deque
 from urllib.parse import urlsplit
 from app.constants import SUPPORTED_PLATFORMS, SUPPORTED_PLATFORMS_SUFFIXES
-from app.core.state import active_processes_lock, active_processes
+from app.core.state import active_processes_lock, active_processes, user_rates
 
 # Regex паттерны
 URL_RE = re.compile(r"https?://\S+", re.I)
@@ -58,7 +58,11 @@ def extract_supported_url(text: str) -> str | None:
     return None
 
 def check_rate_limit(user_id: int, limit: int = 5) -> bool:
-    """Проверяет лимит запросов пользователя в минуту (Отключено пользователем)"""
+    """Проверяет лимит запросов пользователя в минуту"""
+    current = user_rates.get(user_id, 0)
+    if current >= limit:
+        return False
+    user_rates[user_id] = current + 1
     return True
 
 def safe_remove(path: str) -> None:

@@ -114,32 +114,34 @@ class MediaSender:
                             if not line:
                                 break
 
-                            line_str = line.decode("utf-8", errors="ignore").strip()
+                            # Optimization: Check bytes prefix first to avoid unnecessary decoding
+                            if progress_callback and line.startswith(b"[download]"):
+                                line_str = line.decode("utf-8", errors="ignore").strip()
 
-                            if progress_callback and "[download]" in line_str and "%" in line_str:
-                                now = time.time()
-                                if now - last_update > 3.0:
-                                    match = PROGRESS_RE.search(line_str)
-                                    if match:
-                                        try:
-                                            percent = float(match.group(1))
-                                            details = ""
+                                if "%" in line_str:
+                                    now = time.time()
+                                    if now - last_update > 3.0:
+                                        match = PROGRESS_RE.search(line_str)
+                                        if match:
+                                            try:
+                                                percent = float(match.group(1))
+                                                details = ""
 
-                                            det_match = PROGRESS_DETAILS_RE.search(line_str)
-                                            if det_match:
-                                                speed = det_match.group(1)
-                                                eta = det_match.group(2)
-                                                details = f"\n🚀 {speed} • ⏱ ETA {eta}"
+                                                det_match = PROGRESS_DETAILS_RE.search(line_str)
+                                                if det_match:
+                                                    speed = det_match.group(1)
+                                                    eta = det_match.group(2)
+                                                    details = f"\n🚀 {speed} • ⏱ ETA {eta}"
 
-                                            await progress_callback(
-                                                f"⏳ Скачиваю: {render_progressbar(percent)}{details}\n❌ Нажмите отмена, если передумали.",
-                                                kb_cancel,
-                                            )
-                                            last_update = now
-                                        except Exception as e:
-                                            logger.warning(
-                                                f"Failed to parse progress or update message: {e}"
-                                            )
+                                                await progress_callback(
+                                                    f"⏳ Скачиваю: {render_progressbar(percent)}{details}\n❌ Нажмите отмена, если передумали.",
+                                                    kb_cancel,
+                                                )
+                                                last_update = now
+                                            except Exception as e:
+                                                logger.warning(
+                                                    f"Failed to parse progress or update message: {e}"
+                                                )
                 except asyncio.TimeoutError:
                     if proc.returncode is None:
                         logger.warning("[DL-TG] Inactivity timeout (300s) exceeded")

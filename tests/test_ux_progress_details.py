@@ -67,7 +67,7 @@ class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, []
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
              patch("os.path.getsize", return_value=1000), \
              patch("builtins.open", MagicMock()), \

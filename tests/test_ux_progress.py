@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 os.environ['BOT_TOKEN'] = 'test_token'
 os.environ['BASE_URL'] = 'http://test.com'
 
-from app.main import render_progressbar
+from app.core.utils import render_progressbar
 
 class TestUXProgress(unittest.TestCase):
     def test_zero_percent(self):

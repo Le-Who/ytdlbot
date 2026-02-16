@@ -67,13 +67,15 @@ class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, []
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
              patch("os.path.getsize", return_value=1000), \
              patch("builtins.open", MagicMock()), \
              patch("app.bot.callbacks.safe_remove", MagicMock()):
 
-            await callbacks.on_send(self.update, self.context)
+            # Manually inject time mock to verify logic
+            with patch("time.time", side_effect=[100.0, 110.0, 120.0, 130.0]):
+                 await callbacks.on_send(self.update, self.context)
 
             # Check all calls to edit_message_text
             # We expect one of them to contain the speed and ETA

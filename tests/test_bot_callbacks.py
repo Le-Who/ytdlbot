@@ -190,6 +190,10 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             self.context.bot.send_video.assert_awaited()
             self.update.callback_query.delete_message.assert_awaited()
 
+            # Check caption
+            _, kwargs = self.context.bot.send_video.call_args
+            self.assertIn("📹 Video", kwargs["caption"])
+
     async def test_on_send_file_too_large_pre_check(self):
         # Setup
         token = "large_file_token"
@@ -295,6 +299,10 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
             self.context.bot.send_audio.assert_awaited()
 
+            # Check caption
+            _, kwargs = self.context.bot.send_audio.call_args
+            self.assertIn("🎵 Audio", kwargs["caption"])
+
     async def test_on_send_success_gif(self):
         token = "gif_token"
         self.update.callback_query.data = f"send|{token}"
@@ -321,6 +329,10 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             await callbacks.on_send(self.update, self.context)
 
             self.context.bot.send_animation.assert_awaited()
+
+            # Check caption
+            _, kwargs = self.context.bot.send_animation.call_args
+            self.assertIn("🎬 GIF", kwargs["caption"])
 
     async def test_on_send_download_failure(self):
         token = "fail_token"

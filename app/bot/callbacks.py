@@ -227,13 +227,17 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_gif = payload["format_id"] == GIF_FORMAT_ID
         is_audio = payload["format_id"] == AUDIO_FORMAT_ID
 
+        title = payload.get("title", "")
+        icon = "🎵" if is_audio else "🎬" if is_gif else "📹"
+        caption = f"{icon} {title}".strip()
+
         success = await MediaSender.send_file(
             context.bot,
             q.message.chat_id,
             file_path,
             is_audio=is_audio,
             is_gif=is_gif,
-            caption="📹" if not is_audio else "🎵",
+            caption=caption[:1000],
         )
 
         if success:

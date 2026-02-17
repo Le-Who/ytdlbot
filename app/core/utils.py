@@ -1,10 +1,15 @@
 import os
+import time
 import asyncio
 import re
+import logging
 from collections import deque
 from urllib.parse import urlsplit
 from app.constants import SUPPORTED_PLATFORMS, SUPPORTED_PLATFORMS_SUFFIXES
+from app.core import state
 from app.core.state import active_processes_lock, active_processes
+
+logger = logging.getLogger(__name__)
 
 # Regex паттерны
 URL_RE = re.compile(r"https?://\S+", re.I)
@@ -58,8 +63,25 @@ def extract_supported_url(text: str) -> str | None:
     return None
 
 def check_rate_limit(user_id: int, limit: int = 5) -> bool:
-    """Проверяет лимит запросов пользователя в минуту (Отключено пользователем)"""
-    return True
+    """Проверяет лимит запросов пользователя в минуту."""
+    try:
+        current_minute = int(time.time() / 60)
+
+        # Получаем данные пользователя: (last_minute, count)
+        user_data = state.user_rates.get(user_id)
+
+        if user_data and user_data[0] == current_minute:
+            count = user_data[1]
+            if count >= limit:
+                return False
+            state.user_rates[user_id] = (current_minute, count + 1)
+        else:
+            state.user_rates[user_id] = (current_minute, 1)
+
+        return True
+    except Exception as e:
+        logger.error(f"Rate limit check failed: {e}")
+        return True
 
 def safe_remove(path: str) -> None:
     """Удаляет файл, игнорируя ошибки если файл не найден"""

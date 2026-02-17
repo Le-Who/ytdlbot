@@ -19,16 +19,18 @@ sys.modules["cachetools"] = MagicMock()
 sys.modules["dotenv"] = MagicMock()
 
 # Ensure app can be imported
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 # Import app modules after mocking
 from app.bot import callbacks
 from app.core import state
 
+
 class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         state.info_cache = {}
         state.link_cache = {}
+        state.file_cache = {}
         state.cancel_cache = {}
         state.tasks_sem = MagicMock()
         state.tasks_sem.locked.return_value = False
@@ -52,7 +54,7 @@ class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
         state.link_cache[token] = {
             "page_url": "http://example.com",
             "format_id": "137",
-            "title": "Video"
+            "title": "Video",
         }
 
         mock_proc = MagicMock()
@@ -67,11 +69,15 @@ class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, []
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
-             patch("app.bot.callbacks.check_rate_limit", return_value=True), \
-             patch("os.path.getsize", return_value=1000), \
-             patch("builtins.open", MagicMock()), \
-             patch("app.bot.callbacks.safe_remove", MagicMock()):
+        with patch(
+            "app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen
+        ), patch("app.bot.callbacks.check_rate_limit", return_value=True), patch(
+            "os.path.getsize", return_value=1000
+        ), patch(
+            "builtins.open", MagicMock()
+        ), patch(
+            "app.bot.callbacks.safe_remove", MagicMock()
+        ):
 
             await callbacks.on_send(self.update, self.context)
 
@@ -88,6 +94,7 @@ class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
                     break
 
             self.assertTrue(found, "Speed and ETA not found in progress update")
+
 
 if __name__ == "__main__":
     unittest.main()

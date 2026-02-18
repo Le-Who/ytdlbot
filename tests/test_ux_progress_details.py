@@ -1,93 +1,142 @@
 import unittest
-import sys
-import os
 import asyncio
-from unittest.mock import MagicMock, AsyncMock, patch
+import sys
+import time
+from unittest.mock import MagicMock, AsyncMock, patch, call
+import os
+import importlib
 
-# Mock environment variables
-os.environ["BOT_TOKEN"] = "test_token"
-os.environ["WEBHOOK_URL"] = "https://example.com"
-os.environ["TELEGRAM_SECRET_TOKEN"] = "secret"
-
-# Mock external dependencies
-sys.modules["telegram"] = MagicMock()
-sys.modules["telegram.ext"] = MagicMock()
-sys.modules["telegram.error"] = MagicMock()
-sys.modules["fastapi"] = MagicMock()
-sys.modules["yt_dlp"] = MagicMock()
-sys.modules["cachetools"] = MagicMock()
-sys.modules["dotenv"] = MagicMock()
-
-# Ensure app can be imported
+# Add repo root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Import app modules after mocking
-from app.bot import callbacks
-from app.core import state
-
 class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
-        state.info_cache = {}
-        state.link_cache = {}
-        state.cancel_cache = {}
-        state.tasks_sem = MagicMock()
-        state.tasks_sem.locked.return_value = False
-        state.tasks_sem.__aenter__.return_value = None
-        state.tasks_sem.__aexit__.return_value = None
+    def setUp(self):
+        # Mock telegram module
+        self.mock_telegram = MagicMock()
+        self.mock_telegram.InlineKeyboardMarkup = MagicMock()
+        self.mock_telegram.InlineKeyboardButton = MagicMock()
+        self.mock_telegram.Bot = MagicMock()
+        self.mock_telegram.error = MagicMock()
 
-        self.context = MagicMock()
-        self.context.user_data = {}
-        self.context.bot = AsyncMock()
+        # Mock dotenv
+        self.mock_dotenv = MagicMock()
+        self.mock_dotenv.load_dotenv = MagicMock()
 
-        self.update = MagicMock()
-        self.update.callback_query = MagicMock()
-        self.update.callback_query.answer = AsyncMock()
-        self.update.callback_query.edit_message_text = AsyncMock()
-        self.update.callback_query.delete_message = AsyncMock()
-        self.update.callback_query.from_user.id = 12345
+        # Mock app.core.state
+        self.mock_state = MagicMock()
+        self.mock_state.file_cache = {}
+        self.mock_state.cancel_cache = {}
+        self.mock_state.ytdlp = MagicMock()
+        self.mock_state.ytdlp.build_command.return_value = ["mock_cmd"]
 
-    async def test_progress_with_speed_and_eta(self):
-        token = "test_token"
-        self.update.callback_query.data = f"send|{token}"
-        state.link_cache[token] = {
-            "page_url": "http://example.com",
-            "format_id": "137",
-            "title": "Video"
-        }
+        # Patch sys.modules
+        self.modules_patcher = patch.dict(sys.modules, {
+            "telegram": self.mock_telegram,
+            "telegram.error": self.mock_telegram.error,
+            "app.core.state": self.mock_state,
+            "dotenv": self.mock_dotenv,
+        })
+        self.modules_patcher.start()
 
-        mock_proc = MagicMock()
+        # Mock environment variables for config BEFORE importing anything
+        # We need to use patch.dict on os.environ directly because config module reads it at import time
+        self.env_patcher = patch.dict(os.environ, {
+            "BOT_TOKEN": "test_token",
+            "TEMP_DIR": "/tmp",
+            "BASE_URL": "http://test.com"
+        })
+        self.env_patcher.start()
+
+        # Import module under test
+        # We need to reload app.core.config too because it might have been imported differently
+        import app.core.config
+        importlib.reload(app.core.config)
+
+        import app.services.downloader
+        importlib.reload(app.services.downloader)
+        self.downloader = app.services.downloader
+
+    def tearDown(self):
+        self.modules_patcher.stop()
+        self.env_patcher.stop()
+
+    async def test_progress_format(self):
+        # Mock run_subprocess to yield a progress line
+        mock_proc = AsyncMock()
+        # It needs to return bytes for stdout.readline
+        mock_proc.stdout.readline.side_effect = [
+            b"[download]  53.2% of 10.00MiB at  2.50MiB/s ETA 00:45\n",
+            b""
+        ]
+        mock_proc.wait.return_value = 0
         mock_proc.returncode = 0
 
-        # Line containing speed and ETA
-        progress_line = b"[download]  50.0% of 10.00MiB at  2.50MiB/s ETA 00:10"
-
-        mock_proc.stdout.readline = AsyncMock(side_effect=[progress_line, b""])
-        mock_proc.wait = AsyncMock()
-
-        async def mock_subprocess_gen(*args, **kwargs):
+        # Mock run_subprocess generator
+        # It yields (proc, stderr_deque)
+        async def mock_run_gen(*args, **kwargs):
             yield mock_proc, []
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
-             patch("app.bot.callbacks.check_rate_limit", return_value=True), \
-             patch("os.path.getsize", return_value=1000), \
-             patch("builtins.open", MagicMock()), \
-             patch("app.bot.callbacks.safe_remove", MagicMock()):
+        mock_callback = AsyncMock()
 
-            await callbacks.on_send(self.update, self.context)
+        # Patch run_subprocess in app.services.downloader module namespace
+        # Because the module does: from app.core.utils import run_subprocess
+        # We must patch app.services.downloader.run_subprocess
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_run_gen) as mock_run:
 
-            # Check all calls to edit_message_text
-            # We expect one of them to contain the speed and ETA
-            calls = self.update.callback_query.edit_message_text.call_args_list
+            # Also mock time.time to control the toggle icon
+            with patch("time.time") as mock_time:
+                # First call: download_start = time.time()
+                # Second call: check timeout
+                # Third call: now = time.time() inside progress check
+                # Fourth call: last_update > 3.0 check (needs to be True)
 
-            found = False
-            for call in calls:
-                args, _ = call
-                text = args[0]
-                if "2.50MiB/s" in text and "00:10" in text:
-                    found = True
-                    break
+                # Let's just make time increase
+                start_time = 1000.0
+                mock_time.side_effect = [
+                    start_time,          # download_start
+                    start_time + 1,      # timeout check
+                    start_time + 4.0,    # progress check 'now' (diff > 3.0)
+                    start_time + 5.0,    # next loop timeout check
+                    start_time + 6.0,    # next loop...
+                ]
 
-            self.assertTrue(found, "Speed and ETA not found in progress update")
+                # Mock os.path.exists to avoid file check errors (it checks if file exists after download)
+                with patch("os.path.exists", return_value=True):
+                    # Mock os.path.getsize to avoid size check error
+                    with patch("os.path.getsize", return_value=1024):
+                        await self.downloader.MediaSender.download_video(
+                            "http://test.com", "format_id", 720, "token",
+                            progress_callback=mock_callback
+                        )
 
-if __name__ == "__main__":
+        # Verify callback was called
+        self.assertTrue(mock_callback.called)
+
+        # Check the message content
+        # args[0] is the text
+        # args[1] is the markup (kb_cancel)
+        text = mock_callback.call_args[0][0]
+
+        print(f"\nGenerated text: '{text}'")
+
+        # Current format (to fail initially):
+        # "⏳ Скачиваю: {bar} 53.2%\n🚀 2.50MiB/s • ⏱ ETA 00:45\n❌ Нажмите отмена..."
+
+        # Verify it DOES contain redundant text (checking current state)
+        # Or assert failure if I expect new state
+
+        # I want this test to PASS when I implement changes.
+        # So I assert the NEW state.
+
+        # Expecting: "⏳ 2.50MiB/s • 00:45 left\n████████░░░░░░░ 53.2%"
+
+        self.assertIn("2.50MiB/s", text)
+        self.assertIn("00:45", text) # removed "ETA" prefix check if present in new
+        self.assertIn("53.2%", text)
+
+        # Verify it DOES NOT contain redundant text
+        self.assertNotIn("Нажмите отмена", text)
+        self.assertNotIn("Скачиваю:", text)
+
+if __name__ == '__main__':
     unittest.main()

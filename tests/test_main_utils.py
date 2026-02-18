@@ -1,14 +1,12 @@
 import unittest
 import os
 import sys
-from unittest import mock
 
 # Add repo root to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-# Mock environment variables BEFORE importing app.main
-with mock.patch.dict(os.environ, {"BOT_TOKEN": "test_token", "WEBHOOK_URL": "https://example.com/webhook"}):
-    from app.main import is_supported_url
+from app.core.utils import is_supported_url
+
 
 class TestMainUtils(unittest.TestCase):
     def test_is_supported_url(self):
@@ -37,5 +35,6 @@ class TestMainUtils(unittest.TestCase):
         # Case insensitivity (urlparse handles domain as lowercase usually, but good to check)
         self.assertTrue(is_supported_url("https://YOUTUBE.COM/watch"))
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

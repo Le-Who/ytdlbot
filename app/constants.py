@@ -4,18 +4,20 @@
 CHUNK_SIZE = 1024 * 1024  # 1 MB (Оптимизация: меньше вызовов read/write)
 
 MAX_FORMATS_DISPLAY = 6
-DOWNLOAD_TIMEOUT_SECONDS = 5  
-UPLOAD_TIMEOUT_SECONDS = 600    # 10 минут
+UPLOAD_TIMEOUT_SECONDS = 600  # 10 минут
 
 # Поддерживаемые платформы
 # Примечание: Pinterest поддерживается yt-dlp, но могут быть проблемы с 403/404 ошибками
 # для приватного контента или при отсутствии необходимых заголовков
 SUPPORTED_PLATFORMS = {
-    "youtube.com", "youtu.be",
+    "youtube.com",
+    "youtu.be",
     "rutube.ru",
-    "vk.com", "vkvideo.ru",
+    "vk.com",
+    "vkvideo.ru",
     "tiktok.com",
-    "pinterest.com", "pin.it",
+    "pinterest.com",
+    "pin.it",
 }
 SUPPORTED_PLATFORMS_SUFFIXES = tuple(f".{p}" for p in SUPPORTED_PLATFORMS)
 

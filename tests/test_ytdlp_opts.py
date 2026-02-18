@@ -7,9 +7,10 @@ from unittest.mock import MagicMock, patch
 sys.modules["yt_dlp"] = MagicMock()
 
 # Add repo root to path so we can import app
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.services.ytdlp.service import YtDlpService
+
 
 class TestYtDlpOpts(unittest.TestCase):
     def setUp(self):
@@ -38,22 +39,23 @@ class TestYtDlpOpts(unittest.TestCase):
         """Verify modifying returned opts does not affect subsequent calls (template isolation)."""
         opts1 = self.service._base_opts(for_list_formats=False)
 
-        # Verify initial state
-        self.assertEqual(len(opts1["extractor_args"]["youtube"]["player_client"]), 4)
+        # Verify initial state — extractor_args starts empty
+        self.assertIsInstance(opts1["extractor_args"], dict)
+        self.assertEqual(len(opts1["extractor_args"]), 0)
 
         # Modify opts1
         opts1["new_key"] = "value"
-        opts1["extractor_args"]["youtube"]["player_client"].append("hacked")
+        opts1["extractor_args"]["injected"] = ["val1", "val2"]
 
         # Verify opts2 is independent
         opts2 = self.service._base_opts(for_list_formats=False)
         self.assertNotIn("new_key", opts2)
 
-        # Check if list was modified in opts2
-        # This will pass if each call creates a NEW list.
-        # It will FAIL if they share the list.
-        self.assertEqual(len(opts2["extractor_args"]["youtube"]["player_client"]), 4)
-        self.assertNotEqual(opts1["extractor_args"]["youtube"]["player_client"], opts2["extractor_args"]["youtube"]["player_client"])
+        # Check if dict was modified in opts2
+        # This will pass if each call creates a NEW dict.
+        self.assertEqual(len(opts2["extractor_args"]), 0)
+        self.assertNotIn("injected", opts2["extractor_args"])
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

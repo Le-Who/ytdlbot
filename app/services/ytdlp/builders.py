@@ -10,10 +10,18 @@ def _get_base_cmd(format_arg: str, output: str) -> List[str]:
         format_arg,
         "--output",
         output,
+        "--merge-output-format",
+        "mp4",
         "--quiet",
         "--no-warnings",
         "--no-playlist",
         "--force-ipv4",
+        "--retries",
+        "3",
+        "--fragment-retries",
+        "5",
+        "--retry-sleep",
+        "linear=1::2",
     ]
 
 

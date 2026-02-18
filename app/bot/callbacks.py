@@ -9,7 +9,12 @@ from telegram.ext import ContextTypes
 from telegram.error import NetworkError
 
 from app.core import state
-from app.core.config import BASE_URL, LINK_TTL_MINUTES, ENABLE_TELEGRAM_UPLOAD, MAX_TG_UPLOAD_MB
+from app.core.config import (
+    BASE_URL,
+    LINK_TTL_MINUTES,
+    ENABLE_TELEGRAM_UPLOAD,
+    MAX_TG_UPLOAD_MB,
+)
 from app.core.utils import (
     safe_remove,
 )
@@ -19,6 +24,7 @@ from app.core.policy import size_allowed
 from app.core.logging import set_correlation_id
 
 logger = logging.getLogger("app.bot.callbacks")
+
 
 async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -57,6 +63,7 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup,
         parse_mode="HTML",
     )
+
 
 async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -124,6 +131,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML",
     )
 
+
 async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer("🚫 Отменяю...")
@@ -138,12 +146,15 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except (ValueError, AttributeError) as e:
         logger.error(f"Invalid callback data in on_cancel: {e}")
 
+
 async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer("🚀 Загрузка началась")
     user_id = q.from_user.id
 
-    if not state.limiter.allow_user(user_id) or not state.limiter.allow_chat(q.message.chat_id):
+    if not state.limiter.allow_user(user_id) or not state.limiter.allow_chat(
+        q.message.chat_id
+    ):
         await q.edit_message_text("⚠️ Слишком много запросов. Подождите немного.")
         return
 
@@ -196,15 +207,17 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async with state.tasks_sem:
         await q.edit_message_text("⏳ Начинаю загрузку...")
-        
-        from app.services.downloader import MediaSender # Lazy import to avoid circular dep if any
+
+        from app.services.downloader import (
+            MediaSender,
+        )  # Lazy import to avoid circular dep if any
 
         file_path, error = await MediaSender.download_video(
             payload["page_url"],
             payload["format_id"],
             payload.get("height"),
             token,
-            progress_callback=update_progress_ui
+            progress_callback=update_progress_ui,
         )
 
         if error or not file_path:
@@ -215,23 +228,25 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         is_gif = payload["format_id"] == GIF_FORMAT_ID
         is_audio = payload["format_id"] == AUDIO_FORMAT_ID
-        
+
         success = await MediaSender.send_file(
             context.bot,
             q.message.chat_id,
             file_path,
             is_audio=is_audio,
             is_gif=is_gif,
-            caption="📹" if not is_audio else "🎵"
+            caption="📹" if not is_audio else "🎵",
         )
 
         if success:
             await q.delete_message()
         else:
-            await q.edit_message_text("⚠️ Ошибка при отправке файла.", reply_markup=kb_error)
-        
+            await q.edit_message_text(
+                "⚠️ Ошибка при отправке файла.", reply_markup=kb_error
+            )
+
         # Cleanup is handled by MediaSender if it created a new file, but we should ensure cache policy
-        # If it was a cached file, don't remove. 
+        # If it was a cached file, don't remove.
         # Actually MediaSender returns path. If it was from cache, existing logic holds.
         # If we want to remove after send to save space (unless reused for GIF), we might need logic.
         # For now, let TTLCache handle cleanup or periodic cleanup task (not in scope).
@@ -249,30 +264,33 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("⏳ Конвертирую в GIF...")
     except Exception as e:
         logger.warning(f"Callback answer failed (query too old?): {e}")
-    
+
     try:
         _, token = q.data.split("|", 1)
     except ValueError:
         return
 
     from app.services.downloader import MediaSender
-    
+
     # 1. Get file path from cache
     video_path = state.file_cache.get(token)
     if not video_path or not os.path.exists(video_path):
-        await q.answer("⚠️ Файл не найден или устарел.", show_alert=True)
+        try:
+            await q.message.reply_text("⚠️ Файл не найден или устарел.", quote=True)
+        except Exception as e:
+            logger.warning(f"Failed to reply about missing file: {e}")
         return
 
     # Check/Add to processing set (Debounce)
-    if hasattr(state, "processing_gifs") and token in state.processing_gifs:
-        await q.answer("⏳ У вас уже идет генерация...", show_alert=True)
+    if token in state.processing_gifs:
+        try:
+            await q.message.reply_text("⏳ У вас уже идет генерация...", quote=True)
+        except Exception as e:
+            logger.warning(f"Failed to reply about in-progress GIF: {e}")
         return
-        
-    if not hasattr(state, "processing_gifs"):
-        state.processing_gifs = set()
-        
+
     state.processing_gifs.add(token)
-    
+
     try:
         # 2. Convert (Strip Audio)
         gif_path = await MediaSender.convert_to_gif_ffmpeg(video_path)
@@ -280,11 +298,10 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
         state.processing_gifs.discard(token)
 
     if not gif_path:
-        # q.answer() was already called, so we can't show_alert=True via answer.
         try:
-             await q.message.reply_text("⚠️ Ошибка конвертации.", quote=True)
-        except:
-             pass
+            await q.message.reply_text("⚠️ Ошибка конвертации.", quote=True)
+        except Exception as e:
+            logger.warning(f"Failed to reply about conversion error: {e}")
         return
 
     # 3. Send as Reply to the VIDEO message
@@ -297,17 +314,17 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
         gif_path,
         is_gif=True,
         reply_to_message_id=target_msg_id,
-        caption="🎬 GIF"
+        caption="🎬 GIF",
     )
 
     if success:
         pass
     else:
-         try:
-             await q.message.reply_text("⚠️ Не удалось отправить GIF.", quote=True)
-         except:
-             pass
-    
+        try:
+            await q.message.reply_text("⚠️ Не удалось отправить GIF.", quote=True)
+        except Exception as e:
+            logger.warning(f"Failed to reply about send error: {e}")
+
     # Do NOT delete gif_path if it is the same as video_path (cached source)
     if gif_path != video_path:
         await asyncio.to_thread(safe_remove, gif_path)

@@ -3,8 +3,6 @@ import re
 from urllib.parse import urlsplit
 
 from app.constants import SUPPORTED_PLATFORMS, SUPPORTED_PLATFORMS_SUFFIXES
-from app.core import state
-from app.core.process import run_subprocess
 
 URL_RE = re.compile(r"https?://\S+", re.I)
 SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*]')
@@ -35,7 +33,9 @@ def is_supported_url(text: str) -> bool:
         domain = parsed.hostname
         if not domain:
             return False
-        return domain in SUPPORTED_PLATFORMS or domain.endswith(SUPPORTED_PLATFORMS_SUFFIXES)
+        return domain in SUPPORTED_PLATFORMS or domain.endswith(
+            SUPPORTED_PLATFORMS_SUFFIXES
+        )
     except Exception:
         return False
 
@@ -46,11 +46,6 @@ def extract_supported_url(text: str) -> str | None:
         return None
     url = match.group(0).rstrip(".,!:;)")
     return url if is_supported_url(url) else None
-
-
-def check_rate_limit(user_id: int, limit: int = 5) -> bool:
-    # limit arg kept for backward compatibility
-    return state.limiter.allow_user(user_id)
 
 
 def safe_remove(path: str) -> None:

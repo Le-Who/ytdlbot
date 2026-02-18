@@ -25,3 +25,8 @@
 **Vulnerability:** The `yt-dlp` command and service configuration had SSL certificate verification disabled via `--no-check-certificate` and `'nocheckcertificate': True`. This exposed the application to Man-In-The-Middle (MITM) attacks when communicating with video platforms or fetching metadata.
 **Learning:** Disabling SSL verification removes the primary defense against interception and tampering of HTTPS traffic. While often done to "fix" connection issues with legacy or misconfigured servers, it creates a significant security risk for the entire application.
 **Prevention:** Never disable SSL certificate verification in production. If connection issues occur, investigate the root cause (e.g., outdated CA certificates, local network issues) rather than bypassing security checks. Ensure the system trust store is up to date.
+
+## 2026-02-12 - [High] Missing Rate Limiting
+**Vulnerability:** The rate limiting function was stubbed out (`return True`), allowing malicious users to flood the service with requests (DoS), exhausting CPU (parsing) and network bandwidth (downloading).
+**Learning:** Stubbed security controls (often left from debugging) are silent vulnerabilities. Global concurrency limits (`Semaphore`) are insufficient to prevent a single user from starving others.
+**Prevention:** Implement per-user rate limiting (e.g., Fixed Window or Leaky Bucket) and verify it with tests. Ensure security features are not disabled in production code.

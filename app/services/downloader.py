@@ -123,18 +123,20 @@ class MediaSender:
                                     if match:
                                         try:
                                             percent = float(match.group(1))
-                                            details = ""
-
                                             det_match = PROGRESS_DETAILS_RE.search(line_str)
+
+                                            # Dynamic icon for "alive" feeling
+                                            icon = "⏳" if int(now) % 2 == 0 else "⌛"
+
                                             if det_match:
                                                 speed = det_match.group(1)
                                                 eta = det_match.group(2)
-                                                details = f"\n🚀 {speed} • ⏱ ETA {eta}"
+                                                # Clean UX: Speed • ETA \n Progress Bar
+                                                msg = f"{icon} {speed} • {eta} left\n{render_progressbar(percent)}"
+                                            else:
+                                                msg = f"{icon} Downloading...\n{render_progressbar(percent)}"
 
-                                            await progress_callback(
-                                                f"⏳ Скачиваю: {render_progressbar(percent)}{details}\n❌ Нажмите отмена, если передумали.",
-                                                kb_cancel,
-                                            )
+                                            await progress_callback(msg, kb_cancel)
                                             last_update = now
                                         except Exception as e:
                                             logger.warning(

@@ -22,6 +22,7 @@ class TestCoreUtils(unittest.IsolatedAsyncioTestCase):
         self.mock_state_module = MagicMock()
         self.mock_state_module.active_processes_lock = asyncio.Lock()
         self.mock_state_module.active_processes = set()
+        self.mock_state_module.user_rates = {}
 
         self.modules_patcher = patch.dict(sys.modules, {
             "app.core.state": self.mock_state_module,
@@ -211,6 +212,34 @@ class TestCoreUtils(unittest.IsolatedAsyncioTestCase):
         # Test rounding
         # 25% of 10 is 2.5 -> 2
         self.assertEqual(self.utils.render_progressbar(25, length=10), "█" * 2 + "░" * 8 + " 25.0%")
+
+    @patch("time.time")
+    def test_check_rate_limit(self, mock_time):
+        """Test rate limiting logic."""
+        mock_time.return_value = 1000.0
+        user_id = 12345
+        limit = 2
+
+        # 1st call: OK
+        self.assertTrue(self.utils.check_rate_limit(user_id, limit))
+
+        # 2nd call: OK
+        self.assertTrue(self.utils.check_rate_limit(user_id, limit))
+
+        # 3rd call: Fail
+        self.assertFalse(self.utils.check_rate_limit(user_id, limit))
+
+        # Check that user_rates was updated correctly
+        # Key should be "12345:16" (1000/60 = 16.66 -> 16)
+        expected_key = "12345:16"
+        self.assertEqual(self.mock_state_module.user_rates[expected_key], 2)
+
+        # Move to next minute
+        mock_time.return_value = 1060.0
+        # Should be OK again
+        self.assertTrue(self.utils.check_rate_limit(user_id, limit))
+        expected_key_next = "12345:17"
+        self.assertEqual(self.mock_state_module.user_rates[expected_key_next], 1)
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,6 +1,12 @@
 import re
 from typing import List, Dict, Any, Optional
-from app.constants import VIDEO_EXTENSIONS, GIF_FORMAT_ID, AUDIO_FORMAT_ID, HEIGHT_PATTERN
+from app.constants import (
+    VIDEO_EXTENSIONS,
+    GIF_FORMAT_ID,
+    AUDIO_FORMAT_ID,
+    HEIGHT_PATTERN,
+    Platform,
+)
 from .models import FormatItem, FormatMetadata
 
 HEIGHT_REGEX = re.compile(HEIGHT_PATTERN)
@@ -9,14 +15,6 @@ BITS_IN_BYTE = 8
 BYTES_IN_MB = 1024 * 1024
 BITRATE_COEFFICIENT = 128.0  # 1024 / 8
 
-def _is_tiktok(url: str) -> bool:
-    return "tiktok.com" in url.lower()
-
-def _is_youtube(url: str) -> bool:
-    return "youtube.com" in url.lower() or "youtu.be" in url.lower()
-
-def _is_pinterest(url: str) -> bool:
-    return "pinterest.com" in url.lower() or "pin.it" in url.lower()
 
 def _format_duration(seconds: Optional[float]) -> str:
     """Форматирует длительность в формат HH:MM:SS или MM:SS"""
@@ -27,13 +25,17 @@ def _format_duration(seconds: Optional[float]) -> str:
     h, m = divmod(m, 60)
     return f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
+
 def _extract_height(format_note: str) -> Optional[int]:
     match = HEIGHT_REGEX.search(format_note or "")
     if match:
         return int(match.group(1))
     return None
 
-def _calculate_filesize(format_dict: Dict[str, Any], duration_factor: Optional[float]) -> Optional[int]:
+
+def _calculate_filesize(
+    format_dict: Dict[str, Any], duration_factor: Optional[float]
+) -> Optional[int]:
     """Вычисляет размер файла используя pre-calculated duration factor"""
     fs = format_dict.get("filesize")
     if fs:
@@ -45,6 +47,7 @@ def _calculate_filesize(format_dict: Dict[str, Any], duration_factor: Optional[f
     if tbr and duration_factor:
         return int(float(tbr) * duration_factor)
     return None
+
 
 def _create_format_label(
     height: Optional[int],
@@ -82,6 +85,7 @@ def _create_format_label(
 
     return " ".join(parts)
 
+
 def parse_format_metadata(
     format_dict: Dict[str, Any],
     duration_factor: Optional[float],
@@ -108,7 +112,11 @@ def parse_format_metadata(
     filesize = _calculate_filesize(format_dict, duration_factor)
 
     return FormatMetadata(
-        format_id=fid, ext="mp4", height=height or 0, filesize=filesize, protocol=protocol
+        format_id=fid,
+        ext="mp4",
+        height=height or 0,
+        filesize=filesize,
+        protocol=protocol,
     )
 
 
@@ -141,9 +149,11 @@ def deduplicate_formats(
             unique_formats.append(fmt)
     return unique_formats
 
+
 def get_special_format(url: str) -> FormatItem:
-    if _is_pinterest(url):
-         return FormatItem(
+    platform = Platform.detect(url)
+    if platform == Platform.PINTEREST:
+        return FormatItem(
             format_id=GIF_FORMAT_ID,
             label="🎬 Только GIF",
             ext="gif",

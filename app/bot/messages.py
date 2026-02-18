@@ -8,6 +8,7 @@ from telegram.constants import ChatAction
 from app.core import state
 from app.core.utils import check_rate_limit, extract_supported_url
 from app.bot.keyboards import build_format_keyboard
+from app.constants import Platform
 from app.services.ytdlp.exceptions import (
     AccessDeniedError,
     VideoNotFoundError,
@@ -16,6 +17,20 @@ from app.services.ytdlp.exceptions import (
 )
 
 logger = logging.getLogger("app.bot.messages")
+
+# Platform-specific error messages
+_PLATFORM_ERROR_MESSAGES = {
+    Platform.PINTEREST: (
+        "❌ Ошибка загрузки с Pinterest. Попробуйте позже или используйте прямую ссылку на видео."
+    ),
+    Platform.RUTUBE: (
+        "❌ Ошибка загрузки с RuTube. Возможно, видео защищено DRM или доступно только авторизованным пользователям."
+    ),
+    Platform.VK: (
+        "❌ Ошибка загрузки с VK. Возможно, видео приватное или требуется авторизация."
+    ),
+}
+
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -76,18 +91,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             except LiveStreamError:
-                await msg.edit_text(
-                    "❌ Прямые трансляции (Live) не поддерживаются."
-                )
+                await msg.edit_text("❌ Прямые трансляции (Live) не поддерживаются.")
                 return
             except ExtractionError as e:
-                error_msg = str(e).lower()
-                if "pinterest" in error_msg or "pin.it" in error_msg:
-                    await msg.edit_text(
-                        "❌ Ошибка загрузки с Pinterest. Попробуйте позже или используйте прямую ссылку на видео."
-                    )
+                platform = Platform.detect(text)
+                platform_msg = _PLATFORM_ERROR_MESSAGES.get(platform)
+                if platform_msg:
+                    await msg.edit_text(platform_msg)
                 else:
-                    # e already contains the localized error message prefix
                     await msg.edit_text(f"❌ {e}")
                 return
             except Exception as e:

@@ -1,5 +1,5 @@
 from typing import List, Optional
-from app.constants import GIF_FORMAT_ID
+from app.constants import GIF_FORMAT_ID, AUDIO_SELECTOR
 
 
 def _get_base_cmd(format_arg: str, output: str) -> List[str]:
@@ -14,6 +14,8 @@ def _get_base_cmd(format_arg: str, output: str) -> List[str]:
         "--no-warnings",
         "--no-playlist",
         "--force-ipv4",
+        "--merge-output-format",
+        "mp4",
     ]
 
 
@@ -43,7 +45,6 @@ def build_command(
 ) -> List[str]:
     """Строит команду yt-dlp с поддержкой aria2c"""
 
-    # Проверяем, является ли это GIF форматом для Pinterest
     is_gif_format = format_id == GIF_FORMAT_ID
 
     # 1. Селектор видео
@@ -59,7 +60,7 @@ def build_command(
         prog_sel = "best"
     elif is_gif_format:
         # Для GIF используем bestvideo без аудио
-        cmd = _get_base_cmd("bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best", output)
+        cmd = _get_base_cmd(GIF_FORMAT_ID, output)
 
         # Для прогресс-бара
         if output != "-":
@@ -81,8 +82,8 @@ def build_command(
         _append_common_opts(cmd, page_url, cookies_path, max_filesize)
         return cmd
 
-    # 2. Селектор аудио (Original -> English -> OrigTag -> Any)
-    audio_sel = "bestaudio[format_note*=original]/bestaudio[language^=en]/bestaudio[language^=orig]/bestaudio/bestaudio[ext=m4a]/bestaudio"
+    # 2. Селектор аудио (from centralized constant)
+    audio_sel = AUDIO_SELECTOR
 
     # 3. Финальный селектор с каскадным fallback
     final_fmt = f"{video_sel}+({audio_sel})/{prog_sel}/bestvideo+bestaudio/best"

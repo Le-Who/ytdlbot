@@ -1,8 +1,4 @@
 import shutil
-import threading
-import subprocess
-import json
-import sys
 import logging
 from typing import Dict, Any, List, Optional, Tuple
 
@@ -17,8 +13,6 @@ from .parsers import (
     deduplicate_formats,
     _format_duration,
     get_special_format,
-    _is_youtube,
-    _is_tiktok,
     BITRATE_COEFFICIENT,
 )
 from .exceptions import (
@@ -26,6 +20,11 @@ from .exceptions import (
     VideoNotFoundError,
     LiveStreamError,
     ExtractionError,
+)
+from app.constants import (
+    Platform,
+    DEFAULT_FORMAT_SORT,
+    DEFAULT_DOWNLOAD_FORMAT,
 )
 
 logger = logging.getLogger("ytdlp_service")
@@ -51,7 +50,14 @@ class YtDlpService:
         "no_mtime": True,
         "concurrent_fragment_downloads": 5,
         "hls_use_mpegts": True,
+        "merge_output_format": "mp4",
     }
+
+    _YOUTUBE_PLAYER_CLIENTS = [
+        "ios",
+        "android",
+        "web",
+    ]
 
     def __init__(self):
         self.cookies_manager = CookiesManager()
@@ -61,30 +67,28 @@ class YtDlpService:
         else:
             logger.info("⚠️ Aria2c not found. Standard download mode.")
 
-        self._thread_local = threading.local()
-
     @property
     def cookies_path(self) -> Optional[str]:
         return self.cookies_manager.cookies_path
 
     def _base_opts(self, for_list_formats: bool = False) -> Dict[str, Any]:
         """Базовые опции для yt-dlp"""
-        # Start with cached immutable options
         opts = self._BASE_OPTS_TEMPLATE.copy()
 
-        # Add mutable/nested structures freshly to ensure independence
-        opts["extractor_args"] = {}
+        # Fresh mutable structures for each call
+        opts["extractor_args"] = {
+            "youtube": {
+                "player_client": ["ios", "android", "web", "default"],
+            }
+        }
 
-        # Add dynamic/instance options
         opts["socket_timeout"] = self.SOCKET_TIMEOUT
         opts["retries"] = self.MAX_RETRIES
         opts["user_agent"] = self.USER_AGENT
 
         if not for_list_formats:
-            opts["format_sort"] = ["res:1080", "vcodec:vp9", "br", "size"]
-            opts["format"] = (
-                "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
-            )
+            opts["format_sort"] = list(DEFAULT_FORMAT_SORT)
+            opts["format"] = DEFAULT_DOWNLOAD_FORMAT
 
         if self.cookies_path:
             opts["cookiefile"] = self.cookies_path
@@ -93,6 +97,10 @@ class YtDlpService:
 
     def _extract_youtube_via_subprocess(self, url: str) -> Optional[Dict[str, Any]]:
         """Извлечение через yt-dlp CLI для YouTube — надёжный обход ошибок API."""
+        import subprocess
+        import json
+        import sys
+
         base_cmd = [
             sys.executable,
             "-m",
@@ -109,11 +117,9 @@ class YtDlpService:
             base_cmd.extend(["--cookies", self.cookies_path])
 
         arg_variants = [
-            ["--extractor-args", "youtube:player_client=ios"],
-            ["--extractor-args", "youtube:player_client=android"],
-            ["--extractor-args", "youtube:player_client=web"],
-            [],
-        ]
+            ["--extractor-args", f"youtube:player_client={client}"]
+            for client in self._YOUTUBE_PLAYER_CLIENTS
+        ] + [[]]
 
         for args in arg_variants:
             cmd = base_cmd + args + [url]
@@ -136,24 +142,17 @@ class YtDlpService:
         self, url: str, used_subprocess: bool
     ) -> Tuple[Optional[Dict[str, Any]], bool]:
         """
-        Attempts to fetch info via subprocess if allowed (YouTube) and needed (not already used).
-        Returns (info, new_used_subprocess_state).
+        Attempts to fetch info via subprocess if allowed (YouTube) and needed.
         """
-        if not used_subprocess and _is_youtube(url):
+        if not used_subprocess and Platform.detect(url) == Platform.YOUTUBE:
             logger.info("Attempting YouTube subprocess fallback...")
             info = self._extract_youtube_via_subprocess(url)
             return info, True
         return None, used_subprocess
 
     def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
-        """Извлекает метаданные видео."""
-        if for_list_formats:
-            if not hasattr(self._thread_local, "ydl_list"):
-                opts = self._base_opts(for_list_formats=True)
-                self._thread_local.ydl_list = yt_dlp.YoutubeDL(opts)
-            return self._thread_local.ydl_list.extract_info(url, download=False)
-
-        opts = self._base_opts(for_list_formats=False)
+        """Извлекает метаданные видео. Always creates fresh YoutubeDL instances."""
+        opts = self._base_opts(for_list_formats=for_list_formats)
         with yt_dlp.YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=False)
 
@@ -163,6 +162,9 @@ class YtDlpService:
         """Извлекает форматы видео с обработкой ошибок"""
         info: Optional[Dict[str, Any]] = None
         used_subprocess = False
+        platform = Platform.detect(url)
+        is_tiktok_url = platform == Platform.TIKTOK
+
         try:
             info = self.extract(url, for_list_formats=True)
         except Exception as e:
@@ -209,7 +211,6 @@ class YtDlpService:
             if info2:
                 raw_formats = info2.get("formats", [])
 
-        is_tiktok_url = _is_tiktok(url)
         formats_meta: List[FormatMetadata] = []
         for raw_fmt in raw_formats:
             fmt = parse_format_metadata(raw_fmt, duration_factor, is_tiktok_url)

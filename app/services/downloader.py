@@ -4,13 +4,13 @@ import time
 import asyncio
 import logging
 import shutil
-from typing import Optional, Tuple, AsyncGenerator
+from typing import Optional, Tuple
 
 from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.error import NetworkError
+from telegram.error import NetworkError, RetryAfter, TimedOut
 
 from app.core import state
-from app.core.config import TEMP_DIR
+from app.core.config import TEMP_DIR, BASE_URL
 from app.core.utils import (
     safe_remove,
     run_subprocess,
@@ -21,6 +21,11 @@ from app.core.utils import (
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 
 logger = logging.getLogger("app.services.downloader")
+
+# Retry configuration
+MAX_SEND_RETRIES = 3
+RETRY_BASE_DELAY = 2.0  # seconds
+
 
 class MediaSender:
     """
@@ -38,7 +43,7 @@ class MediaSender:
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Downloads a video.
-        
+
         Args:
             page_url: URL to download.
             format_id: yt-dlp format ID.
@@ -94,8 +99,6 @@ class MediaSender:
                     del state.cancel_cache[token]
 
                 try:
-                    # Performance optimization: use asyncio.timeout with reschedule
-                    # instead of creating a new Task for every line read with wait_for.
                     async with asyncio.timeout(300.0) as cm:
                         while True:
                             if state.cancel_cache.get(token):
@@ -116,7 +119,11 @@ class MediaSender:
 
                             line_str = line.decode("utf-8", errors="ignore").strip()
 
-                            if progress_callback and "[download]" in line_str and "%" in line_str:
+                            if (
+                                progress_callback
+                                and "[download]" in line_str
+                                and "%" in line_str
+                            ):
                                 now = time.time()
                                 if now - last_update > 3.0:
                                     match = PROGRESS_RE.search(line_str)
@@ -125,7 +132,9 @@ class MediaSender:
                                             percent = float(match.group(1))
                                             details = ""
 
-                                            det_match = PROGRESS_DETAILS_RE.search(line_str)
+                                            det_match = PROGRESS_DETAILS_RE.search(
+                                                line_str
+                                            )
                                             if det_match:
                                                 speed = det_match.group(1)
                                                 eta = det_match.group(2)
@@ -159,15 +168,18 @@ class MediaSender:
                     elif "sign in" in err or "cookies" in err:
                         return None, "⚠️ Требуется авторизация (Sign-in required)."
                     elif "requested format is not available" in err:
-                         return None, "⚠️ Формат недоступен. Попробуйте другое качество."
+                        return None, "⚠️ Формат недоступен. Попробуйте другое качество."
                     else:
-                        return None, "⚠️ Ошибка загрузки. Попробуйте другое качество или ссылку."
+                        return (
+                            None,
+                            "⚠️ Ошибка загрузки. Попробуйте другое качество или ссылку.",
+                        )
 
             # Verify file
             try:
                 if not os.path.exists(tmp_path):
-                     return None, "⚠️ Файл не был создан."
-                     
+                    return None, "⚠️ Файл не был создан."
+
                 file_size = await asyncio.to_thread(os.path.getsize, tmp_path)
                 if file_size > 49.9 * 1024 * 1024:
                     await asyncio.to_thread(safe_remove, tmp_path)
@@ -197,46 +209,70 @@ class MediaSender:
         reply_to_message_id: int = None,
     ) -> bool:
         """
-        Sends a file to Telegram.
+        Sends a file to Telegram with automatic retry on transient errors.
+        Handles RetryAfter (Telegram rate limit) and NetworkError with exponential backoff.
         """
-        try:
-            f = await asyncio.to_thread(open, file_path, "rb")
-            try:
-                if is_gif:
-                    await bot.send_animation(
-                        chat_id=chat_id,
-                        animation=f,
-                        caption=caption,
-                        reply_markup=reply_markup,
-                        reply_to_message_id=reply_to_message_id,
-                    )
-                elif is_audio:
-                    await bot.send_audio(
-                        chat_id=chat_id,
-                        audio=f,
-                        caption=caption,
-                        reply_markup=reply_markup,
-                        reply_to_message_id=reply_to_message_id,
-                    )
-                else:
-                    await bot.send_video(
-                        chat_id=chat_id,
-                        video=f,
-                        caption=caption,
-                        supports_streaming=True,
-                        reply_markup=reply_markup,
-                        reply_to_message_id=reply_to_message_id,
-                    )
-                return True
-            finally:
-                await asyncio.to_thread(f.close)
+        last_error = None
 
-        except NetworkError:
-            logger.warning(f"Network error sending file {file_path}")
-            return False
-        except Exception as e:
-            logger.error(f"Send error: {e}", exc_info=True)
-            return False
+        for attempt in range(1, MAX_SEND_RETRIES + 1):
+            try:
+                f = await asyncio.to_thread(open, file_path, "rb")
+                try:
+                    if is_gif:
+                        await bot.send_animation(
+                            chat_id=chat_id,
+                            animation=f,
+                            caption=caption,
+                            reply_markup=reply_markup,
+                            reply_to_message_id=reply_to_message_id,
+                        )
+                    elif is_audio:
+                        await bot.send_audio(
+                            chat_id=chat_id,
+                            audio=f,
+                            caption=caption,
+                            reply_markup=reply_markup,
+                            reply_to_message_id=reply_to_message_id,
+                        )
+                    else:
+                        await bot.send_video(
+                            chat_id=chat_id,
+                            video=f,
+                            caption=caption,
+                            supports_streaming=True,
+                            reply_markup=reply_markup,
+                            reply_to_message_id=reply_to_message_id,
+                        )
+                    return True
+                finally:
+                    await asyncio.to_thread(f.close)
+
+            except RetryAfter as e:
+                wait = e.retry_after + 1
+                logger.warning(
+                    f"[SEND] RetryAfter {e.retry_after}s (attempt {attempt}/{MAX_SEND_RETRIES})"
+                )
+                last_error = e
+                if attempt < MAX_SEND_RETRIES:
+                    await asyncio.sleep(wait)
+                    continue
+
+            except (NetworkError, TimedOut) as e:
+                delay = RETRY_BASE_DELAY * attempt
+                logger.warning(
+                    f"[SEND] {type(e).__name__} (attempt {attempt}/{MAX_SEND_RETRIES}), retry in {delay}s"
+                )
+                last_error = e
+                if attempt < MAX_SEND_RETRIES:
+                    await asyncio.sleep(delay)
+                    continue
+
+            except Exception as e:
+                logger.error(f"[SEND] Unrecoverable error: {e}", exc_info=True)
+                return False
+
+        logger.error(f"[SEND] All {MAX_SEND_RETRIES} attempts failed: {last_error}")
+        return False
 
     @staticmethod
     async def convert_to_gif_ffmpeg(video_path: str) -> Optional[str]:
@@ -249,35 +285,35 @@ class MediaSender:
 
         # Output as MP4, not GIF. Telegram send_animation supports MP4.
         gif_path = video_path.rsplit(".", 1)[0] + "_gif.mp4"
-        
-        # Optimization: Stream Copy (Fastest)
+
+        # Stream Copy (Fastest):
         # -c:v copy: Copy video stream directly (no re-encoding, original quality)
         # -an: Remove audio
-        # -t 60: Safety cut (though usually redundant if copy)
-        # This resolves "Video has sound" AND "Re-encoding makes it bigger/worse" issues.
-        # It is instant (IO bound).
-        
+        # -t 60: Safety cut
         cmd = [
             "ffmpeg",
             "-y",
-            "-t", "60", 
-            "-i", video_path,
-            "-c:v", "copy",
+            "-t",
+            "60",
+            "-i",
+            video_path,
+            "-c:v",
+            "copy",
             "-an",
-            gif_path
+            gif_path,
         ]
-        
+
         try:
-            # Acquire lock to ensure we only burn CPU for one task at a time
             async with state.conversion_lock:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.PIPE
+                    stderr=asyncio.subprocess.PIPE,
                 )
                 try:
-                    # MP4 encoding is fast, but give it enough time on weak CPU
-                    _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
+                    _, stderr = await asyncio.wait_for(
+                        proc.communicate(), timeout=300.0
+                    )
                 except asyncio.TimeoutError:
                     try:
                         proc.kill()
@@ -285,14 +321,14 @@ class MediaSender:
                         pass
                     logger.error("FFmpeg conversion timed out")
                     return None
-            
+
             if proc.returncode != 0:
                 logger.error(f"FFmpeg conversion failed: {stderr.decode()}")
                 return None
-            
+
             if not os.path.exists(gif_path) or os.path.getsize(gif_path) == 0:
                 return None
-                
+
             return gif_path
         except Exception as e:
             logger.error(f"FFmpeg exception: {e}")

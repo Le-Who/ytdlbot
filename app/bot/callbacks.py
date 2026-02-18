@@ -276,13 +276,10 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("⚠️ Файл не найден или устарел.", show_alert=True)
         return
 
-    # Check/Add to processing set (Debounce)
-    if hasattr(state, "processing_gifs") and token in state.processing_gifs:
+    # Debounce: prevent duplicate GIF conversions for same token
+    if token in state.processing_gifs:
         await q.answer("⏳ У вас уже идет генерация...", show_alert=True)
         return
-
-    if not hasattr(state, "processing_gifs"):
-        state.processing_gifs = set()
 
     state.processing_gifs.add(token)
 

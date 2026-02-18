@@ -24,12 +24,17 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # Import app modules after mocking
 from app.bot import callbacks
 from app.core import state
+# Import downloader explicitly to ensure it is loaded and we can inspect it
+from app.services import downloader
 
 class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         state.info_cache = {}
         state.link_cache = {}
         state.cancel_cache = {}
+        # IMPORTANT: Initialize file_cache as empty dict to avoid Mock object behavior if cachetools is mocked
+        state.file_cache = {}
+
         state.tasks_sem = MagicMock()
         state.tasks_sem.locked.return_value = False
         state.tasks_sem.__aenter__.return_value = None
@@ -67,27 +72,33 @@ class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, []
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        # Patch app.services.downloader.run_subprocess
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
              patch("os.path.getsize", return_value=1000), \
+             patch("os.path.exists", return_value=True), \
              patch("builtins.open", MagicMock()), \
-             patch("app.bot.callbacks.safe_remove", MagicMock()):
+             patch("app.core.utils.safe_remove", MagicMock()):
 
-            await callbacks.on_send(self.update, self.context)
+             # Also need to mock time.time so the throttling condition (3s) passes
+             with patch("time.time") as mock_time:
+                 # Provide ample values to pass initial checks and loop throttle
+                 mock_time.side_effect = [100.0, 100.0, 105.0, 110.0, 115.0, 120.0, 125.0, 130.0]
 
-            # Check all calls to edit_message_text
-            # We expect one of them to contain the speed and ETA
-            calls = self.update.callback_query.edit_message_text.call_args_list
+                 await callbacks.on_send(self.update, self.context)
 
-            found = False
-            for call in calls:
-                args, _ = call
-                text = args[0]
-                if "2.50MiB/s" in text and "00:10" in text:
-                    found = True
-                    break
+                 # Check all calls to edit_message_text
+                 calls = self.update.callback_query.edit_message_text.call_args_list
 
-            self.assertTrue(found, "Speed and ETA not found in progress update")
+                 found = False
+                 for call in calls:
+                     args, _ = call
+                     text = args[0]
+                     if "2.50MiB/s" in text and "00:10" in text:
+                         found = True
+                         break
+
+                 self.assertTrue(found, "Speed and ETA not found in progress update")
 
 if __name__ == "__main__":
     unittest.main()

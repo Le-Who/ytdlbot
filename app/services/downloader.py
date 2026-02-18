@@ -114,11 +114,11 @@ class MediaSender:
                             if not line:
                                 break
 
-                            line_str = line.decode("utf-8", errors="ignore").strip()
-
-                            if progress_callback and "[download]" in line_str and "%" in line_str:
+                            # Performance optimization: check bytes first to avoid decoding every line
+                            if progress_callback and b"[download]" in line and b"%" in line:
                                 now = time.time()
                                 if now - last_update > 3.0:
+                                    line_str = line.decode("utf-8", errors="ignore").strip()
                                     match = PROGRESS_RE.search(line_str)
                                     if match:
                                         try:

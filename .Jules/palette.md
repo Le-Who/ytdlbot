@@ -36,3 +36,7 @@
 ## 2026-02-08 - Dismissive Actions in Chat UIs
 **Learning:** Users often trigger bot commands by mistake or change their mind after seeing options. Without a clear "Close" or "Dismiss" action, the chat history becomes cluttered with stale interactive elements.
 **Action:** Always include a "Close" (❌) button in persistent bot menus to allow users to clean up their interface.
+
+## 2026-02-12 - File Caption Context
+**Learning:** In chat interfaces, file downloads often appear out of context in history or when forwarded. Adding the original content title to the file caption (e.g., "📹 Video Title") provides crucial context and makes the content searchable.
+**Action:** Always include a descriptive title in file captions, even for temporary downloads, to aid user recall and content management.

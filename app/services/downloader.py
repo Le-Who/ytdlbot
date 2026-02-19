@@ -140,8 +140,10 @@ class MediaSender:
                                                 eta = det_match.group(2)
                                                 details = f"\n🚀 {speed} • ⏱ ETA {eta}"
 
+                                            icon = "⏳" if int(now) % 2 == 0 else "⌛"
                                             await progress_callback(
-                                                f"⏳ Скачиваю: {render_progressbar(percent)}{details}\n❌ Нажмите отмена, если передумали.",
+                                                f"{icon} <b>Скачиваю...</b>\n"
+                                                f"{render_progressbar(percent)}{details}",
                                                 kb_cancel,
                                             )
                                             last_update = now

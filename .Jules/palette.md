@@ -36,3 +36,7 @@
 ## 2026-02-08 - Dismissive Actions in Chat UIs
 **Learning:** Users often trigger bot commands by mistake or change their mind after seeing options. Without a clear "Close" or "Dismiss" action, the chat history becomes cluttered with stale interactive elements.
 **Action:** Always include a "Close" (❌) button in persistent bot menus to allow users to clean up their interface.
+
+## 2026-02-09 - Heartbeat Animations in Chat UIs
+**Learning:** In long-running processes (like downloads), a static icon (⏳) can feel frozen even if a progress bar updates. Toggling between two states (⏳/⌛) on every update creates a "heartbeat" effect that reassures the user the process is alive and active, without requiring text changes.
+**Action:** Use simple ASCII/Emoji animations for indeterminate or long-running states in text interfaces to signal liveness.

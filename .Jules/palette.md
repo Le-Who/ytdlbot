@@ -36,3 +36,7 @@
 ## 2026-02-08 - Dismissive Actions in Chat UIs
 **Learning:** Users often trigger bot commands by mistake or change their mind after seeing options. Without a clear "Close" or "Dismiss" action, the chat history becomes cluttered with stale interactive elements.
 **Action:** Always include a "Close" (❌) button in persistent bot menus to allow users to clean up their interface.
+
+## 2026-02-09 - Alive Indicators in Static Text
+**Learning:** During long-running operations in text interfaces, static text (even with progress bars) can feel frozen if the percentage doesn't change frequently. A simple alternating icon (⏳/⌛) provides immediate visual confirmation that the process is still active.
+**Action:** Use simple ASCII animations or icon toggles in text-based progress indicators to reassure users that the system is responsive.

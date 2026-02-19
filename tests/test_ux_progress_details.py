@@ -24,12 +24,14 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # Import app modules after mocking
 from app.bot import callbacks
 from app.core import state
+from app.services import downloader
 
 class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         state.info_cache = {}
         state.link_cache = {}
         state.cancel_cache = {}
+        state.file_cache = {}
         state.tasks_sem = MagicMock()
         state.tasks_sem.locked.return_value = False
         state.tasks_sem.__aenter__.return_value = None
@@ -67,11 +69,23 @@ class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
         async def mock_subprocess_gen(*args, **kwargs):
             yield mock_proc, []
 
-        with patch("app.bot.callbacks.run_subprocess", side_effect=mock_subprocess_gen), \
+        # We need time.time() to return increasing values to trigger the update
+        # 1. download_start
+        # 2. inside loop (check timeout)
+        # 3. inside loop (now = time.time())
+
+        # Initial time 1000.
+        # Check timeout: 1001.
+        # Inside update check: 1005 (> 1000 + 3.0) -> triggers update.
+        # 1005 is odd. 1005 % 2 == 1 -> "⌛".
+        time_side_effect = [1000.0, 1001.0, 1005.0, 1006.0, 1007.0]
+
+        with patch("app.services.downloader.run_subprocess", side_effect=mock_subprocess_gen), \
              patch("app.bot.callbacks.check_rate_limit", return_value=True), \
              patch("os.path.getsize", return_value=1000), \
              patch("builtins.open", MagicMock()), \
-             patch("app.bot.callbacks.safe_remove", MagicMock()):
+             patch("app.services.downloader.safe_remove", MagicMock()), \
+             patch("time.time", side_effect=time_side_effect):
 
             await callbacks.on_send(self.update, self.context)
 
@@ -85,6 +99,15 @@ class TestUXProgressDetails(unittest.IsolatedAsyncioTestCase):
                 text = args[0]
                 if "2.50MiB/s" in text and "00:10" in text:
                     found = True
+                    # Verify icon for odd timestamp 1005.0 -> ⌛
+                    if "⌛" not in text:
+                        # Fallback check if logic changed, but we expect ⌛
+                        # Let's print for debugging if test fails
+                        print(f"DEBUG: Text was: {text}")
+                    self.assertIn("⌛", text, "Expected icon ⌛ for timestamp 1005.0")
+
+                    # Verify redundant text is GONE
+                    self.assertNotIn("Нажмите отмена", text, "Redundant cancellation text found in message")
                     break
 
             self.assertTrue(found, "Speed and ETA not found in progress update")

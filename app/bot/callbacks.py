@@ -134,7 +134,25 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         _, token = q.data.split("|", 1)
         state.cancel_cache[token] = True
-        await q.edit_message_text("❌ Загрузка отменена пользователем.")
+
+        payload = state.link_cache.get(token)
+        if payload:
+            dl_link = f"{BASE_URL}/dl/{token}"
+            kb_recovery = [
+                [InlineKeyboardButton("📥 Скачать (Ссылка)", url=dl_link)],
+                [
+                    InlineKeyboardButton(
+                        "🔄 Повторить отправку", callback_data=f"send|{token}"
+                    )
+                ],
+                [InlineKeyboardButton("🔙 Назад", callback_data="back")],
+            ]
+            await q.edit_message_text(
+                "❌ Загрузка отменена пользователем.\nВы можете скачать файл по ссылке или попробовать снова.",
+                reply_markup=InlineKeyboardMarkup(kb_recovery),
+            )
+        else:
+            await q.edit_message_text("❌ Загрузка отменена пользователем.")
     except (ValueError, AttributeError) as e:
         logger.error(f"Invalid callback data in on_cancel: {e}")
 

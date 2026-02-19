@@ -1,10 +1,11 @@
 import os
 import asyncio
 import re
+import time
 from collections import deque
 from urllib.parse import urlsplit
 from app.constants import SUPPORTED_PLATFORMS, SUPPORTED_PLATFORMS_SUFFIXES
-from app.core.state import active_processes_lock, active_processes
+from app.core.state import active_processes_lock, active_processes, user_rates
 
 # Regex паттерны
 URL_RE = re.compile(r"https?://\S+", re.I)
@@ -58,7 +59,26 @@ def extract_supported_url(text: str) -> str | None:
     return None
 
 def check_rate_limit(user_id: int, limit: int = 5) -> bool:
-    """Проверяет лимит запросов пользователя в минуту (Отключено пользователем)"""
+    """Проверяет лимит запросов пользователя в минуту (Sliding Window)"""
+    now = time.time()
+
+    # Get user's timestamps from cache (default empty list)
+    # Using .get() returns a copy or reference depending on implementation,
+    # but since we create a new list below, it's safe.
+    timestamps = user_rates.get(user_id, [])
+
+    # Filter out timestamps older than 60 seconds
+    timestamps = [t for t in timestamps if now - t < 60]
+
+    # Check if limit reached
+    if len(timestamps) >= limit:
+        # Update cache to keep current valid timestamps (refreshes TTL)
+        user_rates[user_id] = timestamps
+        return False
+
+    # Add new timestamp and update cache
+    timestamps.append(now)
+    user_rates[user_id] = timestamps
     return True
 
 def safe_remove(path: str) -> None:

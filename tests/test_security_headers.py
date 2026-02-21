@@ -1,6 +1,5 @@
 import os
 import unittest
-from unittest.mock import patch, MagicMock
 
 # Set environment variables BEFORE importing app.main to avoid runtime errors during import
 os.environ["BOT_TOKEN"] = "test_token"

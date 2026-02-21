@@ -1,9 +1,7 @@
 import asyncio
 import hmac
 import logging
-import os
 import time
-import uuid
 from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
@@ -12,10 +10,9 @@ from telegram import Update
 
 from app.constants import AUDIO_FORMAT_ID, CHUNK_SIZE, GIF_FORMAT_ID
 from app.core import state
-from app.core.config import TELEGRAM_SECRET_TOKEN, TEMP_DIR, DL_TIMEOUT_HTTP
+from app.core.config import TELEGRAM_SECRET_TOKEN, DL_TIMEOUT_HTTP
 from app.core.logging import set_correlation_id
 from app.core.process import run_subprocess
-from app.core.utils import safe_remove
 
 logger = logging.getLogger("app.api")
 router = APIRouter()
@@ -57,56 +54,60 @@ async def download(token: str, request: Request):
 
     async def stream_video_subprocess():
         if is_gif:
-            # GIF = download video, then strip audio via ffmpeg stream copy (instant, no re-encode)
-            video_tmp = os.path.join(TEMP_DIR, f"ytdl_video_{uuid.uuid4().hex}.mp4")
-            try:
-                cmd = state.ytdlp.build_command(
-                    payload["page_url"],
-                    payload["format_id"],
-                    payload.get("height"),
-                    output=video_tmp,
-                )
-                async with run_subprocess(cmd, timeout=DL_TIMEOUT_HTTP) as handle:
-                    proc = handle.proc
-                    while await proc.stdout.read(4096):
-                        pass
-                    await proc.wait()
-                    if proc.returncode != 0:
-                        logger.error(
-                            "gif download failed",
-                            extra={
-                                "op": "gif-download",
-                                "error_type": "SubprocessError",
-                            },
-                        )
-                        return
+            # GIF = download video directly to ffmpeg pipe
+            cmd = state.ytdlp.build_command(
+                payload["page_url"],
+                payload["format_id"],
+                payload.get("height"),
+                output="-",
+            )
+            # Mute MP4: strip audio, copy video stream (no quality loss, instant)
+            ffmpeg_cmd = [
+                "ffmpeg",
+                "-y",
+                "-i",
+                "pipe:0",
+                "-c:v",
+                "copy",
+                "-an",
+                "-t",
+                "60",
+                "-movflags",
+                "frag_keyframe+empty_moov",
+                "-f",
+                "mp4",
+                "-",
+            ]
+            async with run_subprocess(cmd, timeout=DL_TIMEOUT_HTTP) as dl_handle:
+                async with run_subprocess(
+                    ffmpeg_cmd, stdin=asyncio.subprocess.PIPE, timeout=300
+                ) as ff_handle:
 
-                # Mute MP4: strip audio, copy video stream (no quality loss, instant)
-                ffmpeg_cmd = [
-                    "ffmpeg",
-                    "-y",
-                    "-i",
-                    video_tmp,
-                    "-c:v",
-                    "copy",
-                    "-an",
-                    "-t",
-                    "60",
-                    "-movflags",
-                    "frag_keyframe+empty_moov",
-                    "-f",
-                    "mp4",
-                    "-",
-                ]
-                async with run_subprocess(ffmpeg_cmd, timeout=300) as handle:
-                    proc = handle.proc
-                    while True:
-                        chunk = await proc.stdout.read(CHUNK_SIZE)
-                        if not chunk:
-                            break
-                        yield chunk
-            finally:
-                await asyncio.to_thread(safe_remove, video_tmp)
+                    async def read_ytdlp_write_ffmpeg():
+                        try:
+                            while True:
+                                chunk = await dl_handle.proc.stdout.read(CHUNK_SIZE)
+                                if not chunk:
+                                    break
+                                ff_handle.proc.stdin.write(chunk)
+                                await ff_handle.proc.stdin.drain()
+                        except Exception as e:
+                            logger.debug(f"Pipe stream error: {e}")
+                        finally:
+                            try:
+                                ff_handle.proc.stdin.close()
+                            except Exception:
+                                pass
+
+                    pipe_task = asyncio.create_task(read_ytdlp_write_ffmpeg())
+                    try:
+                        while True:
+                            chunk = await ff_handle.proc.stdout.read(CHUNK_SIZE)
+                            if not chunk:
+                                break
+                            yield chunk
+                    finally:
+                        pipe_task.cancel()
         else:
             cmd = state.ytdlp.build_command(
                 payload["page_url"],

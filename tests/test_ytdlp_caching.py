@@ -8,7 +8,6 @@ if "yt_dlp" not in sys.modules:
     sys.modules["yt_dlp"] = MagicMock()
 
 from app.services.ytdlp.service import YtDlpService
-import yt_dlp
 
 
 class TestYtDlpCaching(unittest.TestCase):

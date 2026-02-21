@@ -1,12 +1,10 @@
 import os
 import uuid
 import asyncio
-import time
 import logging
 import html
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from telegram.error import NetworkError
 
 from app.core import state
 from app.core.config import (
@@ -68,6 +66,11 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer("⏳ Подготовка ссылки...")
+
+    try:
+        await q.edit_message_reply_markup(None)
+    except Exception:
+        pass
 
     if not q.data:
         return
@@ -151,6 +154,11 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer("🚀 Загрузка началась")
     user_id = q.from_user.id
+
+    try:
+        await q.edit_message_reply_markup(None)
+    except Exception:
+        pass
 
     if not state.limiter.allow_user(user_id) or not state.limiter.allow_chat(
         q.message.chat_id
@@ -262,6 +270,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     try:
         await q.answer("⏳ Конвертирую в GIF...")
+        await q.edit_message_reply_markup(None)
     except Exception as e:
         logger.warning(f"Callback answer failed (query too old?): {e}")
 

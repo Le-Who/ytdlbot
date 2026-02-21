@@ -1,7 +1,6 @@
 import unittest
 import sys
 import os
-import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 from collections import deque
 
@@ -12,7 +11,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 with patch.dict(os.environ, {"BOT_TOKEN": "test_token"}):
     from app import main
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 class TestUXOnSend(unittest.IsolatedAsyncioTestCase):
     @patch("app.main.run_subprocess")

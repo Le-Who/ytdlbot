@@ -10,7 +10,6 @@ sys.modules["yt_dlp"] = MagicMock()
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.services.ytdlp.service import YtDlpService
-from app.services.ytdlp.models import FormatItem
 from app.services.ytdlp.exceptions import (
     AccessDeniedError,
     VideoNotFoundError,

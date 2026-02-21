@@ -13,17 +13,33 @@ class ProcessHandle:
     stderr_data: deque[bytes]
     stderr_task: asyncio.Task | None
 
-    @property
-    def exit_code(self) -> int | None:
-        return self.proc.returncode
-
     async def cancel(self) -> None:
         if self.proc.returncode is not None:
             return
+
+        import sys
+        import subprocess
+        import os
+
         try:
-            self.proc.terminate()
-            await asyncio.wait_for(self.proc.wait(), timeout=5.0)
+            if sys.platform != "win32":
+                import signal
+
+                try:
+                    os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            else:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(self.proc.pid)],
+                    capture_output=True,
+                )
         except Exception:
+            pass
+
+        try:
+            await asyncio.wait_for(self.proc.wait(), timeout=2.0)
+        except asyncio.TimeoutError:
             try:
                 self.proc.kill()
             except ProcessLookupError:
@@ -38,14 +54,26 @@ class ProcessHandle:
 async def run_subprocess(
     cmd: list[str],
     *,
+    stdin=asyncio.subprocess.DEVNULL,
     stdout_pipe: bool = True,
     stderr_pipe: bool = True,
     timeout: float | None = None,
 ) -> AsyncIterator[ProcessHandle]:
+    import sys
+    import subprocess
+
+    kwargs = {}
+    if sys.platform != "win32":
+        kwargs["start_new_session"] = True
+    else:
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
     proc = await asyncio.create_subprocess_exec(
         *cmd,
+        stdin=stdin,
         stdout=asyncio.subprocess.PIPE if stdout_pipe else asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE if stderr_pipe else asyncio.subprocess.DEVNULL,
+        **kwargs,
     )
 
     async with state.active_processes_lock:
@@ -55,6 +83,7 @@ async def run_subprocess(
     stderr_task: asyncio.Task | None = None
 
     if stderr_pipe and proc.stderr is not None:
+
         async def consume_stderr() -> None:
             while True:
                 line = await proc.stderr.readline()

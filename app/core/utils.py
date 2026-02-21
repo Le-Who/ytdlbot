@@ -54,8 +54,3 @@ def safe_remove(path: str) -> None:
             os.unlink(path)
         except OSError:
             pass
-
-
-def rename_if_exists(src: str, dst: str) -> None:
-    if src and os.path.exists(src):
-        os.rename(src, dst)

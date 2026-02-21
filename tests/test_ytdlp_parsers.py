@@ -1,6 +1,6 @@
 import unittest
 from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, get_special_format, deduplicate_formats, _extract_height, _format_duration, BITRATE_COEFFICIENT
-from app.services.ytdlp.models import FormatItem, FormatMetadata
+from app.services.ytdlp.models import FormatMetadata
 from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
 class TestYtDlpParsers(unittest.TestCase):

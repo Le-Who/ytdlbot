@@ -4,28 +4,30 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 
 ## 🚀 Key Features
 
-*   **Multi-Platform Support**: Downloads videos from YouTube, TikTok (no watermark), Pinterest, VK, and many others supported by `yt-dlp`.
-*   **Smart Quality Selection**:
-    *   **Private Chat**: Offers an interactive menu to choose video quality (1080p, 720p, etc.) or Audio only.
-    *   **Group Mode**: Automatically downloads the best quality video (<45MB) to ensure extensive compatibility and fast sharing without spamming the chat.
-*   **GIF Conversion**:
-    *   Easily convert any downloaded video to a GIF with a single click in Group chats.
-    *   Smart caching reuses the downloaded video file for instant conversion.
-*   **High Performance**:
-    *   **Async/Await**: Fully asynchronous architecture to handle multiple downloads simultaneously.
-    *   **Aria2c Support**: Integrated `aria2c` for accelerated downloads.
-    *   **Smart Caching**: In-memory caching of video metadata (`TTLCache`) to reduce duplicate API calls to platforms.
-*   **Robust Error Handling**: Handles regional restrictions, private content, and large file limits gracefully.
-*   **Admin Tools**: Rate limiting and user management features (configurable).
+- **Multi-Platform Support**: Downloads videos from YouTube, TikTok (no watermark), Pinterest, VK, and many others supported by `yt-dlp`.
+- **Smart Quality Selection**:
+  - **Private Chat**: Offers an interactive menu to choose video quality (1080p, 720p, etc.) or Audio only.
+  - **Group Mode**: Automatically downloads the best quality video (<45MB) to ensure extensive compatibility and fast sharing without spamming the chat.
+- **GIF Conversion**:
+  - Easily convert any downloaded video to a GIF with a single click in Group chats.
+  - Smart caching reuses the downloaded video file for instant conversion.
+- **High Performance**:
+  - **Async/Await**: Fully asynchronous architecture to handle multiple downloads simultaneously.
+  - **Aria2c Support**: Integrated `aria2c` for accelerated downloads.
+  - **Smart Caching**: In-memory caching of video metadata (`TTLCache`) to reduce duplicate API calls to platforms.
+  - **Instant GIF Streaming**: Zero-disk pipelining (`yt-dlp` -> `ffmpeg`) for GIF conversion, enabling an immediate "Time-To-First-Byte" playback.
+  - **Robust Memory Management**: Complete protection against `yt-dlp`/`ffmpeg` zombie processes via cross-platform Process Group termination and strict `asyncio.timeout` bounds.
+- **Robust Error Handling**: Handles regional restrictions, private content, and large file limits gracefully.
+- **Admin Tools**: Rate limiting and user management features (configurable).
 
 ## 🛠 Tech Stack
 
-*   **Language**: Python 3.10+
-*   **Framework**: [FastAPI](https://fastapi.tiangolo.com/) (Web Server & Webhook handling)
-*   **Bot Framework**: [python-telegram-bot](https://python-telegram-bot.org/) (v20+)
-*   **Core Engine**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Media extraction)
-*   **Processing**: [FFmpeg](https://ffmpeg.org/) (Video/Audio processing & GIF conversion)
-*   **Containerization**: Docker & Docker Compose
+- **Language**: Python 3.10+
+- **Framework**: [FastAPI](https://fastapi.tiangolo.com/) (Web Server & Webhook handling)
+- **Bot Framework**: [python-telegram-bot](https://python-telegram-bot.org/) (v20+)
+- **Core Engine**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Media extraction)
+- **Processing**: [FFmpeg](https://ffmpeg.org/) (Video/Audio processing & GIF conversion)
+- **Containerization**: Docker & Docker Compose
 
 ## 📂 Project Structure
 
@@ -56,31 +58,35 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 
 ### Prerequisites
 
-*   Python 3.10+
-*   FFmpeg (installed and in system PATH)
-*   Aria2c (optional, recommended for speed)
+- Python 3.10+
+- FFmpeg (installed and in system PATH)
+- Aria2c (optional, recommended for speed)
 
 ### Local Development
 
 1.  **Clone the repository**:
+
     ```bash
     git clone https://github.com/yourusername/ytdlbot.git
     cd ytdlbot
     ```
 
 2.  **Create a virtual environment**:
+
     ```bash
     python -m venv venv
     source venv/bin/activate  # On Windows: venv\Scripts\activate
     ```
 
 3.  **Install dependencies**:
+
     ```bash
     pip install -r requirements.txt
     ```
 
 4.  **Configure Environment**:
     Create a `.env` file in the root directory:
+
     ```env
     BOT_TOKEN=your_telegram_bot_token
     TELEGRAM_SECRET_TOKEN=random_string_for_security
@@ -97,6 +103,7 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 ## 🐳 Docker Deployment
 
 1.  **Build the image**:
+
     ```bash
     docker build -t ytdlbot .
     ```
@@ -112,12 +119,14 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 ## 🎮 Usage
 
 ### Private Chat
+
 1.  Send a link (e.g., TikTok, YouTube).
 2.  Wait for the bot to fetch formats.
 3.  Choose your desired quality or format (Audio/Video).
 4.  Receive the file!
 
 ### Group Chat
+
 1.  Add the bot to a group.
 2.  Send a link.
 3.  The bot automatically downloads the best suitable video and sends it.
@@ -126,6 +135,7 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 ## 🤝 Contributing
 
 Contributions are welcome! Please follow these steps:
+
 1.  Fork the repository.
 2.  Create a feature branch (`git checkout -b feature/AmazingFeature`).
 3.  Commit your changes (`git commit -m 'Add some AmazingFeature'`).
@@ -136,24 +146,27 @@ Contributions are welcome! Please follow these steps:
 
 Distributed under the MIT License. See `LICENSE` for more information.
 
-
 ## 🔧 New operational settings
 
 Use `.env.example` as baseline. Key variables:
+
 - `MAX_TG_UPLOAD_MB`, `MAX_DL_MB`, `GROUP_DEFAULT_TARGET_MB`
 - `LIMITER_*` token-bucket limits for users/chats/IP/token
 - `MAX_TEMP_AGE_SECONDS`, `JANITOR_INTERVAL_SECONDS`
 
 Run locally:
+
 ```bash
 cp .env.example .env
 uvicorn app.main:api --reload
 ```
 
 Run tests:
+
 ```bash
 BOT_TOKEN=test BASE_URL=http://localhost:8000 pytest tests/test_core_process.py tests/test_limiter.py tests/test_janitor.py tests/test_core_utils.py
 ```
 
 ### Structured logging schema
+
 JSON logs include: `correlation_id`, `op`, `duration_ms`, `error_type`, and optional context fields (`token`, `chat_id`, `user_id`, `url_host`).

@@ -12,7 +12,6 @@ class TokenBucketLimiter:
     def __init__(self, capacity: float, refill_rate: float, burst: float | None = None):
         self.capacity = burst if burst is not None else capacity
         self.refill_rate = refill_rate
-        self.default_cost = 1.0
         self._buckets: dict[str, Bucket] = {}
 
     def allow(self, key: str, cost: float = 1.0) -> bool:
@@ -25,7 +24,9 @@ class TokenBucketLimiter:
 
         elapsed = now - bucket.updated_at
         if elapsed > 0:
-            bucket.tokens = min(self.capacity, bucket.tokens + elapsed * self.refill_rate)
+            bucket.tokens = min(
+                self.capacity, bucket.tokens + elapsed * self.refill_rate
+            )
             bucket.updated_at = now
 
         if bucket.tokens >= cost:
@@ -35,7 +36,13 @@ class TokenBucketLimiter:
 
 
 class LimiterRegistry:
-    def __init__(self, user: TokenBucketLimiter, chat: TokenBucketLimiter, ip: TokenBucketLimiter, token: TokenBucketLimiter):
+    def __init__(
+        self,
+        user: TokenBucketLimiter,
+        chat: TokenBucketLimiter,
+        ip: TokenBucketLimiter,
+        token: TokenBucketLimiter,
+    ):
         self.user = user
         self.chat = chat
         self.ip = ip

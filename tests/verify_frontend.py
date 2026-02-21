@@ -11,8 +11,6 @@ os.environ["BOT_TOKEN"] = "test_token"
 os.environ["BASE_URL"] = "http://localhost:8000"
 
 # Mock telegram module to avoid needing actual API connection or complex objects
-import telegram
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 # Import the module under test
 import app.main as main_app

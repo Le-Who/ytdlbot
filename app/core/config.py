@@ -18,10 +18,8 @@ LINK_TTL_MINUTES = int(os.getenv("LINK_TTL_MINUTES", "30"))
 ENABLE_TELEGRAM_UPLOAD = os.getenv("ENABLE_TELEGRAM_UPLOAD", "1").strip() == "1"
 MAX_TG_UPLOAD_MB = int(os.getenv("MAX_TG_UPLOAD_MB", "45"))
 MAX_DL_MB = int(os.getenv("MAX_DL_MB", "1000"))
-GROUP_DEFAULT_TARGET_MB = int(os.getenv("GROUP_DEFAULT_TARGET_MB", "50"))
 MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "2"))
 
-LIMITER_BACKEND = os.getenv("LIMITER_BACKEND", "memory")
 LIMITER_USER_CAPACITY = float(os.getenv("LIMITER_USER_CAPACITY", "10"))
 LIMITER_USER_REFILL_PER_SEC = float(os.getenv("LIMITER_USER_REFILL_PER_SEC", "0.5"))
 LIMITER_CHAT_CAPACITY = float(os.getenv("LIMITER_CHAT_CAPACITY", "20"))
@@ -36,8 +34,6 @@ JANITOR_INTERVAL_SECONDS = int(os.getenv("JANITOR_INTERVAL_SECONDS", "300"))
 
 DL_TIMEOUT_TELEGRAM = int(os.getenv("DL_TIMEOUT_TELEGRAM", "600"))
 DL_TIMEOUT_HTTP = int(os.getenv("DL_TIMEOUT_HTTP", "900"))
-DL_TIMEOUT_PARSE = int(os.getenv("DL_TIMEOUT_PARSE", "60"))
-
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")
 if not BASE_URL:

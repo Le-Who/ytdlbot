@@ -17,6 +17,7 @@ from app.services.ytdlp.exceptions import (
 
 logger = logging.getLogger("app.bot.messages")
 
+
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = (update.message.text or "").strip()
@@ -30,7 +31,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = url
 
-    if not state.limiter.allow_user(user.id) or not state.limiter.allow_chat(update.effective_chat.id):
+    if not state.limiter.allow_user(user.id) or not state.limiter.allow_chat(
+        update.effective_chat.id
+    ):
         await update.message.reply_text("⚠️ Слишком часто. Подождите минуту.")
         return
 
@@ -60,11 +63,18 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             event = asyncio.Event()
             state.inflight_parsing[text] = event
             try:
-                async with state.parsing_sem:
-                    title, formats, special_format, duration = await asyncio.to_thread(
-                        state.ytdlp.list_formats, text
-                    )
+                async with asyncio.timeout(300.0):
+                    async with state.parsing_sem:
+                        (
+                            title,
+                            formats,
+                            special_format,
+                            duration,
+                        ) = await asyncio.to_thread(state.ytdlp.list_formats, text)
                 state.info_cache[text] = (title, formats, special_format, duration)
+            except asyncio.TimeoutError:
+                await msg.edit_text("❌ Время ожидания истекло. Сервис недоступен.")
+                return
             except AccessDeniedError:
                 await msg.edit_text(
                     "❌ Доступ запрещен. Контент может быть приватным или требуется авторизация."
@@ -76,9 +86,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             except LiveStreamError:
-                await msg.edit_text(
-                    "❌ Прямые трансляции (Live) не поддерживаются."
-                )
+                await msg.edit_text("❌ Прямые трансляции (Live) не поддерживаются.")
                 return
             except ExtractionError as e:
                 error_msg = str(e).lower()

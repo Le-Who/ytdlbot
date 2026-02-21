@@ -8,7 +8,7 @@ import importlib.util
 sys.path.append(os.getcwd())
 
 def check_temp_dir():
-    print(f"Testing temp dir resolution...")
+    print("Testing temp dir resolution...")
     # Mocking environment variable if not set, or just checking default behavior match
     # In the code we used: os.getenv("TMPDIR", tempfile.gettempdir())
     

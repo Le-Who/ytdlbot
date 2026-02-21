@@ -1,7 +1,6 @@
 import unittest
 import sys
 import os
-import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
 # Mock environment variables

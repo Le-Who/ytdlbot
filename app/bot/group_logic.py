@@ -1,7 +1,5 @@
 import logging
 import uuid
-import os
-import asyncio
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.constants import ChatAction

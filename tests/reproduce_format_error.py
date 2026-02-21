@@ -1,6 +1,5 @@
 
 import yt_dlp
-import sys
 
 def debug_extraction():
     url = "https://www.youtube.com/watch?v=UNo0TG9LwwI"

@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 with patch.dict(os.environ, {"BOT_TOKEN": "test_token"}):
     from app import main
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardMarkup
 
 class TestUXBackButton(unittest.IsolatedAsyncioTestCase):
     async def test_on_back_restores_format_selection(self):

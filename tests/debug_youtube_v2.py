@@ -2,8 +2,6 @@
 import asyncio
 import sys
 import os
-import json
-import subprocess
 
 # Add repo root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

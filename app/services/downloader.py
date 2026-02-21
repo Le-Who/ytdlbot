@@ -3,8 +3,7 @@ import uuid
 import time
 import asyncio
 import logging
-import shutil
-from typing import Optional, Tuple, AsyncGenerator
+from typing import Optional, Tuple
 
 from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import NetworkError

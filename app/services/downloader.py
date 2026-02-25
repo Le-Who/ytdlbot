@@ -284,7 +284,7 @@ class MediaSender:
                 except asyncio.TimeoutError:
                     try:
                         proc.kill()
-                    except:
+                    except Exception:
                         pass
                     logger.error("FFmpeg conversion timed out")
                     return None

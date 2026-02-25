@@ -9,7 +9,7 @@ from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import NetworkError
 
 from app.core import state
-from app.core.config import TEMP_DIR, MAX_TG_UPLOAD_MB, DL_TIMEOUT_TELEGRAM
+from app.core.config import TEMP_DIR, MAX_TG_UPLOAD_MB, DL_TIMEOUT_TELEGRAM, DL_TIMEOUT_READ
 from app.core.utils import (
     safe_remove,
     render_progressbar,
@@ -107,7 +107,7 @@ class MediaSender:
 
                     try:
                         line = await asyncio.wait_for(
-                            proc.stdout.readline(), timeout=300.0
+                            proc.stdout.readline(), timeout=DL_TIMEOUT_READ
                         )
                     except asyncio.TimeoutError:
                         if proc.returncode is not None:
@@ -283,7 +283,7 @@ class MediaSender:
                 try:
                     # MP4 encoding is fast, but give it enough time on weak CPU
                     _, stderr = await asyncio.wait_for(
-                        proc.communicate(), timeout=300.0
+                        proc.communicate(), timeout=DL_TIMEOUT_READ
                     )
                 except asyncio.TimeoutError:
                     try:

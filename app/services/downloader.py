@@ -65,7 +65,7 @@ class MediaSender:
 
         # Check if we already have this file in cache (e.g. for GIF conversion reuse)
         cached_path = state.file_cache.get(token)
-        if cached_path and os.path.exists(cached_path):
+        if cached_path and await asyncio.to_thread(os.path.exists, cached_path):
             logger.info(f"[CACHE] Reusing downloaded file: {cached_path}")
             return cached_path, None
 
@@ -166,7 +166,7 @@ class MediaSender:
 
             # Verify file
             try:
-                if not os.path.exists(tmp_path):
+                if not await asyncio.to_thread(os.path.exists, tmp_path):
                     return None, "⚠️ Файл не был создан."
 
                 file_size = await asyncio.to_thread(os.path.getsize, tmp_path)
@@ -246,7 +246,7 @@ class MediaSender:
         Converts a video to a mute MP4 (Telegram treats as GIF).
         Uses a lock to prevent CPU overload.
         """
-        if not video_path or not os.path.exists(video_path):
+        if not video_path or not await asyncio.to_thread(os.path.exists, video_path):
             return None
 
         # Output as MP4, not GIF. Telegram send_animation supports MP4.
@@ -297,7 +297,10 @@ class MediaSender:
                 logger.error(f"FFmpeg conversion failed: {stderr.decode()}")
                 return None
 
-            if not os.path.exists(gif_path) or os.path.getsize(gif_path) == 0:
+            if (
+                not await asyncio.to_thread(os.path.exists, gif_path)
+                or await asyncio.to_thread(os.path.getsize, gif_path) == 0
+            ):
                 return None
 
             return gif_path

@@ -53,78 +53,79 @@ async def download(token: str, request: Request):
         media_type = "video/mp4"
 
     async def stream_video_subprocess():
-        if is_gif:
-            # GIF = download video directly to ffmpeg pipe
-            cmd = state.ytdlp.build_command(
-                payload["page_url"],
-                payload["format_id"],
-                payload.get("height"),
-                output="-",
-            )
-            # Mute MP4: strip audio, copy video stream (no quality loss, instant)
-            ffmpeg_cmd = [
-                "ffmpeg",
-                "-y",
-                "-i",
-                "pipe:0",
-                "-c:v",
-                "copy",
-                "-an",
-                "-t",
-                "60",
-                "-movflags",
-                "frag_keyframe+empty_moov",
-                "-f",
-                "mp4",
-                "-",
-            ]
-            async with run_subprocess(cmd, timeout=DL_TIMEOUT_HTTP) as dl_handle:
-                async with run_subprocess(
-                    ffmpeg_cmd, stdin=asyncio.subprocess.PIPE, timeout=300
-                ) as ff_handle:
+        async with state.tasks_sem:
+            if is_gif:
+                # GIF = download video directly to ffmpeg pipe
+                cmd = state.ytdlp.build_command(
+                    payload["page_url"],
+                    payload["format_id"],
+                    payload.get("height"),
+                    output="-",
+                )
+                # Mute MP4: strip audio, copy video stream (no quality loss, instant)
+                ffmpeg_cmd = [
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    "pipe:0",
+                    "-c:v",
+                    "copy",
+                    "-an",
+                    "-t",
+                    "60",
+                    "-movflags",
+                    "frag_keyframe+empty_moov",
+                    "-f",
+                    "mp4",
+                    "-",
+                ]
+                async with run_subprocess(cmd, timeout=DL_TIMEOUT_HTTP) as dl_handle:
+                    async with run_subprocess(
+                        ffmpeg_cmd, stdin=asyncio.subprocess.PIPE, timeout=300
+                    ) as ff_handle:
 
-                    async def read_ytdlp_write_ffmpeg():
+                        async def read_ytdlp_write_ffmpeg():
+                            try:
+                                while True:
+                                    chunk = await dl_handle.proc.stdout.read(CHUNK_SIZE)
+                                    if not chunk:
+                                        break
+                                    ff_handle.proc.stdin.write(chunk)
+                                    await ff_handle.proc.stdin.drain()
+                            except Exception as e:
+                                logger.debug(f"Pipe stream error: {e}")
+                            finally:
+                                try:
+                                    ff_handle.proc.stdin.close()
+                                except Exception:
+                                    pass
+
+                        pipe_task = asyncio.create_task(read_ytdlp_write_ffmpeg())
                         try:
                             while True:
-                                chunk = await dl_handle.proc.stdout.read(CHUNK_SIZE)
+                                chunk = await ff_handle.proc.stdout.read(CHUNK_SIZE)
                                 if not chunk:
                                     break
-                                ff_handle.proc.stdin.write(chunk)
-                                await ff_handle.proc.stdin.drain()
-                        except Exception as e:
-                            logger.debug(f"Pipe stream error: {e}")
+                                yield chunk
                         finally:
-                            try:
-                                ff_handle.proc.stdin.close()
-                            except Exception:
-                                pass
-
-                    pipe_task = asyncio.create_task(read_ytdlp_write_ffmpeg())
-                    try:
-                        while True:
-                            chunk = await ff_handle.proc.stdout.read(CHUNK_SIZE)
-                            if not chunk:
-                                break
-                            yield chunk
-                    finally:
-                        pipe_task.cancel()
-        else:
-            cmd = state.ytdlp.build_command(
-                payload["page_url"],
-                payload["format_id"],
-                payload.get("height"),
-                output="-",
-            )
-            start_time = time.time()
-            async with run_subprocess(cmd, timeout=DL_TIMEOUT_HTTP) as handle:
-                proc = handle.proc
-                while True:
-                    if time.time() - start_time > DL_TIMEOUT_HTTP:
-                        break
-                    chunk = await proc.stdout.read(CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    yield chunk
+                            pipe_task.cancel()
+            else:
+                cmd = state.ytdlp.build_command(
+                    payload["page_url"],
+                    payload["format_id"],
+                    payload.get("height"),
+                    output="-",
+                )
+                start_time = time.time()
+                async with run_subprocess(cmd, timeout=DL_TIMEOUT_HTTP) as handle:
+                    proc = handle.proc
+                    while True:
+                        if time.time() - start_time > DL_TIMEOUT_HTTP:
+                            break
+                        chunk = await proc.stdout.read(CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        yield chunk
 
     return StreamingResponse(
         stream_video_subprocess(),

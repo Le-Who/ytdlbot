@@ -93,7 +93,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             await status_msg.edit_text(error or "❌ Ошибка.")
             # await asyncio.sleep(5)
             # await status_msg.delete()
-        except:
+        except Exception:
             pass
         return
 

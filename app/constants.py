@@ -7,16 +7,21 @@ CHUNK_SIZE = 1024 * 1024  # 1 MB (Оптимизация: меньше вызо�
 # Поддерживаемые платформы
 # Примечание: Pinterest поддерживается yt-dlp, но могут быть проблемы с 403/404 ошибками
 # для приватного контента или при отсутствии необходимых заголовков
+
+TIKTOK_DOMAINS = ("tiktok.com",)
+YOUTUBE_DOMAINS = ("youtube.com", "youtu.be")
+PINTEREST_DOMAINS = ("pinterest.com", "pin.it")
+VK_DOMAINS = ("vk.com", "vkvideo.ru")
+RUTUBE_DOMAINS = ("rutube.ru",)
+
 SUPPORTED_PLATFORMS = {
-    "youtube.com",
-    "youtu.be",
-    "rutube.ru",
-    "vk.com",
-    "vkvideo.ru",
-    "tiktok.com",
-    "pinterest.com",
-    "pin.it",
+    *TIKTOK_DOMAINS,
+    *YOUTUBE_DOMAINS,
+    *PINTEREST_DOMAINS,
+    *VK_DOMAINS,
+    *RUTUBE_DOMAINS,
 }
+
 SUPPORTED_PLATFORMS_SUFFIXES = tuple(f".{p}" for p in SUPPORTED_PLATFORMS)
 
 # Форматы видео (в т.ч. для YouTube DASH/HLS)

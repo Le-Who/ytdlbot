@@ -5,6 +5,9 @@ from app.constants import (
     GIF_FORMAT_ID,
     AUDIO_FORMAT_ID,
     HEIGHT_PATTERN,
+    TIKTOK_DOMAINS,
+    YOUTUBE_DOMAINS,
+    PINTEREST_DOMAINS,
 )
 from .models import FormatItem, FormatMetadata
 
@@ -15,15 +18,15 @@ BITRATE_COEFFICIENT = 128.0  # 1024 / 8
 
 
 def _is_tiktok(url: str) -> bool:
-    return "tiktok.com" in url.lower()
+    return any(domain in url.lower() for domain in TIKTOK_DOMAINS)
 
 
 def _is_youtube(url: str) -> bool:
-    return "youtube.com" in url.lower() or "youtu.be" in url.lower()
+    return any(domain in url.lower() for domain in YOUTUBE_DOMAINS)
 
 
 def _is_pinterest(url: str) -> bool:
-    return "pinterest.com" in url.lower() or "pin.it" in url.lower()
+    return any(domain in url.lower() for domain in PINTEREST_DOMAINS)
 
 
 def _format_duration(seconds: Optional[float]) -> str:

@@ -1,7 +1,6 @@
 import contextvars
 import json
 import logging
-import time
 import uuid
 
 correlation_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(

@@ -94,6 +94,13 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await status_msg.edit_text(Texts.SLIDESHOW_SENDING)
 
         try:
+            await context.bot.send_chat_action(
+                chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_PHOTO
+            )
+        except Exception:
+            pass
+
+        try:
             success = await MediaSender.send_slideshow_photos(
                 context.bot,
                 update.effective_chat.id,
@@ -149,6 +156,13 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     caption = f"👤 {user_tag}"
 
     await status_msg.edit_text(Texts.GROUP_SENDING)
+
+    try:
+        await context.bot.send_chat_action(
+            chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO
+        )
+    except Exception:
+        pass
 
     # Create "Send GIF" button
     kb = InlineKeyboardMarkup(

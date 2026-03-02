@@ -4,6 +4,7 @@ import asyncio
 import logging
 import html
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
+from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from app.core import state
@@ -58,7 +59,7 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         from app.bot.keyboards import build_slideshow_keyboard
         reply_markup = build_slideshow_keyboard()
         await q.edit_message_text(
-            Texts.SLIDESHOW_DETECTED.format(title=html.escape(title), count="?"),
+            Texts.SLIDESHOW_DETECTED.format(title=html.escape(title)),
             reply_markup=reply_markup,
             parse_mode="HTML",
         )
@@ -217,6 +218,10 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     async with state.tasks_sem:
         await q.edit_message_text(Texts.STARTING_DOWNLOAD)
+        try:
+            await context.bot.send_chat_action(chat_id=q.message.chat_id, action=ChatAction.UPLOAD_VIDEO)
+        except Exception:
+            pass
 
         file_path, error = await MediaSender.download_video(
             payload["page_url"],
@@ -281,7 +286,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     video_path = state.file_cache.get(token)
     if not video_path or not os.path.exists(video_path):
         try:
-            await q.message.reply_text("⚠️ Файл не найден или устарел.", do_quote=True)
+            await q.message.reply_text(Texts.GIF_FILE_EXPIRED, do_quote=True)
         except Exception as e:
             logger.warning(f"Failed to reply about missing file: {e}")
         return
@@ -290,7 +295,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     async with state.conversion_lock:
         if token in state.processing_gifs:
             try:
-                await q.message.reply_text("⏳ У вас уже идет генерация...", do_quote=True)
+                await q.message.reply_text(Texts.GIF_ALREADY_IN_PROGRESS, do_quote=True)
             except Exception as e:
                 logger.warning(f"Failed to reply about in-progress GIF: {e}")
             return
@@ -304,7 +309,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if not gif_path:
         try:
-            await q.message.reply_text("⚠️ Ошибка конвертации.", do_quote=True)
+            await q.message.reply_text(Texts.GIF_CONVERSION_ERROR, do_quote=True)
         except Exception as e:
             logger.warning(f"Failed to reply about conversion error: {e}")
         return
@@ -324,7 +329,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     if not success:
         try:
-            await q.message.reply_text("⚠️ Не удалось отправить GIF.", do_quote=True)
+            await q.message.reply_text(Texts.GIF_SEND_ERROR, do_quote=True)
         except Exception as e:
             logger.warning(f"Failed to reply about send error: {e}")
 

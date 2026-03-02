@@ -75,9 +75,13 @@ class Texts:
     SEND_ERROR = "⚠️ Ошибка при отправке файла."
     GIF_CONVERTING = "⏳ Конвертирую в GIF..."
     GIF_DOWNLOAD_CANCEL = "❌ Загрузка отменена."
+    GIF_FILE_EXPIRED = "⚠️ Файл не найден или устарел."
+    GIF_ALREADY_IN_PROGRESS = "⏳ У вас уже идет генерация..."
+    GIF_CONVERSION_ERROR = "⚠️ Ошибка конвертации."
+    GIF_SEND_ERROR = "⚠️ Не удалось отправить GIF."
 
     # ── Slideshow ─────────────────────────────────────────────────
-    SLIDESHOW_DETECTED = "🖼 <b>{title}</b>\n📸 Фотоальбом ({count} фото)"
+    SLIDESHOW_DETECTED = "🖼 <b>{title}</b>\n📸 Это фотоальбом (TikTok Slideshow)"
     BTN_SLIDESHOW_PHOTOS = "📸 Фото (альбом)"
     BTN_SLIDESHOW_VIDEO = "🎬 Видео (slideshow)"
     SLIDESHOW_DOWNLOADING = "⏳ Скачиваю фото..."

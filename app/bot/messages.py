@@ -113,7 +113,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         reply_markup = build_slideshow_keyboard()
 
         await msg.edit_text(
-            Texts.SLIDESHOW_DETECTED.format(title=html.escape(title), count="?"),
+            Texts.SLIDESHOW_DETECTED.format(title=html.escape(title)),
             reply_markup=reply_markup,
             parse_mode="HTML",
         )

@@ -1,7 +1,6 @@
 """Telegram file/media sending service."""
 
 import logging
-from typing import Optional
 
 from telegram import Bot, InputMediaPhoto
 from telegram.error import NetworkError

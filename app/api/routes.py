@@ -5,7 +5,7 @@ import re
 from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, PlainTextResponse
 from telegram import Update
 
 from app.constants import AUDIO_FORMAT_ID, CHUNK_SIZE, GIF_FORMAT_ID
@@ -21,6 +21,12 @@ router = APIRouter()
 @router.get("/health")
 async def health():
     return {"ok": True}
+
+
+@router.get("/metrics")
+async def metrics_endpoint():
+    from app.core.metrics import metrics
+    return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
 
 
 @router.get("/dl/{token}")

@@ -46,6 +46,11 @@ __all__ = [
 
 logger = logging.getLogger("app.services.downloader")
 
+# Late import to avoid circular dep — metrics is a lightweight singleton
+def _metrics():
+    from app.core.metrics import metrics
+    return metrics
+
 
 class VideoDownloader:
     """Downloads video/audio files via yt-dlp subprocess."""
@@ -88,6 +93,7 @@ class VideoDownloader:
         cached_path = state.file_cache.get(token)
         if cached_path and os.path.exists(cached_path):
             logger.info(f"[CACHE] Reusing downloaded file: {cached_path}")
+            _metrics().cache_hits.inc(cache="file_cache")
             return cached_path, None
 
         tmp_path = os.path.join(tmp_dir, f"ytdl_{uuid.uuid4().hex}.{file_ext}")
@@ -106,6 +112,8 @@ class VideoDownloader:
         )
 
         try:
+            _metrics().downloads_total.inc(platform="telegram")
+            _metrics().active_downloads.inc()
             async with run_subprocess(cmd) as handle:
                 proc = handle.proc
                 stderr = handle.stderr_data
@@ -115,6 +123,16 @@ class VideoDownloader:
 
                 # Clear previous cancel state for this token
                 state.cancel_cache.pop(token, None)
+
+                # Show initial 0% progress bar immediately
+                if progress_callback:
+                    try:
+                        await progress_callback(
+                            f"⏳ Скачиваю: {render_progressbar(0)}\n❌ Нажмите отмена, если передумали.",
+                            kb_cancel,
+                        )
+                    except Exception:
+                        pass
 
                 while True:
                     if state.cancel_cache.get(token):
@@ -168,7 +186,20 @@ class VideoDownloader:
                                     )
 
                 await proc.wait()
+
+                # Show 100% completion before transitioning to send
+                if proc.returncode == 0 and progress_callback:
+                    try:
+                        await progress_callback(
+                            f"✅ Скачано: {render_progressbar(100)}",
+                            None,
+                        )
+                    except Exception:
+                        pass
+
                 if proc.returncode != 0:
+                    _metrics().downloads_failed.inc(platform="telegram")
+                    _metrics().active_downloads.dec()
                     err = b"".join(stderr).decode("utf-8", errors="ignore").lower()
                     logger.error(f"[DL-TG] yt-dlp failed: {err}")
 
@@ -199,10 +230,14 @@ class VideoDownloader:
 
             # Save to cache
             state.file_cache[token] = tmp_path
+            _metrics().downloads_success.inc(platform="telegram")
+            _metrics().active_downloads.dec()
             return tmp_path, None
 
         except Exception as e:
             logger.error(f"Download exception: {e}", exc_info=True)
+            _metrics().downloads_failed.inc(platform="telegram")
+            _metrics().active_downloads.dec()
             await asyncio.to_thread(safe_remove, tmp_path)
             return None, "⚠️ Внутренняя ошибка при загрузке."
 

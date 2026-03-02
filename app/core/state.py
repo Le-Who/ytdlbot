@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from cachetools import TTLCache
 from app.core.cache import FileTTLCache
 from app.core.config import (
@@ -32,6 +33,7 @@ active_processes_lock = asyncio.Lock()
 active_processes = set()
 processing_gifs = set()  # Set of tokens currently being converted to GIF
 conversion_sem = asyncio.Semaphore(3)  # Bounded concurrency for CPU-intensive conversions
+ytdlp_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="ytdlp")  # Dedicated pool for yt-dlp
 
 # Глобальный объект приложения Telegram (инициализируется в main.py)
 bot_app = None

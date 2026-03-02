@@ -1,7 +1,8 @@
 import asyncio
 import logging
 import html
-from telegram import Update
+import uuid
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 
@@ -40,7 +41,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         chat_id=update.effective_chat.id, action=ChatAction.TYPING
     )
 
-    msg = await update.message.reply_text(Texts.SEARCHING)
+    parse_token = uuid.uuid4().hex[:8]
+    kb_cancel = InlineKeyboardMarkup(
+        [[InlineKeyboardButton("❌ Отмена", callback_data=f"cancel_parse|{parse_token}")]]
+    )
+    msg = await update.message.reply_text(Texts.SEARCHING, reply_markup=kb_cancel)
+    state.cancel_cache.pop(parse_token, None)
 
     cached = state.info_cache.get(text)
     if cached:
@@ -74,7 +80,16 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                             special_format,
                             duration,
                             is_slideshow,
-                        ) = await asyncio.to_thread(state.ytdlp.list_formats, text)
+                        ) = await asyncio.get_event_loop().run_in_executor(
+                            state.ytdlp_executor, state.ytdlp.list_formats, text
+                        )
+
+                # Check if user cancelled while parsing
+                if state.cancel_cache.get(parse_token):
+                    state.cancel_cache.pop(parse_token, None)
+                    await msg.edit_text(Texts.CANCELLED)
+                    return
+
                 state.info_cache[text] = (title, formats, special_format, duration, is_slideshow)
             except asyncio.TimeoutError:
                 await msg.edit_text(Texts.TIMEOUT_UNAVAILABLE)

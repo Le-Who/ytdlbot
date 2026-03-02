@@ -64,6 +64,11 @@ async def janitor_loop(stop_event: asyncio.Event) -> None:
             },
         )
         try:
+            from app.core.metrics import metrics as app_metrics
+            app_metrics.log_summary()
+        except Exception:
+            pass
+        try:
             await asyncio.wait_for(stop_event.wait(), timeout=JANITOR_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
             continue

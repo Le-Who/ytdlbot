@@ -1,8 +1,8 @@
 import asyncio
 import os
+import shutil
 import time
 import logging
-from dataclasses import dataclass
 
 from app.core.config import TEMP_DIR, MAX_TEMP_AGE_SECONDS, JANITOR_INTERVAL_SECONDS
 from app.core.utils import safe_remove
@@ -29,7 +29,6 @@ def cleanup_temp_dir() -> tuple[int, int]:
             if age > MAX_TEMP_AGE_SECONDS:
                 orphan += 1
                 try:
-                    import shutil
                     shutil.rmtree(path, ignore_errors=True)
                     deleted += 1
                 except Exception:

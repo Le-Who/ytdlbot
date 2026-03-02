@@ -2,7 +2,6 @@ import asyncio
 import hmac
 import logging
 import re
-import time
 from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request

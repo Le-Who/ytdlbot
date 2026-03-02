@@ -58,11 +58,12 @@ class GalleryDlService:
             "--filename", "{num:>03}.{extension}",
             "--no-mtime",
             "--write-metadata",
-            "--", url,
         ]
 
         if cookies_path:
             cmd.extend(["--cookies", cookies_path])
+
+        cmd.extend(["--", url])
 
         try:
             result = subprocess.run(

@@ -278,7 +278,7 @@ class MediaSender:
         ]
 
         try:
-            # Acquire lock to ensure we only burn CPU for one task at a time
+            # Limit concurrency for CPU-intensive conversions
             async with state.conversion_sem:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
@@ -323,7 +323,7 @@ class MediaSender:
             (SlideshowResult, None) on success.
             (None, error_message) on failure.
         """
-        from app.services.gallery_dl.service import GalleryDlService, SlideshowResult  # noqa: F811
+        from app.services.gallery_dl.service import GalleryDlService
 
         cookies_path = state.ytdlp.cookies_path
 
@@ -451,9 +451,9 @@ class MediaSender:
 
         photos_to_send = images[:MAX_TELEGRAM_ALBUM_SIZE]
 
+        file_handles = []
         try:
             media = []
-            file_handles = []
             for i, img_path in enumerate(photos_to_send):
                 fh = open(img_path, "rb")
                 file_handles.append(fh)
@@ -491,11 +491,10 @@ class MediaSender:
         if not result or not result.images:
             return
         # All slideshow files are in the same parent directory
-        if result.images:
-            parent_dir = os.path.dirname(result.images[0])
-            if parent_dir and os.path.isdir(parent_dir) and "slideshow_" in parent_dir:
-                try:
-                    shutil.rmtree(parent_dir, ignore_errors=True)
-                    logger.info(f"[CLEANUP] Removed slideshow dir: {parent_dir}")
-                except Exception as e:
-                    logger.warning(f"[CLEANUP] Failed to remove slideshow dir: {e}")
+        parent_dir = os.path.dirname(result.images[0])
+        if parent_dir and os.path.isdir(parent_dir) and "slideshow_" in parent_dir:
+            try:
+                shutil.rmtree(parent_dir, ignore_errors=True)
+                logger.info(f"[CLEANUP] Removed slideshow dir: {parent_dir}")
+            except Exception as e:
+                logger.warning(f"[CLEANUP] Failed to remove slideshow dir: {e}")

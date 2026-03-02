@@ -17,7 +17,7 @@ from app.core.config import (
 from app.core.utils import (
     safe_remove,
 )
-from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID, SLIDESHOW_PHOTO_FORMAT_ID, SLIDESHOW_VIDEO_FORMAT_ID
+from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID, SLIDESHOW_PHOTO_FORMAT_ID
 from app.bot.keyboards import build_format_keyboard
 from app.core.texts import Texts
 from app.core.policy import size_allowed

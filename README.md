@@ -17,17 +17,18 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
   - **Smart Caching**: In-memory caching of video metadata (`TTLCache`) to reduce duplicate API calls to platforms.
   - **Instant GIF Streaming**: Zero-disk pipelining (`yt-dlp` -> `ffmpeg`) for GIF conversion, enabling an immediate "Time-To-First-Byte" playback.
   - **Robust Memory Management**: Complete protection against `yt-dlp`/`ffmpeg` zombie processes via cross-platform Process Group termination and strict `asyncio.timeout` bounds.
-- **Robust Error Handling**: Handles regional restrictions, private content, and large file limits gracefully.
-- **Admin Tools**: Rate limiting and user management features (configurable).
+- **Robust Error Handling**: Handles regional restrictions, private content, live streams, and large file limits gracefully with dedicated exception types.
+- **Admin Tools**: Multi-layer rate limiting (per user, chat, IP, and token) and configurable download policies.
 
 ## 🛠 Tech Stack
 
 - **Language**: Python 3.12+
-- **Framework**: [FastAPI](https://fastapi.tiangolo.com/) (Web Server & Webhook handling)
-- **Bot Framework**: [python-telegram-bot](https://python-telegram-bot.org/) (v20+)
+- **Framework**: [FastAPI](https://fastapi.tiangolo.com/) 0.135.x (Web Server & Webhook handling)
+- **Bot Framework**: [python-telegram-bot](https://python-telegram-bot.org/) 22.x
 - **Core Engine**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Media extraction)
 - **Processing**: [FFmpeg](https://ffmpeg.org/) (Video/Audio processing & GIF conversion)
-- **Containerization**: Docker & Docker Compose
+- **Download Accelerator**: [aria2c](https://aria2.github.io/) (optional, multi-threaded downloads)
+- **Containerization**: Docker (Python 3.12-slim)
 - **CI/CD**: GitHub Actions (automated testing with coverage)
 
 ## 📂 Project Structure
@@ -36,6 +37,7 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 .
 ├── app
 │   ├── api                # FastAPI routes (webhooks, health checks, streaming)
+│   │   └── routes.py      # Webhook endpoint, /dl/{token}, /health
 │   ├── bot                # Telegram Bot logic
 │   │   ├── callbacks.py   # Button interactions (Download, Cancel, GIF)
 │   │   ├── commands.py    # /start, /help handlers
@@ -43,27 +45,34 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 │   │   ├── keyboards.py   # Inline keyboard builders
 │   │   └── messages.py    # Private chat message handlers
 │   ├── core               # Core configurations & utilities
+│   │   ├── cache.py       # Centralized TTLCache factories
 │   │   ├── config.py      # Environment variables settings
 │   │   ├── limiter.py     # Token bucket rate limiter + LimiterRegistry
+│   │   ├── logging.py     # Structured JSON logging + correlation IDs
 │   │   ├── policy.py      # Size policy checks
-│   │   ├── state.py       # Global state (locks, caches)
+│   │   ├── process.py     # Cross-platform process group management
+│   │   ├── state.py       # Global state (locks, caches, semaphores)
 │   │   ├── texts.py       # All user-facing UI strings (i18n-ready)
 │   │   └── utils.py       # Helper functions
+│   ├── constants.py       # Shared constants (format IDs, limits)
 │   ├── services
 │   │   ├── downloader.py  # MediaSender service (Download/Send/Convert)
 │   │   └── ytdlp          # yt-dlp wrapper service
 │   │       ├── service.py # YtDlpService facade
 │   │       ├── parsers.py # Format parsing & deduplication
 │   │       ├── models.py  # FormatItem, FormatMetadata dataclasses
-│   │       └── builders.py# Command-line builders
+│   │       ├── builders.py# Command-line builders (aria2c, ffmpeg flags)
+│   │       ├── cookies.py # Cookie file management
+│   │       └── exceptions.py # Domain-specific errors
 │   ├── tasks
 │   │   └── janitor.py     # Periodic temp file cleanup
 │   └── main.py            # Application entry point
 ├── tests/                 # 193 tests (unit + integration)
 ├── .github/workflows/     # CI/CD pipeline
 ├── Dockerfile             # Docker build (Python 3.12-slim)
+├── .dockerignore          # Excludes .git, tests, IDE files from build context
 ├── pyproject.toml         # pytest + coverage config
-├── requirements.txt       # Python dependencies
+├── requirements.txt       # Python dependencies (pinned)
 └── README.md
 ```
 
@@ -98,14 +107,13 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
     ```
 
 4.  **Configure Environment**:
-    Create a `.env` file in the root directory:
+    Copy `.env.example` to `.env` and fill in the required values:
 
-    ```env
-    BOT_TOKEN=your_telegram_bot_token
-    TELEGRAM_SECRET_TOKEN=random_string_for_security
-    # Optional: Webhook URL (if defined, runs in Webhook mode, else Polling)
-    # WEBHOOK_URL=https://your-domain.com
+    ```bash
+    cp .env.example .env
     ```
+
+    At minimum, set `BOT_TOKEN`. See [Configuration](#-configuration) for all options.
 
 5.  **Run the bot**:
     ```bash
@@ -122,12 +130,17 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
     ```
 
 2.  **Run the container**:
+
     ```bash
     docker run -d --name ytdlbot \
       -e BOT_TOKEN=your_token \
-      -v $(pwd)/downloads:/app/downloads \
+      -e BASE_URL=https://your-domain.com \
+      -e WEBHOOK_URL=https://your-domain.com/webhook \
+      -p 8000:8000 \
       ytdlbot
     ```
+
+    The `PORT` environment variable (default `8000`) controls uvicorn's listening port and is usually overridden by your hosting platform (Northflank, Railway, etc.).
 
 ## 🧪 Testing
 
@@ -158,7 +171,7 @@ The test suite includes:
 1.  Send a link (e.g., TikTok, YouTube).
 2.  Wait for the bot to fetch formats.
 3.  Choose your desired quality or format (Audio/Video).
-4.  Receive the file!
+4.  Get a direct download link **or** receive the file directly in Telegram.
 
 ### Group Chat
 
@@ -169,19 +182,50 @@ The test suite includes:
 
 ## 🔧 Configuration
 
-Use `.env.example` as baseline. Key variables:
+Use `.env.example` as baseline. All variables are read from environment or `.env` file via `python-dotenv`.
 
-| Variable                   | Description                                  | Default      |
-| -------------------------- | -------------------------------------------- | ------------ |
-| `BOT_TOKEN`                | Telegram bot token                           | **required** |
-| `WEBHOOK_URL`              | Webhook URL (omit for polling mode)          | —            |
-| `TELEGRAM_SECRET_TOKEN`    | HMAC secret for webhook auth                 | **required** |
-| `MAX_TG_UPLOAD_MB`         | Max file size for Telegram upload            | 45           |
-| `MAX_DL_MB`                | Max file size for HTTP download              | 500          |
-| `GROUP_DEFAULT_TARGET_MB`  | Target file size for group auto-download     | 45           |
-| `LIMITER_*`                | Token-bucket limits for users/chats/IP/token | various      |
-| `MAX_TEMP_AGE_SECONDS`     | Temp file cleanup threshold                  | 3600         |
-| `JANITOR_INTERVAL_SECONDS` | Cleanup task interval                        | 300          |
+### Core
+
+| Variable                | Description                                           | Default                 |
+| ----------------------- | ----------------------------------------------------- | ----------------------- |
+| `BOT_TOKEN`             | Telegram bot token (from @BotFather)                  | **required**            |
+| `BASE_URL`              | Public URL of the service (for download links)        | `http://localhost:8000` |
+| `WEBHOOK_URL`           | Webhook URL (omit for polling mode)                   | —                       |
+| `TELEGRAM_SECRET_TOKEN` | HMAC secret for webhook auth (auto-generated if omit) | random                  |
+| `TMPDIR`                | Temporary files directory                             | system temp             |
+| `PORT`                  | Uvicorn listening port                                | `8000`                  |
+
+### Limits & Policies
+
+| Variable                 | Description                              | Default |
+| ------------------------ | ---------------------------------------- | ------- |
+| `MAX_TG_UPLOAD_MB`       | Max file size for Telegram upload        | `45`    |
+| `MAX_DL_MB`              | Max file size for HTTP download          | `1000`  |
+| `MAX_CONCURRENT_TASKS`   | Max simultaneous downloads               | `2`     |
+| `ENABLE_TELEGRAM_UPLOAD` | Show "Send to Telegram" button (`1`/`0`) | `1`     |
+| `LINK_TTL_MINUTES`       | Download link expiry time                | `30`    |
+| `DL_TIMEOUT_TELEGRAM`    | Timeout for Telegram send (seconds)      | `600`   |
+| `DL_TIMEOUT_HTTP`        | Timeout for HTTP downloads (seconds)     | `900`   |
+
+### Rate Limiting
+
+| Variable                       | Description                | Default |
+| ------------------------------ | -------------------------- | ------- |
+| `LIMITER_USER_CAPACITY`        | Per-user token bucket size | `10`    |
+| `LIMITER_USER_REFILL_PER_SEC`  | Per-user refill rate       | `0.5`   |
+| `LIMITER_CHAT_CAPACITY`        | Per-chat token bucket size | `20`    |
+| `LIMITER_CHAT_REFILL_PER_SEC`  | Per-chat refill rate       | `1`     |
+| `LIMITER_IP_CAPACITY`          | Per-IP token bucket size   | `15`    |
+| `LIMITER_IP_REFILL_PER_SEC`    | Per-IP refill rate         | `1`     |
+| `LIMITER_TOKEN_CAPACITY`       | Per-token bucket size      | `3`     |
+| `LIMITER_TOKEN_REFILL_PER_SEC` | Per-token refill rate      | `0.25`  |
+
+### Maintenance
+
+| Variable                   | Description                 | Default |
+| -------------------------- | --------------------------- | ------- |
+| `MAX_TEMP_AGE_SECONDS`     | Temp file cleanup threshold | `3600`  |
+| `JANITOR_INTERVAL_SECONDS` | Cleanup task interval       | `300`   |
 
 ### Structured Logging
 

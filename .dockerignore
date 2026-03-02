@@ -1,0 +1,15 @@
+.git
+.github
+.gitignore
+.env
+.env.*
+.vscode
+.idea
+.cursor
+.Jules
+.pytest_cache
+.ruff_cache
+tests/
+scripts/
+*.md
+pyproject.toml

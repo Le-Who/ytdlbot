@@ -7,10 +7,9 @@ WORKDIR /app
 # aria2 - для ускорения загрузки (многопоточность)
 # ca-certificates - для HTTPS
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    aria2 \
-    ca-certificates \
-    curl \
+  ffmpeg \
+  aria2 \
+  ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
 # 2. Устанавливаем Python-зависимости

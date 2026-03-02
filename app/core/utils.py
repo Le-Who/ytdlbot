@@ -4,6 +4,8 @@ from urllib.parse import urlsplit
 
 from app.constants import SUPPORTED_PLATFORMS, SUPPORTED_PLATFORMS_SUFFIXES
 
+__all__ = ["render_progressbar", "is_supported_url", "extract_supported_url", "safe_remove"]
+
 URL_RE = re.compile(r"https?://\S+", re.I)
 SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*]')
 PROGRESS_RE = re.compile(r"(\d+\.\d+)%")

@@ -147,7 +147,15 @@ def deduplicate_formats(
     formats: List[FormatMetadata], is_tiktok_url: bool
 ) -> List[FormatMetadata]:
     if is_tiktok_url:
-        return formats
+        # TikTok: dedup by filesize since heights are often identical
+        unique = []
+        seen_sizes = set()
+        for fmt in formats:
+            key = fmt.filesize or id(fmt)
+            if key not in seen_sizes:
+                unique.append(fmt)
+                seen_sizes.add(key)
+        return unique
     unique_formats = []
     seen_heights = set()
     for fmt in formats:

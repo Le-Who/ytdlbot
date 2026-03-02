@@ -5,6 +5,8 @@ import asyncio
 import logging
 from typing import Optional, Tuple
 
+__all__ = ["MediaSender"]
+
 from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.error import NetworkError
 
@@ -93,8 +95,7 @@ class MediaSender:
                 max_download_time = DL_TIMEOUT_TELEGRAM
 
                 # Clear previous cancel state for this token
-                if token in state.cancel_cache:
-                    del state.cancel_cache[token]
+                state.cancel_cache.pop(token, None)
 
                 while True:
                     if state.cancel_cache.get(token):
@@ -153,7 +154,7 @@ class MediaSender:
                     logger.error(f"[DL-TG] yt-dlp failed: {err}")
 
                     if "file larger" in err or "filesize" in err:
-                        return None, "⚠️ Файл слишком большой (>50 МБ)."
+                        return None, f"⚠️ Файл слишком большой (>{MAX_TG_UPLOAD_MB} МБ)."
                     elif "sign in" in err or "cookies" in err:
                         return None, "⚠️ Требуется авторизация (Sign-in required)."
                     elif "requested format is not available" in err:
@@ -194,40 +195,43 @@ class MediaSender:
         is_audio: bool = False,
         is_gif: bool = False,
         caption: str = "",
+        parse_mode: str = None,
         reply_markup=None,
         reply_to_message_id: int = None,
     ) -> bool:
         """
         Sends a file to Telegram.
         """
-        f = None
         try:
-            f = await asyncio.to_thread(open, file_path, "rb")
-            if is_gif:
-                await bot.send_animation(
-                    chat_id=chat_id,
-                    animation=f,
-                    caption=caption,
-                    reply_markup=reply_markup,
-                    reply_to_message_id=reply_to_message_id,
-                )
-            elif is_audio:
-                await bot.send_audio(
-                    chat_id=chat_id,
-                    audio=f,
-                    caption=caption,
-                    reply_markup=reply_markup,
-                    reply_to_message_id=reply_to_message_id,
-                )
-            else:
-                await bot.send_video(
-                    chat_id=chat_id,
-                    video=f,
-                    caption=caption,
-                    supports_streaming=True,
-                    reply_markup=reply_markup,
-                    reply_to_message_id=reply_to_message_id,
-                )
+            with open(file_path, "rb") as f:
+                if is_gif:
+                    await bot.send_animation(
+                        chat_id=chat_id,
+                        animation=f,
+                        caption=caption,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup,
+                        reply_to_message_id=reply_to_message_id,
+                    )
+                elif is_audio:
+                    await bot.send_audio(
+                        chat_id=chat_id,
+                        audio=f,
+                        caption=caption,
+                        parse_mode=parse_mode,
+                        reply_markup=reply_markup,
+                        reply_to_message_id=reply_to_message_id,
+                    )
+                else:
+                    await bot.send_video(
+                        chat_id=chat_id,
+                        video=f,
+                        caption=caption,
+                        parse_mode=parse_mode,
+                        supports_streaming=True,
+                        reply_markup=reply_markup,
+                        reply_to_message_id=reply_to_message_id,
+                    )
             return True
 
         except NetworkError:
@@ -236,9 +240,6 @@ class MediaSender:
         except Exception as e:
             logger.error(f"Send error: {e}", exc_info=True)
             return False
-        finally:
-            if f:
-                await asyncio.to_thread(f.close)
 
     @staticmethod
     async def convert_to_gif_ffmpeg(video_path: str) -> Optional[str]:

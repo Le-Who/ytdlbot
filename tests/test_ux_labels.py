@@ -82,7 +82,11 @@ class TestUXLabels(unittest.TestCase):
             protocol="https",
             is_tiktok=False
         )
-        self.assertIn("?", label)
+        # No size suffix when filesize is None and protocol is not HLS
+        self.assertIn("720p", label)
+        self.assertNotIn("MB", label)
+        self.assertNotIn("KB", label)
+        self.assertNotIn("HLS", label)
 
 if __name__ == '__main__':
     unittest.main()

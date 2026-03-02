@@ -22,43 +22,56 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 
 ## 🛠 Tech Stack
 
-- **Language**: Python 3.10+
+- **Language**: Python 3.12+
 - **Framework**: [FastAPI](https://fastapi.tiangolo.com/) (Web Server & Webhook handling)
 - **Bot Framework**: [python-telegram-bot](https://python-telegram-bot.org/) (v20+)
 - **Core Engine**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Media extraction)
 - **Processing**: [FFmpeg](https://ffmpeg.org/) (Video/Audio processing & GIF conversion)
 - **Containerization**: Docker & Docker Compose
+- **CI/CD**: GitHub Actions (automated testing with coverage)
 
 ## 📂 Project Structure
 
 ```
 .
 ├── app
-│   ├── api              # FastAPI routes (webhooks, health checks)
-│   ├── bot              # Telegram Bot logic
-│   │   ├── callbacks.py # Button interactions (Download, Cancel, GIF)
-│   │   ├── commands.py  # /start, /help handlers
+│   ├── api                # FastAPI routes (webhooks, health checks, streaming)
+│   ├── bot                # Telegram Bot logic
+│   │   ├── callbacks.py   # Button interactions (Download, Cancel, GIF)
+│   │   ├── commands.py    # /start, /help handlers
 │   │   ├── group_logic.py # Group chat specific logic
-│   │   ├── keyboards.py # Inline keyboard builders
-│   │   └── messages.py  # Private chat message handlers
-│   ├── core             # Core configurations & utilities
-│   │   ├── config.py    # Environment variables settings
-│   │   ├── state.py     # Global state (locks, caches)
-│   │   └── utils.py     # Helper functions
+│   │   ├── keyboards.py   # Inline keyboard builders
+│   │   └── messages.py    # Private chat message handlers
+│   ├── core               # Core configurations & utilities
+│   │   ├── config.py      # Environment variables settings
+│   │   ├── limiter.py     # Token bucket rate limiter + LimiterRegistry
+│   │   ├── policy.py      # Size policy checks
+│   │   ├── state.py       # Global state (locks, caches)
+│   │   ├── texts.py       # All user-facing UI strings (i18n-ready)
+│   │   └── utils.py       # Helper functions
 │   ├── services
-│   │   ├── downloader.py # MediaSender service (Download/Send/Convert)
-│   │   └── ytdlp        # yt-dlp wrapper service
-│   └── main.py          # Application entry point
-├── Dockerfile           # Docker build instructions
-├── requirements.txt     # Python dependencies
-└── README.md            # Project documentation
+│   │   ├── downloader.py  # MediaSender service (Download/Send/Convert)
+│   │   └── ytdlp          # yt-dlp wrapper service
+│   │       ├── service.py # YtDlpService facade
+│   │       ├── parsers.py # Format parsing & deduplication
+│   │       ├── models.py  # FormatItem, FormatMetadata dataclasses
+│   │       └── builders.py# Command-line builders
+│   ├── tasks
+│   │   └── janitor.py     # Periodic temp file cleanup
+│   └── main.py            # Application entry point
+├── tests/                 # 193 tests (unit + integration)
+├── .github/workflows/     # CI/CD pipeline
+├── Dockerfile             # Docker build (Python 3.12-slim)
+├── pyproject.toml         # pytest + coverage config
+├── requirements.txt       # Python dependencies
+└── README.md
 ```
 
 ## ⚙️ Installation & Setup
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.12+
 - FFmpeg (installed and in system PATH)
 - Aria2c (optional, recommended for speed)
 
@@ -116,6 +129,28 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
       ytdlbot
     ```
 
+## 🧪 Testing
+
+Run the full test suite:
+
+```bash
+BOT_TOKEN=test pytest tests/ -v
+```
+
+With coverage report:
+
+```bash
+BOT_TOKEN=test pytest tests/ --cov=app --cov-report=term-missing
+```
+
+The test suite includes:
+
+- **193 unit + integration tests**
+- HMAC webhook authentication tests
+- Rate limiter behavior tests
+- Format parsing and deduplication tests
+- Full end-to-end flow tests (URL → formats → pick → download → send)
+
 ## 🎮 Usage
 
 ### Private Chat
@@ -132,6 +167,30 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 3.  The bot automatically downloads the best suitable video and sends it.
 4.  Click **"Send GIF"** on the video reply to instantly get a GIF version.
 
+## 🔧 Configuration
+
+Use `.env.example` as baseline. Key variables:
+
+| Variable                   | Description                                  | Default      |
+| -------------------------- | -------------------------------------------- | ------------ |
+| `BOT_TOKEN`                | Telegram bot token                           | **required** |
+| `WEBHOOK_URL`              | Webhook URL (omit for polling mode)          | —            |
+| `TELEGRAM_SECRET_TOKEN`    | HMAC secret for webhook auth                 | **required** |
+| `MAX_TG_UPLOAD_MB`         | Max file size for Telegram upload            | 45           |
+| `MAX_DL_MB`                | Max file size for HTTP download              | 500          |
+| `GROUP_DEFAULT_TARGET_MB`  | Target file size for group auto-download     | 45           |
+| `LIMITER_*`                | Token-bucket limits for users/chats/IP/token | various      |
+| `MAX_TEMP_AGE_SECONDS`     | Temp file cleanup threshold                  | 3600         |
+| `JANITOR_INTERVAL_SECONDS` | Cleanup task interval                        | 300          |
+
+### Structured Logging
+
+JSON logs include: `correlation_id`, `op`, `duration_ms`, `error_type`, and optional context fields (`token`, `chat_id`, `user_id`, `url_host`).
+
+## 🌐 i18n
+
+All user-facing strings are centralized in [`app/core/texts.py`](app/core/texts.py). To localize the bot, replace the `Texts` class constants or implement a locale-based lookup.
+
 ## 🤝 Contributing
 
 Contributions are welcome! Please follow these steps:
@@ -145,28 +204,3 @@ Contributions are welcome! Please follow these steps:
 ## 📄 License
 
 Distributed under the MIT License. See `LICENSE` for more information.
-
-## 🔧 New operational settings
-
-Use `.env.example` as baseline. Key variables:
-
-- `MAX_TG_UPLOAD_MB`, `MAX_DL_MB`, `GROUP_DEFAULT_TARGET_MB`
-- `LIMITER_*` token-bucket limits for users/chats/IP/token
-- `MAX_TEMP_AGE_SECONDS`, `JANITOR_INTERVAL_SECONDS`
-
-Run locally:
-
-```bash
-cp .env.example .env
-uvicorn app.main:api --reload
-```
-
-Run tests:
-
-```bash
-BOT_TOKEN=test BASE_URL=http://localhost:8000 pytest tests/test_core_process.py tests/test_limiter.py tests/test_janitor.py tests/test_core_utils.py
-```
-
-### Structured logging schema
-
-JSON logs include: `correlation_id`, `op`, `duration_ms`, `error_type`, and optional context fields (`token`, `chat_id`, `user_id`, `url_host`).

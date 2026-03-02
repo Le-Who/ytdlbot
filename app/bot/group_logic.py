@@ -8,6 +8,7 @@ from app.core import state
 from app.core.config import MAX_TG_UPLOAD_MB
 from app.core.utils import extract_supported_url
 from app.services.downloader import MediaSender
+from app.core.texts import Texts
 
 logger = logging.getLogger("app.bot.group_logic")
 
@@ -16,7 +17,7 @@ _sz = f"{MAX_TG_UPLOAD_MB}M"
 GROUP_VIDEO_FORMAT = f"bestvideo[ext=mp4][filesize<{_sz}]+bestaudio[ext=m4a]/best[ext=mp4][filesize<{_sz}]/best[filesize<{_sz}]"
 
 
-async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """
     Passively monitors group messages for supported links.
     """
@@ -90,7 +91,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         # If error, we might want to delete the status message or show error
         # In groups, clutter is bad. Show error for 5s then delete?
         try:
-            await status_msg.edit_text(error or "❌ Ошибка.")
+            await status_msg.edit_text(error or Texts.GROUP_ERROR)
             # await asyncio.sleep(5)
             # await status_msg.delete()
         except Exception:
@@ -99,13 +100,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Success! Send video in Silent Mode (Delete original, Tag user)
 
-    # 1. Delete original user message (Silent Mode)
-    try:
-        await update.message.delete()
-    except Exception as e:
-        logger.debug(f"Could not delete user message: {e}")
-
-    # 2. Tag user in caption
+    # Tag user in caption
     if update.effective_user.username:
         user_tag = f"@{update.effective_user.username}"
     else:
@@ -113,10 +108,9 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     caption = f"👤 {user_tag}"
 
-    await status_msg.edit_text("📤 Отправляю...")
+    await status_msg.edit_text(Texts.GROUP_SENDING)
 
     # Create "Send GIF" button
-    # The callback data must include the token to find the file in cache
     kb = InlineKeyboardMarkup(
         [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{token}")]]
     )
@@ -125,17 +119,21 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         context.bot,
         update.effective_chat.id,
         file_path,
-        is_audio=False,  # Prioritize video
+        is_audio=False,
         is_gif=False,
         caption=caption,
+        parse_mode="HTML",
         reply_markup=kb,
-        # reply_to_message_id=update.message.message_id # Cannot reply if deleted
     )
 
     if success:
+        # Delete original user message ONLY after successful send (Silent Mode)
+        try:
+            await update.message.delete()
+        except Exception as e:
+            logger.debug(f"Could not delete user message: {e}")
         await status_msg.delete()
     else:
-        await status_msg.edit_text("⚠️ Ошибка отправки.")
+        await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
 
-    # We do NOT remove the file here, because "Send GIF" needs it.
-    # It remains in state.file_cache (TTLCache) until expiry.
+    # File remains in state.file_cache (TTLCache) for GIF conversion reuse

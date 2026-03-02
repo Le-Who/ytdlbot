@@ -3,15 +3,21 @@ import sys
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# Ensure app can be imported
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+os.environ.setdefault("BOT_TOKEN", "test_token")
 
-# Minimal env required for config import; keep ENABLE_TELEGRAM_UPLOAD unset
-with patch.dict(os.environ, {"BOT_TOKEN": "test_token"}, clear=False):
-    from app.bot import callbacks
+from app.bot import callbacks
+from app.core import state
 
 
 class TestUXOnPick(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        state.info_cache = {}
+        state.link_cache = {}
+        state.cancel_cache = {}
+        state.limiter = MagicMock()
+        state.limiter.allow_user.return_value = True
+
     async def test_on_pick_shows_details(self):
         context = MagicMock()
         context.user_data = {
@@ -40,7 +46,7 @@ class TestUXOnPick(unittest.IsolatedAsyncioTestCase):
         self.assertIn("✅ <b>Готово", message_text)
 
     async def test_on_pick_has_link_and_tg_buttons_in_default_config(self):
-        """Regression guard: default config (without env overrides) keeps both action buttons."""
+        """Regression guard: default config keeps both action buttons."""
         context = MagicMock()
         context.user_data = {
             "page_url": "http://example.com/video",
@@ -54,13 +60,12 @@ class TestUXOnPick(unittest.IsolatedAsyncioTestCase):
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
 
-        await callbacks.on_pick(update, context)
-
+        with patch("app.bot.callbacks.ENABLE_TELEGRAM_UPLOAD", True):
+            await callbacks.on_pick(update, context)
 
         _, kwargs = update.callback_query.edit_message_text.call_args
         reply_markup = kwargs["reply_markup"]
-
-        button_texts = [button.text for row in reply_markup.inline_keyboard for button in row]
+        button_texts = [btn.text for row in reply_markup.inline_keyboard for btn in row]
 
         self.assertIn("📥 Скачать (Ссылка)", button_texts)
         self.assertIn("📤 Отправить файл в TG", button_texts)

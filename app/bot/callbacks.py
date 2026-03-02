@@ -18,28 +18,29 @@ from app.core.utils import (
 )
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from app.bot.keyboards import build_format_keyboard
+from app.core.texts import Texts
 from app.core.policy import size_allowed
 from app.core.logging import set_correlation_id
+
+__all__ = ["on_back", "on_pick", "on_cancel", "on_send", "on_convert_to_gif"]
 
 logger = logging.getLogger("app.bot.callbacks")
 
 
-async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     await q.answer()
 
     data = context.user_data
     page_url = data.get("page_url")
     if not page_url:
-        await q.edit_message_text(
-            "⚠️ Данные устарели. Пожалуйста, отправьте ссылку заново."
-        )
+        await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
         return
 
     cached = state.info_cache.get(page_url)
     if not cached:
         try:
-            await q.edit_message_text("⏳ Кэш истек. Обновляю данные...")
+            await q.edit_message_text(Texts.CACHE_REFRESHING)
             async with state.parsing_sem:
                 title, formats, special_format, duration = await asyncio.to_thread(
                     state.ytdlp.list_formats, page_url
@@ -47,9 +48,7 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
             state.info_cache[page_url] = (title, formats, special_format, duration)
         except Exception as e:
             logger.error(f"[ON_BACK] Refresh error: {e}")
-            await q.edit_message_text(
-                "⚠️ Ошибка обновления данных. Отправьте ссылку заново."
-            )
+            await q.edit_message_text(Texts.CACHE_REFRESH_FAIL)
             return
     else:
         title, formats, special_format, duration = cached
@@ -63,9 +62,9 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
-    await q.answer("⏳ Подготовка ссылки...")
+    await q.answer(Texts.PREPARING_LINK)
 
     try:
         await q.edit_message_reply_markup(None)
@@ -83,9 +82,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = context.user_data
     if not data.get("page_url"):
-        await q.edit_message_text(
-            "⚠️ Данные устарели. Пожалуйста, отправьте ссылку на видео еще раз."
-        )
+        await q.edit_message_text(Texts.DATA_EXPIRED_RESEND)
         return
 
     token = uuid.uuid4().hex
@@ -98,17 +95,17 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     dl_link = f"{BASE_URL}/dl/{token}"
 
-    kb = [[InlineKeyboardButton("📥 Скачать (Ссылка)", url=dl_link)]]
+    kb = [[InlineKeyboardButton(Texts.BTN_DOWNLOAD_LINK, url=dl_link)]]
     if ENABLE_TELEGRAM_UPLOAD:
         kb.append(
             [
                 InlineKeyboardButton(
-                    "📤 Отправить файл в TG", callback_data=f"send|{token}"
+                    Texts.BTN_SEND_TG, callback_data=f"send|{token}"
                 )
             ]
         )
 
-    kb.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
+    kb.append([InlineKeyboardButton(Texts.BTN_BACK, callback_data="back")])
 
     height = data["format_map"].get(format_id)
     filesize = data.get("size_map", {}).get(format_id)
@@ -128,16 +125,16 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE):
     quality_str = f" ({' • '.join(quality_parts)})" if quality_parts else ""
 
     await q.edit_message_text(
-        f"✅ <b>Готово{quality_str}</b>\n🔗 Ссылка ({LINK_TTL_MINUTES} мин):\n{html.escape(dl_link)}",
+        Texts.READY_LINK.format(quality=quality_str, ttl=LINK_TTL_MINUTES, link=html.escape(dl_link)),
         reply_markup=InlineKeyboardMarkup(kb),
         disable_web_page_preview=True,
         parse_mode="HTML",
     )
 
 
-async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
-    await q.answer("🚫 Отменяю...")
+    await q.answer(Texts.CANCELLING)
 
     if not q.data:
         return
@@ -145,14 +142,14 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         _, token = q.data.split("|", 1)
         state.cancel_cache[token] = True
-        await q.edit_message_text("❌ Загрузка отменена пользователем.")
+        await q.edit_message_text(Texts.CANCELLED)
     except (ValueError, AttributeError) as e:
         logger.error(f"Invalid callback data in on_cancel: {e}")
 
 
-async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
-    await q.answer("🚀 Загрузка началась")
+    await q.answer(Texts.DOWNLOAD_STARTED)
     user_id = q.from_user.id
 
     try:
@@ -163,7 +160,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not state.limiter.allow_user(user_id) or not state.limiter.allow_chat(
         q.message.chat_id
     ):
-        await q.edit_message_text("⚠️ Слишком много запросов. Подождите немного.")
+        await q.edit_message_text(Texts.TOO_MANY_REQUESTS)
         return
 
     if not q.data:
@@ -178,21 +175,19 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     set_correlation_id(token)
     payload = state.link_cache.get(token)
     if not payload:
-        await q.edit_message_text("⚠️ Ссылка устарела.")
+        await q.edit_message_text(Texts.LINK_EXPIRED)
         return
 
     dl_link = f"{BASE_URL}/dl/{token}"
     kb_error = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📥 Скачать (Ссылка)", url=dl_link)],
-            [InlineKeyboardButton("🔙 Назад", callback_data="back")],
+            [InlineKeyboardButton(Texts.BTN_DOWNLOAD_LINK, url=dl_link)],
+            [InlineKeyboardButton(Texts.BTN_BACK, callback_data="back")],
         ]
     )
 
     if state.tasks_sem.locked():
-        await q.edit_message_text(
-            "⚠️ Очередь переполнена. Скачайте по ссылке.", reply_markup=kb_error
-        )
+        await q.edit_message_text(Texts.QUEUE_FULL, reply_markup=kb_error)
         return
 
     data = context.user_data
@@ -200,9 +195,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not size_allowed(fmt_size, target="telegram"):
         mb = fmt_size / (1024 * 1024)
         await q.edit_message_text(
-            f"⚠️ Файл слишком большой (~{mb:.1f} МБ).\n"
-            f"Telegram Bot API не позволяет отправлять файлы больше {MAX_TG_UPLOAD_MB} МБ.\n"
-            "Пожалуйста, используйте прямую ссылку ниже.",
+            Texts.FILE_TOO_BIG.format(size_mb=mb, max_mb=MAX_TG_UPLOAD_MB),
             reply_markup=kb_error,
         )
         return
@@ -214,7 +207,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"UI Update failed: {e}")
 
     async with state.tasks_sem:
-        await q.edit_message_text("⏳ Начинаю загрузку...")
+        await q.edit_message_text(Texts.STARTING_DOWNLOAD)
 
         from app.services.downloader import (
             MediaSender,
@@ -229,10 +222,10 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         if error or not file_path:
-            await q.edit_message_text(error or "⚠️ Ошибка.", reply_markup=kb_error)
+            await q.edit_message_text(error or Texts.GENERIC_ERROR_SHORT, reply_markup=kb_error)
             return
 
-        await q.edit_message_text("📤 Отправляю в Telegram...")
+        await q.edit_message_text(Texts.SENDING_TO_TG)
 
         is_gif = payload["format_id"] == GIF_FORMAT_ID
         is_audio = payload["format_id"] == AUDIO_FORMAT_ID
@@ -249,9 +242,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if success:
             await q.delete_message()
         else:
-            await q.edit_message_text(
-                "⚠️ Ошибка при отправке файла.", reply_markup=kb_error
-            )
+            await q.edit_message_text(Texts.SEND_ERROR, reply_markup=kb_error)
 
         # Cleanup is handled by MediaSender if it created a new file, but we should ensure cache policy
         # If it was a cached file, don't remove.
@@ -265,11 +256,11 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # We'll leave it in cache.
 
 
-async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles 'Send GIF' button press from Group Mode."""
     q = update.callback_query
     try:
-        await q.answer("⏳ Конвертирую в GIF...")
+        await q.answer(Texts.GIF_CONVERTING)
         await q.edit_message_reply_markup(None)
     except Exception as e:
         logger.warning(f"Callback answer failed (query too old?): {e}")
@@ -290,15 +281,15 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Failed to reply about missing file: {e}")
         return
 
-    # Check/Add to processing set (Debounce)
-    if token in state.processing_gifs:
-        try:
-            await q.message.reply_text("⏳ У вас уже идет генерация...", quote=True)
-        except Exception as e:
-            logger.warning(f"Failed to reply about in-progress GIF: {e}")
-        return
-
-    state.processing_gifs.add(token)
+    # Check/Add to processing set (Debounce) — atomic under lock
+    async with state.conversion_lock:
+        if token in state.processing_gifs:
+            try:
+                await q.message.reply_text("⏳ У вас уже идет генерация...", quote=True)
+            except Exception as e:
+                logger.warning(f"Failed to reply about in-progress GIF: {e}")
+            return
+        state.processing_gifs.add(token)
 
     try:
         # 2. Convert (Strip Audio)
@@ -326,9 +317,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption="🎬 GIF",
     )
 
-    if success:
-        pass
-    else:
+    if not success:
         try:
             await q.message.reply_text("⚠️ Не удалось отправить GIF.", quote=True)
         except Exception as e:

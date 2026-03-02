@@ -8,6 +8,7 @@ from telegram.constants import ChatAction
 from app.core import state
 from app.core.utils import extract_supported_url
 from app.bot.keyboards import build_format_keyboard
+from app.core.texts import Texts
 from app.services.ytdlp.exceptions import (
     AccessDeniedError,
     VideoNotFoundError,
@@ -18,15 +19,13 @@ from app.services.ytdlp.exceptions import (
 logger = logging.getLogger("app.bot.messages")
 
 
-async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     text = (update.message.text or "").strip()
 
     url = extract_supported_url(text)
     if not url:
-        await update.message.reply_text(
-            "❌ Ссылка не поддерживается. Попробуйте YouTube, TikTok, VK или Pinterest."
-        )
+        await update.message.reply_text(Texts.URL_NOT_SUPPORTED)
         return
 
     text = url
@@ -34,14 +33,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not state.limiter.allow_user(user.id) or not state.limiter.allow_chat(
         update.effective_chat.id
     ):
-        await update.message.reply_text("⚠️ Слишком часто. Подождите минуту.")
+        await update.message.reply_text(Texts.RATE_LIMITED)
         return
 
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id, action=ChatAction.TYPING
     )
 
-    msg = await update.message.reply_text("🔎 Ищу видео...")
+    msg = await update.message.reply_text(Texts.SEARCHING)
 
     cached = state.info_cache.get(text)
     if cached:
@@ -50,14 +49,18 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         if text in state.inflight_parsing:
             logger.info(f"[PARSING] Waiting for inflight task: {text}")
-            await state.inflight_parsing[text].wait()
+            try:
+                await asyncio.wait_for(
+                    state.inflight_parsing[text].wait(), timeout=300.0
+                )
+            except asyncio.TimeoutError:
+                await msg.edit_text(Texts.TIMEOUT_RETRY)
+                return
             cached = state.info_cache.get(text)
             if cached:
                 title, formats, special_format, duration = cached
             else:
-                await msg.edit_text(
-                    "❌ Ошибка при получении данных. Попробуйте еще раз."
-                )
+                await msg.edit_text(Texts.FETCH_ERROR_RETRY)
                 return
         else:
             event = asyncio.Event()
@@ -73,34 +76,27 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         ) = await asyncio.to_thread(state.ytdlp.list_formats, text)
                 state.info_cache[text] = (title, formats, special_format, duration)
             except asyncio.TimeoutError:
-                await msg.edit_text("❌ Время ожидания истекло. Сервис недоступен.")
+                await msg.edit_text(Texts.TIMEOUT_UNAVAILABLE)
                 return
             except AccessDeniedError:
-                await msg.edit_text(
-                    "❌ Доступ запрещен. Контент может быть приватным или требуется авторизация."
-                )
+                await msg.edit_text(Texts.ACCESS_DENIED)
                 return
             except VideoNotFoundError:
-                await msg.edit_text(
-                    "❌ Видео не найдено. Проверьте правильность ссылки."
-                )
+                await msg.edit_text(Texts.VIDEO_NOT_FOUND)
                 return
             except LiveStreamError:
-                await msg.edit_text("❌ Прямые трансляции (Live) не поддерживаются.")
+                await msg.edit_text(Texts.LIVE_NOT_SUPPORTED)
                 return
             except ExtractionError as e:
                 error_msg = str(e).lower()
                 if "pinterest" in error_msg or "pin.it" in error_msg:
-                    await msg.edit_text(
-                        "❌ Ошибка загрузки с Pinterest. Попробуйте позже или используйте прямую ссылку на видео."
-                    )
+                    await msg.edit_text(Texts.PINTEREST_ERROR)
                 else:
-                    # e already contains the localized error message prefix
                     await msg.edit_text(f"❌ {e}")
                 return
             except Exception as e:
                 logger.error(f"Parse error: {e}", exc_info=True)
-                await msg.edit_text(f"❌ Ошибка: {str(e)[:150]}")
+                await msg.edit_text(Texts.GENERIC_ERROR.format(detail=str(e)[:150]))
                 return
             finally:
                 event.set()

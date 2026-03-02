@@ -1,6 +1,7 @@
 import asyncio
 import hmac
 import logging
+import re
 import time
 from urllib.parse import quote, urlsplit
 
@@ -39,7 +40,9 @@ async def download(token: str, request: Request):
     if not state.limiter.allow_ip(ip) or not state.limiter.allow_token(token):
         raise HTTPException(429, "Too many requests")
 
-    encoded_filename = quote(payload.get("title") or "video")
+    raw_title = payload.get("title") or "video"
+    clean_title = re.sub(r'[\x00-\x1f\x7f\r\n]', '', raw_title)[:200]
+    encoded_filename = quote(clean_title or "video")
     format_id = payload.get("format_id")
     is_gif = format_id == GIF_FORMAT_ID
     is_audio = format_id == AUDIO_FORMAT_ID
@@ -115,12 +118,9 @@ async def download(token: str, request: Request):
                 payload.get("height"),
                 output="-",
             )
-            start_time = time.time()
             async with run_subprocess(cmd, timeout=DL_TIMEOUT_HTTP) as handle:
                 proc = handle.proc
                 while True:
-                    if time.time() - start_time > DL_TIMEOUT_HTTP:
-                        break
                     chunk = await proc.stdout.read(CHUNK_SIZE)
                     if not chunk:
                         break
@@ -140,6 +140,13 @@ async def telegram_webhook(request: Request):
     token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
     if not token or not hmac.compare_digest(token, TELEGRAM_SECRET_TOKEN):
         raise HTTPException(401, "Unauthorized")
+
+    # Rate limit by source IP to prevent replay attacks
+    ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    if not ip and request.client:
+        ip = request.client.host
+    if ip and not state.limiter.allow_ip(ip):
+        raise HTTPException(429, "Too many requests")
 
     if state.bot_app:
         try:

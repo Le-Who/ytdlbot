@@ -1,5 +1,12 @@
 import unittest
-from app.main import render_progressbar
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+os.environ.setdefault("BOT_TOKEN", "test_token")
+
+from app.core.utils import render_progressbar
+
 
 class TestUI(unittest.TestCase):
     def test_render_progressbar_zero(self):
@@ -31,6 +38,7 @@ class TestUI(unittest.TestCase):
         """Test custom length"""
         result = render_progressbar(50, length=4)
         self.assertEqual(result, "██░░ 50.0%")
+
 
 if __name__ == "__main__":
     unittest.main()

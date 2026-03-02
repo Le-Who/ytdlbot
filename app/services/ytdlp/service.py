@@ -7,6 +7,8 @@ from typing import Dict, Any, List, Optional, Tuple
 
 import yt_dlp
 
+__all__ = ["YtDlpService"]
+
 from .models import FormatItem, FormatMetadata
 from .cookies import CookiesManager
 from .builders import build_command
@@ -26,6 +28,7 @@ from .exceptions import (
     LiveStreamError,
     ExtractionError,
 )
+from app.core.texts import Texts
 
 logger = logging.getLogger("ytdlp_service")
 
@@ -162,26 +165,24 @@ class YtDlpService:
             if not info:
                 error_msg = str(e).lower()
                 if "403" in error_msg or "forbidden" in error_msg:
-                    raise AccessDeniedError(
-                        "Доступ запрещен. Возможно, контент приватный или требуется авторизация."
-                    )
+                    raise AccessDeniedError(Texts.SVC_ACCESS_DENIED)
                 elif "404" in error_msg or "not found" in error_msg:
-                    raise VideoNotFoundError("Видео не найдено. Проверьте ссылку.")
+                    raise VideoNotFoundError(Texts.SVC_VIDEO_NOT_FOUND)
                 elif "live" in error_msg and "available" not in error_msg:
-                    raise LiveStreamError("Прямые трансляции (Live) не поддерживаются.")
+                    raise LiveStreamError(Texts.SVC_LIVE_NOT_SUPPORTED)
                 else:
                     logger.error("YtDlp Extraction Error: %s", e, exc_info=True)
                     msg = str(e)
                     if "format is not available" in msg.lower():
-                        msg = "Выбранный формат или видео недоступны. Попробуйте другую ссылку."
-                    raise ExtractionError(f"Ошибка извлечения: {msg[:300]}")
+                        msg = Texts.SVC_FORMAT_UNAVAILABLE
+                    raise ExtractionError(Texts.SVC_EXTRACTION_ERROR.format(detail=msg[:300]))
 
         if info.get("is_live") or info.get("live_status") == "is_live":
             raise LiveStreamError(
                 "⚠️ Это прямая трансляция. Загрузка активных стримов не поддерживается."
             )
 
-        title = info.get("title") or "Видео"
+        title = info.get("title") or Texts.SVC_DEFAULT_TITLE
         duration_sec = info.get("duration")
         duration_str = _format_duration(duration_sec)
 

@@ -18,6 +18,9 @@ def cleanup_temp_dir() -> tuple[int, int]:
         return deleted, orphan
 
     for name in os.listdir(TEMP_DIR):
+        # Only clean up files created by this bot (ytdl_ prefix)
+        if not name.startswith("ytdl_"):
+            continue
         path = os.path.join(TEMP_DIR, name)
         if not os.path.isfile(path):
             continue

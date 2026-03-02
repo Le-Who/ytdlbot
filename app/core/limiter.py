@@ -1,6 +1,8 @@
 import time
 from dataclasses import dataclass
 
+__all__ = ["TokenBucketLimiter"]
+
 
 @dataclass
 class Bucket:
@@ -13,6 +15,9 @@ class TokenBucketLimiter:
         self.capacity = burst if burst is not None else capacity
         self.refill_rate = refill_rate
         self._buckets: dict[str, Bucket] = {}
+        self._max_idle_sec = max(300.0, 2 * self.capacity / self.refill_rate)
+        self._last_prune = time.monotonic()
+        self._prune_interval = 600.0  # prune at most every 10 min
 
     def allow(self, key: str, cost: float = 1.0) -> bool:
         now = time.monotonic()
@@ -31,8 +36,21 @@ class TokenBucketLimiter:
 
         if bucket.tokens >= cost:
             bucket.tokens -= cost
+            self._maybe_prune(now)
             return True
+        self._maybe_prune(now)
         return False
+
+    def _maybe_prune(self, now: float) -> None:
+        if now - self._last_prune < self._prune_interval:
+            return
+        self._last_prune = now
+        stale_keys = [
+            k for k, b in self._buckets.items()
+            if now - b.updated_at > self._max_idle_sec
+        ]
+        for k in stale_keys:
+            del self._buckets[k]
 
 
 class LimiterRegistry:

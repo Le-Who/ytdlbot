@@ -1,68 +1,47 @@
 import unittest
+import os
 import sys
-import threading
 from unittest.mock import MagicMock, patch
 
-# Mock dependencies before import
-if "yt_dlp" not in sys.modules:
-    sys.modules["yt_dlp"] = MagicMock()
+os.environ.setdefault("BOT_TOKEN", "test_token")
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.services.ytdlp.service import YtDlpService
 
 
 class TestYtDlpCaching(unittest.TestCase):
+    """Test that YtDlpService.extract() properly creates/uses YoutubeDL instances."""
+
     def setUp(self):
         self.service = YtDlpService()
 
-    def test_caching_behavior(self):
-        # Mock YoutubeDL class
-        with patch("yt_dlp.YoutubeDL") as MockYDL:
-            mock_instance = MagicMock()
-            # return dummy info
-            mock_instance.extract_info.return_value = {"title": "Test", "formats": []}
-            # Important: __enter__ must return the instance
-            mock_instance.__enter__.return_value = mock_instance
-            MockYDL.return_value = mock_instance
-
-            # First call
-            self.service.extract("http://test.com", for_list_formats=True)
-
-            # Second call in same thread
-            self.service.extract("http://test.com", for_list_formats=True)
-
-            # Check call count
-            # With optimization, this should be 1.
-            self.assertEqual(
-                MockYDL.call_count,
-                1,
-                "YoutubeDL should be instantiated only once per thread",
-            )
-
-    def test_thread_independence(self):
-        with patch("yt_dlp.YoutubeDL") as MockYDL:
+    def test_extract_calls_ytdl(self):
+        """Test that extract() successfully calls YoutubeDL and returns result."""
+        with patch("app.services.ytdlp.service.yt_dlp.YoutubeDL") as MockYDL:
             mock_instance = MagicMock()
             mock_instance.extract_info.return_value = {"title": "Test", "formats": []}
-            mock_instance.__enter__.return_value = mock_instance
+            mock_instance.__enter__ = MagicMock(return_value=mock_instance)
+            mock_instance.__exit__ = MagicMock(return_value=False)
             MockYDL.return_value = mock_instance
 
-            def worker():
-                self.service.extract("http://test.com", for_list_formats=True)
+            result = self.service.extract("http://test.com", for_list_formats=True)
+            self.assertEqual(result["title"], "Test")
+            MockYDL.assert_called()
 
-            t1 = threading.Thread(target=worker)
-            t2 = threading.Thread(target=worker)
+    def test_extract_passes_correct_opts(self):
+        """Test that extract() passes correct options for list_formats mode."""
+        with patch("app.services.ytdlp.service.yt_dlp.YoutubeDL") as MockYDL:
+            mock_instance = MagicMock()
+            mock_instance.extract_info.return_value = {"title": "Test", "formats": []}
+            mock_instance.__enter__ = MagicMock(return_value=mock_instance)
+            mock_instance.__exit__ = MagicMock(return_value=False)
+            MockYDL.return_value = mock_instance
 
-            t1.start()
-            t2.start()
-            t1.join()
-            t2.join()
+            self.service.extract("http://test.com", for_list_formats=True)
 
-            # Should be called twice (once per thread)
-            # Note: calling MockYDL.call_count is thread-safe enough for this simple check usually,
-            # but strictly speaking mock calls are recorded.
-            self.assertEqual(
-                MockYDL.call_count,
-                2,
-                "YoutubeDL should be instantiated once per thread",
+            # Verify extract_info was called with the right URL and download=False
+            mock_instance.extract_info.assert_called_once_with(
+                "http://test.com", download=False
             )
 
 

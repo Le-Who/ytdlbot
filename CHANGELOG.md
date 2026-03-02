@@ -24,6 +24,7 @@ All notable changes to this project will be documented in this file.
 - **`parse_mode="HTML"` for group captions** (M4): Enables HTML mentions in group chat file sends
 - **TikTok format deduplication** (M5): Deduplicates by filesize instead of height
 - **`.dockerignore`**: Excludes `.git`, tests, IDE files, docs from Docker build context
+- **Injection prevention tests**: `tests/test_injection_prevention.py` — 15 tests for URL separator, prefix validation, gallery-dl cookies ordering, and stream byte limits
 
 ### Changed
 
@@ -31,7 +32,14 @@ All notable changes to this project will be documented in this file.
 - **Dockerfile**: Updated base image from `python:3.11-slim` to `python:3.12-slim`
 - **Dockerfile**: Removed unused `curl` package from system dependencies
 - **Tech stack**: Python version requirement updated from 3.10+ to 3.12+
-- **Test suite**: Expanded from 140 to 217 tests (all passing)
+- **Test suite**: Expanded from 140 to 232 tests (all passing)
+- **Dockerfile**: Added non-root `botuser` for defense-in-depth
+- **`conversion_lock`→`Semaphore(3)`**: Allows 3 concurrent CPU-intensive conversions instead of serializing
+- **Janitor**: Now also cleans `slideshow_*` directories and `concat_*` temp files
+- **PTB error handler**: Registered global `add_error_handler` to log and notify users of unhandled exceptions
+- **`MAX_CONCURRENT_TASKS`**: Default increased from 2 to 5
+- **`inflight_parsing`**: Replaced plain `dict` with `TTLCache(100, 600)` for auto-expiry of stale entries
+- **Photo streaming**: `send_slideshow_photos` now passes file handles instead of buffering entire images in memory
 - **8 test files rewritten**: Removed FastAPI/TestClient dependencies by testing logic directly
 
 ### Dependencies
@@ -54,6 +62,10 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 
+- **CLI injection prevention** (SEC-1/3): `--` end-of-options separator added to all `yt-dlp` and `gallery-dl` subprocess commands
+- **URL prefix validation**: URLs starting with `-` are rejected before being passed to any subprocess
+- **Stream byte limit** (SEC-2): HTTP `/dl/{token}` endpoint terminates after exceeding `MAX_DL_MB` to prevent resource exhaustion
+- **Non-root Docker user**: Container runs as `botuser` instead of root
 - Webhook HMAC authentication using `hmac.compare_digest` (timing-safe)
 - Security headers middleware with CSP (strict for API, relaxed for docs)
 - Rate limiting per user, chat, IP, and token via `LimiterRegistry`

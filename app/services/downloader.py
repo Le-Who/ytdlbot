@@ -4,7 +4,10 @@ import time
 import asyncio
 import logging
 import shutil
-from typing import Optional, Tuple
+from typing import Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.gallery_dl.service import SlideshowResult
 
 __all__ = ["MediaSender"]
 

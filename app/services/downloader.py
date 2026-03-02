@@ -279,7 +279,7 @@ class MediaSender:
 
         try:
             # Acquire lock to ensure we only burn CPU for one task at a time
-            async with state.conversion_lock:
+            async with state.conversion_sem:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.DEVNULL,
@@ -397,7 +397,7 @@ class MediaSender:
                     output_path,
                 ])
 
-            async with state.conversion_lock:
+            async with state.conversion_sem:
                 proc = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.DEVNULL,
@@ -453,12 +453,13 @@ class MediaSender:
 
         try:
             media = []
+            file_handles = []
             for i, img_path in enumerate(photos_to_send):
-                with open(img_path, "rb") as f:
-                    photo_bytes = f.read()
+                fh = open(img_path, "rb")
+                file_handles.append(fh)
                 media.append(
                     InputMediaPhoto(
-                        media=photo_bytes,
+                        media=fh,
                         caption=caption if i == 0 else None,
                         parse_mode=parse_mode if i == 0 else None,
                     )
@@ -477,6 +478,12 @@ class MediaSender:
         except Exception as e:
             logger.error(f"Slideshow send error: {e}", exc_info=True)
             return False
+        finally:
+            for fh in file_handles:
+                try:
+                    fh.close()
+                except Exception:
+                    pass
 
     @staticmethod
     def cleanup_slideshow(result) -> None:

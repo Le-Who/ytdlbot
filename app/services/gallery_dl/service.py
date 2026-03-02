@@ -58,7 +58,7 @@ class GalleryDlService:
             "--filename", "{num:>03}.{extension}",
             "--no-mtime",
             "--write-metadata",
-            url,
+            "--", url,
         ]
 
         if cookies_path:

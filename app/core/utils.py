@@ -30,6 +30,8 @@ def render_progressbar(percent: float, length: int = BAR_LENGTH) -> str:
 
 
 def is_supported_url(text: str) -> bool:
+    if text.startswith("-"):
+        return False
     try:
         parsed = urlsplit(text)
         domain = parsed.hostname

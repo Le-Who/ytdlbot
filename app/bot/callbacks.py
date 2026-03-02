@@ -200,9 +200,12 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await q.edit_message_text(Texts.QUEUE_FULL, reply_markup=kb_error)
         return
 
+    await state.tasks_sem.acquire()
+
     data = context.user_data
     fmt_size = data.get("size_map", {}).get(payload["format_id"])
     if not size_allowed(fmt_size, target="telegram"):
+        state.tasks_sem.release()
         mb = fmt_size / (1024 * 1024)
         await q.edit_message_text(
             Texts.FILE_TOO_BIG.format(size_mb=mb, max_mb=MAX_TG_UPLOAD_MB),
@@ -216,7 +219,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception as e:
             logger.warning(f"UI Update failed: {e}")
 
-    async with state.tasks_sem:
+    try:
         await q.edit_message_text(Texts.STARTING_DOWNLOAD)
         try:
             await context.bot.send_chat_action(chat_id=q.message.chat_id, action=ChatAction.UPLOAD_VIDEO)
@@ -264,6 +267,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # We can implement a cleanup job or rely on OS temp cleaner, but for now we follow the "Reuse" requirement.
         # To avoid disk fill up, we could remove if it's NOT in file_cache, but MediaSender puts it there.
         # We'll leave it in cache.
+    finally:
+        state.tasks_sem.release()
 
 
 async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -292,7 +297,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     # Check/Add to processing set (Debounce) — atomic under lock
-    async with state.conversion_lock:
+    async with state.conversion_sem:
         if token in state.processing_gifs:
             try:
                 await q.message.reply_text(Texts.GIF_ALREADY_IN_PROGRESS, do_quote=True)
@@ -376,7 +381,8 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await q.edit_message_text(Texts.QUEUE_FULL)
         return
 
-    async with state.tasks_sem:
+    await state.tasks_sem.acquire()
+    try:
         await q.edit_message_text(Texts.SLIDESHOW_DOWNLOADING)
 
         result, error = await MediaSender.download_slideshow(page_url)
@@ -437,3 +443,5 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         finally:
             # Always cleanup slideshow download directory
             await asyncio.to_thread(MediaSender.cleanup_slideshow, result)
+    finally:
+        state.tasks_sem.release()

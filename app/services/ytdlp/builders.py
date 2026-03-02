@@ -36,6 +36,7 @@ def _append_common_opts(
         cmd.extend(["--cookies", cookies_path])
     if max_filesize:
         cmd.extend(["--max-filesize", f"{max_filesize}M"])
+    cmd.append("--")
     cmd.append(page_url)
 
 

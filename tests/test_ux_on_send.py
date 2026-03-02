@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 import os
 import sys
@@ -15,10 +16,7 @@ class TestUXOnSend(unittest.IsolatedAsyncioTestCase):
         state.info_cache = {}
         state.link_cache = {}
         state.cancel_cache = {}
-        state.tasks_sem = MagicMock()
-        state.tasks_sem.locked.return_value = False
-        state.tasks_sem.__aenter__ = AsyncMock(return_value=None)
-        state.tasks_sem.__aexit__ = AsyncMock(return_value=None)
+        state.tasks_sem = asyncio.Semaphore(5)
         state.limiter = MagicMock()
         state.limiter.allow_user.return_value = True
         state.limiter.allow_chat.return_value = True

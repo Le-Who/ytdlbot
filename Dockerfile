@@ -24,5 +24,9 @@ ENV PYTHONUNBUFFERED=1
 # Порт по умолчанию (Northflank/Heroku обычно переопределяют его через ENV)
 ENV PORT=8000 
 
-# 5. Запуск через sh -c для корректной подстановки переменной окружения PORT
+# 5. Создание пользователя без root-прав для безопасности
+RUN useradd -m -s /bin/bash botuser
+USER botuser
+
+# 6. Запуск через sh -c для корректной подстановки переменной окружения PORT
 CMD ["sh", "-c", "uvicorn app.main:api --host 0.0.0.0 --port ${PORT}"]

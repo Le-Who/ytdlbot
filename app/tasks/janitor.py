@@ -18,10 +18,27 @@ def cleanup_temp_dir() -> tuple[int, int]:
         return deleted, orphan
 
     for name in os.listdir(TEMP_DIR):
-        # Only clean up files created by this bot (ytdl_ prefix)
-        if not name.startswith("ytdl_"):
-            continue
         path = os.path.join(TEMP_DIR, name)
+
+        # Clean slideshow directories (slideshow_* subdirs)
+        if name.startswith("slideshow_") and os.path.isdir(path):
+            try:
+                age = now - os.path.getmtime(path)
+            except OSError:
+                continue
+            if age > MAX_TEMP_AGE_SECONDS:
+                orphan += 1
+                try:
+                    import shutil
+                    shutil.rmtree(path, ignore_errors=True)
+                    deleted += 1
+                except Exception:
+                    pass
+            continue
+
+        # Clean bot-created files: ytdl_* and concat_*
+        if not (name.startswith("ytdl_") or name.startswith("concat_")):
+            continue
         if not os.path.isfile(path):
             continue
         try:

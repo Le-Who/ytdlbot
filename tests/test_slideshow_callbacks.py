@@ -1,5 +1,6 @@
 """Tests for slideshow callbacks and downloader methods."""
 
+import asyncio
 import os
 import sys
 import unittest
@@ -23,10 +24,7 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
         state.link_cache = {}
         state.cancel_cache = {}
         state.ytdlp = MagicMock()
-        state.tasks_sem = MagicMock()
-        state.tasks_sem.locked.return_value = False
-        state.tasks_sem.__aenter__ = AsyncMock(return_value=None)
-        state.tasks_sem.__aexit__ = AsyncMock(return_value=None)
+        state.tasks_sem = asyncio.Semaphore(5)
         state.parsing_sem = MagicMock()
         state.parsing_sem.__aenter__ = AsyncMock(return_value=None)
         state.parsing_sem.__aexit__ = AsyncMock(return_value=None)
@@ -153,7 +151,7 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
     async def test_on_slideshow_queue_full(self):
         """Full queue should show queue full error."""
         self.update.callback_query.data = f"slideshow|{SLIDESHOW_PHOTO_FORMAT_ID}"
-        state.tasks_sem.locked.return_value = True
+        state.tasks_sem = asyncio.Semaphore(0)  # Fully exhausted = queue full
 
         await callbacks.on_slideshow(self.update, self.context)
 

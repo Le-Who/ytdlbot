@@ -117,7 +117,7 @@ class YtDlpService:
         ]
 
         for args in arg_variants:
-            cmd = base_cmd + args + [url]
+            cmd = base_cmd + args + ["--", url]
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
                 if result.returncode == 0 and result.stdout.strip():

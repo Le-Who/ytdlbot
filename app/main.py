@@ -42,6 +42,22 @@ async def lifespan(app: FastAPI):
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_convert_to_gif, pattern=r"^gif\|"))
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_slideshow, pattern=r"^slideshow\|"))
 
+    async def _global_error_handler(update, context):
+        logger.error(
+            "Unhandled exception in handler",
+            exc_info=context.error,
+            extra={"op": "error_handler"},
+        )
+        try:
+            if update and update.effective_message:
+                await update.effective_message.reply_text(
+                    "⚠️ Произошла внутренняя ошибка. Попробуйте позже."
+                )
+        except Exception:
+            pass
+
+    bot_app.add_error_handler(_global_error_handler)
+
     await bot_app.initialize()
     await bot_app.start()
     state.bot_app = bot_app

@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 import os
 import sys
@@ -23,10 +24,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.link_cache = {}
         state.cancel_cache = {}
         state.ytdlp = MagicMock()
-        state.tasks_sem = MagicMock()
-        state.tasks_sem.locked.return_value = False
-        state.tasks_sem.__aenter__ = AsyncMock(return_value=None)
-        state.tasks_sem.__aexit__ = AsyncMock(return_value=None)
+        state.tasks_sem = asyncio.Semaphore(5)
 
         state.parsing_sem = MagicMock()
         state.parsing_sem.__aenter__ = AsyncMock(return_value=None)
@@ -149,7 +147,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         token = "token"
         self.update.callback_query.data = f"send|{token}"
         state.link_cache[token] = {"page_url": "http://example.com", "format_id": "137"}
-        state.tasks_sem.locked.return_value = True
+        state.tasks_sem = asyncio.Semaphore(0)  # Fully exhausted = queue full
 
         await callbacks.on_send(self.update, self.context)
         args, _ = self.update.callback_query.edit_message_text.call_args

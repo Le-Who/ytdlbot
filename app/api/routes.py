@@ -11,7 +11,7 @@ from telegram import Update
 
 from app.constants import AUDIO_FORMAT_ID, CHUNK_SIZE, GIF_FORMAT_ID
 from app.core import state
-from app.core.config import TELEGRAM_SECRET_TOKEN, DL_TIMEOUT_HTTP
+from app.core.config import TELEGRAM_SECRET_TOKEN, DL_TIMEOUT_HTTP, MAX_DL_MB
 from app.core.logging import set_correlation_id
 from app.core.process import run_subprocess
 
@@ -55,7 +55,10 @@ async def download(token: str, request: Request):
         file_ext = "mp4"
         media_type = "video/mp4"
 
+    max_bytes = MAX_DL_MB * 1024 * 1024
+
     async def stream_video_subprocess():
+        bytes_sent = 0
         if is_gif:
             # GIF = download video directly to ffmpeg pipe
             cmd = state.ytdlp.build_command(
@@ -108,6 +111,10 @@ async def download(token: str, request: Request):
                             chunk = await ff_handle.proc.stdout.read(CHUNK_SIZE)
                             if not chunk:
                                 break
+                            bytes_sent += len(chunk)
+                            if bytes_sent > max_bytes:
+                                logger.warning(f"Stream exceeded {MAX_DL_MB}MB limit, terminating")
+                                return
                             yield chunk
                     finally:
                         pipe_task.cancel()
@@ -124,6 +131,10 @@ async def download(token: str, request: Request):
                     chunk = await proc.stdout.read(CHUNK_SIZE)
                     if not chunk:
                         break
+                    bytes_sent += len(chunk)
+                    if bytes_sent > max_bytes:
+                        logger.warning(f"Stream exceeded {MAX_DL_MB}MB limit, terminating")
+                        return
                     yield chunk
 
     return StreamingResponse(

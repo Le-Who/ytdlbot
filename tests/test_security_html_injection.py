@@ -47,7 +47,7 @@ class TestHtmlInjection(unittest.IsolatedAsyncioTestCase):
             mock_state.parsing_sem = state.parsing_sem
             mock_state.ytdlp = MagicMock()
             mock_state.ytdlp.list_formats = MagicMock(
-                return_value=(malicious_title, formats, special_format, duration)
+                return_value=(malicious_title, formats, special_format, duration, False)
             )
 
             with patch("app.bot.messages.build_format_keyboard") as mock_kb:

@@ -4,3 +4,4 @@ uvicorn[standard]==0.41.0
 yt-dlp>=2025.1.15
 python-dotenv==1.2.2
 cachetools==7.0.1
+gallery-dl>=1.27.0

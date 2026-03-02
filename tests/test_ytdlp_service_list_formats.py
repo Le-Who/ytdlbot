@@ -49,7 +49,7 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
         }
 
         with patch.object(self.service, 'extract', return_value=mock_info) as mock_extract:
-            title, formats, special_format, duration = self.service.list_formats("http://example.com/video")
+            title, formats, special_format, duration, _ = self.service.list_formats("http://example.com/video")
 
             self.assertEqual(title, "Test Video")
             self.assertEqual(duration, "02:00")
@@ -116,7 +116,7 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
         # Mock extract to fail, and _extract_youtube_via_subprocess to succeed
         with patch.object(self.service, 'extract', side_effect=Exception("API Error")):
             with patch.object(self.service, '_extract_youtube_via_subprocess', return_value=mock_info) as mock_subprocess:
-                title, formats, _, _ = self.service.list_formats(url)
+                title, formats, _, _, _ = self.service.list_formats(url)
 
                 mock_subprocess.assert_called_once_with(url)
                 self.assertEqual(title, "Fallback Video")
@@ -144,7 +144,7 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
                 # Mock parse_format_metadata to ensure the subprocess format is accepted
                 # Actually, real parser works fine for simple dicts
 
-                title, formats, _, _ = self.service.list_formats(url)
+                title, formats, _, _, _ = self.service.list_formats(url)
 
                 # Logic: extract -> empty formats -> check if is_youtube and not used_subprocess -> call subprocess
                 mock_subprocess.assert_called_once_with(url)
@@ -180,7 +180,7 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
         with patch.object(self.service, 'extract', return_value=mock_info_initial):
             with patch.object(self.service, '_extract_youtube_via_subprocess', return_value=mock_info_subprocess) as mock_subprocess:
 
-                title, formats, _, _ = self.service.list_formats(url)
+                title, formats, _, _, _ = self.service.list_formats(url)
 
                 mock_subprocess.assert_called_once_with(url)
                 self.assertEqual(title, "Filtered Formats")
@@ -232,7 +232,7 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
 
         with patch.object(self.service, 'extract', return_value=mock_info):
             # Pass max_items=5
-            _, formats_list, _, _ = self.service.list_formats(url, max_items=5)
+            _, formats_list, _, _, _ = self.service.list_formats(url, max_items=5)
             self.assertEqual(len(formats_list), 5)
             # Should return the top 5 (highest height/size)
             # Since we appended 100+i, the last ones are the biggest.
@@ -257,7 +257,7 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
         }
 
         with patch.object(self.service, 'extract', return_value=mock_info):
-            _, formats_list, _, _ = self.service.list_formats(url)
+            _, formats_list, _, _, _ = self.service.list_formats(url)
 
             # Expected behavior:
             # Sort order before deduplication:

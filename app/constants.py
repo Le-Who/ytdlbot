@@ -24,5 +24,9 @@ VIDEO_EXTENSIONS = {"mp4", "webm", "3gp"}
 AUDIO_FORMAT_ID = "bestaudio/best"
 GIF_FORMAT_ID = "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
 
+# Форматы TikTok Slideshow
+SLIDESHOW_PHOTO_FORMAT_ID = "__slideshow_photos__"
+SLIDESHOW_VIDEO_FORMAT_ID = "__slideshow_video__"
+
 # Regex паттерны
 HEIGHT_PATTERN = r"(\d+)p"

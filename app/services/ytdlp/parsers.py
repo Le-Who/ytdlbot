@@ -185,3 +185,29 @@ def get_special_format(url: str) -> FormatItem:
             height=None,
             filesize=None,
         )
+
+
+def detect_tiktok_slideshow(info: Dict[str, Any], url: str) -> bool:
+    """
+    Detects if a TikTok URL is a slideshow (image carousel) rather than a video.
+
+    Heuristic:
+    1. URL must be TikTok
+    2. No formats with video codec exist (only audio-only or empty)
+    3. OR extraction returned an error for a TikTok URL (slideshow not supported by yt-dlp)
+    """
+    if not _is_tiktok(url):
+        return False
+
+    raw_formats = info.get("formats", [])
+    if not raw_formats:
+        # No formats at all — likely a slideshow that yt-dlp can't handle
+        return True
+
+    # Check if all formats are audio-only (vcodec == "none")
+    has_video = any(
+        fmt.get("vcodec") not in (None, "none")
+        for fmt in raw_formats
+    )
+
+    return not has_video

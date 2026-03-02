@@ -40,6 +40,7 @@ async def lifespan(app: FastAPI):
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_cancel, pattern=r"^cancel\|"))
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_send, pattern=r"^send\|"))
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_convert_to_gif, pattern=r"^gif\|"))
+    bot_app.add_handler(CallbackQueryHandler(callbacks.on_slideshow, pattern=r"^slideshow\|"))
 
     await bot_app.initialize()
     await bot_app.start()

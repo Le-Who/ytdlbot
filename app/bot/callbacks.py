@@ -16,13 +16,14 @@ from app.core.config import (
 from app.core.utils import (
     safe_remove,
 )
-from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
+from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID, SLIDESHOW_PHOTO_FORMAT_ID, SLIDESHOW_VIDEO_FORMAT_ID
 from app.bot.keyboards import build_format_keyboard
 from app.core.texts import Texts
 from app.core.policy import size_allowed
 from app.core.logging import set_correlation_id
+from app.services.downloader import MediaSender, MAX_TELEGRAM_ALBUM_SIZE
 
-__all__ = ["on_back", "on_pick", "on_cancel", "on_send", "on_convert_to_gif"]
+__all__ = ["on_back", "on_pick", "on_cancel", "on_send", "on_convert_to_gif", "on_slideshow"]
 
 logger = logging.getLogger("app.bot.callbacks")
 
@@ -42,24 +43,32 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await q.edit_message_text(Texts.CACHE_REFRESHING)
             async with state.parsing_sem:
-                title, formats, special_format, duration = await asyncio.to_thread(
+                title, formats, special_format, duration, is_slideshow = await asyncio.to_thread(
                     state.ytdlp.list_formats, page_url
                 )
-            state.info_cache[page_url] = (title, formats, special_format, duration)
+            state.info_cache[page_url] = (title, formats, special_format, duration, is_slideshow)
         except Exception as e:
             logger.error(f"[ON_BACK] Refresh error: {e}")
             await q.edit_message_text(Texts.CACHE_REFRESH_FAIL)
             return
     else:
-        title, formats, special_format, duration = cached
+        title, formats, special_format, duration, is_slideshow = cached
 
-    reply_markup = build_format_keyboard(formats, special_format)
-
-    await q.edit_message_text(
-        f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}",
-        reply_markup=reply_markup,
-        parse_mode="HTML",
-    )
+    if is_slideshow:
+        from app.bot.keyboards import build_slideshow_keyboard
+        reply_markup = build_slideshow_keyboard()
+        await q.edit_message_text(
+            Texts.SLIDESHOW_DETECTED.format(title=html.escape(title), count="?"),
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+    else:
+        reply_markup = build_format_keyboard(formats, special_format)
+        await q.edit_message_text(
+            f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}",
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
 
 
 async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -209,10 +218,6 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     async with state.tasks_sem:
         await q.edit_message_text(Texts.STARTING_DOWNLOAD)
 
-        from app.services.downloader import (
-            MediaSender,
-        )  # Lazy import to avoid circular dep if any
-
         file_path, error = await MediaSender.download_video(
             payload["page_url"],
             payload["format_id"],
@@ -270,7 +275,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except ValueError:
         return
 
-    from app.services.downloader import MediaSender
+
 
     # 1. Get file path from cache
     video_path = state.file_cache.get(token)
@@ -326,3 +331,104 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     # Do NOT delete gif_path if it is the same as video_path (cached source)
     if gif_path != video_path:
         await asyncio.to_thread(safe_remove, gif_path)
+
+
+async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles slideshow button presses (photos or video)."""
+    q = update.callback_query
+    await q.answer(Texts.SLIDESHOW_DOWNLOADING)
+    user_id = q.from_user.id
+
+    try:
+        await q.edit_message_reply_markup(None)
+    except Exception:
+        pass
+
+    if not state.limiter.allow_user(user_id) or not state.limiter.allow_chat(
+        q.message.chat_id
+    ):
+        await q.edit_message_text(Texts.TOO_MANY_REQUESTS)
+        return
+
+    if not q.data:
+        return
+
+    try:
+        _, mode = q.data.split("|", 1)
+    except (ValueError, AttributeError) as e:
+        logger.error(f"Invalid callback data in on_slideshow: {e}")
+        return
+
+    data = context.user_data
+    page_url = data.get("page_url")
+    if not page_url:
+        await q.edit_message_text(Texts.DATA_EXPIRED_RESEND)
+        return
+
+    is_photo_mode = mode == SLIDESHOW_PHOTO_FORMAT_ID
+
+    if state.tasks_sem.locked():
+        await q.edit_message_text(Texts.QUEUE_FULL)
+        return
+
+    async with state.tasks_sem:
+        await q.edit_message_text(Texts.SLIDESHOW_DOWNLOADING)
+
+        result, error = await MediaSender.download_slideshow(page_url)
+
+        if error or not result:
+            await q.edit_message_text(error or Texts.SLIDESHOW_ERROR)
+            return
+
+        try:
+            if is_photo_mode:
+                # Send as photo album
+                await q.edit_message_text(Texts.SLIDESHOW_SENDING)
+
+                total = len(result.images)
+                caption = "📸"
+                if total > MAX_TELEGRAM_ALBUM_SIZE:
+                    caption += f"\n{Texts.SLIDESHOW_TRUNCATED.format(total=total)}"
+
+                success = await MediaSender.send_slideshow_photos(
+                    context.bot,
+                    q.message.chat_id,
+                    result.images,
+                    caption=caption,
+                )
+
+                if success:
+                    await q.delete_message()
+                else:
+                    await q.edit_message_text(Texts.SEND_ERROR)
+            else:
+                # Convert to video and send
+                await q.edit_message_text(Texts.SLIDESHOW_CONVERTING)
+
+                video_path = await MediaSender.images_to_video(
+                    result.images, result.audio
+                )
+
+                if not video_path:
+                    await q.edit_message_text(Texts.SLIDESHOW_ERROR)
+                    return
+
+                await q.edit_message_text(Texts.SENDING_TO_TG)
+
+                success = await MediaSender.send_file(
+                    context.bot,
+                    q.message.chat_id,
+                    video_path,
+                    caption="🎬",
+                )
+
+                if success:
+                    await q.delete_message()
+                else:
+                    await q.edit_message_text(Texts.SEND_ERROR)
+
+                # Cleanup video file
+                await asyncio.to_thread(safe_remove, video_path)
+        finally:
+            # Always cleanup slideshow download directory
+            await asyncio.to_thread(MediaSender.cleanup_slideshow, result)

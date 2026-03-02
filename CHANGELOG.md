@@ -6,6 +6,14 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **TikTok Slideshow (Image Carousel) support**: Two output modes via `gallery-dl` + `ffmpeg`:
+  - **📸 Photo Album** — sends images as a Telegram media group (up to 10)
+  - **🎬 Video Slideshow** — combines images + audio into MP4
+  - Automatic slideshow detection via `detect_tiktok_slideshow()` heuristic
+  - Full support in both private chat (interactive keyboard) and group chat (auto photo album)
+- **`gallery_dl/service.py`**: New `GalleryDlService` subprocess wrapper for downloading TikTok slideshow images and audio
+- **Slideshow callback handler**: `on_slideshow()` in `callbacks.py` with rate limiting, queue management, and cleanup
+- **Slideshow keyboard**: `build_slideshow_keyboard()` with Photo / Video / Audio options
 - **i18n support**: All ~50 user-facing Russian strings extracted to `app/core/texts.py` (`Texts` class) for easy localization
 - **CI/CD pipeline**: `.github/workflows/test.yml` — automated testing with coverage on push/PR
 - **Integration tests**: `tests/test_integration.py` — 18 end-to-end flow tests (URL→formats→pick→send, cancel, rate limiting)
@@ -19,10 +27,11 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **`list_formats()` return type**: Extended from 4-tuple to 5-tuple with `is_slideshow` flag
 - **Dockerfile**: Updated base image from `python:3.11-slim` to `python:3.12-slim`
 - **Dockerfile**: Removed unused `curl` package from system dependencies
 - **Tech stack**: Python version requirement updated from 3.10+ to 3.12+
-- **Test suite**: Expanded from 140 to 193 tests (all passing)
+- **Test suite**: Expanded from 140 to 217 tests (all passing)
 - **8 test files rewritten**: Removed FastAPI/TestClient dependencies by testing logic directly
 
 ### Dependencies
@@ -33,6 +42,7 @@ All notable changes to this project will be documented in this file.
 - **`python-dotenv`**: 1.0.1 → 1.2.2
 - **`cachetools`**: 5.5.0 → 7.0.1
 - **`yt-dlp`**: Pinned to `>=2025.1.15` (was unpinned)
+- **`gallery-dl`**: Added `>=1.27.0` for TikTok slideshow image downloads
 - **Removed**: `aiohttp` (unused dependency)
 
 ### Fixed

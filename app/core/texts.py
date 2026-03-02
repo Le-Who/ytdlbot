@@ -76,6 +76,16 @@ class Texts:
     GIF_CONVERTING = "⏳ Конвертирую в GIF..."
     GIF_DOWNLOAD_CANCEL = "❌ Загрузка отменена."
 
+    # ── Slideshow ─────────────────────────────────────────────────
+    SLIDESHOW_DETECTED = "🖼 <b>{title}</b>\n📸 Фотоальбом ({count} фото)"
+    BTN_SLIDESHOW_PHOTOS = "📸 Фото (альбом)"
+    BTN_SLIDESHOW_VIDEO = "🎬 Видео (slideshow)"
+    SLIDESHOW_DOWNLOADING = "⏳ Скачиваю фото..."
+    SLIDESHOW_CONVERTING = "⏳ Создаю видео из фото..."
+    SLIDESHOW_SENDING = "📤 Отправляю фотоальбом..."
+    SLIDESHOW_TRUNCATED = "ℹ️ Показаны первые 10 из {total} фото."
+    SLIDESHOW_ERROR = "⚠️ Ошибка загрузки слайдшоу."
+
     # ── Group logic ───────────────────────────────────────────────
     GROUP_ERROR = "❌ Ошибка."
     GROUP_SENDING = "📤 Отправляю..."

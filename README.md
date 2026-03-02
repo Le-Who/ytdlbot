@@ -1,10 +1,13 @@
 # YTDL Bot - Telegram Media Downloader
 
-A high-performance Telegram bot for downloading media from popular platforms (YouTube, TikTok, Pinterest, VK, etc.) using `yt-dlp`. Built with **FastAPI**, **python-telegram-bot**, and **asyncio** for maximum concurrency and efficiency.
+A high-performance Telegram bot for downloading media from popular platforms (YouTube, TikTok, Pinterest, VK, etc.) using `yt-dlp` and `gallery-dl`. Built with **FastAPI**, **python-telegram-bot**, and **asyncio** for maximum concurrency and efficiency.
 
 ## 🚀 Key Features
 
 - **Multi-Platform Support**: Downloads videos from YouTube, TikTok (no watermark), Pinterest, VK, and many others supported by `yt-dlp`.
+- **TikTok Slideshow Support**: Downloads TikTok image carousel (slideshow) posts via `gallery-dl` with two output modes:
+  - **📸 Photo Album** — sends individual images as a Telegram media group (up to 10 photos).
+  - **🎬 Video Slideshow** — combines images + audio into an MP4 via `ffmpeg`.
 - **Smart Quality Selection**:
   - **Private Chat**: Offers an interactive menu to choose video quality (1080p, 720p, etc.) or Audio only.
   - **Group Mode**: Automatically downloads the best quality video (<45MB) to ensure extensive compatibility and fast sharing without spamming the chat.
@@ -25,8 +28,9 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 - **Language**: Python 3.12+
 - **Framework**: [FastAPI](https://fastapi.tiangolo.com/) 0.135.x (Web Server & Webhook handling)
 - **Bot Framework**: [python-telegram-bot](https://python-telegram-bot.org/) 22.x
-- **Core Engine**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Media extraction)
-- **Processing**: [FFmpeg](https://ffmpeg.org/) (Video/Audio processing & GIF conversion)
+- **Core Engine**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Video/audio extraction)
+- **Image Downloader**: [gallery-dl](https://github.com/mikf/gallery-dl) (TikTok slideshow image extraction)
+- **Processing**: [FFmpeg](https://ffmpeg.org/) (Video/Audio processing, GIF conversion & slideshow-to-video)
 - **Download Accelerator**: [aria2c](https://aria2.github.io/) (optional, multi-threaded downloads)
 - **Containerization**: Docker (Python 3.12-slim)
 - **CI/CD**: GitHub Actions (automated testing with coverage)
@@ -56,10 +60,12 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 │   │   └── utils.py       # Helper functions
 │   ├── constants.py       # Shared constants (format IDs, limits)
 │   ├── services
-│   │   ├── downloader.py  # MediaSender service (Download/Send/Convert)
+│   │   ├── downloader.py  # MediaSender service (Download/Send/Convert/Slideshow)
+│   │   ├── gallery_dl     # gallery-dl wrapper for TikTok slideshows
+│   │   │   └── service.py # GalleryDlService (image + audio download)
 │   │   └── ytdlp          # yt-dlp wrapper service
 │   │       ├── service.py # YtDlpService facade
-│   │       ├── parsers.py # Format parsing & deduplication
+│   │       ├── parsers.py # Format parsing, deduplication & slideshow detection
 │   │       ├── models.py  # FormatItem, FormatMetadata dataclasses
 │   │       ├── builders.py# Command-line builders (aria2c, ffmpeg flags)
 │   │       ├── cookies.py # Cookie file management
@@ -67,7 +73,7 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 │   ├── tasks
 │   │   └── janitor.py     # Periodic temp file cleanup
 │   └── main.py            # Application entry point
-├── tests/                 # 193 tests (unit + integration)
+├── tests/                 # 217 tests (unit + integration)
 ├── .github/workflows/     # CI/CD pipeline
 ├── Dockerfile             # Docker build (Python 3.12-slim)
 ├── .dockerignore          # Excludes .git, tests, IDE files from build context
@@ -83,6 +89,7 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 - Python 3.12+
 - FFmpeg (installed and in system PATH)
 - Aria2c (optional, recommended for speed)
+- gallery-dl (optional, required for TikTok slideshow downloads)
 
 ### Local Development
 
@@ -158,10 +165,12 @@ BOT_TOKEN=test pytest tests/ --cov=app --cov-report=term-missing
 
 The test suite includes:
 
-- **193 unit + integration tests**
+- **217 unit + integration tests**
 - HMAC webhook authentication tests
 - Rate limiter behavior tests
 - Format parsing and deduplication tests
+- TikTok slideshow detection and callback tests
+- Gallery-dl service command and error handling tests
 - Full end-to-end flow tests (URL → formats → pick → download → send)
 
 ## 🎮 Usage
@@ -171,14 +180,16 @@ The test suite includes:
 1.  Send a link (e.g., TikTok, YouTube).
 2.  Wait for the bot to fetch formats.
 3.  Choose your desired quality or format (Audio/Video).
-4.  Get a direct download link **or** receive the file directly in Telegram.
+4.  For TikTok slideshows: choose **📸 Фото** (album) or **🎬 Видео** (slideshow→video).
+5.  Get a direct download link **or** receive the file directly in Telegram.
 
 ### Group Chat
 
 1.  Add the bot to a group.
 2.  Send a link.
 3.  The bot automatically downloads the best suitable video and sends it.
-4.  Click **"Send GIF"** on the video reply to instantly get a GIF version.
+4.  TikTok slideshows are automatically sent as photo albums.
+5.  Click **"Send GIF"** on a video reply to instantly get a GIF version.
 
 ## 🔧 Configuration
 
@@ -226,6 +237,21 @@ Use `.env.example` as baseline. All variables are read from environment or `.env
 | -------------------------- | --------------------------- | ------- |
 | `MAX_TEMP_AGE_SECONDS`     | Temp file cleanup threshold | `3600`  |
 | `JANITOR_INTERVAL_SECONDS` | Cleanup task interval       | `300`   |
+
+### Authentication (Cookies)
+
+| Variable            | Description                                                     | Default |
+| ------------------- | --------------------------------------------------------------- | ------- |
+| `YTDLP_COOKIES_B64` | Base64-encoded Netscape cookies file (for TikTok, YouTube auth) | —       |
+
+To bypass "Sign-in required" errors on TikTok or age-restricted YouTube content:
+
+1. Export your cookies from a browser using an extension like **"Get cookies.txt LOCALLY"**.
+2. Combine YouTube + TikTok cookies into a single Netscape-format `.txt` file.
+3. Encode it: `base64 -w0 cookies.txt` (Linux) or `[Convert]::ToBase64String([IO.File]::ReadAllBytes('cookies.txt'))` (PowerShell).
+4. Set `YTDLP_COOKIES_B64` in your `.env` file.
+
+> **Note**: Cookies expire periodically (1–4 weeks for TikTok) and will need to be re-exported.
 
 ### Structured Logging
 

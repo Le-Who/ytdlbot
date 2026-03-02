@@ -7,7 +7,7 @@ from telegram.constants import ChatAction
 
 from app.core import state
 from app.core.utils import extract_supported_url
-from app.bot.keyboards import build_format_keyboard
+from app.bot.keyboards import build_format_keyboard, build_slideshow_keyboard
 from app.core.texts import Texts
 from app.services.ytdlp.exceptions import (
     AccessDeniedError,
@@ -45,7 +45,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     cached = state.info_cache.get(text)
     if cached:
         logger.info(f"[CACHE] Hit: {text}")
-        title, formats, special_format, duration = cached
+        title, formats, special_format, duration, is_slideshow = cached
     else:
         if text in state.inflight_parsing:
             logger.info(f"[PARSING] Waiting for inflight task: {text}")
@@ -58,7 +58,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 return
             cached = state.info_cache.get(text)
             if cached:
-                title, formats, special_format, duration = cached
+                title, formats, special_format, duration, is_slideshow = cached
             else:
                 await msg.edit_text(Texts.FETCH_ERROR_RETRY)
                 return
@@ -73,8 +73,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                             formats,
                             special_format,
                             duration,
+                            is_slideshow,
                         ) = await asyncio.to_thread(state.ytdlp.list_formats, text)
-                state.info_cache[text] = (title, formats, special_format, duration)
+                state.info_cache[text] = (title, formats, special_format, duration, is_slideshow)
             except asyncio.TimeoutError:
                 await msg.edit_text(Texts.TIMEOUT_UNAVAILABLE)
                 return
@@ -102,25 +103,39 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 event.set()
                 state.inflight_parsing.pop(text, None)
 
-    format_map = {f.format_id: f.height for f in formats}
-    format_map[special_format.format_id] = None
+    # Store common data
+    context.user_data["page_url"] = text
+    context.user_data["title"] = title
+    context.user_data["is_slideshow"] = is_slideshow
 
-    size_map = {f.format_id: f.filesize for f in formats}
-    size_map[special_format.format_id] = special_format.filesize
+    if is_slideshow:
+        # TikTok slideshow — show photo/video choice keyboard
+        reply_markup = build_slideshow_keyboard()
 
-    context.user_data.update(
-        {
-            "page_url": text,
-            "title": title,
-            "format_map": format_map,
-            "size_map": size_map,
-        }
-    )
+        await msg.edit_text(
+            Texts.SLIDESHOW_DETECTED.format(title=html.escape(title), count="?"),
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+    else:
+        # Normal video — show format selection keyboard
+        format_map = {f.format_id: f.height for f in formats}
+        format_map[special_format.format_id] = None
 
-    reply_markup = build_format_keyboard(formats, special_format)
+        size_map = {f.format_id: f.filesize for f in formats}
+        size_map[special_format.format_id] = special_format.filesize
 
-    await msg.edit_text(
-        f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}",
-        reply_markup=reply_markup,
-        parse_mode="HTML",
-    )
+        context.user_data.update(
+            {
+                "format_map": format_map,
+                "size_map": size_map,
+            }
+        )
+
+        reply_markup = build_format_keyboard(formats, special_format)
+
+        await msg.edit_text(
+            f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}",
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )

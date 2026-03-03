@@ -218,21 +218,28 @@ class YtDlpService:
                 error_msg = str(e).lower()
 
                 # Handle auth/cookies errors — for TikTok classified content,
-                # try gallery-dl as fallback before giving up
+                # try TikWM API as fallback (gallery-dl also fails with 403
+                # from datacenter IPs, so we skip it to save ~5 seconds)
                 if "log in" in error_msg or "cookies" in error_msg or "sign in" in error_msg:
                     if _is_tiktok(url):
-                        logger.info(
-                            "TikTok classified content, trying gallery-dl fallback: %s", url
-                        )
-                        video_path, gdl_err = self._try_gallery_dl_video(url)
-                        if video_path:
-                            raise DirectDownloadReady(video_path, "TikTok Video")
-                        logger.warning(
-                            "gallery-dl fallback also failed: %s", gdl_err
-                        )
+                        # Only try gallery-dl if proxy is configured
+                        # (without proxy it always fails with 403)
+                        if self.tiktok_proxy:
+                            logger.info(
+                                "TikTok classified content, trying gallery-dl "
+                                "(proxy configured): %s", url
+                            )
+                            video_path, gdl_err = self._try_gallery_dl_video(url)
+                            if video_path:
+                                raise DirectDownloadReady(video_path, "TikTok Video")
+                            logger.warning(
+                                "gallery-dl fallback failed: %s", gdl_err
+                            )
 
-                        # Fallback 3: TikWM third-party API
-                        # Works from datacenter IPs, no cookies/proxy needed
+                        # TikWM third-party API — works from datacenter IPs
+                        logger.info(
+                            "TikTok classified content, trying TikWM: %s", url
+                        )
                         video_path, twm_err = self._try_tikwm_video(url)
                         if video_path:
                             raise DirectDownloadReady(video_path, "TikTok Video")

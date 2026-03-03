@@ -83,30 +83,82 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         result, error = await MediaSender.download_slideshow(url)
 
         if error or not result:
-            try:
-                await status_msg.edit_text(error or Texts.SLIDESHOW_ERROR)
-            except Exception:
-                pass
-            return
+            # Slideshow download failed — for classified TikTok content,
+            # try TikWM API as video fallback before giving up
+            from app.services.tikwm import TikWMService
+            logger.info("Slideshow failed, trying TikWM video fallback: %s", url)
+            tikwm_path, tikwm_err = await asyncio.to_thread(
+                TikWMService.download_video, url
+            )
+            if tikwm_path:
+                # Got video via TikWM — switch to video sending flow
+                is_slideshow = False
+                file_path = tikwm_path
+            else:
+                logger.warning("TikWM fallback also failed: %s", tikwm_err)
+                try:
+                    await status_msg.edit_text(error or Texts.SLIDESHOW_ERROR)
+                except Exception:
+                    pass
+                return
 
         caption = f"👤 {user_tag}"
 
-        await status_msg.edit_text(Texts.SLIDESHOW_SENDING)
+        if is_slideshow and result:
+            # Normal slideshow flow — send photos
+            await status_msg.edit_text(Texts.SLIDESHOW_SENDING)
 
-        try:
-            await context.bot.send_chat_action(
-                chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_PHOTO
+            try:
+                await context.bot.send_chat_action(
+                    chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_PHOTO
+                )
+            except Exception:
+                pass
+
+            try:
+                success = await MediaSender.send_slideshow_photos(
+                    context.bot,
+                    update.effective_chat.id,
+                    result.images,
+                    caption=caption,
+                    parse_mode="HTML",
+                )
+
+                if success:
+                    try:
+                        await update.message.delete()
+                    except Exception as e:
+                        logger.debug(f"Could not delete user message: {e}")
+                    await status_msg.delete()
+                else:
+                    await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
+            finally:
+                await asyncio.to_thread(MediaSender.cleanup_slideshow, result)
+            return
+
+        elif not is_slideshow and file_path:
+            # TikWM video fallback — send as video
+            await status_msg.edit_text(Texts.GROUP_SENDING)
+
+            try:
+                await context.bot.send_chat_action(
+                    chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO
+                )
+            except Exception:
+                pass
+
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{token}")]]
             )
-        except Exception:
-            pass
-
-        try:
-            success = await MediaSender.send_slideshow_photos(
+            success = await MediaSender.send_file(
                 context.bot,
                 update.effective_chat.id,
-                result.images,
+                file_path,
+                is_audio=False,
+                is_gif=False,
                 caption=caption,
                 parse_mode="HTML",
+                reply_markup=kb,
             )
 
             if success:
@@ -117,9 +169,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 await status_msg.delete()
             else:
                 await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
-        finally:
-            await asyncio.to_thread(MediaSender.cleanup_slideshow, result)
-        return
+            return
 
     # Regular video download flow
     # Callback to update the status message

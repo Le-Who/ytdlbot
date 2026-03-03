@@ -306,6 +306,34 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
                          side_effect=Exception("Unsupported URL")):
             with self.assertRaises(ExtractionError):
                 self.service.list_formats(url)
+    def test_tiktok_auth_error_raises_access_denied(self):
+        """TikTok auth/cookies errors should raise AccessDeniedError, not slideshow."""
+        url = "https://tiktok.com/@user/video/123"
+        error_msg = (
+            "ERROR: [TikTok] 123: This post may not be comfortable. "
+            "Log in for access. Use --cookies-from-browser or --cookies"
+        )
+        with patch.object(self.service, 'extract',
+                         side_effect=Exception(error_msg)):
+            with self.assertRaises(AccessDeniedError) as cm:
+                self.service.list_formats(url)
+            self.assertIn("cookies", str(cm.exception).lower())
+
+    def test_tiktok_sign_in_error_raises_access_denied(self):
+        """TikTok 'sign in' errors should raise AccessDeniedError."""
+        url = "https://tiktok.com/@user/video/456"
+        with patch.object(self.service, 'extract',
+                         side_effect=Exception("Sign in to confirm")):
+            with self.assertRaises(AccessDeniedError):
+                self.service.list_formats(url)
+
+    def test_tiktok_unknown_error_falls_back_to_slideshow(self):
+        """TikTok unknown errors (not auth, not unsupported) still try slideshow."""
+        url = "https://tiktok.com/@user/video/789"
+        with patch.object(self.service, 'extract',
+                         side_effect=Exception("Some weird TikTok error")):
+            _, _, _, _, is_slideshow = self.service.list_formats(url)
+            self.assertTrue(is_slideshow)
 
 if __name__ == '__main__':
     unittest.main()

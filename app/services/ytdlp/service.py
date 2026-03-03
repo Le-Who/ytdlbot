@@ -164,16 +164,25 @@ class YtDlpService:
             info, used_subprocess = self._attempt_youtube_fallback(url, used_subprocess)
 
             if not info:
-                # If yt-dlp fails on a TikTok URL, it's likely a /photo/ slideshow
-                # that yt-dlp doesn't support — route to gallery-dl instead
-                if _is_tiktok(url):
+                error_msg = str(e).lower()
+
+                # Handle auth/cookies errors first — these should NOT trigger
+                # the slideshow fallback, even for TikTok URLs
+                if "log in" in error_msg or "cookies" in error_msg or "sign in" in error_msg:
+                    raise AccessDeniedError(
+                        "⚠️ Контент с ограниченным доступом. "
+                        "Требуется авторизация (cookies могут быть устаревшими)."
+                    )
+
+                # If yt-dlp fails on a TikTok URL with "Unsupported URL",
+                # it's a /photo/ slideshow — route to gallery-dl
+                if _is_tiktok(url) and "unsupported url" in error_msg:
                     logger.info(
-                        "TikTok extraction failed, assuming slideshow: %s", url
+                        "TikTok unsupported URL, routing to slideshow: %s", url
                     )
                     special_format = get_special_format(url)
                     return "TikTok Slideshow", [], special_format, "—", True
 
-                error_msg = str(e).lower()
                 if "403" in error_msg or "forbidden" in error_msg:
                     raise AccessDeniedError(Texts.SVC_ACCESS_DENIED)
                 elif "404" in error_msg or "not found" in error_msg:
@@ -181,6 +190,16 @@ class YtDlpService:
                 elif "live" in error_msg and "available" not in error_msg:
                     raise LiveStreamError(Texts.SVC_LIVE_NOT_SUPPORTED)
                 else:
+                    # For TikTok, any other unknown error still falls back to slideshow
+                    # since yt-dlp has limited TikTok support
+                    if _is_tiktok(url):
+                        logger.info(
+                            "TikTok extraction failed (unknown error), "
+                            "trying slideshow fallback: %s", url
+                        )
+                        special_format = get_special_format(url)
+                        return "TikTok Slideshow", [], special_format, "—", True
+
                     logger.error("YtDlp Extraction Error: %s", e, exc_info=True)
                     msg = str(e)
                     if "format is not available" in msg.lower():

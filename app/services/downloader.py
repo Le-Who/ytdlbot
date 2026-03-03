@@ -113,12 +113,12 @@ class VideoDownloader:
         try:
             _metrics().downloads_total.inc(platform="telegram")
             _metrics().active_downloads.inc()
-            async with run_subprocess(cmd) as handle:
+            async with run_subprocess(cmd, merge_stderr=True) as handle:
                 proc = handle.proc
-                stderr = handle.stderr_data
                 last_update = 0
                 download_start = time.time()
                 max_download_time = DL_TIMEOUT_TELEGRAM
+                output_lines: list[str] = []
 
                 # Clear previous cancel state for this token
                 state.cancel_cache.pop(token, None)
@@ -154,6 +154,8 @@ class VideoDownloader:
                     if not line:
                         break
                     line_str = line.decode("utf-8", errors="ignore").strip()
+                    if line_str:
+                        output_lines.append(line_str)
 
                     if (
                         progress_callback
@@ -199,7 +201,7 @@ class VideoDownloader:
                 if proc.returncode != 0:
                     _metrics().downloads_failed.inc(platform="telegram")
                     _metrics().active_downloads.dec()
-                    err = b"".join(stderr).decode("utf-8", errors="ignore").lower()
+                    err = "\n".join(output_lines).lower()
                     logger.error(f"[DL-TG] yt-dlp failed: {err}")
 
                     if "file larger" in err or "filesize" in err:

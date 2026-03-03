@@ -172,6 +172,14 @@ class YtDlpService:
             url, self.cookies_path, proxy=self.tiktok_proxy,
         )
 
+    @staticmethod
+    def _try_tikwm_video(
+        url: str,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Try downloading TikTok video via TikWM third-party API."""
+        from app.services.tikwm import TikWMService
+        return TikWMService.download_video(url)
+
     def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
         """Извлекает метаданные видео."""
         opts = self._base_opts(for_list_formats=for_list_formats, url=url)
@@ -222,6 +230,16 @@ class YtDlpService:
                         logger.warning(
                             "gallery-dl fallback also failed: %s", gdl_err
                         )
+
+                        # Fallback 3: TikWM third-party API
+                        # Works from datacenter IPs, no cookies/proxy needed
+                        video_path, twm_err = self._try_tikwm_video(url)
+                        if video_path:
+                            raise DirectDownloadReady(video_path, "TikTok Video")
+                        logger.warning(
+                            "TikWM fallback also failed: %s", twm_err
+                        )
+
                     raise AccessDeniedError(
                         "⚠️ Контент с ограниченным доступом. "
                         "Требуется авторизация (cookies могут быть устаревшими)."

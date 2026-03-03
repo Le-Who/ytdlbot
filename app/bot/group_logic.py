@@ -62,6 +62,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     # Check if this is a TikTok slideshow
     is_tiktok_url = _is_tiktok(url)
     is_slideshow = False
+    tiktok_auth_error = False  # age-restricted content needing TikWM fallback
 
     if is_tiktok_url:
         # Fast path: /photo/ URLs are always slideshows (no extraction needed)
@@ -76,9 +77,55 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                     for fmt in raw_formats
                 )
                 is_slideshow = not has_video
+            except Exception as exc:
+                err_msg = str(exc).lower()
+                if "log in" in err_msg or "cookies" in err_msg or "sign in" in err_msg:
+                    # Auth/age-restricted — NOT a slideshow, use TikWM directly
+                    logger.info("TikTok auth error in group, will use TikWM: %s", url)
+                    tiktok_auth_error = True
+                elif "unsupported url" in err_msg:
+                    is_slideshow = True
+                else:
+                    # Unknown error — assume slideshow as fallback
+                    is_slideshow = True
+
+    # TikTok auth-restricted video → bypass slideshow UI, go straight to TikWM
+    if tiktok_auth_error:
+        from app.services.tikwm import TikWMService
+        await status_msg.edit_text(Texts.GROUP_SENDING)
+        tikwm_path, tikwm_err = await asyncio.to_thread(
+            TikWMService.download_video, url
+        )
+        if tikwm_path:
+            caption = f"👤 {user_tag}"
+            gif_token = uuid.uuid4().hex
+            state.file_cache[gif_token] = tikwm_path
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{gif_token}")]]
+            )
+            try:
+                await context.bot.send_chat_action(
+                    chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO
+                )
             except Exception:
-                # If extraction fails for TikTok, assume it might be a slideshow
-                is_slideshow = True
+                pass
+            success = await MediaSender.send_file(
+                context.bot, update.effective_chat.id, tikwm_path,
+                is_audio=False, is_gif=False,
+                caption=caption, parse_mode="HTML", reply_markup=kb,
+            )
+            if success:
+                try:
+                    await update.message.delete()
+                except Exception:
+                    pass
+                await status_msg.delete()
+            else:
+                await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
+        else:
+            logger.warning("TikWM fallback failed for auth-restricted: %s", tikwm_err)
+            await status_msg.edit_text(Texts.GROUP_ERROR)
+        return
 
     if is_slideshow:
         # TikTok slideshow — offer format choice (album vs video)

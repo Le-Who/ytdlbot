@@ -28,6 +28,7 @@ from .exceptions import (
     VideoNotFoundError,
     LiveStreamError,
     ExtractionError,
+    DirectDownloadReady,
 )
 from app.core.texts import Texts
 
@@ -153,6 +154,13 @@ class YtDlpService:
             return info, True
         return None, used_subprocess
 
+    def _try_gallery_dl_video(
+        self, url: str
+    ) -> tuple[Optional[str], Optional[str]]:
+        """Try downloading TikTok video via gallery-dl (fallback for classified content)."""
+        from app.services.gallery_dl.service import GalleryDlService
+        return GalleryDlService.download_video(url, self.cookies_path)
+
     def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
         """Извлекает метаданные видео."""
         opts = self._base_opts(for_list_formats=for_list_formats)
@@ -190,9 +198,19 @@ class YtDlpService:
             if not info:
                 error_msg = str(e).lower()
 
-                # Handle auth/cookies errors first — these should NOT trigger
-                # the slideshow fallback, even for TikTok URLs
+                # Handle auth/cookies errors — for TikTok classified content,
+                # try gallery-dl as fallback before giving up
                 if "log in" in error_msg or "cookies" in error_msg or "sign in" in error_msg:
+                    if _is_tiktok(url):
+                        logger.info(
+                            "TikTok classified content, trying gallery-dl fallback: %s", url
+                        )
+                        video_path, gdl_err = self._try_gallery_dl_video(url)
+                        if video_path:
+                            raise DirectDownloadReady(video_path, "TikTok Video")
+                        logger.warning(
+                            "gallery-dl fallback also failed: %s", gdl_err
+                        )
                     raise AccessDeniedError(
                         "⚠️ Контент с ограниченным доступом. "
                         "Требуется авторизация (cookies могут быть устаревшими)."

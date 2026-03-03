@@ -307,25 +307,42 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
             with self.assertRaises(ExtractionError):
                 self.service.list_formats(url)
     def test_tiktok_auth_error_raises_access_denied(self):
-        """TikTok auth/cookies errors should raise AccessDeniedError, not slideshow."""
+        """TikTok auth/cookies errors should try gallery-dl, then raise AccessDeniedError."""
         url = "https://tiktok.com/@user/video/123"
         error_msg = (
             "ERROR: [TikTok] 123: This post may not be comfortable. "
             "Log in for access. Use --cookies-from-browser or --cookies"
         )
         with patch.object(self.service, 'extract',
-                         side_effect=Exception(error_msg)):
+                         side_effect=Exception(error_msg)), \
+             patch.object(self.service, '_try_gallery_dl_video',
+                         return_value=(None, "gallery-dl error")):
             with self.assertRaises(AccessDeniedError) as cm:
                 self.service.list_formats(url)
             self.assertIn("cookies", str(cm.exception).lower())
 
     def test_tiktok_sign_in_error_raises_access_denied(self):
-        """TikTok 'sign in' errors should raise AccessDeniedError."""
+        """TikTok 'sign in' errors should try gallery-dl, then raise AccessDeniedError."""
         url = "https://tiktok.com/@user/video/456"
         with patch.object(self.service, 'extract',
-                         side_effect=Exception("Sign in to confirm")):
+                         side_effect=Exception("Sign in to confirm")), \
+             patch.object(self.service, '_try_gallery_dl_video',
+                         return_value=(None, "failed")):
             with self.assertRaises(AccessDeniedError):
                 self.service.list_formats(url)
+
+    def test_tiktok_auth_error_gallery_dl_direct_download(self):
+        """When gallery-dl succeeds for classified TikTok, DirectDownloadReady is raised."""
+        from app.services.ytdlp.exceptions import DirectDownloadReady
+        url = "https://tiktok.com/@user/video/789"
+        error_msg = "This post may not be comfortable. Log in for access"
+        with patch.object(self.service, 'extract',
+                         side_effect=Exception(error_msg)), \
+             patch.object(self.service, '_try_gallery_dl_video',
+                         return_value=("/tmp/video.mp4", None)):
+            with self.assertRaises(DirectDownloadReady) as cm:
+                self.service.list_formats(url)
+            self.assertEqual(cm.exception.video_path, "/tmp/video.mp4")
 
     def test_tiktok_unknown_error_falls_back_to_slideshow(self):
         """TikTok unknown errors (not auth, not unsupported) still try slideshow."""

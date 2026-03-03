@@ -26,3 +26,16 @@ class ExtractionError(YtDlpError):
     """Raised for generic extraction errors."""
 
     pass
+
+
+class DirectDownloadReady(YtDlpError):
+    """Raised when content was downloaded directly (e.g. via gallery-dl fallback).
+
+    Carries the video file path so the caller can send it immediately
+    without going through format selection.
+    """
+
+    def __init__(self, video_path: str, title: str = "TikTok Video"):
+        self.video_path = video_path
+        self.title = title
+        super().__init__(f"Direct download ready: {video_path}")

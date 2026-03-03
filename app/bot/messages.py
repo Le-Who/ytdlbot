@@ -15,7 +15,9 @@ from app.services.ytdlp.exceptions import (
     VideoNotFoundError,
     LiveStreamError,
     ExtractionError,
+    DirectDownloadReady,
 )
+from app.services.sender import TelegramSender
 
 logger = logging.getLogger("app.bot.messages")
 
@@ -93,6 +95,21 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 state.info_cache[text] = (title, formats, special_format, duration, is_slideshow)
             except asyncio.TimeoutError:
                 await msg.edit_text(Texts.TIMEOUT_UNAVAILABLE)
+                return
+            except DirectDownloadReady as dd:
+                await msg.edit_text("📦 Загрузка через альтернативный источник...")
+                sent = await TelegramSender.send_file(
+                    bot=context.bot,
+                    chat_id=update.effective_chat.id,
+                    file_path=dd.video_path,
+                    caption=f"🎬 {html.escape(dd.title)}",
+                    parse_mode="HTML",
+                    reply_to_message_id=update.message.message_id,
+                )
+                if sent:
+                    await msg.delete()
+                else:
+                    await msg.edit_text("❌ Не удалось отправить видео (файл слишком большой?)")
                 return
             except AccessDeniedError:
                 await msg.edit_text(Texts.ACCESS_DENIED)

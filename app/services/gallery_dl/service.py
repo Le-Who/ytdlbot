@@ -1,7 +1,8 @@
 """
-gallery-dl wrapper service for downloading TikTok slideshow images.
+gallery-dl wrapper service for downloading TikTok content.
 
 gallery-dl is used via subprocess since it has no stable Python API.
+Supports both slideshow (image) and video downloads.
 """
 
 import json
@@ -29,7 +30,7 @@ class SlideshowResult:
 
 
 class GalleryDlService:
-    """Wrapper around gallery-dl CLI for TikTok slideshow downloads."""
+    """Wrapper around gallery-dl CLI for TikTok content downloads."""
 
     TIMEOUT = 120  # seconds
 
@@ -40,10 +41,6 @@ class GalleryDlService:
     ) -> tuple[Optional[SlideshowResult], Optional[str]]:
         """
         Downloads a TikTok slideshow (images + optional audio).
-
-        Args:
-            url: TikTok post URL.
-            cookies_path: Path to Netscape cookies file.
 
         Returns:
             (SlideshowResult, None) on success.
@@ -93,6 +90,77 @@ class GalleryDlService:
 
         # Collect downloaded files
         return GalleryDlService._collect_files(output_dir)
+
+    @staticmethod
+    def download_video(
+        url: str,
+        cookies_path: Optional[str] = None,
+    ) -> tuple[Optional[str], Optional[str]]:
+        """
+        Downloads a TikTok video via gallery-dl.
+        Used as fallback when yt-dlp can't access classified/restricted content.
+
+        Returns:
+            (video_path, None) on success.
+            (None, error_message) on failure.
+        """
+        output_dir = os.path.join(TEMP_DIR, f"gdl_video_{uuid.uuid4().hex}")
+        os.makedirs(output_dir, exist_ok=True)
+
+        cmd = [
+            "gallery-dl",
+            "--directory", output_dir,
+            "--filename", "{id}.{extension}",
+            "--no-mtime",
+        ]
+
+        if cookies_path:
+            cmd.extend(["--cookies", cookies_path])
+
+        cmd.extend(["--", url])
+
+        logger.info(f"[GALLERY-DL] Attempting TikTok video download: {url}")
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=GalleryDlService.TIMEOUT,
+            )
+
+            if result.returncode != 0:
+                stderr = result.stderr.strip()
+                logger.error(f"[GALLERY-DL] Video download failed: {stderr}")
+                return None, f"gallery-dl error: {stderr[:200]}"
+
+        except FileNotFoundError:
+            logger.error("[GALLERY-DL] gallery-dl not found in PATH")
+            return None, "gallery-dl not installed"
+        except subprocess.TimeoutExpired:
+            logger.error("[GALLERY-DL] Video download timed out")
+            return None, "gallery-dl timeout"
+        except Exception as e:
+            logger.error(f"[GALLERY-DL] Unexpected error: {e}", exc_info=True)
+            return None, str(e)
+
+        # Find the video file
+        video_extensions = {".mp4", ".webm", ".mkv", ".mov"}
+        for root, _dirs, files in os.walk(output_dir):
+            for fname in files:
+                ext = os.path.splitext(fname)[1].lower()
+                if ext in video_extensions:
+                    video_path = os.path.join(root, fname)
+                    size_mb = os.path.getsize(video_path) / (1024 * 1024)
+                    logger.info(
+                        f"[GALLERY-DL] Video downloaded: {video_path} "
+                        f"({size_mb:.1f} MB)"
+                    )
+                    return video_path, None
+
+        # No video found — might be a slideshow or failed extraction
+        logger.warning(f"[GALLERY-DL] No video file found in {output_dir}")
+        return None, "No video file found"
 
     @staticmethod
     def _collect_files(

@@ -39,9 +39,9 @@ class TestYtDlpOpts(unittest.TestCase):
         """Verify modifying returned opts does not affect subsequent calls (template isolation)."""
         opts1 = self.service._base_opts(for_list_formats=False)
 
-        # Verify initial state — extractor_args starts empty
+        # Verify initial state — extractor_args includes TikTok defaults
         self.assertIsInstance(opts1["extractor_args"], dict)
-        self.assertEqual(len(opts1["extractor_args"]), 0)
+        self.assertIn("tiktok", opts1["extractor_args"])
 
         # Modify opts1
         opts1["new_key"] = "value"
@@ -53,8 +53,9 @@ class TestYtDlpOpts(unittest.TestCase):
 
         # Check if dict was modified in opts2
         # This will pass if each call creates a NEW dict.
-        self.assertEqual(len(opts2["extractor_args"]), 0)
         self.assertNotIn("injected", opts2["extractor_args"])
+        # TikTok defaults should be present but not the injected key
+        self.assertIn("tiktok", opts2["extractor_args"])
 
 
 if __name__ == "__main__":

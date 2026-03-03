@@ -74,7 +74,14 @@ class YtDlpService:
         opts = self._BASE_OPTS_TEMPLATE.copy()
 
         # Add mutable/nested structures freshly to ensure independence
-        opts["extractor_args"] = {}
+        # Enable TikTok's mobile app API extraction path — needed for
+        # age-restricted/classified content that the webpage can't access.
+        # An empty string uses yt-dlp's built-in defaults for app_name/version/aid.
+        opts["extractor_args"] = {
+            "tiktok": {
+                "app_info": [""],
+            },
+        }
 
         # Add dynamic/instance options
         opts["socket_timeout"] = self.SOCKET_TIMEOUT

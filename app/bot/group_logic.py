@@ -77,99 +77,22 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             is_slideshow = True
 
     if is_slideshow:
-        # TikTok slideshow — download and send as photo album
-        await status_msg.edit_text(Texts.SLIDESHOW_DOWNLOADING)
+        # TikTok slideshow — offer format choice (album vs video)
+        state.link_cache[token] = {
+            "page_url": url,
+            "user_tag": user_tag,
+            "chat_id": update.effective_chat.id,
+            "original_msg_id": update.message.message_id,
+        }
 
-        result, error = await MediaSender.download_slideshow(url)
-
-        if error or not result:
-            # Slideshow download failed — for classified TikTok content,
-            # try TikWM API as video fallback before giving up
-            from app.services.tikwm import TikWMService
-            logger.info("Slideshow failed, trying TikWM video fallback: %s", url)
-            tikwm_path, tikwm_err = await asyncio.to_thread(
-                TikWMService.download_video, url
-            )
-            if tikwm_path:
-                # Got video via TikWM — switch to video sending flow
-                is_slideshow = False
-                file_path = tikwm_path
-            else:
-                logger.warning("TikWM fallback also failed: %s", tikwm_err)
-                try:
-                    await status_msg.edit_text(error or Texts.SLIDESHOW_ERROR)
-                except Exception:
-                    pass
-                return
-
-        caption = f"👤 {user_tag}"
-
-        if is_slideshow and result:
-            # Normal slideshow flow — send photos
-            await status_msg.edit_text(Texts.SLIDESHOW_SENDING)
-
-            try:
-                await context.bot.send_chat_action(
-                    chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_PHOTO
-                )
-            except Exception:
-                pass
-
-            try:
-                success = await MediaSender.send_slideshow_photos(
-                    context.bot,
-                    update.effective_chat.id,
-                    result.images,
-                    caption=caption,
-                    parse_mode="HTML",
-                )
-
-                if success:
-                    try:
-                        await update.message.delete()
-                    except Exception as e:
-                        logger.debug(f"Could not delete user message: {e}")
-                    await status_msg.delete()
-                else:
-                    await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
-            finally:
-                await asyncio.to_thread(MediaSender.cleanup_slideshow, result)
-            return
-
-        elif not is_slideshow and file_path:
-            # TikWM video fallback — send as video
-            await status_msg.edit_text(Texts.GROUP_SENDING)
-
-            try:
-                await context.bot.send_chat_action(
-                    chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO
-                )
-            except Exception:
-                pass
-
-            kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{token}")]]
-            )
-            success = await MediaSender.send_file(
-                context.bot,
-                update.effective_chat.id,
-                file_path,
-                is_audio=False,
-                is_gif=False,
-                caption=caption,
-                parse_mode="HTML",
-                reply_markup=kb,
-            )
-
-            if success:
-                try:
-                    await update.message.delete()
-                except Exception as e:
-                    logger.debug(f"Could not delete user message: {e}")
-                await status_msg.delete()
-            else:
-                await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
-            return
+        kb = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("📸 Альбом", callback_data=f"grpslide|{token}|photo"),
+                InlineKeyboardButton("🎬 Видео", callback_data=f"grpslide|{token}|video"),
+            ]
+        ])
+        await status_msg.edit_text(Texts.GROUP_SLIDESHOW_CHOICE, reply_markup=kb)
+        return
 
     # Regular video download flow
     # Callback to update the status message
@@ -240,3 +163,151 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
 
     # File remains in state.file_cache (TTLCache) for GIF conversion reuse
+
+
+async def on_group_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles group slideshow format choice (album or video) callback."""
+    q = update.callback_query
+    await q.answer()
+
+    if not q.data:
+        return
+
+    try:
+        _, token, mode = q.data.split("|", 2)
+    except (ValueError, AttributeError) as e:
+        logger.error(f"Invalid callback data in on_group_slideshow: {e}")
+        return
+
+    payload = state.link_cache.get(token)
+    if not payload:
+        try:
+            await q.edit_message_text(Texts.SLIDESHOW_ERROR)
+        except Exception:
+            pass
+        return
+
+    page_url = payload["page_url"]
+    user_tag = payload["user_tag"]
+    chat_id = payload["chat_id"]
+    original_msg_id = payload.get("original_msg_id")
+    is_photo_mode = mode == "photo"
+
+    try:
+        await q.edit_message_reply_markup(None)
+    except Exception:
+        pass
+
+    await q.edit_message_text(Texts.SLIDESHOW_DOWNLOADING)
+
+    result, error = await MediaSender.download_slideshow(page_url)
+
+    if error or not result:
+        # Slideshow download failed — try TikWM as video fallback
+        from app.services.tikwm import TikWMService
+        logger.info("Slideshow failed in group, trying TikWM fallback: %s", page_url)
+        tikwm_path, tikwm_err = await asyncio.to_thread(
+            TikWMService.download_video, page_url
+        )
+        if tikwm_path:
+            # Got video via TikWM — send as video
+            await q.edit_message_text(Texts.GROUP_SENDING)
+            try:
+                await context.bot.send_chat_action(
+                    chat_id=chat_id, action=ChatAction.UPLOAD_VIDEO
+                )
+            except Exception:
+                pass
+
+            caption = f"👤 {user_tag}"
+            gif_token = uuid.uuid4().hex
+            state.file_cache[gif_token] = tikwm_path
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{gif_token}")]]
+            )
+            success = await MediaSender.send_file(
+                context.bot, chat_id, tikwm_path,
+                is_audio=False, is_gif=False,
+                caption=caption, parse_mode="HTML", reply_markup=kb,
+            )
+            if success:
+                try:
+                    await context.bot.delete_message(chat_id, original_msg_id)
+                except Exception:
+                    pass
+                await q.delete_message()
+            else:
+                await q.edit_message_text(Texts.GROUP_SEND_ERROR)
+            return
+        else:
+            logger.warning("TikWM fallback also failed: %s", tikwm_err)
+            await q.edit_message_text(error or Texts.SLIDESHOW_ERROR)
+            return
+
+    caption = f"👤 {user_tag}"
+
+    try:
+        if is_photo_mode:
+            await q.edit_message_text(Texts.SLIDESHOW_SENDING)
+            try:
+                await context.bot.send_chat_action(
+                    chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO
+                )
+            except Exception:
+                pass
+
+            success = await MediaSender.send_slideshow_photos(
+                context.bot, chat_id, result.images,
+                caption=caption, parse_mode="HTML",
+            )
+            if success:
+                try:
+                    await context.bot.delete_message(chat_id, original_msg_id)
+                except Exception:
+                    pass
+                await q.delete_message()
+            else:
+                await q.edit_message_text(Texts.GROUP_SEND_ERROR)
+        else:
+            # Convert to video
+            await q.edit_message_text(Texts.SLIDESHOW_CONVERTING)
+            from app.core.utils import safe_remove
+
+            video_path = await MediaSender.images_to_video(
+                result.images, result.audio
+            )
+            if not video_path:
+                await q.edit_message_text(Texts.SLIDESHOW_ERROR)
+                return
+
+            await q.edit_message_text(Texts.GROUP_SENDING)
+            try:
+                await context.bot.send_chat_action(
+                    chat_id=chat_id, action=ChatAction.UPLOAD_VIDEO
+                )
+            except Exception:
+                pass
+
+            gif_token = uuid.uuid4().hex
+            state.file_cache[gif_token] = video_path
+            kb = InlineKeyboardMarkup(
+                [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{gif_token}")]]
+            )
+            success = await MediaSender.send_file(
+                context.bot, chat_id, video_path,
+                is_audio=False, is_gif=False,
+                caption=caption, parse_mode="HTML", reply_markup=kb,
+            )
+            if success:
+                try:
+                    await context.bot.delete_message(chat_id, original_msg_id)
+                except Exception:
+                    pass
+                await q.delete_message()
+            else:
+                await q.edit_message_text(Texts.GROUP_SEND_ERROR)
+
+            # Cleanup video file (not cached for GIF, slideshow video is one-off)
+            # Actually, we cached it above for GIF. Don't remove.
+    finally:
+        await asyncio.to_thread(MediaSender.cleanup_slideshow, result)

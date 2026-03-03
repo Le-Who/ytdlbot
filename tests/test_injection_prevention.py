@@ -25,7 +25,6 @@ class TestURLSeparatorInjection(unittest.TestCase):
     def setUp(self):
         self.service = YtDlpService()
         self.service.cookies_manager.cookies_path = None
-        self.service.has_aria2 = False
 
     def _assert_separator_before_url(self, cmd: list, url: str):
         """Assert '--' appears in cmd and immediately precedes the URL."""

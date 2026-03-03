@@ -21,10 +21,9 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
     def setUp(self):
         # Setup mocks before YtDlpService init
         self.service = YtDlpService()
-        # Mock cookies path and aria2 presence for deterministic testing
+        # Mock cookies path for deterministic testing
         self.service.cookies_manager = MagicMock()
         self.service.cookies_manager.cookies_path = "/tmp/cookies.txt"
-        self.service.has_aria2 = True
 
     def test_happy_path(self):
         """Test successful format extraction."""

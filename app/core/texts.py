@@ -94,6 +94,7 @@ class Texts:
     GROUP_ERROR = "❌ Ошибка."
     GROUP_SENDING = "📤 Отправляю..."
     GROUP_SEND_ERROR = "⚠️ Ошибка отправки."
+    GROUP_SLIDESHOW_CHOICE = "🖼 TikTok Slideshow\nВыберите формат:"
 
     # ── Service layer (ytdlp exceptions) ──────────────────────────
     SVC_ACCESS_DENIED = "Доступ запрещен. Возможно, контент приватный или требуется авторизация."

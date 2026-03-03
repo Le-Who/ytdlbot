@@ -104,7 +104,6 @@ class VideoDownloader:
             height,
             output=tmp_path,
             max_filesize=MAX_TG_UPLOAD_MB,
-            use_aria2=True,
         )
 
         kb_cancel = InlineKeyboardMarkup(

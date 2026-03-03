@@ -16,7 +16,6 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
   - Smart caching reuses the downloaded video file for instant conversion.
 - **High Performance**:
   - **Async/Await**: Fully asynchronous architecture to handle multiple downloads simultaneously.
-  - **Aria2c Support**: Integrated `aria2c` for accelerated downloads.
   - **Smart Caching**: In-memory caching of video metadata (`TTLCache`) to reduce duplicate API calls to platforms.
   - **Instant GIF Streaming**: Zero-disk pipelining (`yt-dlp` -> `ffmpeg`) for GIF conversion, enabling an immediate "Time-To-First-Byte" playback.
   - **Robust Memory Management**: Complete protection against `yt-dlp`/`ffmpeg` zombie processes via cross-platform Process Group termination and strict `asyncio.timeout` bounds.
@@ -31,7 +30,6 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 - **Core Engine**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Video/audio extraction)
 - **Image Downloader**: [gallery-dl](https://github.com/mikf/gallery-dl) (TikTok slideshow image extraction)
 - **Processing**: [FFmpeg](https://ffmpeg.org/) (Video/Audio processing, GIF conversion & slideshow-to-video)
-- **Download Accelerator**: [aria2c](https://aria2.github.io/) (optional, multi-threaded downloads)
 - **Containerization**: Docker (Python 3.12-slim)
 - **CI/CD**: GitHub Actions (automated testing with coverage)
 
@@ -67,7 +65,7 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 │   │       ├── service.py # YtDlpService facade
 │   │       ├── parsers.py # Format parsing, deduplication & slideshow detection
 │   │       ├── models.py  # FormatItem, FormatMetadata dataclasses
-│   │       ├── builders.py# Command-line builders (aria2c, ffmpeg flags)
+│   │       ├── builders.py# Command-line builders (ffmpeg flags)
 │   │       ├── cookies.py # Cookie file management
 │   │       └── exceptions.py # Domain-specific errors
 │   ├── tasks
@@ -88,7 +86,6 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 
 - Python 3.12+
 - FFmpeg (installed and in system PATH)
-- Aria2c (optional, recommended for speed)
 - gallery-dl (optional, required for TikTok slideshow downloads)
 
 ### Local Development
@@ -188,7 +185,7 @@ The test suite includes:
 1.  Add the bot to a group.
 2.  Send a link.
 3.  The bot automatically downloads the best suitable video and sends it.
-4.  TikTok slideshows are automatically sent as photo albums.
+4.  For TikTok slideshows: choose **📸 Альбом** or **🎬 Видео**.
 5.  Click **"Send GIF"** on a video reply to instantly get a GIF version.
 
 ## 🔧 Configuration

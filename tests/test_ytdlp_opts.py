@@ -14,9 +14,7 @@ from app.services.ytdlp.service import YtDlpService
 
 class TestYtDlpOpts(unittest.TestCase):
     def setUp(self):
-        # Mock shutil.which to avoid logging warning during init
-        with patch("shutil.which", return_value="/usr/bin/aria2c"):
-            self.service = YtDlpService()
+        self.service = YtDlpService()
         self.service.cookies_manager.cookies_path = "/tmp/cookies.txt"
 
     def test_base_opts_structure(self):

@@ -12,7 +12,6 @@ from app.services.ytdlp.service import YtDlpService
 class TestProfessionalRefinements(unittest.TestCase):
     def setUp(self):
         self.service = YtDlpService()
-        self.service.has_aria2 = True
 
     def test_format_sort_in_opts(self):
         opts = self.service._base_opts()
@@ -32,10 +31,8 @@ class TestProfessionalRefinements(unittest.TestCase):
         
         self.assertIn("прямая трансляция", str(cm.exception).lower())
 
-    def test_aria2c_tuned_args(self):
-        cmd = self.service.build_command("url", "best", 1080, "out", use_aria2=True)
-        # Check if aria2c args are upgraded to -x 16
-        self.assertIn("-x 16 -s 16 -k 1M", " ".join(cmd))
+    def test_concurrent_fragments_present(self):
+        cmd = self.service.build_command("url", "best", 1080, "out")
         self.assertIn("--concurrent-fragments", cmd)
         self.assertIn("5", cmd)
         self.assertIn("--no-playlist", cmd)

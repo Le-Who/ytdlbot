@@ -50,11 +50,9 @@ def build_command(
     output: str,
     cookies_path: Optional[str] = None,
     max_filesize: Optional[int] = None,
-    use_aria2: bool = False,
-    has_aria2_installed: bool = False,
     proxy: Optional[str] = None,
 ) -> List[str]:
-    """Строит команду yt-dlp с поддержкой aria2c"""
+    """Строит команду yt-dlp"""
 
     # Проверяем, является ли это GIF форматом для Pinterest
     is_gif_format = format_id == GIF_FORMAT_ID
@@ -77,15 +75,6 @@ def build_command(
         # Для прогресс-бара
         if output != "-":
             cmd.extend(["--progress", "--newline"])
-            if use_aria2 and has_aria2_installed:
-                cmd.extend(
-                    [
-                        "--external-downloader",
-                        "aria2c",
-                        "--external-downloader-args",
-                        "-x 8 -k 1M",
-                    ]
-                )
         _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
         return cmd
     else:
@@ -111,9 +100,8 @@ def build_command(
         ]
     )
 
-    # Если стримим в pipe ("-"), то aria2c использовать нельзя, и прогресс тоже мешает
+    # Если стримим в pipe ("-"), то прогресс мешает
     if output != "-":
-        # Для прогресс-бара нам нужен вывод в stdout/stderr
         cmd.extend(["--progress", "--newline"])
 
     cmd.extend(
@@ -122,17 +110,6 @@ def build_command(
             "Merger+ffmpeg:-movflags frag_keyframe+empty_moov",
         ]
     )
-
-    if output != "-" and use_aria2 and has_aria2_installed:
-        # Ускорение для скачивания на диск
-        cmd.extend(
-            [
-                "--external-downloader",
-                "aria2c",
-                "--external-downloader-args",
-                "-x 16 -s 16 -k 1M",
-            ]
-        )
 
     _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
     return cmd

@@ -16,12 +16,11 @@ from app.constants import GIF_FORMAT_ID
 class TestYtDlpService(unittest.TestCase):
     def setUp(self):
         self.service = YtDlpService()
-        # Mock cookies path and aria2 presence for deterministic testing
+        # Mock cookies path for deterministic testing
         # We can't easily mock inner attributes if they are properties or hidden,
         # but cookies_path is a property reading from cookies_manager.
         # So we mock cookies_manager.cookies_path
         self.service.cookies_manager.cookies_path = "/tmp/cookies.txt"
-        self.service.has_aria2 = True
 
     def test_build_command_video(self):
         cmd = self.service.build_command(
@@ -61,27 +60,15 @@ class TestYtDlpService(unittest.TestCase):
         self.assertIn("bestaudio/best", cmd)
         self.assertIn("--cookies", cmd)
 
-    def test_build_command_aria2(self):
-        # Case 1: Stream to pipe (aria2 disabled)
-        cmd = self.service.build_command(
-            page_url="http://example.com/video",
-            format_id="best",
-            height=720,
-            output="-",
-            use_aria2=True
-        )
-        # Check that aria2c is NOT in the arguments
-        self.assertFalse(any("aria2c" in arg for arg in cmd))
-
-        # Case 2: Download to file (aria2 enabled)
+    def test_build_command_no_aria2(self):
+        # Verify aria2c is never in the command args
         cmd = self.service.build_command(
             page_url="http://example.com/video",
             format_id="best",
             height=720,
             output="/tmp/file.mp4",
-            use_aria2=True
         )
-        self.assertTrue(any("aria2c" in arg for arg in cmd))
+        self.assertFalse(any("aria2c" in arg for arg in cmd))
 
     def test_list_formats_passes_is_tiktok(self):
         mock_info = {

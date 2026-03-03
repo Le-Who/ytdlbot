@@ -1,0 +1,60 @@
+# docker-compose.wireguard.example.yml
+#
+# Example: WireGuard + SOCKS5 proxy for TikTok age-restricted content.
+#
+# Usage:
+#   1. Place your Mullvad .conf file as ./wireguard/wg0.conf
+#   2. Set TIKTOK_PROXY=socks5://wireguard-proxy:1080 in your bot env
+#   3. docker compose -f docker-compose.yml -f docker-compose.wireguard.example.yml up -d
+#
+# The proxy container runs WireGuard + microsocks (SOCKS5).
+# Only TikTok traffic goes through the tunnel; everything else stays direct.
+
+services:
+  wireguard-proxy:
+    image: lscr.io/linuxserver/wireguard:latest
+    container_name: wireguard-proxy
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    environment:
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - ./wireguard:/config          # Put your wg0.conf here
+    sysctls:
+      - net.ipv4.conf.all.src_valid_mark=1
+    restart: unless-stopped
+    # After WireGuard is up, start a SOCKS5 proxy on port 1080
+    # microsocks is tiny (~15KB) and has zero dependencies
+    entrypoint: /bin/bash
+    command: >
+      -c "
+        # Install microsocks on first run
+        if ! command -v microsocks &>/dev/null; then
+          apt-get update -qq && apt-get install -y -qq microsocks || {
+            # Fallback: build from source if package not available
+            apt-get install -y -qq gcc git make &&
+            git clone https://github.com/rofl0r/microsocks /tmp/microsocks &&
+            cd /tmp/microsocks && make && cp microsocks /usr/local/bin/
+          }
+        fi
+        # Start WireGuard
+        wg-quick up wg0 || { echo 'WireGuard failed to start'; exit 1; }
+        echo '=== WireGuard UP ==='
+        # Start SOCKS5 proxy (binds to all interfaces inside container)
+        exec microsocks -p 1080
+      "
+    healthcheck:
+      test: ["CMD-SHELL", "wg show wg0 | grep -q 'latest handshake'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Your bot service should have these env vars set:
+  # bot:
+  #   environment:
+  #     - TIKTOK_PROXY=socks5://wireguard-proxy:1080
+  #   depends_on:
+  #     wireguard-proxy:
+  #       condition: service_healthy

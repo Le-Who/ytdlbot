@@ -78,7 +78,7 @@ class TestURLSeparatorInjection(unittest.TestCase):
     def test_cookies_placed_before_separator(self):
         """--cookies flag must appear before the '--' separator."""
         self.service.cookies_manager.cookies_path = "/tmp/cookies.txt"
-        url = "https://youtube.com/watch?v=test"
+        url = "https://www.tiktok.com/@user/video/123"
         cmd = self.service.build_command(
             page_url=url, format_id="best", height=720, output="/tmp/out.mp4"
         )

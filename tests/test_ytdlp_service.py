@@ -25,7 +25,7 @@ class TestYtDlpService(unittest.TestCase):
 
     def test_build_command_video(self):
         cmd = self.service.build_command(
-            page_url="http://example.com/video",
+            page_url="https://www.tiktok.com/@user/video/123",
             format_id="137+140",
             height=1080,
             output="/tmp/out.mp4"
@@ -36,7 +36,7 @@ class TestYtDlpService(unittest.TestCase):
         # We check substring
         self.assertTrue(any("bestvideo[height=1080]" in arg for arg in cmd))
         self.assertIn("/tmp/out.mp4", cmd)
-        self.assertIn("http://example.com/video", cmd)
+        self.assertIn("https://www.tiktok.com/@user/video/123", cmd)
         self.assertIn("--cookies", cmd)
         self.assertIn("/tmp/cookies.txt", cmd)
 
@@ -53,7 +53,7 @@ class TestYtDlpService(unittest.TestCase):
 
     def test_build_command_audio(self):
         cmd = self.service.build_command(
-            page_url="http://example.com/song",
+            page_url="https://www.tiktok.com/@user/video/456",
             format_id="bestaudio/best",
             height=None,
             output="/tmp/out.mp3"

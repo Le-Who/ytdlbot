@@ -69,7 +69,7 @@ class YtDlpService:
     def cookies_path(self) -> Optional[str]:
         return self.cookies_manager.cookies_path
 
-    def _base_opts(self, for_list_formats: bool = False) -> Dict[str, Any]:
+    def _base_opts(self, for_list_formats: bool = False, url: str = "") -> Dict[str, Any]:
         """Базовые опции для yt-dlp"""
         # Start with cached immutable options
         opts = self._BASE_OPTS_TEMPLATE.copy()
@@ -95,7 +95,9 @@ class YtDlpService:
                 "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
             )
 
-        if self.cookies_path:
+        # Only pass cookies for platforms that need them (TikTok)
+        # Passing TikTok cookies to YouTube causes stale auth → format mismatch
+        if self.cookies_path and _is_tiktok(url):
             opts["cookiefile"] = self.cookies_path
 
         return opts
@@ -163,7 +165,7 @@ class YtDlpService:
 
     def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
         """Извлекает метаданные видео."""
-        opts = self._base_opts(for_list_formats=for_list_formats)
+        opts = self._base_opts(for_list_formats=for_list_formats, url=url)
 
         # Capture yt-dlp warnings/errors via custom logger
         # (quiet=True suppresses them, but they're critical for debugging)
@@ -316,7 +318,7 @@ class YtDlpService:
             format_id=format_id,
             height=height,
             output=output,
-            cookies_path=self.cookies_path,
+            cookies_path=self.cookies_path if _is_tiktok(page_url) else None,
             max_filesize=max_filesize,
             use_aria2=use_aria2,
             has_aria2_installed=self.has_aria2,

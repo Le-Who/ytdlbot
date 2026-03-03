@@ -51,6 +51,8 @@ def build_command(
     cookies_path: Optional[str] = None,
     max_filesize: Optional[int] = None,
     proxy: Optional[str] = None,
+    use_aria2: bool = False,
+    has_aria2_installed: bool = False,
 ) -> List[str]:
     """Строит команду yt-dlp"""
 
@@ -82,6 +84,13 @@ def build_command(
         cmd = _get_base_cmd(format_id, output)
         if output != "-":
             cmd.extend(["--progress", "--newline"])
+            # aria2c для ускорения скачивания (только для HTTP загрузок)
+            if use_aria2 and has_aria2_installed:
+                cmd.extend([
+                    "--downloader", "http:aria2c",
+                    "--downloader-args",
+                    "aria2c:-x 16 -s 16 -k 1M --summary-interval=1",
+                ])
         _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
         return cmd
 
@@ -105,6 +114,14 @@ def build_command(
     # Если стримим в pipe ("-"), то прогресс мешает
     if output != "-":
         cmd.extend(["--progress", "--newline"])
+        # aria2c для ускорения скачивания (только для HTTP загрузок,
+        # для DASH/HLS используем нативный --concurrent-fragments)
+        if use_aria2 and has_aria2_installed:
+            cmd.extend([
+                "--downloader", "http:aria2c",
+                "--downloader-args",
+                "aria2c:-x 16 -s 16 -k 1M --summary-interval=1",
+            ])
 
     cmd.extend(
         [
@@ -115,3 +132,4 @@ def build_command(
 
     _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
     return cmd
+

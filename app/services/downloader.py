@@ -25,6 +25,8 @@ from app.core.utils import (
     render_progressbar,
     PROGRESS_RE,
     PROGRESS_DETAILS_RE,
+    ARIA2C_PROGRESS_RE,
+    ARIA2C_DETAILS_RE,
 )
 from app.core.process import run_subprocess
 from app.core.policy import size_allowed
@@ -104,6 +106,7 @@ class VideoDownloader:
             height,
             output=tmp_path,
             max_filesize=MAX_TG_UPLOAD_MB,
+            use_aria2=True,
         )
 
         kb_cancel = InlineKeyboardMarkup(
@@ -113,12 +116,12 @@ class VideoDownloader:
         try:
             _metrics().downloads_total.inc(platform="telegram")
             _metrics().active_downloads.inc()
-            async with run_subprocess(cmd) as handle:
+            async with run_subprocess(cmd, merge_stderr=True) as handle:
                 proc = handle.proc
-                stderr = handle.stderr_data
                 last_update = 0
                 download_start = time.time()
                 max_download_time = DL_TIMEOUT_TELEGRAM
+                output_lines: list[str] = []
 
                 # Clear previous cancel state for this token
                 state.cancel_cache.pop(token, None)
@@ -154,26 +157,39 @@ class VideoDownloader:
                     if not line:
                         break
                     line_str = line.decode("utf-8", errors="ignore").strip()
+                    if line_str:
+                        output_lines.append(line_str)
 
-                    if (
-                        progress_callback
-                        and "[download]" in line_str
-                        and "%" in line_str
-                    ):
+                    if progress_callback:
                         now = time.time()
                         if now - last_update > 3.0:
-                            match = PROGRESS_RE.search(line_str)
-                            if match:
-                                try:
-                                    percent = float(match.group(1))
-                                    details = ""
+                            percent = None
+                            details = ""
 
+                            # Try yt-dlp native format: [download] 45.3% of ...
+                            if "[download]" in line_str and "%" in line_str:
+                                match = PROGRESS_RE.search(line_str)
+                                if match:
+                                    percent = float(match.group(1))
                                     det_match = PROGRESS_DETAILS_RE.search(line_str)
                                     if det_match:
                                         speed = det_match.group(1)
                                         eta = det_match.group(2)
                                         details = f"\n🚀 {speed} • ⏱ ETA {eta}"
 
+                            # Try aria2c format: [#abc 1.7MiB/33.2MiB(2%) CN:16 DL:5.2MiB ETA:4m51s]
+                            elif "(" in line_str and "%)" in line_str:
+                                match = ARIA2C_PROGRESS_RE.search(line_str)
+                                if match:
+                                    percent = float(match.group(1))
+                                    det_match = ARIA2C_DETAILS_RE.search(line_str)
+                                    if det_match:
+                                        speed = det_match.group(1)
+                                        eta = det_match.group(2)
+                                        details = f"\n🚀 {speed}/s • ⏱ ETA {eta}"
+
+                            if percent is not None:
+                                try:
                                     await progress_callback(
                                         f"⏳ Скачиваю: {render_progressbar(percent)}{details}\n❌ Нажмите отмена, если передумали.",
                                         kb_cancel,
@@ -199,7 +215,7 @@ class VideoDownloader:
                 if proc.returncode != 0:
                     _metrics().downloads_failed.inc(platform="telegram")
                     _metrics().active_downloads.dec()
-                    err = b"".join(stderr).decode("utf-8", errors="ignore").lower()
+                    err = "\n".join(output_lines[-50:]).lower()
                     logger.error(f"[DL-TG] yt-dlp failed: {err}")
 
                     if "file larger" in err or "filesize" in err:

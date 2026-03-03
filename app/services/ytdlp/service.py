@@ -1,4 +1,5 @@
 
+import shutil
 import subprocess
 import json
 import sys
@@ -61,6 +62,9 @@ class YtDlpService:
     def __init__(self):
         self.cookies_manager = CookiesManager()
         self.tiktok_proxy = TIKTOK_PROXY
+        self.has_aria2 = bool(shutil.which("aria2c"))
+        if self.has_aria2:
+            logger.info("✅ aria2c found — multi-connection downloads enabled")
         if self.tiktok_proxy:
             logger.info("🔒 TikTok proxy configured: %s", self.tiktok_proxy)
 
@@ -339,6 +343,7 @@ class YtDlpService:
         height: Optional[int],
         output: str,
         max_filesize: Optional[int] = None,
+        use_aria2: bool = False,
     ) -> List[str]:
         """Proxy to functional builder with state injection"""
         is_tiktok = _is_tiktok(page_url)
@@ -350,4 +355,6 @@ class YtDlpService:
             cookies_path=self.cookies_path if is_tiktok else None,
             max_filesize=max_filesize,
             proxy=self.tiktok_proxy if is_tiktok else None,
+            use_aria2=use_aria2,
+            has_aria2_installed=self.has_aria2,
         )

@@ -8,8 +8,11 @@ __all__ = ["render_progressbar", "is_supported_url", "extract_supported_url", "s
 
 URL_RE = re.compile(r"https?://\S+", re.I)
 SAFE_FILENAME_RE = re.compile(r'[<>:"/\\|?*]')
-PROGRESS_RE = re.compile(r"(\d+\.\d+)%")
+PROGRESS_RE = re.compile(r"(\d+(?:\.\d+)?)%")
 PROGRESS_DETAILS_RE = re.compile(r"at\s+(\S+).*?ETA\s+(\S+)")
+# aria2c progress format: [#abc 1.7MiB/33.2MiB(1%) CN:16 DL:5.2MiB ETA:4m51s]
+ARIA2C_PROGRESS_RE = re.compile(r"\((\d+)%\)")
+ARIA2C_DETAILS_RE = re.compile(r"DL:(\S+).*?ETA:(\S+)")
 
 BLOCK_FULL = "█"
 BLOCK_EMPTY = "░"

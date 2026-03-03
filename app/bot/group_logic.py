@@ -64,17 +64,21 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     is_slideshow = False
 
     if is_tiktok_url:
-        try:
-            info = await asyncio.to_thread(state.ytdlp.extract, url, True)
-            raw_formats = info.get("formats", [])
-            has_video = any(
-                fmt.get("vcodec") not in (None, "none")
-                for fmt in raw_formats
-            )
-            is_slideshow = not has_video
-        except Exception:
-            # If extraction fails for TikTok, assume it might be a slideshow
+        # Fast path: /photo/ URLs are always slideshows (no extraction needed)
+        if "/photo/" in url:
             is_slideshow = True
+        else:
+            try:
+                info = await asyncio.to_thread(state.ytdlp.extract, url, True)
+                raw_formats = info.get("formats", [])
+                has_video = any(
+                    fmt.get("vcodec") not in (None, "none")
+                    for fmt in raw_formats
+                )
+                is_slideshow = not has_video
+            except Exception:
+                # If extraction fails for TikTok, assume it might be a slideshow
+                is_slideshow = True
 
     if is_slideshow:
         # TikTok slideshow — offer format choice (album vs video)

@@ -164,6 +164,15 @@ class YtDlpService:
             info, used_subprocess = self._attempt_youtube_fallback(url, used_subprocess)
 
             if not info:
+                # If yt-dlp fails on a TikTok URL, it's likely a /photo/ slideshow
+                # that yt-dlp doesn't support — route to gallery-dl instead
+                if _is_tiktok(url):
+                    logger.info(
+                        "TikTok extraction failed, assuming slideshow: %s", url
+                    )
+                    special_format = get_special_format(url)
+                    return "TikTok Slideshow", [], special_format, "—", True
+
                 error_msg = str(e).lower()
                 if "403" in error_msg or "forbidden" in error_msg:
                     raise AccessDeniedError(Texts.SVC_ACCESS_DENIED)

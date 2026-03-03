@@ -276,6 +276,36 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
             self.assertEqual(formats_list[0].format_id, "high_res_big")
             self.assertEqual(formats_list[1].format_id, "med_res")
             self.assertEqual(formats_list[2].format_id, "low_res")
+    def test_tiktok_photo_url_returns_slideshow(self):
+        """Test that TikTok /photo/ URLs that fail yt-dlp return is_slideshow=True."""
+        url = "https://www.tiktok.com/@user/photo/7611488001083886868"
+
+        with patch.object(self.service, 'extract',
+                         side_effect=Exception("ERROR: Unsupported URL: " + url)):
+            title, formats, special_format, duration, is_slideshow = self.service.list_formats(url)
+
+            self.assertTrue(is_slideshow, "TikTok /photo/ URL should be detected as slideshow")
+            self.assertEqual(title, "TikTok Slideshow")
+            self.assertEqual(formats, [])
+            self.assertEqual(duration, "—")
+
+    def test_tiktok_unsupported_url_returns_slideshow(self):
+        """Any TikTok URL that yt-dlp can't handle should fallback to slideshow."""
+        url = "https://tiktok.com/@creator/photo/123456789"
+
+        with patch.object(self.service, 'extract',
+                         side_effect=Exception("Unsupported URL")):
+            _, _, _, _, is_slideshow = self.service.list_formats(url)
+            self.assertTrue(is_slideshow)
+
+    def test_non_tiktok_unsupported_url_raises_error(self):
+        """Non-TikTok unsupported URLs should still raise ExtractionError."""
+        url = "https://example.com/video/123"
+
+        with patch.object(self.service, 'extract',
+                         side_effect=Exception("Unsupported URL")):
+            with self.assertRaises(ExtractionError):
+                self.service.list_formats(url)
 
 if __name__ == '__main__':
     unittest.main()

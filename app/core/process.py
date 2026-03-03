@@ -57,7 +57,6 @@ async def run_subprocess(
     stdin=asyncio.subprocess.DEVNULL,
     stdout_pipe: bool = True,
     stderr_pipe: bool = True,
-    merge_stderr: bool = False,
     timeout: float | None = None,
 ) -> AsyncIterator[ProcessHandle]:
     import sys
@@ -69,19 +68,11 @@ async def run_subprocess(
     else:
         kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
 
-    # merge_stderr: redirect stderr to stdout so caller reads both via proc.stdout
-    if merge_stderr:
-        stderr_arg = asyncio.subprocess.STDOUT
-    elif stderr_pipe:
-        stderr_arg = asyncio.subprocess.PIPE
-    else:
-        stderr_arg = asyncio.subprocess.DEVNULL
-
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdin=stdin,
         stdout=asyncio.subprocess.PIPE if stdout_pipe else asyncio.subprocess.DEVNULL,
-        stderr=stderr_arg,
+        stderr=asyncio.subprocess.PIPE if stderr_pipe else asyncio.subprocess.DEVNULL,
         **kwargs,
     )
 
@@ -91,7 +82,7 @@ async def run_subprocess(
     stderr_data: deque[bytes] = deque(maxlen=200)
     stderr_task: asyncio.Task | None = None
 
-    if not merge_stderr and stderr_pipe and proc.stderr is not None:
+    if stderr_pipe and proc.stderr is not None:
 
         async def consume_stderr() -> None:
             while True:

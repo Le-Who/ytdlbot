@@ -73,24 +73,17 @@ def build_command(
     elif is_gif_format:
         # Для GIF используем bestvideo без аудио
         cmd = _get_base_cmd("bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best", output)
-
-        # Для прогресс-бара
-        if output != "-":
-            cmd.extend(["--progress", "--newline"])
         _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
         return cmd
     else:
         # Аудио/Raw или составной формат (bestvideo+bestaudio)
         cmd = _get_base_cmd(format_id, output)
-        if output != "-":
-            cmd.extend(["--progress", "--newline"])
-            # aria2c для ускорения скачивания (только для HTTP загрузок)
-            if use_aria2 and has_aria2_installed:
-                cmd.extend([
-                    "--downloader", "http:aria2c",
-                    "--downloader-args",
-                    "aria2c:-x 16 -s 16 -k 1M --summary-interval=1",
-                ])
+        if output != "-" and use_aria2 and has_aria2_installed:
+            cmd.extend([
+                "--downloader", "http:aria2c",
+                "--downloader-args",
+                "aria2c:-x 16 -s 16 -k 1M",
+            ])
         _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
         return cmd
 
@@ -111,17 +104,14 @@ def build_command(
         ]
     )
 
-    # Если стримим в pipe ("-"), то прогресс мешает
-    if output != "-":
-        cmd.extend(["--progress", "--newline"])
-        # aria2c для ускорения скачивания (только для HTTP загрузок,
-        # для DASH/HLS используем нативный --concurrent-fragments)
-        if use_aria2 and has_aria2_installed:
-            cmd.extend([
-                "--downloader", "http:aria2c",
-                "--downloader-args",
-                "aria2c:-x 16 -s 16 -k 1M --summary-interval=1",
-            ])
+    # aria2c для ускорения скачивания (только для HTTP загрузок,
+    # для DASH/HLS используем нативный --concurrent-fragments)
+    if output != "-" and use_aria2 and has_aria2_installed:
+        cmd.extend([
+            "--downloader", "http:aria2c",
+            "--downloader-args",
+            "aria2c:-x 16 -s 16 -k 1M",
+        ])
 
     cmd.extend(
         [

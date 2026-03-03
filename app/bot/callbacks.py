@@ -231,7 +231,6 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             payload["format_id"],
             payload.get("height"),
             token,
-            progress_callback=update_progress_ui,
         )
 
         if error or not file_path:

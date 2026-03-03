@@ -167,7 +167,6 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         format_id=video_format,
         height=None,
         token=token,
-        progress_callback=update_ui,
     )
 
     if error or not file_path:

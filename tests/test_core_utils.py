@@ -11,9 +11,8 @@ class TestCoreUtils(unittest.TestCase):
         utils.safe_remove("a")
         mock_unlink.assert_called_once_with("a")
 
-    def test_render_progressbar(self):
-        self.assertEqual(utils.render_progressbar(0), "░" * 15 + " 0.0%")
-        self.assertEqual(utils.render_progressbar(100), "█" * 15 + " 100.0%")
+
+
 
 
 if __name__ == "__main__":

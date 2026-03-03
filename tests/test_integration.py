@@ -17,7 +17,7 @@ os.environ.setdefault("BOT_TOKEN", "test_token")
 from app.bot import callbacks, messages
 from app.bot.keyboards import build_format_keyboard
 from app.core import state
-from app.core.utils import extract_supported_url, render_progressbar, is_supported_url
+from app.core.utils import extract_supported_url, is_supported_url
 from app.core.policy import size_allowed
 from app.services.ytdlp.parsers import (
     get_special_format,
@@ -274,19 +274,6 @@ class TestPolicyIntegration(unittest.TestCase):
         self.assertFalse(size_allowed(exact + 1, target="telegram"))
 
 
-class TestProgressBarIntegration(unittest.TestCase):
-    """Integration: progress bar rendering."""
-
-    def test_progress_bar_various_percentages(self):
-        for pct in [0, 25, 50, 75, 100]:
-            result = render_progressbar(pct)
-            self.assertIn(f"{pct:.1f}%", result)
-
-    def test_progress_bar_clamping(self):
-        result_neg = render_progressbar(-50)
-        self.assertIn("0.0%", result_neg)
-        result_over = render_progressbar(200)
-        self.assertIn("100.0%", result_over)
 
 
 if __name__ == "__main__":

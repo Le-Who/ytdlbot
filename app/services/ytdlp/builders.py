@@ -78,8 +78,10 @@ def build_command(
         _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
         return cmd
     else:
-        # Аудио/Raw
+        # Аудио/Raw или составной формат (bestvideo+bestaudio)
         cmd = _get_base_cmd(format_id, output)
+        if output != "-":
+            cmd.extend(["--progress", "--newline"])
         _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
         return cmd
 

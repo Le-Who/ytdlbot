@@ -24,6 +24,7 @@ logger = logging.getLogger("app.main")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up...")
+    logger.info("aria2c: %s", "enabled ✅" if state.ytdlp.has_aria2 else "not found ❌")
     stop_event = asyncio.Event()
     janitor_task = asyncio.create_task(janitor_loop(stop_event))
 

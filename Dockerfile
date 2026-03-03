@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# 1. Устанавливаем системные зависимости (cache-bust: 2026-03-03)
+# 1. Устанавливаем системные зависимости
 # ffmpeg - для склеивания видео+аудио
 # aria2 - для ускорения загрузки (многопоточность)
 # ca-certificates - для HTTPS
@@ -10,7 +10,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   ffmpeg \
   aria2 \
   ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+  && rm -rf /var/lib/apt/lists/* \
+  && aria2c --version | head -1
 
 # 2. Устанавливаем Python-зависимости
 COPY requirements.txt .

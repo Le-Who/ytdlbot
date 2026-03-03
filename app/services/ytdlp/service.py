@@ -192,7 +192,11 @@ class YtDlpService:
                 pass
             def warning(self, msg, *args):
                 formatted = msg % args if args else msg
-                logger.warning("yt-dlp: %s", formatted)
+                # Known internal retry — not a real warning
+                if "Failed to parse JSON" in formatted:
+                    logger.debug("yt-dlp: %s", formatted)
+                else:
+                    logger.warning("yt-dlp: %s", formatted)
             def error(self, msg, *args):
                 formatted = msg % args if args else msg
                 logger.error("yt-dlp: %s", formatted)

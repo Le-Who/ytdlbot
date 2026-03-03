@@ -38,6 +38,7 @@ class GalleryDlService:
     def download_slideshow(
         url: str,
         cookies_path: Optional[str] = None,
+        proxy: Optional[str] = None,
     ) -> tuple[Optional[SlideshowResult], Optional[str]]:
         """
         Downloads a TikTok slideshow (images + optional audio).
@@ -59,6 +60,8 @@ class GalleryDlService:
 
         if cookies_path:
             cmd.extend(["--cookies", cookies_path])
+        if proxy:
+            cmd.extend(["--proxy", proxy])
 
         cmd.extend(["--", url])
 
@@ -95,6 +98,7 @@ class GalleryDlService:
     def download_video(
         url: str,
         cookies_path: Optional[str] = None,
+        proxy: Optional[str] = None,
     ) -> tuple[Optional[str], Optional[str]]:
         """
         Downloads a TikTok video via gallery-dl.
@@ -116,6 +120,8 @@ class GalleryDlService:
 
         if cookies_path:
             cmd.extend(["--cookies", cookies_path])
+        if proxy:
+            cmd.extend(["--proxy", proxy])
 
         cmd.extend(["--", url])
 

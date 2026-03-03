@@ -9,6 +9,7 @@ import yt_dlp
 
 __all__ = ["YtDlpService"]
 
+from app.core.config import TIKTOK_PROXY
 from .models import FormatItem, FormatMetadata
 from .cookies import CookiesManager
 from .builders import build_command
@@ -59,11 +60,14 @@ class YtDlpService:
 
     def __init__(self):
         self.cookies_manager = CookiesManager()
+        self.tiktok_proxy = TIKTOK_PROXY
         self.has_aria2 = shutil.which("aria2c") is not None
         if self.has_aria2:
             logger.info("🚀 Aria2c detected! Download acceleration enabled.")
         else:
             logger.info("⚠️ Aria2c not found. Standard download mode.")
+        if self.tiktok_proxy:
+            logger.info("🔒 TikTok proxy configured: %s", self.tiktok_proxy)
 
     @property
     def cookies_path(self) -> Optional[str]:
@@ -95,10 +99,13 @@ class YtDlpService:
                 "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
             )
 
-        # Only pass cookies for platforms that need them (TikTok)
+        # Only pass cookies and proxy for platforms that need them (TikTok)
         # Passing TikTok cookies to YouTube causes stale auth → format mismatch
-        if self.cookies_path and _is_tiktok(url):
-            opts["cookiefile"] = self.cookies_path
+        if _is_tiktok(url):
+            if self.cookies_path:
+                opts["cookiefile"] = self.cookies_path
+            if self.tiktok_proxy:
+                opts["proxy"] = self.tiktok_proxy
 
         return opts
 
@@ -161,7 +168,9 @@ class YtDlpService:
     ) -> tuple[Optional[str], Optional[str]]:
         """Try downloading TikTok video via gallery-dl (fallback for classified content)."""
         from app.services.gallery_dl.service import GalleryDlService
-        return GalleryDlService.download_video(url, self.cookies_path)
+        return GalleryDlService.download_video(
+            url, self.cookies_path, proxy=self.tiktok_proxy,
+        )
 
     def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
         """Извлекает метаданные видео."""
@@ -313,13 +322,15 @@ class YtDlpService:
         use_aria2: bool = False,
     ) -> List[str]:
         """Proxy to functional builder with state injection"""
+        is_tiktok = _is_tiktok(page_url)
         return build_command(
             page_url=page_url,
             format_id=format_id,
             height=height,
             output=output,
-            cookies_path=self.cookies_path if _is_tiktok(page_url) else None,
+            cookies_path=self.cookies_path if is_tiktok else None,
             max_filesize=max_filesize,
             use_aria2=use_aria2,
             has_aria2_installed=self.has_aria2,
+            proxy=self.tiktok_proxy if is_tiktok else None,
         )

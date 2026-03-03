@@ -31,9 +31,10 @@ class SlideshowPipeline:
         from app.services.gallery_dl.service import GalleryDlService
 
         cookies_path = state.ytdlp.cookies_path
+        proxy = state.ytdlp.tiktok_proxy
 
         result, error = await asyncio.to_thread(
-            GalleryDlService.download_slideshow, page_url, cookies_path
+            GalleryDlService.download_slideshow, page_url, cookies_path, proxy
         )
 
         return result, error

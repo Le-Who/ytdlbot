@@ -1,6 +1,7 @@
 import os
 import secrets
 import tempfile
+from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -34,6 +35,11 @@ JANITOR_INTERVAL_SECONDS = int(os.getenv("JANITOR_INTERVAL_SECONDS", "300"))
 
 DL_TIMEOUT_TELEGRAM = int(os.getenv("DL_TIMEOUT_TELEGRAM", "600"))
 DL_TIMEOUT_HTTP = int(os.getenv("DL_TIMEOUT_HTTP", "900"))
+
+# TikTok proxy — route TikTok requests through WireGuard/SOCKS5 to bypass
+# datacenter IP blocks on age-restricted content.
+# Example: socks5://wireguard-proxy:1080
+TIKTOK_PROXY: Optional[str] = os.getenv("TIKTOK_PROXY", "").strip() or None
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")
 if not BASE_URL:

@@ -30,10 +30,13 @@ def _append_common_opts(
     page_url: str,
     cookies_path: Optional[str] = None,
     max_filesize: Optional[int] = None,
+    proxy: Optional[str] = None,
 ) -> None:
-    """Добавляет cookies, лимит размера и URL в конец команды"""
+    """Добавляет cookies, прокси, лимит размера и URL в конец команды"""
     if cookies_path:
         cmd.extend(["--cookies", cookies_path])
+    if proxy:
+        cmd.extend(["--proxy", proxy])
     if max_filesize:
         cmd.extend(["--max-filesize", f"{max_filesize}M"])
     cmd.append("--")
@@ -49,6 +52,7 @@ def build_command(
     max_filesize: Optional[int] = None,
     use_aria2: bool = False,
     has_aria2_installed: bool = False,
+    proxy: Optional[str] = None,
 ) -> List[str]:
     """Строит команду yt-dlp с поддержкой aria2c"""
 
@@ -82,12 +86,12 @@ def build_command(
                         "-x 8 -k 1M",
                     ]
                 )
-        _append_common_opts(cmd, page_url, cookies_path, max_filesize)
+        _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
         return cmd
     else:
         # Аудио/Raw
         cmd = _get_base_cmd(format_id, output)
-        _append_common_opts(cmd, page_url, cookies_path, max_filesize)
+        _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
         return cmd
 
     # 2. Селектор аудио (Original -> English -> OrigTag -> Any)
@@ -130,5 +134,5 @@ def build_command(
             ]
         )
 
-    _append_common_opts(cmd, page_url, cookies_path, max_filesize)
+    _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
     return cmd

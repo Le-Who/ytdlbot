@@ -155,9 +155,49 @@ class YtDlpService:
 
     def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
         """Извлекает метаданные видео."""
+        import os
         opts = self._base_opts(for_list_formats=for_list_formats)
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            return ydl.extract_info(url, download=False)
+
+        # Diagnostic: log cookie and extractor_args state
+        cookie_path = opts.get("cookiefile")
+        if cookie_path:
+            exists = os.path.exists(cookie_path)
+            size = os.path.getsize(cookie_path) if exists else 0
+            logger.info(
+                "yt-dlp extract: cookiefile=%s exists=%s size=%d extractor_args=%s",
+                cookie_path, exists, size, opts.get("extractor_args"),
+            )
+        else:
+            logger.warning("yt-dlp extract: NO cookiefile configured!")
+
+        # Capture yt-dlp warnings that quiet=True would suppress
+        captured_warnings = []
+
+        class _DiagLogger:
+            def debug(self, msg, *args):
+                pass
+            def info(self, msg, *args):
+                pass
+            def warning(self, msg, *args):
+                formatted = msg % args if args else msg
+                captured_warnings.append(formatted)
+                logger.info("yt-dlp warning: %s", formatted)
+            def error(self, msg, *args):
+                formatted = msg % args if args else msg
+                logger.error("yt-dlp error: %s", formatted)
+
+        opts["logger"] = _DiagLogger()
+
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(url, download=False)
+        except Exception:
+            if captured_warnings:
+                logger.info(
+                    "yt-dlp failed with %d warnings before error: %s",
+                    len(captured_warnings), captured_warnings,
+                )
+            raise
 
     def list_formats(
         self, url: str, max_items: int = 12

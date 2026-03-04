@@ -16,7 +16,8 @@ class Texts:
         "• YouTube\n"
         "• TikTok\n"
         "• VK / VK Video\n"
-        "• RuTube\n"
+        "• RuTube (включая Shorts)\n"
+        "• Facebook\n"
         "• Pinterest\n\n"
         "<i>Я найду доступные форматы и отправлю видео прямо сюда.</i>"
     )
@@ -36,7 +37,7 @@ class Texts:
     )
 
     # ── Messages (on_message handler) ─────────────────────────────
-    URL_NOT_SUPPORTED = "❌ Ссылка не поддерживается. Попробуйте YouTube, TikTok, VK или Pinterest."
+    URL_NOT_SUPPORTED = "❌ Ссылка не поддерживается. Попробуйте YouTube, TikTok, VK, Facebook, RuTube или Pinterest."
     RATE_LIMITED = "⚠️ Слишком часто. Подождите минуту."
     SEARCHING = "🔎 Ищу видео..."
     TIMEOUT_RETRY = "❌ Время ожидания истекло. Попробуйте еще раз."

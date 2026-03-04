@@ -4,7 +4,7 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 
 ## 🚀 Key Features
 
-- **Multi-Platform Support**: Downloads videos from YouTube, TikTok (no watermark), Pinterest, VK, and many others supported by `yt-dlp`.
+- **Multi-Platform Support**: Downloads videos from YouTube, TikTok (no watermark), Pinterest, VK, Facebook, and RuTube (including Shorts) via `yt-dlp`.
 - **TikTok Slideshow Support**: Downloads TikTok image carousel (slideshow) posts via `gallery-dl` with two output modes:
   - **📸 Photo Album** — sends individual images as a Telegram media group (up to 10 photos).
   - **🎬 Video Slideshow** — combines images + audio into an MP4 via `ffmpeg`.
@@ -71,7 +71,7 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 │   ├── tasks
 │   │   └── janitor.py     # Periodic temp file cleanup
 │   └── main.py            # Application entry point
-├── tests/                 # 217 tests (unit + integration)
+├── tests/                 # 241 tests (unit + integration)
 ├── .github/workflows/     # CI/CD pipeline
 ├── Dockerfile             # Docker build (Python 3.12-slim)
 ├── .dockerignore          # Excludes .git, tests, IDE files from build context
@@ -162,7 +162,7 @@ BOT_TOKEN=test pytest tests/ --cov=app --cov-report=term-missing
 
 The test suite includes:
 
-- **217 unit + integration tests**
+- **241 unit + integration tests**
 - HMAC webhook authentication tests
 - Rate limiter behavior tests
 - Format parsing and deduplication tests
@@ -235,20 +235,22 @@ Use `.env.example` as baseline. All variables are read from environment or `.env
 | `MAX_TEMP_AGE_SECONDS`     | Temp file cleanup threshold | `3600`  |
 | `JANITOR_INTERVAL_SECONDS` | Cleanup task interval       | `300`   |
 
-### Authentication (Cookies)
+| Variable               | Description                                                                | Default |
+| ---------------------- | -------------------------------------------------------------------------- | ------- |
+| `YTDLP_COOKIES_B64`    | Base64-encoded Netscape cookies file — global fallback (YouTube, VK, etc.) | —       |
+| `TIKTOK_COOKIES_B64`   | Base64-encoded cookies for TikTok (overrides global)                       | —       |
+| `FACEBOOK_COOKIES_B64` | Base64-encoded cookies for Facebook (overrides global)                     | —       |
+| `TIKTOK_PROXY`         | SOCKS5/HTTP proxy for TikTok (datacenter IP bypass)                        | —       |
 
-| Variable            | Description                                                     | Default |
-| ------------------- | --------------------------------------------------------------- | ------- |
-| `YTDLP_COOKIES_B64` | Base64-encoded Netscape cookies file (for TikTok, YouTube auth) | —       |
+Cookies allow downloading age-restricted, private, or sign-in-required content. Priority: **platform-specific → global fallback**.
 
-To bypass "Sign-in required" errors on TikTok or age-restricted YouTube content:
+To set up cookies:
 
 1. Export your cookies from a browser using an extension like **"Get cookies.txt LOCALLY"**.
-2. Combine YouTube + TikTok cookies into a single Netscape-format `.txt` file.
-3. Encode it: `base64 -w0 cookies.txt` (Linux) or `[Convert]::ToBase64String([IO.File]::ReadAllBytes('cookies.txt'))` (PowerShell).
-4. Set `YTDLP_COOKIES_B64` in your `.env` file.
+2. Encode the file: `base64 -w0 cookies.txt` (Linux) or `[Convert]::ToBase64String([IO.File]::ReadAllBytes('cookies.txt'))` (PowerShell).
+3. Set the appropriate env var (`YTDLP_COOKIES_B64` for YouTube/general, `TIKTOK_COOKIES_B64` for TikTok, `FACEBOOK_COOKIES_B64` for Facebook).
 
-> **Note**: Cookies expire periodically (1–4 weeks for TikTok) and will need to be re-exported.
+> **Note**: Cookies expire periodically (1–4 weeks depending on platform) and will need to be re-exported.
 
 ### Structured Logging
 

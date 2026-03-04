@@ -6,6 +6,38 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Facebook Video support**: Download videos from `facebook.com` and `fb.watch` URLs via yt-dlp
+- **Rutube Shorts**: Explicitly supported (already worked via Rutube extractor, now documented in UI)
+- **`PlatformCookiesManager`**: Per-platform cookie management with global fallback
+  - `YTDLP_COOKIES_B64` — global cookies (YouTube, VK, etc.)
+  - `TIKTOK_COOKIES_B64` — TikTok-specific override
+  - `FACEBOOK_COOKIES_B64` — Facebook-specific override
+  - Priority: platform-specific → global fallback
+- **TikTok content-type router**: Pre-routes `/photo/` URLs to slideshow pipeline before yt-dlp extraction
+- **`TikTokError` enum**: Structured error classification replacing fragile string matching
+- **`_is_facebook()` helper**: URL detection for Facebook domains
+- **`classify_tiktok_content()`**: URL pattern classifier (slideshow vs video)
+- **`classify_tiktok_error()`**: Error message → enum classifier
+- **New tests**: `test_cookies_manager.py` (4), `test_tiktok_content_router.py` (15), `_is_facebook` in url helpers
+
+### Changed
+
+- **`_base_opts()`**: Universal cookie routing via `get_cookies_path(url)` — all platforms with configured cookies receive them
+- **`build_command()`**: Cookies passed per-platform instead of TikTok-only
+- **`list_formats()` TikTok error handling**: Refactored from string matching to enum-based routing
+- **Test suite**: Expanded from 232 to 241 tests (all passing)
+
+### Dependencies
+
+- **`yt-dlp`**: `>=2025.1.15` → `>=2026.03.03`
+- **`gallery-dl`**: `>=1.27.0` → `>=1.31.0`
+
+---
+
+## [Previous]
+
+### Added
+
 - **TikTok Slideshow (Image Carousel) support**: Two output modes via `gallery-dl` + `ffmpeg`:
   - **📸 Photo Album** — sends images as a Telegram media group (up to 10)
   - **🎬 Video Slideshow** — combines images + audio into MP4

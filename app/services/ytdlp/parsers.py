@@ -1,4 +1,5 @@
 import re
+from enum import Enum
 from typing import List, Dict, Any, Optional
 from app.constants import (
     VIDEO_EXTENSIONS,
@@ -24,6 +25,52 @@ def _is_youtube(url: str) -> bool:
 
 def _is_pinterest(url: str) -> bool:
     return "pinterest.com" in url.lower() or "pin.it" in url.lower()
+
+
+def _is_facebook(url: str) -> bool:
+    low = url.lower()
+    return "facebook.com" in low or "fb.watch" in low
+
+
+# ── TikTok content-type classification ─────────────────────────────
+
+
+class TikTokError(Enum):
+    """Structured classification of TikTok extraction errors."""
+    AUTH_REQUIRED = "auth"       # login / cookies / sign in
+    SLIDESHOW = "slideshow"      # unsupported url → photo content
+    FORBIDDEN = "forbidden"      # 403
+    NOT_FOUND = "not_found"      # 404
+    LIVE = "live"                # live stream
+    GENERIC = "generic"          # everything else
+
+
+def classify_tiktok_content(url: str) -> str:
+    """Classify TikTok content type by URL pattern.
+
+    Returns:
+        'slideshow' — /photo/ URLs (yt-dlp can't handle these)
+        'video'     — everything else
+    """
+    if "/photo/" in url.lower():
+        return "slideshow"
+    return "video"
+
+
+def classify_tiktok_error(error_msg: str) -> TikTokError:
+    """Classify a TikTok extraction error into a structured enum."""
+    msg = error_msg.lower()
+    if "log in" in msg or "cookies" in msg or "sign in" in msg:
+        return TikTokError.AUTH_REQUIRED
+    if "unsupported url" in msg:
+        return TikTokError.SLIDESHOW
+    if "403" in msg or "forbidden" in msg:
+        return TikTokError.FORBIDDEN
+    if "404" in msg or "not found" in msg:
+        return TikTokError.NOT_FOUND
+    if "live" in msg and "available" not in msg:
+        return TikTokError.LIVE
+    return TikTokError.GENERIC
 
 
 def _format_duration(seconds: Optional[float]) -> str:

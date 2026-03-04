@@ -16,11 +16,9 @@ from app.constants import GIF_FORMAT_ID
 class TestYtDlpService(unittest.TestCase):
     def setUp(self):
         self.service = YtDlpService()
-        # Mock cookies path for deterministic testing
-        # We can't easily mock inner attributes if they are properties or hidden,
-        # but cookies_path is a property reading from cookies_manager.
-        # So we mock cookies_manager.cookies_path
-        self.service.cookies_manager.cookies_path = "/tmp/cookies.txt"
+        # Mock PlatformCookiesManager to return a deterministic cookies path
+        self.service.cookies_manager.get_cookies_path = lambda url: "/tmp/cookies.txt"
+        self.service.cookies_manager._global_cookies_path = "/tmp/cookies.txt"
 
     def test_build_command_video(self):
         cmd = self.service.build_command(

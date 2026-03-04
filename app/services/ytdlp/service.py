@@ -12,7 +12,7 @@ __all__ = ["YtDlpService"]
 
 from app.core.config import TIKTOK_PROXY
 from .models import FormatItem, FormatMetadata
-from .cookies import CookiesManager
+from .cookies import PlatformCookiesManager
 from .builders import build_command
 from .parsers import (
     parse_format_metadata,
@@ -23,6 +23,9 @@ from .parsers import (
     _is_youtube,
     _is_tiktok,
     detect_tiktok_slideshow,
+    classify_tiktok_content,
+    classify_tiktok_error,
+    TikTokError,
     BITRATE_COEFFICIENT,
 )
 from .exceptions import (
@@ -60,7 +63,7 @@ class YtDlpService:
     }
 
     def __init__(self):
-        self.cookies_manager = CookiesManager()
+        self.cookies_manager = PlatformCookiesManager()
         self.tiktok_proxy = TIKTOK_PROXY
         self.has_aria2 = bool(shutil.which("aria2c"))
         if self.has_aria2:
@@ -70,7 +73,8 @@ class YtDlpService:
 
     @property
     def cookies_path(self) -> Optional[str]:
-        return self.cookies_manager.cookies_path
+        """Backward-compat: return TikTok cookies (used by slideshow etc.)"""
+        return self.cookies_manager.tiktok_cookies_path
 
     def _base_opts(self, for_list_formats: bool = False, url: str = "") -> Dict[str, Any]:
         """Базовые опции для yt-dlp"""
@@ -98,13 +102,14 @@ class YtDlpService:
                 "bestvideo+bestaudio/bestvideo+bestaudio/best/bestvideo/best"
             )
 
-        # Only pass cookies and proxy for platforms that need them (TikTok)
-        # Passing TikTok cookies to YouTube causes stale auth → format mismatch
-        if _is_tiktok(url):
-            if self.cookies_path:
-                opts["cookiefile"] = self.cookies_path
-            if self.tiktok_proxy:
-                opts["proxy"] = self.tiktok_proxy
+        # Pass cookies for any platform that has them configured
+        cookies = self.cookies_manager.get_cookies_path(url)
+        if cookies:
+            opts["cookiefile"] = cookies
+
+        # Proxy only for TikTok (datacenter IP blocks)
+        if _is_tiktok(url) and self.tiktok_proxy:
+            opts["proxy"] = self.tiktok_proxy
 
         return opts
 
@@ -212,6 +217,15 @@ class YtDlpService:
         """Извлекает форматы видео с обработкой ошибок"""
         info: Optional[Dict[str, Any]] = None
         used_subprocess = False
+
+        # TikTok pre-routing: detect slideshows by URL pattern BEFORE extraction
+        if _is_tiktok(url):
+            content_type = classify_tiktok_content(url)
+            if content_type == "slideshow":
+                logger.info("TikTok /photo/ URL, routing to slideshow: %s", url)
+                special_format = get_special_format(url)
+                return "TikTok Slideshow", [], special_format, "—", True
+
         try:
             info = self.extract(url, for_list_formats=True)
         except Exception as e:
@@ -220,13 +234,11 @@ class YtDlpService:
             if not info:
                 error_msg = str(e).lower()
 
-                # Handle auth/cookies errors — for TikTok classified content,
-                # try TikWM API as fallback (gallery-dl also fails with 403
-                # from datacenter IPs, so we skip it to save ~5 seconds)
-                if "log in" in error_msg or "cookies" in error_msg or "sign in" in error_msg:
-                    if _is_tiktok(url):
-                        # Only try gallery-dl if proxy is configured
-                        # (without proxy it always fails with 403)
+                if _is_tiktok(url):
+                    error_class = classify_tiktok_error(error_msg)
+
+                    if error_class == TikTokError.AUTH_REQUIRED:
+                        # Try gallery-dl (only if proxy configured)
                         if self.tiktok_proxy:
                             logger.info(
                                 "TikTok classified content, trying gallery-dl "
@@ -249,31 +261,28 @@ class YtDlpService:
                         logger.warning(
                             "TikWM fallback also failed: %s", twm_err
                         )
+                        raise AccessDeniedError(
+                            "⚠️ Контент с ограниченным доступом. "
+                            "Требуется авторизация (cookies могут быть устаревшими)."
+                        )
 
-                    raise AccessDeniedError(
-                        "⚠️ Контент с ограниченным доступом. "
-                        "Требуется авторизация (cookies могут быть устаревшими)."
-                    )
+                    elif error_class == TikTokError.SLIDESHOW:
+                        logger.info(
+                            "TikTok unsupported URL, routing to slideshow: %s", url
+                        )
+                        special_format = get_special_format(url)
+                        return "TikTok Slideshow", [], special_format, "—", True
 
-                # If yt-dlp fails on a TikTok URL with "Unsupported URL",
-                # it's a /photo/ slideshow — route to gallery-dl
-                if _is_tiktok(url) and "unsupported url" in error_msg:
-                    logger.info(
-                        "TikTok unsupported URL, routing to slideshow: %s", url
-                    )
-                    special_format = get_special_format(url)
-                    return "TikTok Slideshow", [], special_format, "—", True
+                    elif error_class == TikTokError.FORBIDDEN:
+                        raise AccessDeniedError(Texts.SVC_ACCESS_DENIED)
 
-                if "403" in error_msg or "forbidden" in error_msg:
-                    raise AccessDeniedError(Texts.SVC_ACCESS_DENIED)
-                elif "404" in error_msg or "not found" in error_msg:
-                    raise VideoNotFoundError(Texts.SVC_VIDEO_NOT_FOUND)
-                elif "live" in error_msg and "available" not in error_msg:
-                    raise LiveStreamError(Texts.SVC_LIVE_NOT_SUPPORTED)
-                else:
-                    # For TikTok, any other unknown error still falls back to slideshow
-                    # since yt-dlp has limited TikTok support
-                    if _is_tiktok(url):
+                    elif error_class == TikTokError.NOT_FOUND:
+                        raise VideoNotFoundError(Texts.SVC_VIDEO_NOT_FOUND)
+
+                    elif error_class == TikTokError.LIVE:
+                        raise LiveStreamError(Texts.SVC_LIVE_NOT_SUPPORTED)
+
+                    else:  # TikTokError.GENERIC
                         logger.info(
                             "TikTok extraction failed (unknown error), "
                             "trying slideshow fallback: %s", url
@@ -281,6 +290,19 @@ class YtDlpService:
                         special_format = get_special_format(url)
                         return "TikTok Slideshow", [], special_format, "—", True
 
+                # Non-TikTok error handling
+                if "403" in error_msg or "forbidden" in error_msg:
+                    raise AccessDeniedError(Texts.SVC_ACCESS_DENIED)
+                elif "404" in error_msg or "not found" in error_msg:
+                    raise VideoNotFoundError(Texts.SVC_VIDEO_NOT_FOUND)
+                elif "log in" in error_msg or "cookies" in error_msg or "sign in" in error_msg:
+                    raise AccessDeniedError(
+                        "⚠️ Контент с ограниченным доступом. "
+                        "Требуется авторизация (cookies могут быть устаревшими)."
+                    )
+                elif "live" in error_msg and "available" not in error_msg:
+                    raise LiveStreamError(Texts.SVC_LIVE_NOT_SUPPORTED)
+                else:
                     logger.error("YtDlp Extraction Error: %s", e, exc_info=True)
                     msg = str(e)
                     if "format is not available" in msg.lower():
@@ -350,13 +372,14 @@ class YtDlpService:
         use_aria2: bool = False,
     ) -> List[str]:
         """Proxy to functional builder with state injection"""
+        cookies = self.cookies_manager.get_cookies_path(page_url)
         is_tiktok = _is_tiktok(page_url)
         return build_command(
             page_url=page_url,
             format_id=format_id,
             height=height,
             output=output,
-            cookies_path=self.cookies_path if is_tiktok else None,
+            cookies_path=cookies,
             max_filesize=max_filesize,
             proxy=self.tiktok_proxy if is_tiktok else None,
             use_aria2=use_aria2,

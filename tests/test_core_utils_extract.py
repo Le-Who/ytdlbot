@@ -6,13 +6,13 @@ from unittest.mock import MagicMock
 # Add repo root to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Mock dependencies before importing app code
-sys.modules["dotenv"] = MagicMock()
-sys.modules["cachetools"] = MagicMock()
-sys.modules["yt_dlp"] = MagicMock()
-sys.modules["telegram"] = MagicMock()
-sys.modules["telegram.ext"] = MagicMock()
-sys.modules["fastapi"] = MagicMock()
+# Mock dependencies before importing app code (setdefault to avoid corrupting real packages)
+sys.modules.setdefault("dotenv", MagicMock())
+sys.modules.setdefault("cachetools", MagicMock())
+sys.modules.setdefault("yt_dlp", MagicMock())
+sys.modules.setdefault("telegram", MagicMock())
+sys.modules.setdefault("telegram.ext", MagicMock())
+sys.modules.setdefault("fastapi", MagicMock())
 
 # Set env vars
 import os

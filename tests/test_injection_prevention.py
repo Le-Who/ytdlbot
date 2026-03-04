@@ -72,7 +72,7 @@ class TestURLSeparatorInjection(unittest.TestCase):
         sep_idx = cmd.index("--")
         for arg in cmd[:sep_idx]:
             self.assertFalse(arg.startswith("--exec"),
-                             f"Malicious '--exec' found before separator")
+                             "Malicious '--exec' found before separator")
 
     def test_cookies_placed_before_separator(self):
         """--cookies flag must appear before the '--' separator."""

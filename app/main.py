@@ -73,6 +73,7 @@ async def lifespan(app: FastAPI):
         )
     else:
         await bot_app.bot.delete_webhook()
+        assert bot_app.updater is not None
         await bot_app.updater.start_polling(allowed_updates=["message", "callback_query"])
 
     yield
@@ -83,6 +84,7 @@ async def lifespan(app: FastAPI):
     if config.WEBHOOK_URL:
         await bot_app.bot.delete_webhook()
     else:
+        assert bot_app.updater is not None
         await bot_app.updater.stop()
 
     await bot_app.stop()

@@ -1,7 +1,7 @@
 import unittest
 import os
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 # Mock yt_dlp before importing app code
 sys.modules["yt_dlp"] = MagicMock()

@@ -4,6 +4,8 @@ import os
 import sys
 from unittest.mock import MagicMock, AsyncMock, patch
 
+from telegram import Message
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 os.environ.setdefault("BOT_TOKEN", "test_token")
 
@@ -29,6 +31,7 @@ class TestUXOnSend(unittest.IsolatedAsyncioTestCase):
         update = MagicMock()
         update.callback_query.data = "send|test_token"
         update.callback_query.from_user.id = 12345
+        update.callback_query.message = MagicMock(spec=Message)
         update.callback_query.message.chat_id = 999
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
@@ -60,6 +63,7 @@ class TestUXOnSend(unittest.IsolatedAsyncioTestCase):
         update = MagicMock()
         update.callback_query.data = "send|test_token_err"
         update.callback_query.from_user.id = 12345
+        update.callback_query.message = MagicMock(spec=Message)
         update.callback_query.message.chat_id = 999
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()

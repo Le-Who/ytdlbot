@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING
 from cachetools import TTLCache
 from app.core.cache import FileTTLCache
 from app.core.config import (
@@ -30,13 +33,15 @@ ytdlp = YtDlpService()
 tasks_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 parsing_sem = asyncio.Semaphore(5)  # Лимит на одновременный парсинг форматов
 active_processes_lock = asyncio.Lock()
-active_processes = set()
-processing_gifs = set()  # Set of tokens currently being converted to GIF
+active_processes: set[asyncio.subprocess.Process] = set()
+processing_gifs: set[str] = set()  # Set of tokens currently being converted to GIF
 conversion_sem = asyncio.Semaphore(3)  # Bounded concurrency for CPU-intensive conversions
 ytdlp_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="ytdlp")  # Dedicated pool for yt-dlp
 
 # Глобальный объект приложения Telegram (инициализируется в main.py)
-bot_app = None
+if TYPE_CHECKING:
+    from telegram.ext import Application
+bot_app: Application | None = None  # type: ignore[type-arg]
 
 
 # Кэши

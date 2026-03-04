@@ -10,6 +10,8 @@ import sys
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
+from telegram import Message
+
 
 class MockHTTPException(Exception):
     """Real Exception subclass standing in for fastapi.HTTPException."""
@@ -87,6 +89,7 @@ def mock_update():
     update.message.delete = AsyncMock()
     update.callback_query.data = ""
     update.callback_query.from_user.id = 12345
+    update.callback_query.message = MagicMock(spec=Message)
     update.callback_query.message.chat_id = 99999
     update.callback_query.answer = AsyncMock()
     update.callback_query.edit_message_text = AsyncMock()

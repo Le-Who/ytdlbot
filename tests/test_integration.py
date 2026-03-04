@@ -11,10 +11,13 @@ import sys
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 os.environ.setdefault("BOT_TOKEN", "test_token")
 
-from app.bot import callbacks, messages
+from telegram import Message
+
+from app.bot import callbacks
 from app.bot.keyboards import build_format_keyboard
 from app.core import state
 from app.core.utils import extract_supported_url, is_supported_url
@@ -142,6 +145,7 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
         context = MagicMock()
         update.callback_query.data = f"send|{token}"
         update.callback_query.from_user.id = 12345
+        update.callback_query.message = MagicMock(spec=Message)
         update.callback_query.message.chat_id = 99999
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
@@ -185,6 +189,7 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
         context = MagicMock()
         update.callback_query.data = "send|some_token"
         update.callback_query.from_user.id = 12345
+        update.callback_query.message = MagicMock(spec=Message)
         update.callback_query.message.chat_id = 99999
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()

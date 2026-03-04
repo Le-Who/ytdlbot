@@ -6,6 +6,8 @@ import sys
 import unittest
 from unittest.mock import MagicMock, AsyncMock, patch
 
+from telegram import Message
+
 os.environ.setdefault("BOT_TOKEN", "test_token")
 os.environ.setdefault("WEBHOOK_URL", "https://example.com")
 os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "secret")
@@ -43,7 +45,7 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
         self.update.callback_query.edit_message_text = AsyncMock()
         self.update.callback_query.edit_message_reply_markup = AsyncMock()
         self.update.callback_query.delete_message = AsyncMock()
-        self.update.callback_query.message = MagicMock()
+        self.update.callback_query.message = MagicMock(spec=Message)
         self.update.callback_query.message.chat_id = 99999
         self.update.callback_query.from_user = MagicMock()
         self.update.callback_query.from_user.id = 12345

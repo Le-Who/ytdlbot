@@ -3,7 +3,7 @@ import uuid
 import asyncio
 import logging
 import html
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
+from telegram import Update, Message, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
@@ -31,9 +31,11 @@ logger = logging.getLogger("app.bot.callbacks")
 
 async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
+    assert q is not None
     await q.answer()
 
     data = context.user_data
+    assert data is not None
     page_url = data.get("page_url")
     if not page_url:
         await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
@@ -74,6 +76,7 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
+    assert q is not None
     await q.answer(Texts.PREPARING_LINK)
 
     try:
@@ -91,6 +94,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     data = context.user_data
+    assert data is not None
     if not data.get("page_url"):
         await q.edit_message_text(Texts.DATA_EXPIRED_RESEND)
         return
@@ -144,6 +148,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
+    assert q is not None
     await q.answer(Texts.CANCELLING)
 
     if not q.data:
@@ -159,6 +164,7 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
+    assert q is not None and q.from_user is not None and isinstance(q.message, Message)
     await q.answer(Texts.DOWNLOAD_STARTED)
     user_id = q.from_user.id
 
@@ -203,6 +209,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await state.tasks_sem.acquire()
 
     data = context.user_data
+    assert data is not None
     fmt_size = data.get("size_map", {}).get(payload["format_id"])
     if not size_allowed(fmt_size, target="telegram"):
         state.tasks_sem.release()
@@ -273,16 +280,14 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles 'Send GIF' button press from Group Mode."""
     q = update.callback_query
+    assert q is not None and isinstance(q.message, Message) and q.data is not None
     try:
         await q.answer(Texts.GIF_CONVERTING)
         await q.edit_message_reply_markup(None)
     except Exception as e:
         logger.warning(f"Callback answer failed (query too old?): {e}")
 
-    try:
-        _, token = q.data.split("|", 1)
-    except ValueError:
-        return
+    _, token = q.data.split("|", 1)
 
 
 
@@ -345,6 +350,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles slideshow button presses (photos or video)."""
     q = update.callback_query
+    assert q is not None and q.from_user is not None and isinstance(q.message, Message)
     await q.answer(Texts.SLIDESHOW_DOWNLOADING)
     user_id = q.from_user.id
 
@@ -369,6 +375,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     data = context.user_data
+    assert data is not None
     page_url = data.get("page_url")
     if not page_url:
         await q.edit_message_text(Texts.DATA_EXPIRED_RESEND)

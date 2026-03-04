@@ -22,9 +22,9 @@ class TelegramSender:
         is_audio: bool = False,
         is_gif: bool = False,
         caption: str = "",
-        parse_mode: str = None,
+        parse_mode: str | None = None,
         reply_markup=None,
-        reply_to_message_id: int = None,
+        reply_to_message_id: int | None = None,
     ) -> bool:
         """Sends a single file (video, audio, or GIF) to Telegram."""
         try:
@@ -72,8 +72,8 @@ class TelegramSender:
         chat_id: int,
         images: list[str],
         caption: str = "",
-        parse_mode: str = None,
-        reply_to_message_id: int = None,
+        parse_mode: str | None = None,
+        reply_to_message_id: int | None = None,
     ) -> bool:
         """
         Sends images as a Telegram media group (photo album).

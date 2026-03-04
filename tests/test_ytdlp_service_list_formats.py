@@ -47,7 +47,7 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
             ]
         }
 
-        with patch.object(self.service, 'extract', return_value=mock_info) as mock_extract:
+        with patch.object(self.service, 'extract', return_value=mock_info):
             title, formats, special_format, duration, _ = self.service.list_formats("http://example.com/video")
 
             self.assertEqual(title, "Test Video")

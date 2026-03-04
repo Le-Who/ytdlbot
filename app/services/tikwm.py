@@ -90,6 +90,7 @@ class TikWMService:
         )
 
         try:
+            assert video_url is not None  # guaranteed by fetch_video success path
             req = Request(video_url, headers={"User-Agent": USER_AGENT})
             with urlopen(req, timeout=60) as resp:
                 with open(output_path, "wb") as f:

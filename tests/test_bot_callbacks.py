@@ -15,6 +15,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from app.bot import callbacks
 from app.core import state
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
+from telegram import Message
 
 
 class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
@@ -47,7 +48,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         self.update.callback_query.edit_message_text = AsyncMock()
         self.update.callback_query.edit_message_reply_markup = AsyncMock()
         self.update.callback_query.delete_message = AsyncMock()
-        self.update.callback_query.message = MagicMock()
+        self.update.callback_query.message = MagicMock(spec=Message)
         self.update.callback_query.message.chat_id = 99999
         self.update.callback_query.from_user = MagicMock()
         self.update.callback_query.from_user.id = 12345
@@ -79,7 +80,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         mock_special_format = MagicMock(format_id="audio", label="Audio")
         state.ytdlp.list_formats.return_value = ("Refreshed Title", mock_formats, mock_special_format, "5:00", False)
 
-        with patch("app.bot.callbacks.build_format_keyboard") as mock_build_kb:
+        with patch("app.bot.callbacks.build_format_keyboard"):
             await callbacks.on_back(self.update, self.context)
             state.ytdlp.list_formats.assert_called_with(page_url)
             self.assertIn(page_url, state.info_cache)

@@ -16,7 +16,6 @@ import asyncio
 import logging
 from typing import Optional, Tuple
 
-from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 
 from app.core import state
 from app.core.config import TEMP_DIR, MAX_TG_UPLOAD_MB, DL_TIMEOUT_TELEGRAM
@@ -100,15 +99,12 @@ class VideoDownloader:
             use_aria2=True,
         )
 
-        kb_cancel = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("❌ Отмена", callback_data=f"cancel|{token}")]]
-        )
-
         try:
             _metrics().downloads_total.inc(platform="telegram")
             _metrics().active_downloads.inc()
             async with run_subprocess(cmd) as handle:
                 proc = handle.proc
+                assert proc.stdout is not None
                 stderr = handle.stderr_data
                 download_start = time.time()
                 max_download_time = DL_TIMEOUT_TELEGRAM

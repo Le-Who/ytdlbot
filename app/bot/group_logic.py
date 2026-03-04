@@ -37,14 +37,16 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     # Rate limiting for groups (per chat or per user?)
     # Let's limit per user to avoid spam.
     user = update.effective_user
+    chat = update.effective_chat
+    assert user is not None and chat is not None
     if not state.limiter.allow_user(user.id) or not state.limiter.allow_chat(
-        update.effective_chat.id
+        chat.id
     ):
         return
 
     # Send "Typing..." or "Uploading video..." action
     await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO
+        chat_id=chat.id, action=ChatAction.UPLOAD_VIDEO
     )
 
     # Initial status message
@@ -54,10 +56,10 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     token = uuid.uuid4().hex
 
     # Tag user in caption
-    if update.effective_user.username:
-        user_tag = f"@{update.effective_user.username}"
+    if user.username:
+        user_tag = f"@{user.username}"
     else:
-        user_tag = update.effective_user.mention_html()
+        user_tag = user.mention_html()
 
     # Check if this is a TikTok slideshow
     is_tiktok_url = _is_tiktok(url)
@@ -105,12 +107,12 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             try:
                 await context.bot.send_chat_action(
-                    chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO
+                    chat_id=chat.id, action=ChatAction.UPLOAD_VIDEO
                 )
             except Exception:
                 pass
             success = await MediaSender.send_file(
-                context.bot, update.effective_chat.id, tikwm_path,
+                context.bot, chat.id, tikwm_path,
                 is_audio=False, is_gif=False,
                 caption=caption, parse_mode="HTML", reply_markup=kb,
             )
@@ -132,7 +134,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         state.link_cache[token] = {
             "page_url": url,
             "user_tag": user_tag,
-            "chat_id": update.effective_chat.id,
+            "chat_id": chat.id,
             "original_msg_id": update.message.message_id,
         }
 
@@ -182,7 +184,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     try:
         await context.bot.send_chat_action(
-            chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO
+            chat_id=chat.id, action=ChatAction.UPLOAD_VIDEO
         )
     except Exception:
         pass
@@ -194,7 +196,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     success = await MediaSender.send_file(
         context.bot,
-        update.effective_chat.id,
+        chat.id,
         file_path,
         is_audio=False,
         is_gif=False,
@@ -218,6 +220,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
 async def on_group_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles group slideshow format choice (album or video) callback."""
     q = update.callback_query
+    assert q is not None
     await q.answer()
 
     if not q.data:
@@ -321,7 +324,6 @@ async def on_group_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE)
         else:
             # Convert to video
             await q.edit_message_text(Texts.SLIDESHOW_CONVERTING)
-            from app.core.utils import safe_remove
 
             video_path = await MediaSender.images_to_video(
                 result.images, result.audio

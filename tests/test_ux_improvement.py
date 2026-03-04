@@ -3,6 +3,8 @@ import os
 import sys
 from unittest.mock import MagicMock, AsyncMock, patch
 
+from telegram import Message
+
 os.environ.setdefault("BOT_TOKEN", "test_token")
 os.environ.setdefault("WEBHOOK_URL", "https://example.com")
 os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "secret")
@@ -11,7 +13,6 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 
 from app.services.ytdlp.parsers import get_special_format
 from app.bot.callbacks import on_send
-from app.core import state
 
 
 class TestUXImprovement(unittest.TestCase):
@@ -37,6 +38,7 @@ class TestOnSendUX(unittest.IsolatedAsyncioTestCase):
         update.callback_query = query
         query.data = "send|token123"
         query.from_user.id = 12345
+        query.message = MagicMock(spec=Message)
         query.message.chat_id = 99999
 
         query.answer = AsyncMock()

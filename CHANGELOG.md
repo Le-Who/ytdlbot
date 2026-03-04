@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 - **`classify_tiktok_content()`**: URL pattern classifier (slideshow vs video)
 - **`classify_tiktok_error()`**: Error message → enum classifier
 - **New tests**: `test_cookies_manager.py` (4), `test_tiktok_content_router.py` (15), `_is_facebook` in url helpers
+- **Static analysis tooling**: `mypy.ini` for type-checking config, ruff per-file ignores in `pyproject.toml`
 
 ### Changed
 
@@ -26,6 +27,21 @@ All notable changes to this project will be documented in this file.
 - **`build_command()`**: Cookies passed per-platform instead of TikTok-only
 - **`list_formats()` TikTok error handling**: Refactored from string matching to enum-based routing
 - **Test suite**: Expanded from 232 to 241 tests (all passing)
+
+### Fixed
+
+- **Ruff: 27 errors → 0**: Auto-fixed unused imports, removed dead code (`kb_cancel`, `safe_remove`), suppressed intentional E402 in tests
+- **Mypy: 170 errors → 0**: Full type safety across 82 source files
+  - PTB handlers: `isinstance(q.message, Message)` narrowing for `MaybeInaccessibleMessage` union
+  - `assert` narrowing for `callback_query`, `effective_user`, `effective_chat`, `user_data`
+  - Fixed implicit `Optional` in `sender.py` (`str = None` → `str | None = None`)
+  - Typed `state.py` globals (`active_processes`, `processing_gifs`, `bot_app`)
+  - Explicit `TELEGRAM_SECRET_TOKEN: str` annotation in `config.py`
+  - `assert proc.stdout/stderr` narrowing in `downloader.py` and `process.py`
+  - `assert bot_app.updater` in `main.py`
+- **Test mocks: `MagicMock(spec=Message)`**: All callback test mocks now use `spec=Message` so `isinstance` checks pass correctly
+- **`test_core_utils_extract.py` module corruption**: Fixed `sys.modules["telegram"] = MagicMock()` → `setdefault()` to prevent poisoning the real telegram package during pytest collection
+- **`messages.py` variable naming**: Corrected `msg` → `status_msg` references for editing bot's status messages (vs. user's original message)
 
 ### Dependencies
 

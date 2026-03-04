@@ -1,7 +1,9 @@
 import unittest
 import os
 import sys
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock, AsyncMock
+
+from telegram import Message
 
 # Mock environment variables
 os.environ.setdefault("BOT_TOKEN", "test_token")
@@ -45,7 +47,7 @@ class TestCallbacksExceptions(unittest.IsolatedAsyncioTestCase):
         self.update.callback_query.edit_message_text = AsyncMock()
         self.update.callback_query.edit_message_reply_markup = AsyncMock()
         self.update.callback_query.delete_message = AsyncMock()
-        self.update.callback_query.message = MagicMock()
+        self.update.callback_query.message = MagicMock(spec=Message)
         self.update.callback_query.message.chat_id = 99999
         self.update.callback_query.from_user = MagicMock()
         self.update.callback_query.from_user.id = 12345

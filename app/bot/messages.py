@@ -24,30 +24,33 @@ logger = logging.getLogger("app.bot.messages")
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
-    text = (update.message.text or "").strip()
+    msg = update.message
+    chat = update.effective_chat
+    assert user is not None and msg is not None and chat is not None
+    text = (msg.text or "").strip()
 
     url = extract_supported_url(text)
     if not url:
-        await update.message.reply_text(Texts.URL_NOT_SUPPORTED)
+        await msg.reply_text(Texts.URL_NOT_SUPPORTED)
         return
 
     text = url
 
     if not state.limiter.allow_user(user.id) or not state.limiter.allow_chat(
-        update.effective_chat.id
+        chat.id
     ):
-        await update.message.reply_text(Texts.RATE_LIMITED)
+        await msg.reply_text(Texts.RATE_LIMITED)
         return
 
     await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id, action=ChatAction.TYPING
+        chat_id=chat.id, action=ChatAction.TYPING
     )
 
     parse_token = uuid.uuid4().hex[:8]
     kb_cancel = InlineKeyboardMarkup(
         [[InlineKeyboardButton("❌ Отмена", callback_data=f"cancel_parse|{parse_token}")]]
     )
-    msg = await update.message.reply_text(Texts.SEARCHING, reply_markup=kb_cancel)
+    status_msg = await msg.reply_text(Texts.SEARCHING, reply_markup=kb_cancel)
     state.cancel_cache.pop(parse_token, None)
 
     cached = state.info_cache.get(text)
@@ -62,13 +65,13 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     state.inflight_parsing[text].wait(), timeout=300.0
                 )
             except asyncio.TimeoutError:
-                await msg.edit_text(Texts.TIMEOUT_RETRY)
+                await status_msg.edit_text(Texts.TIMEOUT_RETRY)
                 return
             cached = state.info_cache.get(text)
             if cached:
                 title, formats, special_format, duration, is_slideshow = cached
             else:
-                await msg.edit_text(Texts.FETCH_ERROR_RETRY)
+                await status_msg.edit_text(Texts.FETCH_ERROR_RETRY)
                 return
         else:
             event = asyncio.Event()
@@ -89,62 +92,64 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 # Check if user cancelled while parsing
                 if state.cancel_cache.get(parse_token):
                     state.cancel_cache.pop(parse_token, None)
-                    await msg.edit_text(Texts.CANCELLED)
+                    await status_msg.edit_text(Texts.CANCELLED)
                     return
 
                 state.info_cache[text] = (title, formats, special_format, duration, is_slideshow)
             except asyncio.TimeoutError:
-                await msg.edit_text(Texts.TIMEOUT_UNAVAILABLE)
+                await status_msg.edit_text(Texts.TIMEOUT_UNAVAILABLE)
                 return
             except DirectDownloadReady as dd:
-                await msg.edit_text("📦 Загрузка через альтернативный источник...")
+                await status_msg.edit_text("📦 Загрузка через альтернативный источник...")
                 sent = await TelegramSender.send_file(
                     bot=context.bot,
-                    chat_id=update.effective_chat.id,
+                    chat_id=chat.id,
                     file_path=dd.video_path,
                     caption=f"🎬 {html.escape(dd.title)}",
                     parse_mode="HTML",
-                    reply_to_message_id=update.message.message_id,
+                    reply_to_message_id=msg.message_id,
                 )
                 if sent:
-                    await msg.delete()
+                    await status_msg.delete()
                 else:
-                    await msg.edit_text("❌ Не удалось отправить видео (файл слишком большой?)")
+                    await status_msg.edit_text("❌ Не удалось отправить видео (файл слишком большой?)")
                 return
             except AccessDeniedError:
-                await msg.edit_text(Texts.ACCESS_DENIED)
+                await status_msg.edit_text(Texts.ACCESS_DENIED)
                 return
             except VideoNotFoundError:
-                await msg.edit_text(Texts.VIDEO_NOT_FOUND)
+                await status_msg.edit_text(Texts.VIDEO_NOT_FOUND)
                 return
             except LiveStreamError:
-                await msg.edit_text(Texts.LIVE_NOT_SUPPORTED)
+                await status_msg.edit_text(Texts.LIVE_NOT_SUPPORTED)
                 return
             except ExtractionError as e:
                 error_msg = str(e).lower()
                 if "pinterest" in error_msg or "pin.it" in error_msg:
-                    await msg.edit_text(Texts.PINTEREST_ERROR)
+                    await status_msg.edit_text(Texts.PINTEREST_ERROR)
                 else:
-                    await msg.edit_text(f"❌ {e}")
+                    await status_msg.edit_text(f"❌ {e}")
                 return
             except Exception as e:
                 logger.error(f"Parse error: {e}", exc_info=True)
-                await msg.edit_text(Texts.GENERIC_ERROR.format(detail=str(e)[:150]))
+                await status_msg.edit_text(Texts.GENERIC_ERROR.format(detail=str(e)[:150]))
                 return
             finally:
                 event.set()
                 state.inflight_parsing.pop(text, None)
 
     # Store common data
-    context.user_data["page_url"] = text
-    context.user_data["title"] = title
-    context.user_data["is_slideshow"] = is_slideshow
+    data = context.user_data
+    assert data is not None
+    data["page_url"] = text
+    data["title"] = title
+    data["is_slideshow"] = is_slideshow
 
     if is_slideshow:
         # TikTok slideshow — show photo/video choice keyboard
         reply_markup = build_slideshow_keyboard()
 
-        await msg.edit_text(
+        await status_msg.edit_text(
             Texts.SLIDESHOW_DETECTED.format(title=html.escape(title)),
             reply_markup=reply_markup,
             parse_mode="HTML",
@@ -157,7 +162,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         size_map = {f.format_id: f.filesize for f in formats}
         size_map[special_format.format_id] = special_format.filesize
 
-        context.user_data.update(
+        data.update(
             {
                 "format_map": format_map,
                 "size_map": size_map,
@@ -166,7 +171,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         reply_markup = build_format_keyboard(formats, special_format)
 
-        await msg.edit_text(
+        await status_msg.edit_text(
             f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}",
             reply_markup=reply_markup,
             parse_mode="HTML",

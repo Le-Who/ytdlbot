@@ -75,7 +75,8 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 ├── .github/workflows/     # CI/CD pipeline
 ├── Dockerfile             # Docker build (Python 3.12-slim)
 ├── .dockerignore          # Excludes .git, tests, IDE files from build context
-├── pyproject.toml         # pytest + coverage config
+├── pyproject.toml         # pytest + coverage + ruff config
+├── mypy.ini               # mypy type-checking config
 ├── requirements.txt       # Python dependencies (pinned)
 └── README.md
 ```
@@ -169,6 +170,18 @@ The test suite includes:
 - TikTok slideshow detection and callback tests
 - Gallery-dl service command and error handling tests
 - Full end-to-end flow tests (URL → formats → pick → download → send)
+
+### Linting & Type Checking
+
+```bash
+# Ruff (linter)
+ruff check .
+
+# Mypy (type checker)
+python -m mypy .
+```
+
+Both tools are configured to run with **zero errors** across 82 source files.
 
 ## 🎮 Usage
 

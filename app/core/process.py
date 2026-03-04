@@ -73,7 +73,7 @@ async def run_subprocess(
         stdin=stdin,
         stdout=asyncio.subprocess.PIPE if stdout_pipe else asyncio.subprocess.DEVNULL,
         stderr=asyncio.subprocess.PIPE if stderr_pipe else asyncio.subprocess.DEVNULL,
-        **kwargs,
+        **kwargs,  # type: ignore[arg-type]
     )
 
     async with state.active_processes_lock:
@@ -85,6 +85,7 @@ async def run_subprocess(
     if stderr_pipe and proc.stderr is not None:
 
         async def consume_stderr() -> None:
+            assert proc.stderr is not None
             while True:
                 line = await proc.stderr.readline()
                 if not line:

@@ -26,7 +26,8 @@ All notable changes to this project will be documented in this file.
 - **`_base_opts()`**: Universal cookie routing via `get_cookies_path(url)` — all platforms with configured cookies receive them
 - **`build_command()`**: Cookies passed per-platform instead of TikTok-only
 - **`list_formats()` TikTok error handling**: Refactored from string matching to enum-based routing
-- **Test suite**: Expanded from 232 to 241 tests (all passing)
+- **Facebook format labels**: Infer `height` from `format_id` (`sd`→360p, `hd`→720p), accept formats without `ext`, fallback `📹 Video` instead of `📹 ???p`
+- **Test suite**: Expanded from 232 to 248 tests (all passing)
 
 ### Fixed
 

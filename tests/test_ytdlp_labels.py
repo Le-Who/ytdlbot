@@ -50,7 +50,7 @@ class TestCreateFormatLabel(unittest.TestCase):
             protocol="http",
             is_tiktok=False
         )
-        self.assertEqual(label_none, "📹 ???p")
+        self.assertEqual(label_none, "📹 Video")
 
     def test_filesize_formatting(self):
         """Test filesize formatting (MB vs KB)"""

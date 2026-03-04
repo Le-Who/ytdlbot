@@ -333,5 +333,78 @@ class TestExtractHeight(unittest.TestCase):
         """Should handle 0p edge case"""
         self.assertEqual(_extract_height("0p"), 0)
 
+class TestFacebookFormats(unittest.TestCase):
+    """Tests for Facebook-specific format handling."""
+
+    def test_facebook_sd_format(self):
+        """Facebook SD format: format_id='sd', no ext, no height → 360p."""
+        fmt = {"format_id": "sd", "quality": -3, "url": "https://video.xx.fbcdn.net/sd.mp4"}
+        metadata = parse_format_metadata(fmt, None, False)
+
+        self.assertIsNotNone(metadata)
+        self.assertEqual(metadata.height, 360)
+        self.assertEqual(metadata.ext, "mp4")
+        self.assertIsNone(metadata.filesize)
+
+        item = create_format_item(metadata, False)
+        self.assertIn("📱", item.label)
+        self.assertIn("360p", item.label)
+
+    def test_facebook_hd_format(self):
+        """Facebook HD format: format_id='hd', no ext, no height → 720p."""
+        fmt = {"format_id": "hd", "quality": -2, "url": "https://video.xx.fbcdn.net/hd.mp4"}
+        metadata = parse_format_metadata(fmt, None, False)
+
+        self.assertIsNotNone(metadata)
+        self.assertEqual(metadata.height, 720)
+        self.assertEqual(metadata.ext, "mp4")
+
+        item = create_format_item(metadata, False)
+        self.assertIn("📹", item.label)
+        self.assertIn("720p", item.label)
+
+    def test_facebook_legacy_format_ids(self):
+        """Facebook legacy format_id patterns with _sd/_hd suffixes."""
+        sd_fmt = {"format_id": "progressive_sd_src", "url": "https://example.com/sd"}
+        hd_fmt = {"format_id": "progressive_hd_src", "url": "https://example.com/hd"}
+
+        sd = parse_format_metadata(sd_fmt, None, False)
+        hd = parse_format_metadata(hd_fmt, None, False)
+
+        self.assertEqual(sd.height, 360)
+        self.assertEqual(hd.height, 720)
+
+    def test_facebook_format_without_ext_accepted(self):
+        """Format without ext but with URL should be accepted (not filtered)."""
+        fmt = {"format_id": "sd", "url": "https://video.xx.fbcdn.net/v.mp4"}
+        metadata = parse_format_metadata(fmt, None, False)
+        self.assertIsNotNone(metadata)
+
+    def test_format_without_ext_and_url_rejected(self):
+        """Format without ext AND without URL should still be rejected."""
+        fmt = {"format_id": "bad", "ext": "jpg"}
+        metadata = parse_format_metadata(fmt, None, False)
+        self.assertIsNone(metadata)
+
+    def test_fallback_label_no_height(self):
+        """Format with no height should show 'Video' not '???p'."""
+        fmt = {"format_id": "unknown_fmt", "ext": "mp4", "height": None}
+        metadata = parse_format_metadata(fmt, None, False)
+        self.assertIsNotNone(metadata)
+
+        item = create_format_item(metadata, False)
+        self.assertIn("📹 Video", item.label)
+        self.assertNotIn("???", item.label)
+
+    def test_facebook_dedup_keeps_both_sd_hd(self):
+        """Facebook SD and HD should not be deduped (different heights)."""
+        formats = [
+            FormatMetadata(format_id="sd", ext="mp4", height=360, filesize=None, protocol=""),
+            FormatMetadata(format_id="hd", ext="mp4", height=720, filesize=None, protocol=""),
+        ]
+        result = deduplicate_formats(formats, is_tiktok_url=False)
+        self.assertEqual(len(result), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

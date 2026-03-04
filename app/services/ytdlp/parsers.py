@@ -127,7 +127,7 @@ def _create_format_label(
                 icon = "📱"
             parts.append(f"{icon} {height}p")
         else:
-            parts.append("📹 ???p")
+            parts.append("📹 Video")
 
     # 2. Size / Protocol
     if filesize:
@@ -153,7 +153,10 @@ def parse_format_metadata(
     ext = format_dict.get("ext")
     protocol = format_dict.get("protocol") or ""
     if ext not in VIDEO_EXTENSIONS and "m3u8" not in protocol:
-        return None
+        # Accept formats without ext if they have a direct URL (e.g. Facebook sd/hd)
+        if not format_dict.get("url"):
+            return None
+        ext = "mp4"
 
     fid = format_dict.get("format_id")
     if not fid:
@@ -163,6 +166,13 @@ def parse_format_metadata(
     if not height:
         note = format_dict.get("format_note", "")
         height = _extract_height(note)
+        # Infer height from format_id for Facebook (sd/hd progressive formats)
+        if not height and fid:
+            fid_lower = fid.lower()
+            if fid_lower in ("hd", "hd_src") or "_hd" in fid_lower:
+                height = 720
+            elif fid_lower in ("sd", "sd_src") or "_sd" in fid_lower:
+                height = 360
         if not height and is_tiktok_url:
             height = 720
 

@@ -31,16 +31,20 @@ def _append_common_opts(
     cookies_path: Optional[str] = None,
     max_filesize: Optional[int] = None,
     proxy: Optional[str] = None,
+    info_json_path: Optional[str] = None,
 ) -> None:
-    """Добавляет cookies, прокси, лимит размера и URL в конец команды"""
+    """Добавляет cookies, прокси, лимит размера и URL/info-json в конец команды"""
     if cookies_path:
         cmd.extend(["--cookies", cookies_path])
     if proxy:
         cmd.extend(["--proxy", proxy])
     if max_filesize:
         cmd.extend(["--max-filesize", f"{max_filesize}M"])
-    cmd.append("--")
-    cmd.append(page_url)
+    if info_json_path:
+        cmd.extend(["--load-info-json", info_json_path])
+    else:
+        cmd.append("--")
+        cmd.append(page_url)
 
 
 def build_command(
@@ -53,6 +57,7 @@ def build_command(
     proxy: Optional[str] = None,
     use_aria2: bool = False,
     has_aria2_installed: bool = False,
+    info_json_path: Optional[str] = None,
 ) -> List[str]:
     """Строит команду yt-dlp"""
 
@@ -73,7 +78,7 @@ def build_command(
     elif is_gif_format:
         # Для GIF используем bestvideo без аудио
         cmd = _get_base_cmd("bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best", output)
-        _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
+        _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy, info_json_path)
         return cmd
     else:
         # Аудио/Raw или составной формат (bestvideo+bestaudio)
@@ -84,7 +89,7 @@ def build_command(
                 "--downloader-args",
                 "aria2c:-x 16 -s 16 -k 1M",
             ])
-        _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
+        _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy, info_json_path)
         return cmd
 
     # 2. Селектор аудио (Original -> English -> OrigTag -> Any)
@@ -122,6 +127,6 @@ def build_command(
         ]
     )
 
-    _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy)
+    _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy, info_json_path)
     return cmd
 

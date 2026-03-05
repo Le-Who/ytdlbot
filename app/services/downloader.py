@@ -55,6 +55,7 @@ class VideoDownloader:
         format_id: str,
         height: Optional[int],
         token: str,
+        info_json_path: Optional[str] = None,
     ) -> Tuple[Optional[str], Optional[str]]:
         """
         Downloads a video.
@@ -64,6 +65,8 @@ class VideoDownloader:
             format_id: yt-dlp format ID.
             height: Video height (for filename/metadata).
             token: Unique token for cancellation and file cache.
+            info_json_path: Optional path to cached extraction JSON
+                (--load-info-json to skip re-extraction).
 
         Returns:
             (file_path, error_message)
@@ -97,6 +100,7 @@ class VideoDownloader:
             output=tmp_path,
             max_filesize=MAX_TG_UPLOAD_MB,
             use_aria2=True,
+            info_json_path=info_json_path,
         )
 
         try:

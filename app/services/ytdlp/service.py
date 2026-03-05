@@ -2,6 +2,7 @@
 import shutil
 import subprocess
 import json
+import os
 import sys
 import logging
 from typing import Dict, Any, List, Optional, Tuple
@@ -10,7 +11,7 @@ import yt_dlp
 
 __all__ = ["YtDlpService"]
 
-from app.core.config import TIKTOK_PROXY
+from app.core.config import TIKTOK_PROXY, TEMP_DIR
 from .models import FormatItem, FormatMetadata
 from .cookies import PlatformCookiesManager
 from .builders import build_command
@@ -213,8 +214,13 @@ class YtDlpService:
 
     def list_formats(
         self, url: str, max_items: int = 12
-    ) -> Tuple[str, List[FormatItem], FormatItem, str, bool]:
-        """Извлекает форматы видео с обработкой ошибок"""
+    ) -> Tuple[str, List[FormatItem], FormatItem, str, bool, Optional[str]]:
+        """Извлекает форматы видео с обработкой ошибок.
+
+        Returns:
+            (title, formats, special_format, duration_str, is_slideshow, info_json_path)
+            info_json_path: path to cached extraction JSON for --load-info-json reuse.
+        """
         info: Optional[Dict[str, Any]] = None
         used_subprocess = False
 
@@ -224,7 +230,7 @@ class YtDlpService:
             if content_type == "slideshow":
                 logger.info("TikTok /photo/ URL, routing to slideshow: %s", url)
                 special_format = get_special_format(url)
-                return "TikTok Slideshow", [], special_format, "—", True
+                return "TikTok Slideshow", [], special_format, "—", True, None
 
         try:
             info = self.extract(url, for_list_formats=True)
@@ -271,7 +277,7 @@ class YtDlpService:
                             "TikTok unsupported URL, routing to slideshow: %s", url
                         )
                         special_format = get_special_format(url)
-                        return "TikTok Slideshow", [], special_format, "—", True
+                        return "TikTok Slideshow", [], special_format, "—", True, None
 
                     elif error_class == TikTokError.FORBIDDEN:
                         raise AccessDeniedError(Texts.SVC_ACCESS_DENIED)
@@ -288,7 +294,7 @@ class YtDlpService:
                             "trying slideshow fallback: %s", url
                         )
                         special_format = get_special_format(url)
-                        return "TikTok Slideshow", [], special_format, "—", True
+                        return "TikTok Slideshow", [], special_format, "—", True, None
 
                 # Non-TikTok error handling
                 if "403" in error_msg or "forbidden" in error_msg:
@@ -360,7 +366,23 @@ class YtDlpService:
         is_slideshow = detect_tiktok_slideshow(info, url)
 
         special_format = get_special_format(url)
-        return title, formats, special_format, duration_str, is_slideshow
+
+        # Cache raw extraction info as JSON for download reuse (--load-info-json)
+        info_json_path: Optional[str] = None
+        if info and _is_youtube(url):
+            try:
+                import uuid as _uuid
+                info_json_path = os.path.join(
+                    TEMP_DIR, f"info_{_uuid.uuid4().hex}.json"
+                )
+                with open(info_json_path, "w", encoding="utf-8") as f:
+                    json.dump(info, f, ensure_ascii=False)
+                logger.info("Cached extraction info: %s", info_json_path)
+            except Exception as exc:
+                logger.warning("Failed to cache info JSON: %s", exc)
+                info_json_path = None
+
+        return title, formats, special_format, duration_str, is_slideshow, info_json_path
 
     def build_command(
         self,
@@ -370,6 +392,7 @@ class YtDlpService:
         output: str,
         max_filesize: Optional[int] = None,
         use_aria2: bool = False,
+        info_json_path: Optional[str] = None,
     ) -> List[str]:
         """Proxy to functional builder with state injection"""
         cookies = self.cookies_manager.get_cookies_path(page_url)
@@ -384,4 +407,5 @@ class YtDlpService:
             proxy=self.tiktok_proxy if is_tiktok else None,
             use_aria2=use_aria2,
             has_aria2_installed=self.has_aria2,
+            info_json_path=info_json_path,
         )

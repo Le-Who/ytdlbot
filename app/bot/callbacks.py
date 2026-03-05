@@ -46,10 +46,10 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await q.edit_message_text(Texts.CACHE_REFRESHING)
             async with state.parsing_sem:
-                title, formats, special_format, duration, is_slideshow = await asyncio.to_thread(
+                title, formats, special_format, duration, is_slideshow, info_json_path = await asyncio.to_thread(
                     state.ytdlp.list_formats, page_url
                 )
-            state.info_cache[page_url] = (title, formats, special_format, duration, is_slideshow)
+            state.info_cache[page_url] = (title, formats, special_format, duration, is_slideshow, info_json_path)
         except Exception as e:
             logger.error(f"[ON_BACK] Refresh error: {e}")
             await q.edit_message_text(Texts.CACHE_REFRESH_FAIL)
@@ -105,6 +105,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "format_id": format_id,
         "height": data["format_map"].get(format_id),
         "title": data["title"],
+        "info_json_path": data.get("info_json_path"),
     }
 
     dl_link = f"{BASE_URL}/dl/{token}"
@@ -238,6 +239,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             payload["format_id"],
             payload.get("height"),
             token,
+            info_json_path=payload.get("info_json_path"),
         )
 
         if error or not file_path:

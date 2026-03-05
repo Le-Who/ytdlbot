@@ -78,7 +78,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         mock_formats = [MagicMock(format_id="137", label="1080p")]
         mock_special_format = MagicMock(format_id="audio", label="Audio")
-        state.ytdlp.list_formats.return_value = ("Refreshed Title", mock_formats, mock_special_format, "5:00", False)
+        state.ytdlp.list_formats.return_value = ("Refreshed Title", mock_formats, mock_special_format, "5:00", False, None)
 
         with patch("app.bot.callbacks.build_format_keyboard"):
             await callbacks.on_back(self.update, self.context)

@@ -69,7 +69,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 return
             cached = state.info_cache.get(text)
             if cached:
-                title, formats, special_format, duration, is_slideshow = cached
+                title, formats, special_format, duration, is_slideshow, info_json_path = cached
             else:
                 await status_msg.edit_text(Texts.FETCH_ERROR_RETRY)
                 return
@@ -85,6 +85,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                             special_format,
                             duration,
                             is_slideshow,
+                            info_json_path,
                         ) = await asyncio.get_event_loop().run_in_executor(
                             state.ytdlp_executor, state.ytdlp.list_formats, text
                         )
@@ -95,7 +96,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     await status_msg.edit_text(Texts.CANCELLED)
                     return
 
-                state.info_cache[text] = (title, formats, special_format, duration, is_slideshow)
+                state.info_cache[text] = (title, formats, special_format, duration, is_slideshow, info_json_path)
             except asyncio.TimeoutError:
                 await status_msg.edit_text(Texts.TIMEOUT_UNAVAILABLE)
                 return
@@ -144,6 +145,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     data["page_url"] = text
     data["title"] = title
     data["is_slideshow"] = is_slideshow
+    data["info_json_path"] = info_json_path if not is_slideshow else None
 
     if is_slideshow:
         # TikTok slideshow — show photo/video choice keyboard

@@ -31,6 +31,7 @@ All notable changes to this project will be documented in this file.
 - **`GROUP_VIDEO_FORMAT`**: Relaxed format selector with HLS/height-only fallbacks for platforms without filesize metadata (Rutube Shorts)
 - **`build_command()`**: Added `bestvideo[height<=X]+bestaudio` fallback for HLS-only platforms
 - **`classify_tiktok_error()`**: Route `"not available"` / `"status code"` errors → `AUTH_REQUIRED` → TikWM fallback instead of slideshow misdetection
+- **YouTube download speed**: `--load-info-json` reuses extraction data during download, eliminating double n-challenge solving (~15-20s savings)
 - **Test suite**: Expanded from 232 to 249 tests (all passing)
 
 ### Fixed

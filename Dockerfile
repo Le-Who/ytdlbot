@@ -6,16 +6,22 @@ WORKDIR /app
 # ffmpeg - для склеивания видео+аудио
 # aria2 - для ускорения загрузки (многопоточность)
 # ca-certificates - для HTTPS
+# curl + unzip - для установки Deno
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ffmpeg \
   aria2 \
   ca-certificates \
+  curl unzip \
   && rm -rf /var/lib/apt/lists/* \
   && aria2c --version | head -1
 
+# 1.1. Устанавливаем Deno (JS runtime для YouTube n-parameter challenge)
+RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh \
+  && deno --version
+
 # 2. Устанавливаем Python-зависимости
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt yt-dlp-ejs
 
 # 3. Копируем код приложения
 COPY app ./app

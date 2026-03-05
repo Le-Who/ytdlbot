@@ -71,7 +71,7 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 │   ├── tasks
 │   │   └── janitor.py     # Periodic temp file cleanup
 │   └── main.py            # Application entry point
-├── tests/                 # 248 tests (unit + integration)
+├── tests/                 # 249 tests (unit + integration)
 ├── .github/workflows/     # CI/CD pipeline
 ├── Dockerfile             # Docker build (Python 3.12-slim)
 ├── .dockerignore          # Excludes .git, tests, IDE files from build context
@@ -163,7 +163,7 @@ BOT_TOKEN=test pytest tests/ --cov=app --cov-report=term-missing
 
 The test suite includes:
 
-- **248 unit + integration tests**
+- **249 unit + integration tests**
 - HMAC webhook authentication tests
 - Rate limiter behavior tests
 - Format parsing and deduplication tests

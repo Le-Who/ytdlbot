@@ -91,7 +91,9 @@ def build_command(
     audio_sel = "bestaudio[format_note*=original]/bestaudio[language^=en]/bestaudio[language^=orig]/bestaudio/bestaudio[ext=m4a]/bestaudio"
 
     # 3. Финальный селектор с каскадным fallback
-    final_fmt = f"{video_sel}+({audio_sel})/{prog_sel}/bestvideo+bestaudio/best"
+    # Include height-capped fallback for HLS-only platforms (Rutube etc.)
+    height_cap = height or 1080
+    final_fmt = f"{video_sel}+({audio_sel})/{prog_sel}/bestvideo[height<={height_cap}]+bestaudio/bestvideo+bestaudio/best"
 
     cmd = _get_base_cmd(final_fmt, output)
     cmd.extend(

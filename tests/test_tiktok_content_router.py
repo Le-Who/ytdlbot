@@ -76,6 +76,19 @@ class TestClassifyTikTokError(unittest.TestCase):
             TikTokError.AUTH_REQUIRED,
         )
 
+    def test_auth_status_code(self):
+        """TikTok 'Video not available, status code 10231' → AUTH."""
+        self.assertEqual(
+            classify_tiktok_error(
+                "Video not available, status code 10231"
+            ),
+            TikTokError.AUTH_REQUIRED,
+        )
+        self.assertEqual(
+            classify_tiktok_error("Content not available"),
+            TikTokError.AUTH_REQUIRED,
+        )
+
     def test_slideshow(self):
         self.assertEqual(
             classify_tiktok_error("Unsupported URL: /photo/"),
@@ -101,11 +114,10 @@ class TestClassifyTikTokError(unittest.TestCase):
         )
 
     def test_live_not_triggered_by_available(self):
-        """'live' in 'available' context should NOT match."""
-        self.assertNotEqual(
-            classify_tiktok_error("live version is not available"),
-            TikTokError.LIVE,
-        )
+        """'live' + 'available' should route to AUTH_REQUIRED, not LIVE."""
+        result = classify_tiktok_error("live version is not available")
+        self.assertNotEqual(result, TikTokError.LIVE)
+        self.assertEqual(result, TikTokError.AUTH_REQUIRED)
 
     def test_generic(self):
         self.assertEqual(

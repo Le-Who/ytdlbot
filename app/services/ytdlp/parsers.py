@@ -62,6 +62,8 @@ def classify_tiktok_error(error_msg: str) -> TikTokError:
     msg = error_msg.lower()
     if "log in" in msg or "cookies" in msg or "sign in" in msg:
         return TikTokError.AUTH_REQUIRED
+    if "not available" in msg or "status code" in msg:
+        return TikTokError.AUTH_REQUIRED
     if "unsupported url" in msg:
         return TikTokError.SLIDESHOW
     if "403" in msg or "forbidden" in msg:

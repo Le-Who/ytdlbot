@@ -16,7 +16,12 @@ logger = logging.getLogger("app.bot.group_logic")
 
 # Build format string dynamically from config
 _sz = f"{MAX_TG_UPLOAD_MB}M"
-GROUP_VIDEO_FORMAT = f"bestvideo[ext=mp4][filesize<{_sz}]+bestaudio[ext=m4a]/best[ext=mp4][filesize<{_sz}]/best[filesize<{_sz}]"
+GROUP_VIDEO_FORMAT = (
+    f"bestvideo[ext=mp4][filesize<{_sz}]+bestaudio[ext=m4a]"
+    f"/best[ext=mp4][filesize<{_sz}]"
+    f"/bestvideo[height<=1080]+bestaudio/best[height<=1080]"
+    f"/best[filesize<{_sz}]/best"
+)
 
 
 async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

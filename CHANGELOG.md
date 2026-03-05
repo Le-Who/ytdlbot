@@ -27,7 +27,11 @@ All notable changes to this project will be documented in this file.
 - **`build_command()`**: Cookies passed per-platform instead of TikTok-only
 - **`list_formats()` TikTok error handling**: Refactored from string matching to enum-based routing
 - **Facebook format labels**: Infer `height` from `format_id` (`sd`→360p, `hd`→720p), accept formats without `ext`, fallback `📹 Video` instead of `📹 ???p`
-- **Test suite**: Expanded from 232 to 248 tests (all passing)
+- **Dockerfile**: Added Deno JS runtime + `yt-dlp-ejs` for YouTube n-parameter challenge solving
+- **`GROUP_VIDEO_FORMAT`**: Relaxed format selector with HLS/height-only fallbacks for platforms without filesize metadata (Rutube Shorts)
+- **`build_command()`**: Added `bestvideo[height<=X]+bestaudio` fallback for HLS-only platforms
+- **`classify_tiktok_error()`**: Route `"not available"` / `"status code"` errors → `AUTH_REQUIRED` → TikWM fallback instead of slideshow misdetection
+- **Test suite**: Expanded from 232 to 249 tests (all passing)
 
 ### Fixed
 

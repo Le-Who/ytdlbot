@@ -10,7 +10,7 @@ from app.core.config import MAX_TG_UPLOAD_MB
 from app.core.utils import extract_supported_url
 from app.services.downloader import MediaSender
 from app.core.texts import Texts
-from app.services.ytdlp.parsers import _is_tiktok
+from app.services.ytdlp.parsers import _is_tiktok, classify_tiktok_error, TikTokError
 
 logger = logging.getLogger("app.bot.group_logic")
 
@@ -86,11 +86,12 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 is_slideshow = not has_video
             except Exception as exc:
                 err_msg = str(exc).lower()
-                if "log in" in err_msg or "cookies" in err_msg or "sign in" in err_msg:
+                error_class = classify_tiktok_error(err_msg)
+                if error_class == TikTokError.AUTH_REQUIRED:
                     # Auth/age-restricted — NOT a slideshow, use TikWM directly
                     logger.info("TikTok auth error in group, will use TikWM: %s", url)
                     tiktok_auth_error = True
-                elif "unsupported url" in err_msg:
+                elif error_class == TikTokError.SLIDESHOW:
                     is_slideshow = True
                 else:
                     # Unknown error — assume slideshow as fallback

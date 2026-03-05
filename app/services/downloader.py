@@ -45,6 +45,14 @@ def _metrics():
     from app.core.metrics import metrics
     return metrics
 
+def _safe_remove_info_json(path):
+    """Remove cached info JSON after download (prevent /tmp fill)."""
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
 
 class VideoDownloader:
     """Downloads video/audio files via yt-dlp subprocess."""
@@ -103,6 +111,7 @@ class VideoDownloader:
             info_json_path=info_json_path,
         )
 
+        _dl_start = time.time()
         try:
             _metrics().downloads_total.inc(platform="telegram")
             _metrics().active_downloads.inc()
@@ -175,6 +184,9 @@ class VideoDownloader:
             state.file_cache[token] = tmp_path
             _metrics().downloads_success.inc(platform="telegram")
             _metrics().active_downloads.dec()
+            _metrics().download_duration.observe(
+                time.time() - _dl_start, platform="telegram"
+            )
             return tmp_path, None
 
         except Exception as e:

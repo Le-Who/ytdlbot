@@ -34,6 +34,11 @@ JANITOR_INTERVAL_SECONDS = int(os.getenv("JANITOR_INTERVAL_SECONDS", "300"))
 DL_TIMEOUT_TELEGRAM = int(os.getenv("DL_TIMEOUT_TELEGRAM", "600"))
 DL_TIMEOUT_HTTP = int(os.getenv("DL_TIMEOUT_HTTP", "900"))
 
+# yt-dlp concurrent fragment downloads for DASH/HLS streams.
+# 5 is conservative (yt-dlp default), 8 is optimal for most CDNs.
+# Above 10 risks rate-limiting on YouTube. Configurable for easy tuning.
+CONCURRENT_FRAGMENTS = int(os.getenv("YTDLP_CONCURRENT_FRAGMENTS", "8"))
+
 # TikTok proxy — route TikTok requests through WireGuard/SOCKS5 to bypass
 # datacenter IP blocks on age-restricted content.
 # Example: socks5://wireguard-proxy:1080

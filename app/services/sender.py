@@ -30,8 +30,9 @@ class TelegramSender:
         height: int | None = None,
     ) -> bool:
         """Sends a single file (video, audio, or GIF) to Telegram."""
+        from app.core.metrics import metrics as _m
         try:
-            with open(file_path, "rb") as f:
+            with _m.upload_duration.time(), open(file_path, "rb") as f:
                 if is_gif:
                     await bot.send_animation(
                         chat_id=chat_id,

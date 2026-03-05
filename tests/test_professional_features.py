@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from app.services.ytdlp.service import YtDlpService
+from app.core.config import CONCURRENT_FRAGMENTS
 
 class TestProfessionalRefinements(unittest.TestCase):
     def setUp(self):
@@ -20,7 +21,7 @@ class TestProfessionalRefinements(unittest.TestCase):
 
     def test_concurrency_in_opts(self):
         opts = self.service._base_opts()
-        self.assertEqual(opts.get("concurrent_fragment_downloads"), 5)
+        self.assertEqual(opts.get("concurrent_fragment_downloads"), CONCURRENT_FRAGMENTS)
 
     def test_live_stream_rejection(self):
         # Mock extract to return a live stream info
@@ -34,7 +35,7 @@ class TestProfessionalRefinements(unittest.TestCase):
     def test_concurrent_fragments_present(self):
         cmd = self.service.build_command("url", "best", 1080, "out")
         self.assertIn("--concurrent-fragments", cmd)
-        self.assertIn("5", cmd)
+        self.assertIn(str(CONCURRENT_FRAGMENTS), cmd)
         self.assertIn("--no-playlist", cmd)
 
 if __name__ == "__main__":

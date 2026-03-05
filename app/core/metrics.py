@@ -1,9 +1,10 @@
-"""Lightweight application metrics — zero-dependency counters and gauges.
+"""Lightweight application metrics — zero-dependency counters, gauges, and histograms.
 
 Provides Prometheus-compatible text format via `render_metrics()`.
 """
 
 import time
+import contextlib
 import threading
 import logging
 from collections import defaultdict
@@ -59,6 +60,46 @@ class _Gauge:
             return [(dict(k), v) for k, v in self._values.items()]
 
 
+class _Histogram:
+    """Lightweight timer/histogram — tracks count and total sum per label set.
+
+    Usage:
+        with metrics.extraction_duration.time(platform="youtube"):
+            do_work()
+    """
+
+    def __init__(self, name: str, help_text: str):
+        self.name = name
+        self.help_text = help_text
+        self._lock = threading.Lock()
+        self._counts: dict[tuple, int] = defaultdict(int)
+        self._sums: dict[tuple, float] = defaultdict(float)
+
+    def observe(self, duration: float, **labels) -> None:
+        key = tuple(sorted(labels.items()))
+        with self._lock:
+            self._counts[key] += 1
+            self._sums[key] += duration
+
+    @contextlib.contextmanager
+    def time(self, **labels):
+        """Context manager that measures elapsed time and records it."""
+        start = time.monotonic()
+        try:
+            yield
+        finally:
+            self.observe(time.monotonic() - start, **labels)
+
+    def collect(self) -> list[tuple[dict, int, float]]:
+        """Returns list of (labels, count, sum) tuples."""
+        with self._lock:
+            keys = set(self._counts) | set(self._sums)
+            return [
+                (dict(k), self._counts.get(k, 0), self._sums.get(k, 0.0))
+                for k in keys
+            ]
+
+
 class MetricsCollector:
     """Central metrics registry with pre-defined application counters."""
 
@@ -101,6 +142,24 @@ class MetricsCollector:
             "Currently active downloads",
         )
 
+        # Histograms (phase timing)
+        self.extraction_duration = _Histogram(
+            "ytdlbot_extraction_duration_seconds",
+            "Time spent extracting video metadata",
+        )
+        self.download_duration = _Histogram(
+            "ytdlbot_download_duration_seconds",
+            "Time spent downloading video files",
+        )
+        self.conversion_duration = _Histogram(
+            "ytdlbot_conversion_duration_seconds",
+            "Time spent in ffmpeg conversions",
+        )
+        self.upload_duration = _Histogram(
+            "ytdlbot_upload_duration_seconds",
+            "Time spent uploading to Telegram",
+        )
+
     def render(self) -> str:
         """Render all metrics in Prometheus text exposition format."""
         lines = []
@@ -139,6 +198,30 @@ class MetricsCollector:
                         lines.append(f"{metric.name} {value}")
             lines.append("")
 
+        # Histograms (count + sum)
+        for hist in [
+            self.extraction_duration,
+            self.download_duration,
+            self.conversion_duration,
+            self.upload_duration,
+        ]:
+            lines.append(f"# HELP {hist.name} {hist.help_text}")
+            lines.append(f"# TYPE {hist.name} summary")
+            entries = hist.collect()
+            if not entries:
+                lines.append(f"{hist.name}_count 0")
+                lines.append(f"{hist.name}_sum 0")
+            else:
+                for labels, count, total in entries:
+                    if labels:
+                        label_str = ",".join(f'{k}="{v}"' for k, v in sorted(labels.items()))
+                        lines.append(f"{hist.name}_count{{{label_str}}} {count}")
+                        lines.append(f"{hist.name}_sum{{{label_str}}} {total:.3f}")
+                    else:
+                        lines.append(f"{hist.name}_count {count}")
+                        lines.append(f"{hist.name}_sum {total:.3f}")
+            lines.append("")
+
         return "\n".join(lines)
 
     def log_summary(self) -> None:
@@ -152,6 +235,19 @@ class MetricsCollector:
             "active": sum(v for _, v in self.active_downloads.collect()),
             "uptime_h": (time.time() - self.start_time) / 3600,
         }
+        # Add average durations per phase
+        for hist in [
+            self.extraction_duration,
+            self.download_duration,
+            self.conversion_duration,
+            self.upload_duration,
+        ]:
+            entries = hist.collect()
+            total_count = sum(c for _, c, _ in entries)
+            total_sum = sum(s for _, _, s in entries)
+            if total_count:
+                summary[f"{hist.name}_avg_s"] = round(total_sum / total_count, 2)
+                summary[f"{hist.name}_count"] = total_count
         logger.info("Metrics summary", extra={"metrics": summary})
 
 

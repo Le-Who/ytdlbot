@@ -17,6 +17,8 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 - **High Performance**:
   - **Async/Await**: Fully asynchronous architecture to handle multiple downloads simultaneously.
   - **Smart Caching**: In-memory caching of video metadata (`TTLCache`) to reduce duplicate API calls to platforms.
+  - **`--load-info-json` Reuse**: Extraction metadata is cached as JSON and reused during download via `--load-info-json`, eliminating redundant extraction across all platforms.
+  - **Per-Phase Metrics**: Prometheus-compatible histogram timers for extraction, download, conversion, and upload durations.
   - **Instant GIF Streaming**: Zero-disk pipelining (`yt-dlp` -> `ffmpeg`) for GIF conversion, enabling an immediate "Time-To-First-Byte" playback.
   - **Robust Memory Management**: Complete protection against `yt-dlp`/`ffmpeg` zombie processes via cross-platform Process Group termination and strict `asyncio.timeout` bounds.
 - **Robust Error Handling**: Handles regional restrictions, private content, live streams, and large file limits gracefully with dedicated exception types.
@@ -75,7 +77,7 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 │   ├── tasks
 │   │   └── janitor.py     # Periodic temp file cleanup
 │   └── main.py            # Application entry point
-├── tests/                 # 264 tests (unit + integration)
+├── tests/                 # 257+ tests (unit + integration)
 ├── .github/workflows/     # CI/CD pipeline
 ├── Dockerfile             # Docker build (Python 3.12-slim)
 ├── .dockerignore          # Excludes .git, tests, IDE files from build context
@@ -167,7 +169,7 @@ BOT_TOKEN=test pytest tests/ --cov=app --cov-report=term-missing
 
 The test suite includes:
 
-- **264 unit + integration tests**
+- **257+ unit + integration tests**
 - HMAC webhook authentication tests
 - Rate limiter behavior tests
 - Format parsing and deduplication tests
@@ -222,15 +224,16 @@ Use `.env.example` as baseline. All variables are read from environment or `.env
 
 ### Limits & Policies
 
-| Variable                 | Description                              | Default |
-| ------------------------ | ---------------------------------------- | ------- |
-| `MAX_TG_UPLOAD_MB`       | Max file size for Telegram upload        | `45`    |
-| `MAX_DL_MB`              | Max file size for HTTP download          | `1000`  |
-| `MAX_CONCURRENT_TASKS`   | Max simultaneous downloads               | `2`     |
-| `ENABLE_TELEGRAM_UPLOAD` | Show "Send to Telegram" button (`1`/`0`) | `1`     |
-| `LINK_TTL_MINUTES`       | Download link expiry time                | `30`    |
-| `DL_TIMEOUT_TELEGRAM`    | Timeout for Telegram send (seconds)      | `600`   |
-| `DL_TIMEOUT_HTTP`        | Timeout for HTTP downloads (seconds)     | `900`   |
+| Variable                     | Description                              | Default |
+| ---------------------------- | ---------------------------------------- | ------- |
+| `MAX_TG_UPLOAD_MB`           | Max file size for Telegram upload        | `45`    |
+| `MAX_DL_MB`                  | Max file size for HTTP download          | `1000`  |
+| `MAX_CONCURRENT_TASKS`       | Max simultaneous downloads               | `2`     |
+| `ENABLE_TELEGRAM_UPLOAD`     | Show "Send to Telegram" button (`1`/`0`) | `1`     |
+| `LINK_TTL_MINUTES`           | Download link expiry time                | `30`    |
+| `DL_TIMEOUT_TELEGRAM`        | Timeout for Telegram send (seconds)      | `600`   |
+| `DL_TIMEOUT_HTTP`            | Timeout for HTTP downloads (seconds)     | `900`   |
+| `YTDLP_CONCURRENT_FRAGMENTS` | Concurrent DASH/HLS fragment downloads   | `8`     |
 
 ### Rate Limiting
 

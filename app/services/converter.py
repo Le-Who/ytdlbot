@@ -43,23 +43,25 @@ class MediaConverter:
 
         try:
             # Limit concurrency for CPU-intensive conversions
+            from app.core.metrics import metrics as _m
             async with state.conversion_sem:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                try:
-                    _, stderr = await asyncio.wait_for(
-                        proc.communicate(), timeout=300.0
+                with _m.conversion_duration.time(type="gif"):
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.PIPE,
                     )
-                except asyncio.TimeoutError:
                     try:
-                        proc.kill()
-                    except Exception:
-                        pass
-                    logger.error("FFmpeg conversion timed out")
-                    return None
+                        _, stderr = await asyncio.wait_for(
+                            proc.communicate(), timeout=300.0
+                        )
+                    except asyncio.TimeoutError:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        logger.error("FFmpeg conversion timed out")
+                        return None
 
             if proc.returncode != 0:
                 logger.error(f"FFmpeg conversion failed: {stderr.decode()}")
@@ -115,6 +117,7 @@ class MediaConverter:
                 cmd.extend(["-i", audio_path])
                 cmd.extend([
                     "-c:v", "libx264",
+                    "-preset", "veryfast",
                     "-pix_fmt", "yuv420p",
                     "-vf", "scale='min(1080,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
                     "-c:a", "aac",
@@ -126,29 +129,32 @@ class MediaConverter:
             else:
                 cmd.extend([
                     "-c:v", "libx264",
+                    "-preset", "veryfast",
                     "-pix_fmt", "yuv420p",
                     "-vf", "scale='min(1080,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
                     "-movflags", "+faststart",
                     output_path,
                 ])
 
+            from app.core.metrics import metrics as _m
             async with state.conversion_sem:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.DEVNULL,
-                    stderr=asyncio.subprocess.PIPE,
-                )
-                try:
-                    _, stderr = await asyncio.wait_for(
-                        proc.communicate(), timeout=300.0
+                with _m.conversion_duration.time(type="slideshow"):
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.DEVNULL,
+                        stderr=asyncio.subprocess.PIPE,
                     )
-                except asyncio.TimeoutError:
                     try:
-                        proc.kill()
-                    except Exception:
-                        pass
-                    logger.error("FFmpeg slideshow conversion timed out")
-                    return None
+                        _, stderr = await asyncio.wait_for(
+                            proc.communicate(), timeout=300.0
+                        )
+                    except asyncio.TimeoutError:
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        logger.error("FFmpeg slideshow conversion timed out")
+                        return None
 
             if proc.returncode != 0:
                 logger.error(

@@ -1,5 +1,6 @@
 from typing import List, Optional
 from app.constants import GIF_FORMAT_ID
+from app.core.config import CONCURRENT_FRAGMENTS
 
 
 def _get_base_cmd(format_arg: str, output: str) -> List[str]:
@@ -107,7 +108,7 @@ def build_command(
             "--ignore-config",
             "--no-mtime",
             "--concurrent-fragments",
-            "5",
+            str(CONCURRENT_FRAGMENTS),
         ]
     )
 

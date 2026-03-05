@@ -368,6 +368,10 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # We'll leave it in cache.
     finally:
         state.tasks_sem.release()
+        # Cleanup info JSON after download (prevent /tmp fill)
+        info_json = payload.get("info_json_path") if payload else None
+        if info_json:
+            await asyncio.to_thread(safe_remove, info_json)
 
 
 async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

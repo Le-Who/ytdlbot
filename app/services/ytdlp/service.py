@@ -11,7 +11,7 @@ import yt_dlp
 
 __all__ = ["YtDlpService"]
 
-from app.core.config import TIKTOK_PROXY, TEMP_DIR
+from app.core.config import TIKTOK_PROXY, TEMP_DIR, CONCURRENT_FRAGMENTS
 from .models import FormatItem, FormatMetadata
 from .cookies import PlatformCookiesManager
 from .builders import build_command
@@ -59,7 +59,7 @@ class YtDlpService:
         "ignoreconfig": True,
         "noprogress": True,
         "no_mtime": True,
-        "concurrent_fragment_downloads": 5,
+        "concurrent_fragment_downloads": CONCURRENT_FRAGMENTS,
         "hls_use_mpegts": True,
     }
 
@@ -383,9 +383,10 @@ class YtDlpService:
 
         special_format = get_special_format(url)
 
-        # Cache raw extraction info as JSON for download reuse (--load-info-json)
+        # Cache raw extraction info as JSON for download reuse (--load-info-json).
+        # Saves 3–15s per download by skipping re-extraction in the download phase.
         info_json_path: Optional[str] = None
-        if info and _is_youtube(url):
+        if info:
             try:
                 import uuid as _uuid
                 info_json_path = os.path.join(

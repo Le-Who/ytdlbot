@@ -70,6 +70,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     is_tiktok_url = _is_tiktok(url)
     is_slideshow = False
     tiktok_auth_error = False  # age-restricted content needing TikWM fallback
+    info_json_path = None      # cached extraction JSON for --load-info-json reuse
 
     if is_tiktok_url:
         # Fast path: /photo/ URLs are always slideshows (no extraction needed)
@@ -84,6 +85,20 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                     for fmt in raw_formats
                 )
                 is_slideshow = not has_video
+
+                # Cache extraction as info JSON for download reuse (skip re-extraction)
+                if has_video and info:
+                    import json as _json
+                    import uuid as _uuid
+                    from app.core.config import TEMP_DIR
+                    try:
+                        info_json_path = os.path.join(
+                            TEMP_DIR, f"info_{_uuid.uuid4().hex}.json"
+                        )
+                        with open(info_json_path, "w", encoding="utf-8") as f:
+                            _json.dump(info, f, ensure_ascii=False)
+                    except Exception:
+                        info_json_path = None
             except Exception as exc:
                 err_msg = str(exc).lower()
                 error_class = classify_tiktok_error(err_msg)
@@ -175,6 +190,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         format_id=video_format,
         height=None,
         token=token,
+        info_json_path=info_json_path,
     )
 
     if error or not file_path:

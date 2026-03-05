@@ -25,6 +25,15 @@ All notable changes to this project will be documented in this file.
 - **Cache unpacking bug** (CRITICAL): `on_back` and cache-hit in `on_message` unpacked `info_cache` as 5-tuple, but `info_cache` stores 6-tuple (with `info_json_path`) → `ValueError` on «Back» button press. Fixed in `callbacks.py` and `messages.py`
 - **Test fixtures**: Updated 5-tuple → 6-tuple in `test_bot_callbacks.py`, `test_ux_back_button.py`, `test_integration.py`
 
+### Performance
+
+- **`--load-info-json` for all platforms**: Removed YouTube-only guard — extraction metadata is now cached as JSON and reused during download for TikTok, VK, Pinterest, Rutube, Facebook. Eliminates double extraction (saves 3–15s per download)
+- **Group mode info JSON reuse**: TikTok slideshow detection extraction in group mode now caches info JSON and passes it to the download phase
+- **Per-phase timing metrics**: Added `_Histogram` class to `metrics.py` with `time()` context manager. New Prometheus-compatible timers: `extraction_duration_seconds`, `download_duration_seconds`, `conversion_duration_seconds`, `upload_duration_seconds`
+- **`-preset veryfast` for slideshow encoding**: `images_to_video()` in `converter.py` now uses `veryfast` preset instead of default `medium` — 2–4× faster encoding
+- **Configurable `YTDLP_CONCURRENT_FRAGMENTS`**: New env var (default `8`, up from hardcoded `5`) for DASH/HLS fragment downloads. ~20–40% faster segment-based downloads
+- **Info JSON cleanup**: `on_send()` now deletes cached info JSON files after download, preventing `/tmp` disk fill
+
 ---
 
 ### Added

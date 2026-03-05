@@ -79,6 +79,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             try:
                 async with asyncio.timeout(300.0):
                     async with state.parsing_sem:
+                        import time as _time
+                        from app.core.metrics import metrics as _m
+                        _ext_start = _time.monotonic()
                         (
                             title,
                             formats,
@@ -89,6 +92,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                             thumbnail_url,
                         ) = await asyncio.get_event_loop().run_in_executor(
                             state.ytdlp_executor, state.ytdlp.list_formats, text
+                        )
+                        _platform = (
+                            "youtube" if "youtu" in text
+                            else "tiktok" if "tiktok" in text
+                            else "other"
+                        )
+                        _m.extraction_duration.observe(
+                            _time.monotonic() - _ext_start, platform=_platform,
                         )
 
                 # Check if user cancelled while parsing

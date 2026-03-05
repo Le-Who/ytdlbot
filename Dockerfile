@@ -35,5 +35,8 @@ ENV PORT=8000
 RUN useradd -m -s /bin/bash botuser
 USER botuser
 
-# 6. Запуск через sh -c для корректной подстановки переменной окружения PORT
-CMD ["sh", "-c", "uvicorn app.main:api --host 0.0.0.0 --port ${PORT}"]
+# 6. Graceful shutdown: uvicorn получает SIGINT напрямую
+STOPSIGNAL SIGINT
+
+# 7. Запуск: exec заменяет sh на uvicorn (PID 1 = корректные сигналы)
+CMD ["sh", "-c", "exec uvicorn app.main:api --host 0.0.0.0 --port ${PORT}"]

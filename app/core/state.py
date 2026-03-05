@@ -45,6 +45,9 @@ bot_app: Application | None = None  # type: ignore[type-arg]
 
 
 # Кэши
+# INVARIANT: All cache reads/writes MUST happen from the asyncio event-loop
+# thread.  cachetools.TTLCache is NOT thread-safe.  The executor (ytdlp_executor)
+# returns data to the caller in the event loop, which writes to cache — safe.
 link_cache: TTLCache = TTLCache(maxsize=500, ttl=LINK_TTL_MINUTES * 60)
 info_cache: TTLCache = TTLCache(maxsize=200, ttl=600)
 cancel_cache: TTLCache = TTLCache(maxsize=100, ttl=3600)

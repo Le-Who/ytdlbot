@@ -6,6 +6,27 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Video metadata in `send_video`**: Passes `duration`, `width`, `height` to Telegram API for faster delivery and proper video preview. Extracts from yt-dlp info JSON (zero-cost) with `ffprobe` fallback
+- **`_extract_video_meta()` helper**: Dual-strategy metadata extraction in `callbacks.py`
+- **New tests**: `test_video_meta.py` (8 tests), `test_tikwm.py` (7 tests, skipped without `curl_cffi`)
+
+### Changed
+
+- **TikWM service → async `curl_cffi`**: Rewrote `tikwm.py` from sync `urllib.request` to async `curl_cffi.requests.AsyncSession` with TLS fingerprint impersonation (`impersonate="chrome"`) and 3-retry logic
+- **Dockerfile graceful shutdown**: Added `exec` prefix to CMD and `STOPSIGNAL SIGINT` — uvicorn is now PID 1 and receives signals directly (prevents 10s SIGKILL timeout on `docker stop`)
+- **Thread-safety invariants**: Documented that all `TTLCache` reads/writes must happen from the event loop thread (cachetools is NOT thread-safe)
+- **`sender.py`**: `send_file()` now accepts `duration`, `width`, `height` params → forwarded to `send_video`/`send_animation`/`send_audio`
+- **Test suite**: Expanded from 249 to 264 tests (257 passed + 7 skipped)
+
+### Fixed
+
+- **Cache unpacking bug** (CRITICAL): `on_back` and cache-hit in `on_message` unpacked `info_cache` as 5-tuple, but `info_cache` stores 6-tuple (with `info_json_path`) → `ValueError` on «Back» button press. Fixed in `callbacks.py` and `messages.py`
+- **Test fixtures**: Updated 5-tuple → 6-tuple in `test_bot_callbacks.py`, `test_ux_back_button.py`, `test_integration.py`
+
+---
+
+### Added
+
 - **Facebook Video support**: Download videos from `facebook.com` and `fb.watch` URLs via yt-dlp
 - **Rutube Shorts**: Explicitly supported (already worked via Rutube extractor, now documented in UI)
 - **`PlatformCookiesManager`**: Per-platform cookie management with global fallback

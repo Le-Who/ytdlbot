@@ -181,9 +181,23 @@ class YtDlpService:
     def _try_tikwm_video(
         url: str,
     ) -> tuple[Optional[str], Optional[str]]:
-        """Try downloading TikTok video via TikWM third-party API."""
+        """Try downloading TikTok video via TikWM third-party API.
+
+        Note: TikWMService.download_video is async (uses curl_cffi AsyncSession).
+        Since list_formats runs in a ThreadPoolExecutor, we schedule the coroutine
+        on the running event loop via run_coroutine_threadsafe.
+        """
+        import asyncio
         from app.services.tikwm import TikWMService
-        return TikWMService.download_video(url)
+        try:
+            loop = asyncio.get_event_loop()
+            future = asyncio.run_coroutine_threadsafe(
+                TikWMService.download_video(url), loop
+            )
+            return future.result(timeout=60)
+        except Exception as e:
+            logger.warning("TikWM async bridge failed: %s", e)
+            return None, f"TikWM error: {e}"
 
     def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
         """Извлекает метаданные видео."""

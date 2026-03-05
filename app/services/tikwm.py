@@ -13,8 +13,8 @@ import os
 import uuid
 from typing import Optional
 from urllib.parse import quote
-from urllib.request import Request, urlopen
-import json
+
+from curl_cffi.requests import AsyncSession, Response
 
 from app.core.config import TEMP_DIR
 
@@ -24,14 +24,15 @@ logger = logging.getLogger("app.services.tikwm")
 
 API_BASE = "https://tikwm.com/api/"
 TIMEOUT = 15  # seconds
-USER_AGENT = "Mozilla/5.0 (compatible; ytdlbot/1.0)"
+MAX_RETRIES = 3
+CHUNK_SIZE = 1024 * 1024  # 1 MB
 
 
 class TikWMService:
     """Fetches TikTok video URLs via the TikWM public API."""
 
     @staticmethod
-    def fetch_video(url: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    async def fetch_video(url: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
         """
         Fetch a TikTok video URL via TikWM API.
 
@@ -41,38 +42,49 @@ class TikWMService:
         """
         api_url = f"{API_BASE}?url={quote(url, safe='')}&hd=1"
 
-        req = Request(api_url, headers={"User-Agent": USER_AGENT})
+        last_error: Optional[str] = None
+        for attempt in range(MAX_RETRIES):
+            try:
+                async with AsyncSession() as session:
+                    resp: Response = await session.get(
+                        api_url,
+                        impersonate="chrome",
+                        timeout=TIMEOUT,
+                    )
+                    data = resp.json()
+            except Exception as e:
+                last_error = f"TikWM API error: {e}"
+                logger.warning(
+                    "[TIKWM] Attempt %d/%d failed: %s",
+                    attempt + 1, MAX_RETRIES, e,
+                )
+                continue
 
-        try:
-            with urlopen(req, timeout=TIMEOUT) as resp:
-                data = json.loads(resp.read())
-        except Exception as e:
-            logger.error("[TIKWM] API request failed: %s", e)
-            return None, None, f"TikWM API error: {e}"
+            code = data.get("code")
+            if code != 0:
+                msg = data.get("msg", "unknown error")
+                logger.warning("[TIKWM] API returned code=%s: %s", code, msg)
+                return None, None, f"TikWM: {msg}"
 
-        code = data.get("code")
-        if code != 0:
-            msg = data.get("msg", "unknown error")
-            logger.warning("[TIKWM] API returned code=%s: %s", code, msg)
-            return None, None, f"TikWM: {msg}"
+            info = data.get("data", {})
+            video_url = info.get("hdplay") or info.get("play")
+            title = info.get("title", "TikTok Video")
 
-        info = data.get("data", {})
-        video_url = info.get("hdplay") or info.get("play")
-        title = info.get("title", "TikTok Video")
+            if not video_url:
+                logger.warning("[TIKWM] No video URL in response")
+                return None, None, "TikWM: no video URL in response"
 
-        if not video_url:
-            logger.warning("[TIKWM] No video URL in response")
-            return None, None, "TikWM: no video URL in response"
+            logger.info(
+                "[TIKWM] Got video URL (duration=%ss, title=%s)",
+                info.get("duration", "?"),
+                title[:60],
+            )
+            return video_url, title, None
 
-        logger.info(
-            "[TIKWM] Got video URL (duration=%ss, title=%s)",
-            info.get("duration", "?"),
-            title[:60],
-        )
-        return video_url, title, None
+        return None, None, last_error or "TikWM: max retries exceeded"
 
     @staticmethod
-    def download_video(url: str) -> tuple[Optional[str], Optional[str]]:
+    async def download_video(url: str) -> tuple[Optional[str], Optional[str]]:
         """
         Fetch video URL via TikWM API, then download the video to a temp file.
 
@@ -80,7 +92,7 @@ class TikWMService:
             (file_path, None) on success.
             (None, error_message) on failure.
         """
-        video_url, title, error = TikWMService.fetch_video(url)
+        video_url, title, error = await TikWMService.fetch_video(url)
         if error:
             return None, error
 
@@ -91,14 +103,15 @@ class TikWMService:
 
         try:
             assert video_url is not None  # guaranteed by fetch_video success path
-            req = Request(video_url, headers={"User-Agent": USER_AGENT})
-            with urlopen(req, timeout=60) as resp:
+            async with AsyncSession() as session:
+                resp = await session.get(
+                    video_url,
+                    impersonate="chrome",
+                    timeout=60,
+                )
+
                 with open(output_path, "wb") as f:
-                    while True:
-                        chunk = resp.read(1024 * 1024)  # 1MB chunks
-                        if not chunk:
-                            break
-                        f.write(chunk)
+                    f.write(resp.content)
 
             size_mb = os.path.getsize(output_path) / (1024 * 1024)
             logger.info(

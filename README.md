@@ -29,6 +29,7 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 - **Bot Framework**: [python-telegram-bot](https://python-telegram-bot.org/) 22.x
 - **Core Engine**: [yt-dlp](https://github.com/yt-dlp/yt-dlp) (Video/audio extraction)
 - **Image Downloader**: [gallery-dl](https://github.com/mikf/gallery-dl) (TikTok slideshow image extraction)
+- **HTTP Client**: [curl_cffi](https://github.com/lexiforest/curl_cffi) (TLS fingerprint impersonation for TikWM fallback)
 - **Processing**: [FFmpeg](https://ffmpeg.org/) (Video/Audio processing, GIF conversion & slideshow-to-video)
 - **Containerization**: Docker (Python 3.12-slim)
 - **CI/CD**: GitHub Actions (automated testing with coverage)
@@ -59,6 +60,9 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 │   ├── constants.py       # Shared constants (format IDs, limits)
 │   ├── services
 │   │   ├── downloader.py  # MediaSender service (Download/Send/Convert/Slideshow)
+│   │   ├── converter.py   # FFmpeg media conversion (GIF, slideshow→video)
+│   │   ├── tikwm.py       # TikWM API fallback for TikTok (async curl_cffi)
+│   │   ├── slideshow.py   # Slideshow download & cleanup pipeline
 │   │   ├── gallery_dl     # gallery-dl wrapper for TikTok slideshows
 │   │   │   └── service.py # GalleryDlService (image + audio download)
 │   │   └── ytdlp          # yt-dlp wrapper service
@@ -71,7 +75,7 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 │   ├── tasks
 │   │   └── janitor.py     # Periodic temp file cleanup
 │   └── main.py            # Application entry point
-├── tests/                 # 249 tests (unit + integration)
+├── tests/                 # 264 tests (unit + integration)
 ├── .github/workflows/     # CI/CD pipeline
 ├── Dockerfile             # Docker build (Python 3.12-slim)
 ├── .dockerignore          # Excludes .git, tests, IDE files from build context
@@ -163,7 +167,7 @@ BOT_TOKEN=test pytest tests/ --cov=app --cov-report=term-missing
 
 The test suite includes:
 
-- **249 unit + integration tests**
+- **264 unit + integration tests**
 - HMAC webhook authentication tests
 - Rate limiter behavior tests
 - Format parsing and deduplication tests

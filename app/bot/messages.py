@@ -56,7 +56,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     cached = state.info_cache.get(text)
     if cached:
         logger.info(f"[CACHE] Hit: {text}")
-        title, formats, special_format, duration, is_slideshow = cached
+        title, formats, special_format, duration, is_slideshow, info_json_path = cached
     else:
         if text in state.inflight_parsing:
             logger.info(f"[PARSING] Waiting for inflight task: {text}")

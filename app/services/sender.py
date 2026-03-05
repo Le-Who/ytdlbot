@@ -25,6 +25,9 @@ class TelegramSender:
         parse_mode: str | None = None,
         reply_markup=None,
         reply_to_message_id: int | None = None,
+        duration: int | None = None,
+        width: int | None = None,
+        height: int | None = None,
     ) -> bool:
         """Sends a single file (video, audio, or GIF) to Telegram."""
         try:
@@ -37,6 +40,9 @@ class TelegramSender:
                         parse_mode=parse_mode,
                         reply_markup=reply_markup,
                         reply_to_message_id=reply_to_message_id,
+                        duration=duration,
+                        width=width,
+                        height=height,
                     )
                 elif is_audio:
                     await bot.send_audio(
@@ -46,6 +52,7 @@ class TelegramSender:
                         parse_mode=parse_mode,
                         reply_markup=reply_markup,
                         reply_to_message_id=reply_to_message_id,
+                        duration=duration,
                     )
                 else:
                     await bot.send_video(
@@ -56,6 +63,9 @@ class TelegramSender:
                         supports_streaming=True,
                         reply_markup=reply_markup,
                         reply_to_message_id=reply_to_message_id,
+                        duration=duration,
+                        width=width,
+                        height=height,
                     )
             return True
 

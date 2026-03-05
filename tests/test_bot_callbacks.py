@@ -59,7 +59,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         mock_formats = [MagicMock(format_id="137", label="1080p")]
         mock_special_format = MagicMock(format_id="audio", label="Audio")
-        state.info_cache[page_url] = ("Test Title", mock_formats, mock_special_format, "10:00", False)
+        state.info_cache[page_url] = ("Test Title", mock_formats, mock_special_format, "10:00", False, None)
 
         with patch("app.bot.callbacks.build_format_keyboard") as mock_build_kb:
             mock_kb = MagicMock()

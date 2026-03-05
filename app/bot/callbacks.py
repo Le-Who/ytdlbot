@@ -1,8 +1,10 @@
+import json
 import os
 import uuid
 import asyncio
 import logging
 import html
+from typing import Optional
 from telegram import Update, Message, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
@@ -27,6 +29,66 @@ from app.services.downloader import MediaSender, MAX_TELEGRAM_ALBUM_SIZE
 __all__ = ["on_back", "on_pick", "on_cancel", "on_send", "on_convert_to_gif", "on_slideshow"]
 
 logger = logging.getLogger("app.bot.callbacks")
+
+
+async def _extract_video_meta(
+    file_path: str,
+    info_json_path: Optional[str] = None,
+) -> dict:
+    """Extract duration/width/height for Telegram send_video.
+
+    Strategy: try info JSON first (zero-cost), fall back to ffprobe.
+    Returns dict with keys: duration, width, height (all Optional[int]).
+    """
+    meta: dict = {"duration": None, "width": None, "height": None}
+
+    # 1. Try cached yt-dlp info JSON
+    if info_json_path and os.path.exists(info_json_path):
+        try:
+            with open(info_json_path, "r", encoding="utf-8") as f:
+                info = json.load(f)
+            dur = info.get("duration")
+            if dur:
+                meta["duration"] = int(float(dur))
+            if info.get("width"):
+                meta["width"] = int(info["width"])
+            if info.get("height"):
+                meta["height"] = int(info["height"])
+            if meta["duration"]:
+                return meta
+        except Exception:
+            pass
+
+    # 2. Fallback: ffprobe (available in Docker image)
+    try:
+        cmd = [
+            "ffprobe", "-v", "quiet", "-print_format", "json",
+            "-show_format", "-show_streams", file_path,
+        ]
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+        if stdout:
+            probe = json.loads(stdout)
+            fmt = probe.get("format", {})
+            dur = fmt.get("duration")
+            if dur:
+                meta["duration"] = int(float(dur))
+            stream = next(
+                (s for s in probe.get("streams", []) if s.get("codec_type") == "video"),
+                {},
+            )
+            if stream.get("width"):
+                meta["width"] = int(stream["width"])
+            if stream.get("height"):
+                meta["height"] = int(stream["height"])
+    except Exception:
+        pass
+
+    return meta
 
 
 async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -55,7 +117,7 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await q.edit_message_text(Texts.CACHE_REFRESH_FAIL)
             return
     else:
-        title, formats, special_format, duration, is_slideshow = cached
+        title, formats, special_format, duration, is_slideshow, *_ = cached
 
     if is_slideshow:
         from app.bot.keyboards import build_slideshow_keyboard
@@ -251,6 +313,11 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         is_gif = payload["format_id"] == GIF_FORMAT_ID
         is_audio = payload["format_id"] == AUDIO_FORMAT_ID
 
+        # Extract video metadata for faster Telegram delivery + preview
+        video_meta = await _extract_video_meta(
+            file_path, info_json_path=payload.get("info_json_path"),
+        )
+
         success = await MediaSender.send_file(
             context.bot,
             q.message.chat_id,
@@ -258,6 +325,9 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             is_audio=is_audio,
             is_gif=is_gif,
             caption="📹" if not is_audio else "🎵",
+            duration=video_meta.get("duration"),
+            width=video_meta.get("width"),
+            height=video_meta.get("height"),
         )
 
         if success:

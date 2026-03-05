@@ -35,7 +35,7 @@ class TestUXBackButton(unittest.IsolatedAsyncioTestCase):
         ]
         audio = MagicMock(label="Audio", format_id="140")
 
-        state.info_cache["http://example.com/video"] = ("Test Video", formats, audio, "05:00", False)
+        state.info_cache["http://example.com/video"] = ("Test Video", formats, audio, "05:00", False, None)
 
         await callbacks.on_back(update, context)
 

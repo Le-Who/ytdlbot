@@ -228,12 +228,13 @@ class YtDlpService:
 
     def list_formats(
         self, url: str, max_items: int = 12
-    ) -> Tuple[str, List[FormatItem], FormatItem, str, bool, Optional[str]]:
+    ) -> Tuple[str, List[FormatItem], FormatItem, str, bool, Optional[str], Optional[str]]:
         """Извлекает форматы видео с обработкой ошибок.
 
         Returns:
-            (title, formats, special_format, duration_str, is_slideshow, info_json_path)
+            (title, formats, special_format, duration_str, is_slideshow, info_json_path, thumbnail_url)
             info_json_path: path to cached extraction JSON for --load-info-json reuse.
+            thumbnail_url: URL of the video thumbnail (from yt-dlp metadata).
         """
         info: Optional[Dict[str, Any]] = None
         used_subprocess = False
@@ -244,7 +245,7 @@ class YtDlpService:
             if content_type == "slideshow":
                 logger.info("TikTok /photo/ URL, routing to slideshow: %s", url)
                 special_format = get_special_format(url)
-                return "TikTok Slideshow", [], special_format, "—", True, None
+                return "TikTok Slideshow", [], special_format, "—", True, None, None
 
         try:
             info = self.extract(url, for_list_formats=True)
@@ -291,7 +292,7 @@ class YtDlpService:
                             "TikTok unsupported URL, routing to slideshow: %s", url
                         )
                         special_format = get_special_format(url)
-                        return "TikTok Slideshow", [], special_format, "—", True, None
+                        return "TikTok Slideshow", [], special_format, "—", True, None, None
 
                     elif error_class == TikTokError.FORBIDDEN:
                         raise AccessDeniedError(Texts.SVC_ACCESS_DENIED)
@@ -308,7 +309,7 @@ class YtDlpService:
                             "trying slideshow fallback: %s", url
                         )
                         special_format = get_special_format(url)
-                        return "TikTok Slideshow", [], special_format, "—", True, None
+                        return "TikTok Slideshow", [], special_format, "—", True, None, None
 
                 # Non-TikTok error handling
                 if "403" in error_msg or "forbidden" in error_msg:
@@ -337,6 +338,7 @@ class YtDlpService:
         title = info.get("title") or Texts.SVC_DEFAULT_TITLE
         duration_sec = info.get("duration")
         duration_str = _format_duration(duration_sec)
+        thumbnail_url: Optional[str] = info.get("thumbnail")
 
         duration_factor = None
         if duration_sec:
@@ -396,7 +398,7 @@ class YtDlpService:
                 logger.warning("Failed to cache info JSON: %s", exc)
                 info_json_path = None
 
-        return title, formats, special_format, duration_str, is_slideshow, info_json_path
+        return title, formats, special_format, duration_str, is_slideshow, info_json_path, thumbnail_url
 
     def build_command(
         self,

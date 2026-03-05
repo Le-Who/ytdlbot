@@ -46,6 +46,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         self.update.callback_query = MagicMock()
         self.update.callback_query.answer = AsyncMock()
         self.update.callback_query.edit_message_text = AsyncMock()
+        self.update.callback_query.edit_message_media = AsyncMock()
         self.update.callback_query.edit_message_reply_markup = AsyncMock()
         self.update.callback_query.delete_message = AsyncMock()
         self.update.callback_query.message = MagicMock(spec=Message)
@@ -59,7 +60,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         mock_formats = [MagicMock(format_id="137", label="1080p")]
         mock_special_format = MagicMock(format_id="audio", label="Audio")
-        state.info_cache[page_url] = ("Test Title", mock_formats, mock_special_format, "10:00", False, None)
+        state.info_cache[page_url] = ("Test Title", mock_formats, mock_special_format, "10:00", False, None, "https://example.com/thumb.jpg")
 
         with patch("app.bot.callbacks.build_format_keyboard") as mock_build_kb:
             mock_kb = MagicMock()
@@ -67,9 +68,11 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             await callbacks.on_back(self.update, self.context)
 
             self.update.callback_query.answer.assert_awaited_once()
-            self.update.callback_query.edit_message_text.assert_awaited_once()
-            args, kwargs = self.update.callback_query.edit_message_text.call_args
-            self.assertIn("Test Title", args[0])
+            # With thumbnail, edit_message_media is called instead of edit_message_text
+            self.update.callback_query.edit_message_media.assert_awaited_once()
+            _, kwargs = self.update.callback_query.edit_message_media.call_args
+            media = kwargs["media"]
+            self.assertIn("Test Title", media.caption)
             self.assertEqual(kwargs["reply_markup"], mock_kb)
 
     async def test_on_back_cache_miss_success(self):
@@ -78,7 +81,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         mock_formats = [MagicMock(format_id="137", label="1080p")]
         mock_special_format = MagicMock(format_id="audio", label="Audio")
-        state.ytdlp.list_formats.return_value = ("Refreshed Title", mock_formats, mock_special_format, "5:00", False, None)
+        state.ytdlp.list_formats.return_value = ("Refreshed Title", mock_formats, mock_special_format, "5:00", False, None, "https://example.com/thumb.jpg")
 
         with patch("app.bot.callbacks.build_format_keyboard"):
             await callbacks.on_back(self.update, self.context)

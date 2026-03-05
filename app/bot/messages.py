@@ -56,7 +56,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     cached = state.info_cache.get(text)
     if cached:
         logger.info(f"[CACHE] Hit: {text}")
-        title, formats, special_format, duration, is_slideshow, info_json_path = cached
+        title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url = cached
     else:
         if text in state.inflight_parsing:
             logger.info(f"[PARSING] Waiting for inflight task: {text}")
@@ -69,7 +69,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 return
             cached = state.info_cache.get(text)
             if cached:
-                title, formats, special_format, duration, is_slideshow, info_json_path = cached
+                title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url = cached
             else:
                 await status_msg.edit_text(Texts.FETCH_ERROR_RETRY)
                 return
@@ -86,6 +86,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                             duration,
                             is_slideshow,
                             info_json_path,
+                            thumbnail_url,
                         ) = await asyncio.get_event_loop().run_in_executor(
                             state.ytdlp_executor, state.ytdlp.list_formats, text
                         )
@@ -96,7 +97,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     await status_msg.edit_text(Texts.CANCELLED)
                     return
 
-                state.info_cache[text] = (title, formats, special_format, duration, is_slideshow, info_json_path)
+                state.info_cache[text] = (title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url)
             except asyncio.TimeoutError:
                 await status_msg.edit_text(Texts.TIMEOUT_UNAVAILABLE)
                 return
@@ -146,6 +147,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     data["title"] = title
     data["is_slideshow"] = is_slideshow
     data["info_json_path"] = info_json_path if not is_slideshow else None
+    data["thumbnail_url"] = thumbnail_url
 
     if is_slideshow:
         # TikTok slideshow — show photo/video choice keyboard
@@ -172,9 +174,22 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         )
 
         reply_markup = build_format_keyboard(formats, special_format)
+        caption = f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}"
 
-        await status_msg.edit_text(
-            f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}",
-            reply_markup=reply_markup,
-            parse_mode="HTML",
-        )
+        if thumbnail_url:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            await msg.reply_photo(
+                photo=thumbnail_url,
+                caption=caption,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+        else:
+            await status_msg.edit_text(
+                caption,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )

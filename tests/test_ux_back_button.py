@@ -28,6 +28,7 @@ class TestUXBackButton(unittest.IsolatedAsyncioTestCase):
         update = MagicMock()
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
+        update.callback_query.edit_message_media = AsyncMock()
 
         formats = [
             MagicMock(label="720p", format_id="137"),
@@ -35,16 +36,17 @@ class TestUXBackButton(unittest.IsolatedAsyncioTestCase):
         ]
         audio = MagicMock(label="Audio", format_id="140")
 
-        state.info_cache["http://example.com/video"] = ("Test Video", formats, audio, "05:00", False, None)
+        state.info_cache["http://example.com/video"] = ("Test Video", formats, audio, "05:00", False, None, "https://example.com/thumb.jpg")
 
         await callbacks.on_back(update, context)
 
         update.callback_query.answer.assert_awaited_once()
 
-        args, kwargs = update.callback_query.edit_message_text.call_args
-        text = args[0]
-        self.assertIn("Test Video", text)
-        self.assertIn("05:00", text)
+        # With thumbnail, edit_message_media is called with InputMediaPhoto
+        update.callback_query.edit_message_media.assert_awaited_once()
+        _, kwargs = update.callback_query.edit_message_media.call_args
+        media = kwargs["media"]
+        self.assertIn("Test Video", media.caption)
 
         reply_markup = kwargs.get("reply_markup")
         self.assertIsNotNone(reply_markup)

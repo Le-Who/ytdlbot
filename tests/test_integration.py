@@ -57,8 +57,8 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
             FormatItem(format_id="136", label="📹 720p • 50.0 MB", ext="mp4", height=720, filesize=50*1024*1024),
         ]
         audio = FormatItem(format_id=AUDIO_FORMAT_ID, label="🎵 Audio", ext="audio", height=None, filesize=None)
-        state.ytdlp.list_formats.return_value = ("Test Video", formats, audio, "05:30", False, None)
-        state.info_cache[url] = ("Test Video", formats, audio, "05:30", False, None)
+        state.ytdlp.list_formats.return_value = ("Test Video", formats, audio, "05:30", False, None, "https://i.ytimg.com/vi/test123/maxresdefault.jpg")
+        state.info_cache[url] = ("Test Video", formats, audio, "05:30", False, None, "https://i.ytimg.com/vi/test123/maxresdefault.jpg")
 
         # 2. Build keyboard and verify structure
         keyboard = build_format_keyboard(formats, audio)
@@ -102,7 +102,7 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
         url = "http://example.com/video"
         formats = [MagicMock(format_id="137", label="1080p")]
         audio = MagicMock(format_id="audio", label="Audio")
-        state.info_cache[url] = ("Video Title", formats, audio, "03:00", False, None)
+        state.info_cache[url] = ("Video Title", formats, audio, "03:00", False, None, None)
 
         update = MagicMock()
         context = MagicMock()

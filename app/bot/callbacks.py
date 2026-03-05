@@ -5,7 +5,7 @@ import asyncio
 import logging
 import html
 from typing import Optional
-from telegram import Update, Message, InlineKeyboardButton, InlineKeyboardMarkup, LinkPreviewOptions
+from telegram import Update, Message, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, LinkPreviewOptions
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
@@ -108,16 +108,17 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await q.edit_message_text(Texts.CACHE_REFRESHING)
             async with state.parsing_sem:
-                title, formats, special_format, duration, is_slideshow, info_json_path = await asyncio.to_thread(
+                title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url = await asyncio.to_thread(
                     state.ytdlp.list_formats, page_url
                 )
-            state.info_cache[page_url] = (title, formats, special_format, duration, is_slideshow, info_json_path)
+            state.info_cache[page_url] = (title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url)
         except Exception as e:
             logger.error(f"[ON_BACK] Refresh error: {e}")
             await q.edit_message_text(Texts.CACHE_REFRESH_FAIL)
             return
     else:
-        title, formats, special_format, duration, is_slideshow, *_ = cached
+        title, formats, special_format, duration, is_slideshow, *rest = cached
+        thumbnail_url = rest[1] if len(rest) > 1 else None
 
     if is_slideshow:
         from app.bot.keyboards import build_slideshow_keyboard
@@ -129,11 +130,31 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
     else:
         reply_markup = build_format_keyboard(formats, special_format)
-        await q.edit_message_text(
-            f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}",
-            reply_markup=reply_markup,
-            parse_mode="HTML",
-        )
+        caption = f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}"
+
+        if thumbnail_url:
+            try:
+                await q.edit_message_media(
+                    media=InputMediaPhoto(
+                        media=thumbnail_url,
+                        caption=caption,
+                        parse_mode="HTML",
+                    ),
+                    reply_markup=reply_markup,
+                )
+            except Exception:
+                # Fallback: original message might be text-only
+                await q.edit_message_text(
+                    caption,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML",
+                )
+        else:
+            await q.edit_message_text(
+                caption,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
 
 
 async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

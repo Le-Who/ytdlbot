@@ -5,7 +5,7 @@ import sys
 import asyncio
 import tempfile
 import unittest
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import patch, AsyncMock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 os.environ.setdefault("BOT_TOKEN", "test_token")

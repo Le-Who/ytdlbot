@@ -77,7 +77,7 @@ async def _extract_video_meta(
             dur = fmt.get("duration")
             if dur:
                 meta["duration"] = int(float(dur))
-            stream = next(
+            stream: dict = next(
                 (s for s in probe.get("streams", []) if s.get("codec_type") == "video"),
                 {},
             )

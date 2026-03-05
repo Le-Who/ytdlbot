@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import uuid
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
@@ -116,9 +117,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     if tiktok_auth_error:
         from app.services.tikwm import TikWMService
         await status_msg.edit_text(Texts.GROUP_SENDING)
-        tikwm_path, tikwm_err = await asyncio.to_thread(
-            TikWMService.download_video, url
-        )
+        tikwm_path, tikwm_err = await TikWMService.download_video(url)
         if tikwm_path:
             caption = f"👤 {user_tag}"
             gif_token = uuid.uuid4().hex
@@ -281,9 +280,7 @@ async def on_group_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Slideshow download failed — try TikWM as video fallback
         from app.services.tikwm import TikWMService
         logger.info("Slideshow failed in group, trying TikWM fallback: %s", page_url)
-        tikwm_path, tikwm_err = await asyncio.to_thread(
-            TikWMService.download_video, page_url
-        )
+        tikwm_path, tikwm_err = await TikWMService.download_video(page_url)
         if tikwm_path:
             # Got video via TikWM — send as video
             await q.edit_message_text(Texts.GROUP_SENDING)

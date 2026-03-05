@@ -1,12 +1,7 @@
 import unittest
-import os
-import sys
 
 # Add repo root to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 from app.core.utils import is_supported_url
-
 
 class TestMainUtils(unittest.TestCase):
     def test_is_supported_url(self):
@@ -34,7 +29,6 @@ class TestMainUtils(unittest.TestCase):
 
         # Case insensitivity (urlparse handles domain as lowercase usually, but good to check)
         self.assertTrue(is_supported_url("https://YOUTUBE.COM/watch"))
-
 
 if __name__ == "__main__":
     unittest.main()

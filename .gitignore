@@ -6,6 +6,10 @@ __pycache__/
 dist/
 build/
 
+# Virtual environments
+venv/
+.venv/
+
 # Environment
 .env
 .env.*
@@ -14,8 +18,14 @@ build/
 # IDE
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
+
+# Agent / skills
+skills/
+.gemini/
+.agents/
 
 # OS
 Thumbs.db
@@ -25,5 +35,12 @@ Desktop.ini
 # Testing / tooling
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.mutmut-cache/
+.hypothesis/
 .coverage
 htmlcov/
+
+# Temp
+*.tmp
+*.log

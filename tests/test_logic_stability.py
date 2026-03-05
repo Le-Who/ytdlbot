@@ -1,16 +1,13 @@
 import unittest
 import asyncio
 import os
-import sys
 from unittest.mock import MagicMock
 
 # Add repo root to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 os.environ.setdefault("BOT_TOKEN", "123456:ABC-DEF")
 os.environ.setdefault("BASE_URL", "http://localhost:8000")
 
 from app.core.state import inflight_parsing
-
 
 class TestLogicStability(unittest.IsolatedAsyncioTestCase):
     async def test_parsing_deduplication(self):
@@ -47,7 +44,6 @@ class TestLogicStability(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0][0], "Title")
         self.assertEqual(results[1][0], "Title")
         self.assertEqual(len(inflight_parsing), 0)
-
 
 if __name__ == "__main__":
     unittest.main()

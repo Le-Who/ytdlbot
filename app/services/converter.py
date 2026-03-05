@@ -64,7 +64,7 @@ class MediaConverter:
                         return None
 
             if proc.returncode != 0:
-                logger.error(f"FFmpeg conversion failed: {stderr.decode()}")
+                logger.error("FFmpeg conversion failed", extra={"stderr": stderr.decode()})
                 return None
 
             if not os.path.exists(gif_path) or os.path.getsize(gif_path) == 0:
@@ -72,7 +72,7 @@ class MediaConverter:
 
             return gif_path
         except Exception as e:
-            logger.error(f"FFmpeg exception: {e}")
+            logger.error("FFmpeg exception", extra={"error": str(e)})
             return None
 
     @staticmethod
@@ -168,7 +168,7 @@ class MediaConverter:
             return output_path
 
         except Exception as e:
-            logger.error(f"Slideshow conversion exception: {e}", exc_info=True)
+            logger.error("Slideshow conversion exception", extra={"error": str(e)}, exc_info=True)
             return None
         finally:
             safe_remove(concat_file)

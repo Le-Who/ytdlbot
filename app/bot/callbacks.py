@@ -113,7 +113,7 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
             state.info_cache[page_url] = (title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url)
         except Exception as e:
-            logger.error(f"[ON_BACK] Refresh error: {e}")
+            logger.error("Refresh error on back", extra={"error": str(e)})
             await q.edit_message_text(Texts.CACHE_REFRESH_FAIL)
             return
     else:
@@ -173,7 +173,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         _, format_id = q.data.split("|", 1)
     except (ValueError, AttributeError) as e:
-        logger.error(f"Invalid callback data in on_pick: {e}")
+        logger.error("Invalid callback data in on_pick", extra={"error": str(e)})
         return
 
     data = context.user_data
@@ -243,7 +243,7 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         state.cancel_cache[token] = True
         await q.edit_message_text(Texts.CANCELLED)
     except (ValueError, AttributeError) as e:
-        logger.error(f"Invalid callback data in on_cancel: {e}")
+        logger.error("Invalid callback data in on_cancel", extra={"error": str(e)})
 
 
 async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -269,7 +269,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         _, token = q.data.split("|", 1)
     except (ValueError, AttributeError) as e:
-        logger.error(f"Invalid callback data in on_send: {e}")
+        logger.error("Invalid callback data in on_send", extra={"error": str(e)})
         return
 
     set_correlation_id(token)
@@ -308,7 +308,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await q.edit_message_text(text, reply_markup=markup)
         except Exception as e:
-            logger.warning(f"UI Update failed: {e}")
+            logger.warning("UI update failed", extra={"error": str(e)})
 
     try:
         await q.edit_message_text(Texts.STARTING_DOWNLOAD)
@@ -382,7 +382,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await q.answer(Texts.GIF_CONVERTING)
         await q.edit_message_reply_markup(None)
     except Exception as e:
-        logger.warning(f"Callback answer failed (query too old?): {e}")
+        logger.warning("Callback answer failed", extra={"error": str(e)})
 
     _, token = q.data.split("|", 1)
 
@@ -394,7 +394,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         try:
             await q.message.reply_text(Texts.GIF_FILE_EXPIRED, do_quote=True)
         except Exception as e:
-            logger.warning(f"Failed to reply about missing file: {e}")
+            logger.warning("Failed to reply about missing file", extra={"error": str(e)})
         return
 
     # Check/Add to processing set (Debounce) — atomic under lock
@@ -403,7 +403,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             try:
                 await q.message.reply_text(Texts.GIF_ALREADY_IN_PROGRESS, do_quote=True)
             except Exception as e:
-                logger.warning(f"Failed to reply about in-progress GIF: {e}")
+                logger.warning("Failed to reply about in-progress GIF", extra={"error": str(e)})
             return
         state.processing_gifs.add(token)
 
@@ -417,7 +417,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         try:
             await q.message.reply_text(Texts.GIF_CONVERSION_ERROR, do_quote=True)
         except Exception as e:
-            logger.warning(f"Failed to reply about conversion error: {e}")
+            logger.warning("Failed to reply about conversion error", extra={"error": str(e)})
         return
 
     # 3. Send as Reply to the VIDEO message
@@ -437,7 +437,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         try:
             await q.message.reply_text(Texts.GIF_SEND_ERROR, do_quote=True)
         except Exception as e:
-            logger.warning(f"Failed to reply about send error: {e}")
+            logger.warning("Failed to reply about send error", extra={"error": str(e)})
 
     # Do NOT delete gif_path if it is the same as video_path (cached source)
     if gif_path != video_path:
@@ -468,7 +468,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         _, mode = q.data.split("|", 1)
     except (ValueError, AttributeError) as e:
-        logger.error(f"Invalid callback data in on_slideshow: {e}")
+        logger.error("Invalid callback data in on_slideshow", extra={"error": str(e)})
         return
 
     data = context.user_data

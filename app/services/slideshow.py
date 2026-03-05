@@ -4,7 +4,7 @@ import os
 import asyncio
 import logging
 import shutil
-from typing import Optional, Tuple, TYPE_CHECKING
+from typing import Any, Optional, Tuple, TYPE_CHECKING
 
 from app.core import state
 
@@ -40,7 +40,7 @@ class SlideshowPipeline:
         return result, error
 
     @staticmethod
-    def cleanup_slideshow(result) -> None:
+    def cleanup_slideshow(result: Any) -> None:
         """Removes all downloaded slideshow files and their directory."""
         if not result or not result.images:
             return
@@ -48,6 +48,6 @@ class SlideshowPipeline:
         if parent_dir and os.path.isdir(parent_dir) and "slideshow_" in parent_dir:
             try:
                 shutil.rmtree(parent_dir, ignore_errors=True)
-                logger.info(f"[CLEANUP] Removed slideshow dir: {parent_dir}")
+                logger.info("Removed slideshow dir", extra={"dir": parent_dir})
             except Exception as e:
-                logger.warning(f"[CLEANUP] Failed to remove slideshow dir: {e}")
+                logger.warning("Failed to remove slideshow dir", extra={"error": str(e)})

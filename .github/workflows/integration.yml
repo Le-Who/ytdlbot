@@ -1,0 +1,49 @@
+name: Integration Tests
+
+on:
+  push:
+    branches: [main, master]
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+
+    env:
+      BOT_TOKEN: test_token
+      WEBHOOK_URL: https://example.com/webhook
+      TELEGRAM_SECRET_TOKEN: test_secret_token
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+
+      - name: Install Python deps
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio
+
+      - name: Install yt-dlp
+        run: pip install yt-dlp
+
+      - name: Run integration tests
+        run: |
+          python -m pytest tests/test_integration_real.py \
+            -m integration \
+            --no-cov \
+            -v \
+            --timeout=120
+
+      - name: Run mutation tests
+        run: |
+          pip install mutmut
+          mutmut run || true
+          mutmut results

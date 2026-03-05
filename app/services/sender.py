@@ -1,6 +1,7 @@
 """Telegram file/media sending service."""
 
 import logging
+from typing import Any
 
 from telegram import Bot, InputMediaPhoto
 from telegram.error import NetworkError
@@ -23,7 +24,7 @@ class TelegramSender:
         is_gif: bool = False,
         caption: str = "",
         parse_mode: str | None = None,
-        reply_markup=None,
+        reply_markup: Any = None,
         reply_to_message_id: int | None = None,
         duration: int | None = None,
         width: int | None = None,
@@ -71,10 +72,10 @@ class TelegramSender:
             return True
 
         except NetworkError:
-            logger.warning(f"Network error sending file {file_path}")
+            logger.warning("Network error sending file", extra={"file": file_path})
             return False
         except Exception as e:
-            logger.error(f"Send error: {e}", exc_info=True)
+            logger.error("Send error", extra={"error": str(e)}, exc_info=True)
             return False
 
     @staticmethod
@@ -121,7 +122,7 @@ class TelegramSender:
             logger.warning("Network error sending slideshow photos")
             return False
         except Exception as e:
-            logger.error(f"Slideshow send error: {e}", exc_info=True)
+            logger.error("Slideshow send error", extra={"error": str(e)}, exc_info=True)
             return False
         finally:
             for fh in file_handles:

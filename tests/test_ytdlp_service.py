@@ -1,5 +1,4 @@
 import unittest
-import os
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -7,8 +6,6 @@ from unittest.mock import MagicMock, patch
 sys.modules["yt_dlp"] = MagicMock()
 
 # Add repo root to path so we can import app
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 from app.services.ytdlp.service import YtDlpService
 from app.services.ytdlp.models import FormatItem, FormatMetadata
 from app.constants import GIF_FORMAT_ID

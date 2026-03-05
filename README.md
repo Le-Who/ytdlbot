@@ -77,12 +77,12 @@ A high-performance Telegram bot for downloading media from popular platforms (Yo
 │   ├── tasks
 │   │   └── janitor.py     # Periodic temp file cleanup
 │   └── main.py            # Application entry point
-├── tests/                 # 257+ tests (unit + integration)
-├── .github/workflows/     # CI/CD pipeline
-├── Dockerfile             # Docker build (Python 3.12-slim)
+├── tests/                 # 430+ tests (unit + integration + property-based)
+├── .github/workflows/     # CI/CD pipeline (unit + integration + mutation)
+├── Dockerfile             # Multi-stage Docker build (Python 3.12-slim)
 ├── .dockerignore          # Excludes .git, tests, IDE files from build context
-├── pyproject.toml         # pytest + coverage + ruff config
-├── mypy.ini               # mypy type-checking config
+├── .pre-commit-config.yaml # Pre-commit hooks (ruff, mypy, file hygiene)
+├── pyproject.toml         # pytest + coverage + ruff + mypy + mutmut config
 ├── requirements.txt       # Python dependencies (pinned)
 └── README.md
 ```
@@ -167,9 +167,18 @@ With coverage report:
 BOT_TOKEN=test pytest tests/ --cov=app --cov-report=term-missing
 ```
 
+Integration tests (requires yt-dlp + ffmpeg):
+
+```bash
+pytest -m integration --no-cov -v
+```
+
 The test suite includes:
 
-- **257+ unit + integration tests**
+- **430+ unit tests** with 76% code coverage (threshold: 75%)
+- **Property-based tests** via `hypothesis` (14 properties, ~1400 random examples)
+- **Integration tests** with real yt-dlp + ffmpeg binaries
+- **Mutation testing** via `mutmut` in CI
 - HMAC webhook authentication tests
 - Rate limiter behavior tests
 - Format parsing and deduplication tests
@@ -177,17 +186,22 @@ The test suite includes:
 - Gallery-dl service command and error handling tests
 - Full end-to-end flow tests (URL → formats → pick → download → send)
 
-### Linting & Type Checking
+### Linting, Type Checking & Pre-commit
 
 ```bash
-# Ruff (linter)
-ruff check .
+# Install pre-commit hooks (one-time setup)
+pre-commit install
 
-# Mypy (type checker)
-python -m mypy .
+# Run manually
+pre-commit run --all-files
+
+# Or run tools individually:
+ruff check .            # Linter
+ruff format --check .   # Formatter
+python -m mypy app/     # Type checker (strict mode)
 ```
 
-Both tools are configured to run with **zero errors** across 82 source files.
+All tools are configured to run with **zero errors** across 39 source files. Pre-commit hooks run ruff (lint + format), mypy (type check), and file hygiene checks automatically on every commit.
 
 ## 🎮 Usage
 

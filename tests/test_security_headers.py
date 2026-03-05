@@ -1,65 +1,62 @@
-"""Tests for security headers middleware logic."""
+"""Tests for security headers middleware — verifies REAL middleware from app.main."""
 import unittest
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-os.environ.setdefault("BOT_TOKEN", "test_token")
-os.environ.setdefault("WEBHOOK_URL", "https://example.com")
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from app.api.routes import router
+from app.main import add_security_headers
 
+_app = FastAPI()
+_app.include_router(router)
+_app.middleware("http")(add_security_headers)
 
 class TestSecurityHeaders(unittest.TestCase):
-    """Test the Content-Security-Policy logic directly."""
+    """Test the REAL add_security_headers middleware via TestClient."""
 
-    def _get_csp_for_path(self, path: str) -> str:
-        """Reproduce the CSP logic from app.main.add_security_headers."""
-        if path.startswith(("/docs", "/redoc", "/openapi.json")):
-            return "default-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net data:"
-        else:
-            return "default-src 'none'"
+    def setUp(self):
+        self.client = TestClient(_app)
 
-    def test_strict_csp_on_health(self):
-        """Non-docs routes get strict CSP."""
-        csp = self._get_csp_for_path("/health")
-        self.assertEqual(csp, "default-src 'none'")
+    def test_health_gets_strict_csp(self):
+        """Non-docs routes get strict CSP: default-src 'none'."""
+        resp = self.client.get("/health")
+        self.assertEqual(resp.headers["Content-Security-Policy"], "default-src 'none'")
 
-    def test_strict_csp_on_webhook(self):
-        """Webhook route gets strict CSP."""
-        csp = self._get_csp_for_path("/webhook")
-        self.assertEqual(csp, "default-src 'none'")
+    def test_health_gets_nosniff(self):
+        """X-Content-Type-Options header is present on all routes."""
+        resp = self.client.get("/health")
+        self.assertEqual(resp.headers["X-Content-Type-Options"], "nosniff")
 
-    def test_relaxed_csp_on_docs(self):
-        """Docs route gets relaxed CSP."""
-        csp = self._get_csp_for_path("/docs")
+    def test_health_gets_deny_framing(self):
+        """X-Frame-Options is DENY on all routes."""
+        resp = self.client.get("/health")
+        self.assertEqual(resp.headers["X-Frame-Options"], "DENY")
+
+    def test_health_gets_referrer_policy(self):
+        """Referrer-Policy is set correctly."""
+        resp = self.client.get("/health")
+        self.assertEqual(
+            resp.headers["Referrer-Policy"],
+            "strict-origin-when-cross-origin",
+        )
+
+    def test_docs_gets_relaxed_csp(self):
+        """Docs route permits inline styles and cdn.jsdelivr.net."""
+        resp = self.client.get("/docs")
+        csp = resp.headers["Content-Security-Policy"]
         self.assertIn("'unsafe-inline'", csp)
         self.assertIn("cdn.jsdelivr.net", csp)
         self.assertIn("default-src 'self'", csp)
 
-    def test_relaxed_csp_on_redoc(self):
-        """Redoc route gets relaxed CSP."""
-        csp = self._get_csp_for_path("/redoc")
+    def test_openapi_gets_relaxed_csp(self):
+        """OpenAPI JSON route gets the relaxed CSP."""
+        resp = self.client.get("/openapi.json")
+        csp = resp.headers["Content-Security-Policy"]
         self.assertIn("'unsafe-inline'", csp)
 
-    def test_relaxed_csp_on_openapi(self):
-        """OpenAPI JSON route gets relaxed CSP."""
-        csp = self._get_csp_for_path("/openapi.json")
-        self.assertIn("'unsafe-inline'", csp)
-
-    def test_strict_csp_on_dl(self):
-        """Download route gets strict CSP."""
-        csp = self._get_csp_for_path("/dl/some_token")
-        self.assertEqual(csp, "default-src 'none'")
-
-    def test_security_header_values(self):
-        """Verify the expected header values are correct."""
-        expected_headers = {
-            "X-Content-Type-Options": "nosniff",
-            "X-Frame-Options": "DENY",
-            "Referrer-Policy": "strict-origin-when-cross-origin",
-        }
-        for header, value in expected_headers.items():
-            self.assertIsNotNone(value, f"{header} should not be None")
-
+    def test_arbitrary_path_gets_strict_csp(self):
+        """Unknown path still gets strict CSP (even if 404)."""
+        resp = self.client.get("/some/random/path")
+        self.assertEqual(resp.headers["Content-Security-Policy"], "default-src 'none'")
 
 if __name__ == "__main__":
     unittest.main()

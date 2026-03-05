@@ -4,7 +4,10 @@ from app.constants import AUDIO_FORMAT_ID, SLIDESHOW_PHOTO_FORMAT_ID, SLIDESHOW_
 from app.core.texts import Texts
 
 
-def build_format_keyboard(formats: list, special_format) -> InlineKeyboardMarkup:
+from typing import Any
+
+
+def build_format_keyboard(formats: list[Any], special_format: Any) -> InlineKeyboardMarkup:
     """Helper to build format selection buttons in 2 columns."""
     buttons = []
     formats_slice = formats[:8]

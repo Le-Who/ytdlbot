@@ -1,5 +1,4 @@
 import unittest
-import os
 import sys
 from unittest.mock import MagicMock
 
@@ -7,10 +6,7 @@ from unittest.mock import MagicMock
 sys.modules["yt_dlp"] = MagicMock()
 
 # Add repo root to path so we can import app
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 from app.services.ytdlp.service import YtDlpService
-
 
 class TestYtDlpOpts(unittest.TestCase):
     def setUp(self):
@@ -54,7 +50,6 @@ class TestYtDlpOpts(unittest.TestCase):
         self.assertNotIn("injected", opts2["extractor_args"])
         # TikTok defaults should be present but not the injected key
         self.assertIn("tiktok", opts2["extractor_args"])
-
 
 if __name__ == "__main__":
     unittest.main()

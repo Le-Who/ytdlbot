@@ -6,10 +6,8 @@ from unittest.mock import patch
 
 from app.services.ytdlp.cookies import PlatformCookiesManager
 
-
 # Valid base64 of "# Netscape HTTP Cookie File\n.example.com\tTRUE\t/\tFALSE\t0\ttest_cookie\tvalue"
 _DUMMY_B64 = "IyBOZXRzY2FwZSBIVFRQIENvb2tpZSBGaWxlCi5leGFtcGxlLmNvbQlUUlVFCS8JRkFMU0UJMAlj b29raWVfbmFtZQljb29raWVfdmFsdWU="
-
 
 class TestPlatformCookiesManager(unittest.TestCase):
     """Test cookie routing logic."""
@@ -82,7 +80,6 @@ class TestPlatformCookiesManager(unittest.TestCase):
         self.assertIsNone(
             mgr.get_cookies_path("https://www.youtube.com/watch?v=123")
         )
-
 
 if __name__ == "__main__":
     unittest.main()

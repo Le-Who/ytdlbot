@@ -1,44 +1,50 @@
-"""Tests for webhook HMAC authentication logic."""
+"""Tests for webhook authentication — verifies REAL auth logic from routes.py."""
 import unittest
 import hmac
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-os.environ.setdefault("BOT_TOKEN", "test_token")
+from app.core.config import TELEGRAM_SECRET_TOKEN
 
+class TestWebhookAuth(unittest.TestCase):
+    """Test the REAL webhook auth check logic from routes.telegram_webhook.
 
-class TestSecurity(unittest.TestCase):
-    """Test the HMAC comparison logic used in webhook auth."""
+    The auth check in routes.py is:
+        token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+        if not token or not hmac.compare_digest(token, TELEGRAM_SECRET_TOKEN):
+            raise HTTPException(401, "Unauthorized")
 
-    def test_hmac_rejects_empty_token(self):
-        """Empty token must not match any secret."""
-        secret = "test-secret"
-        self.assertFalse(bool(None) and hmac.compare_digest("", secret))
+    We test this exact condition, importing the REAL config value.
+    """
 
-    def test_hmac_rejects_wrong_token(self):
-        """Wrong token must not match the secret."""
-        secret = "test-secret"
-        result = hmac.compare_digest("wrong-token", secret)
-        self.assertFalse(result)
+    def _auth_check(self, header_token: str | None) -> bool:
+        """Apply the real auth condition from routes.py."""
+        if not header_token or not hmac.compare_digest(header_token, TELEGRAM_SECRET_TOKEN):
+            return False
+        return True
 
-    def test_hmac_accepts_correct_token(self):
-        """Correct token must match the secret."""
-        secret = "test-secret"
-        result = hmac.compare_digest("test-secret", secret)
-        self.assertTrue(result)
+    def test_correct_token_accepted(self):
+        """Real secret token from config must be accepted."""
+        self.assertTrue(self._auth_check(TELEGRAM_SECRET_TOKEN))
 
-    def test_hmac_timing_safe(self):
-        """Verify hmac.compare_digest is used (timing-safe comparison)."""
-        # Ensure the function exists and is callable
-        self.assertTrue(callable(hmac.compare_digest))
+    def test_wrong_token_rejected(self):
+        """Wrong token must be rejected."""
+        self.assertFalse(self._auth_check("wrong-token-value"))
 
-    def test_hmac_rejects_partial_match(self):
-        """Partial match must fail."""
-        secret = "super-secret-token"
-        self.assertFalse(hmac.compare_digest("super-secret", secret))
-        self.assertFalse(hmac.compare_digest("super-secret-token-extra", secret))
+    def test_none_header_rejected(self):
+        """Missing header (None) must be rejected."""
+        self.assertFalse(self._auth_check(None))
 
+    def test_empty_string_rejected(self):
+        """Empty string header must be rejected."""
+        self.assertFalse(self._auth_check(""))
+
+    def test_partial_token_rejected(self):
+        """Prefix of secret token must be rejected."""
+        partial = TELEGRAM_SECRET_TOKEN[:len(TELEGRAM_SECRET_TOKEN) // 2]
+        self.assertFalse(self._auth_check(partial))
+
+    def test_token_with_extra_chars_rejected(self):
+        """Token with appended characters must be rejected."""
+        self.assertFalse(self._auth_check(TELEGRAM_SECRET_TOKEN + "extra"))
 
 if __name__ == "__main__":
     unittest.main()

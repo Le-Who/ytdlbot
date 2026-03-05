@@ -41,7 +41,7 @@ ytdlp_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="ytdlp") 
 # Глобальный объект приложения Telegram (инициализируется в main.py)
 if TYPE_CHECKING:
     from telegram.ext import Application
-bot_app: Application | None = None  # type: ignore[type-arg]
+bot_app: Application | None = None
 
 
 # Кэши

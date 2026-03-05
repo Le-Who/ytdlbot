@@ -1,15 +1,42 @@
+# VCS / CI
 .git
 .github
 .gitignore
+
+# Environment
 .env
 .env.*
+
+# IDE / Agent
 .vscode
 .idea
 .cursor
 .Jules
+.gemini
+.agents
+skills/
+
+# Testing / Tooling
+tests/
 .pytest_cache
 .ruff_cache
-tests/
+.mypy_cache
+.mutmut-cache
+.coverage
+htmlcov/
 scripts/
+
+# Documentation
 *.md
+
+# Config (not needed in runtime image)
 pyproject.toml
+.pre-commit-config.yaml
+
+# Misc
+__pycache__
+*.pyc
+*.tmp
+*.log
+Thumbs.db
+.DS_Store

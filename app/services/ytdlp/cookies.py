@@ -167,10 +167,13 @@ def _log_cookie_diagnostics(content: str, label: str) -> None:
 
 
 def _cleanup_file(path: str) -> None:
-    """Remove a temp file at process exit."""
+    """Remove a temp file at process exit.
+
+    NOTE: This runs via atexit, so logging streams may already be closed.
+    All log calls must be guarded against ValueError / OSError.
+    """
     if path and os.path.exists(path):
         try:
             os.unlink(path)
-            logger.info("Cookies file cleaned up: %s", path)
-        except Exception as e:
-            logger.warning("Failed to cleanup cookies: %s", e)
+        except Exception:
+            pass

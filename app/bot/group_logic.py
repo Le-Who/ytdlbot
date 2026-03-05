@@ -174,7 +174,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             if status_msg:
                 await status_msg.edit_text(text, reply_markup=markup)
         except Exception as e:
-            logger.debug(f"Group UI update failed: {e}")
+            logger.debug("Group UI update failed", extra={"error": str(e)})
 
     # Detect Pinterest to use a simpler format
     is_pinterest = "pinterest" in url or "pin.it" in url
@@ -230,7 +230,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
         try:
             await update.message.delete()
         except Exception as e:
-            logger.debug(f"Could not delete user message: {e}")
+            logger.debug("Could not delete user message", extra={"error": str(e)})
         await status_msg.delete()
     else:
         await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
@@ -250,7 +250,7 @@ async def on_group_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         _, token, mode = q.data.split("|", 2)
     except (ValueError, AttributeError) as e:
-        logger.error(f"Invalid callback data in on_group_slideshow: {e}")
+        logger.error("Invalid callback data in on_group_slideshow", extra={"error": str(e)})
         return
 
     payload = state.link_cache.get(token)

@@ -1,24 +1,15 @@
 """Tests for slideshow callbacks and downloader methods."""
 
 import asyncio
-import os
-import sys
 import unittest
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from telegram import Message
 
-os.environ.setdefault("BOT_TOKEN", "test_token")
-os.environ.setdefault("WEBHOOK_URL", "https://example.com")
-os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "secret")
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 from app.bot import callbacks
 from app.core import state
 from app.constants import SLIDESHOW_PHOTO_FORMAT_ID, SLIDESHOW_VIDEO_FORMAT_ID
 from app.services.gallery_dl.service import SlideshowResult
-
 
 class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -186,7 +177,6 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
 
             args, _ = self.update.callback_query.edit_message_text.call_args
             self.assertIn("Ошибка", args[0])
-
 
 if __name__ == "__main__":
     unittest.main()

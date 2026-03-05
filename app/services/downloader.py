@@ -95,7 +95,7 @@ class VideoDownloader:
         # Check if we already have this file in cache (e.g. for GIF conversion reuse)
         cached_path = state.file_cache.get(token)
         if cached_path and os.path.exists(cached_path):
-            logger.info(f"[CACHE] Reusing downloaded file: {cached_path}")
+            logger.info("Reusing cached file", extra={"path": cached_path})
             _metrics().cache_hits.inc(cache="file_cache")
             return cached_path, None
 
@@ -128,7 +128,7 @@ class VideoDownloader:
                 # Drain stdout; check cancel/timeout every 2s
                 while True:
                     if state.cancel_cache.get(token):
-                        logger.info(f"[DL-TG] Cancelled by user: {token}")
+                        logger.info("Cancelled by user", extra={"token": token})
                         return None, "❌ Загрузка отменена пользователем."
 
                     if time.time() - download_start > max_download_time:
@@ -153,7 +153,7 @@ class VideoDownloader:
                     _metrics().downloads_failed.inc(platform="telegram")
                     _metrics().active_downloads.dec()
                     err = b"".join(stderr).decode("utf-8", errors="ignore").lower()
-                    logger.error(f"[DL-TG] yt-dlp failed: {err}")
+                    logger.error("yt-dlp download failed", extra={"stderr": err})
 
                     if "file larger" in err or "filesize" in err:
                         return None, f"⚠️ Файл слишком большой (>{MAX_TG_UPLOAD_MB} МБ)."
@@ -190,7 +190,7 @@ class VideoDownloader:
             return tmp_path, None
 
         except Exception as e:
-            logger.error(f"Download exception: {e}", exc_info=True)
+            logger.error("Download exception", extra={"error": str(e)}, exc_info=True)
             _metrics().downloads_failed.inc(platform="telegram")
             _metrics().active_downloads.dec()
             await asyncio.to_thread(safe_remove, tmp_path)

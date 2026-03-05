@@ -1,22 +1,13 @@
 import asyncio
 import unittest
-import os
-import sys
 from unittest.mock import MagicMock, AsyncMock, patch
 
 # Mock environment variables
-os.environ.setdefault("BOT_TOKEN", "test_token")
-os.environ.setdefault("WEBHOOK_URL", "https://example.com")
-os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "secret")
-
 # Ensure app can be imported
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 from app.bot import callbacks
 from app.core import state
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from telegram import Message
-
 
 class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -344,7 +335,6 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         reply_markup = kwargs["reply_markup"]
         button_texts = [btn.text for row in reply_markup.inline_keyboard for btn in row]
         self.assertNotIn("📤 Отправить файл в TG", button_texts)
-
 
 if __name__ == "__main__":
     unittest.main()

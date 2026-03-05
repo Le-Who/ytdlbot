@@ -143,7 +143,7 @@ class YtDlpService:
             try:
                 result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
                 if result.returncode == 0 and result.stdout.strip():
-                    return json.loads(result.stdout)
+                    return json.loads(result.stdout)  # type: ignore[no-any-return]
                 else:
                     logger.debug(
                         f"Subprocess attempt failed (args={args}), retcode={result.returncode}"
@@ -224,7 +224,7 @@ class YtDlpService:
         opts["logger"] = _YtdlpLogger()
 
         with yt_dlp.YoutubeDL(opts) as ydl:
-            return ydl.extract_info(url, download=False)
+            return ydl.extract_info(url, download=False)  # type: ignore[no-any-return]
 
     def list_formats(
         self, url: str, max_items: int = 12

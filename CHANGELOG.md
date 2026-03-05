@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Quality & Testing
+
+- **Test suite expanded**: 257 → 432+ tests (76% coverage, threshold 75%)
+- **Property-based testing**: 14 `hypothesis` properties (~1400 random examples) for parsers, URL detection, sanitization
+- **Integration tests**: 4 tests with real `yt-dlp` + `ffmpeg` binaries (`@pytest.mark.integration`)
+- **Mutation testing**: `mutmut` configured targeting `parsers.py` (runs in CI)
+- **Test consolidation**: Removed 7 redundant/overlapping test files, merged into stronger suites
+
+### DevOps & CI
+
+- **GitHub Actions**: Added `integration.yml` workflow (integration + mutation tests on push to main)
+- **Docker multi-stage build**: 2-stage Dockerfile (builder → runtime), removes gcc from final image
+- **Docker HEALTHCHECK**: Checks `/health` endpoint every 30s
+- **Pre-commit hooks**: `.pre-commit-config.yaml` with ruff (lint + format), mypy, file hygiene
+- **File hygiene**: Comprehensive `.gitignore` and `.dockerignore` updates
+
+### Code Quality
+
+- **Mypy strict: 0 errors** in 39 source files (up from 30 errors)
+  - Type annotations added to `metrics.py`, `routes.py`, `main.py`, `service.py`, `sender.py`, `keyboards.py`, `slideshow.py`, `process.py`, `state.py`
+  - `pyproject.toml` consolidates all mypy config (deleted standalone `mypy.ini`)
+- **Ruff: 0 errors** — auto-fixed 40+ issues (unused imports, formatting)
+- **Structured logging**: Converted 40 f-string loggers → `extra={}` format across 9 files for machine-parseable JSON logs
+- **Dead code removal**: `vulture` scan clean, deleted 6 redundant files (`mypy.ini`, `reproduce_format_error.py`, `verify_*.py`)
+
+### Documentation
+
+- **README updated**: Test count 257 → 430+, coverage badge, pre-commit setup, integration test docs, Docker multi-stage section
+
 ### Added
 
 - **Video metadata in `send_video`**: Passes `duration`, `width`, `height` to Telegram API for faster delivery and proper video preview. Extracts from yt-dlp info JSON (zero-cost) with `ffprobe` fallback

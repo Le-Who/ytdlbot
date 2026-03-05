@@ -55,11 +55,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     cached = state.info_cache.get(text)
     if cached:
-        logger.info(f"[CACHE] Hit: {text}")
+        logger.info("Cache hit", extra={"url": text})
         title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url = cached
     else:
         if text in state.inflight_parsing:
-            logger.info(f"[PARSING] Waiting for inflight task: {text}")
+            logger.info("Waiting for inflight parse", extra={"url": text})
             try:
                 await asyncio.wait_for(
                     state.inflight_parsing[text].wait(), timeout=300.0
@@ -144,7 +144,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     await status_msg.edit_text(f"❌ {e}")
                 return
             except Exception as e:
-                logger.error(f"Parse error: {e}", exc_info=True)
+                logger.error("Parse error", extra={"error": str(e)}, exc_info=True)
                 await status_msg.edit_text(Texts.GENERIC_ERROR.format(detail=str(e)[:150]))
                 return
             finally:

@@ -1,13 +1,7 @@
 import unittest
-import os
-import sys
 from unittest.mock import MagicMock, patch
 
-os.environ.setdefault("BOT_TOKEN", "test_token")
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 from app.services.ytdlp.service import YtDlpService
-
 
 class TestYtDlpCaching(unittest.TestCase):
     """Test that YtDlpService.extract() properly creates/uses YoutubeDL instances."""
@@ -43,7 +37,6 @@ class TestYtDlpCaching(unittest.TestCase):
             mock_instance.extract_info.assert_called_once_with(
                 "http://test.com", download=False
             )
-
 
 if __name__ == "__main__":
     unittest.main()

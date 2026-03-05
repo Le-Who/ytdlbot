@@ -1,17 +1,12 @@
 """Tests for _extract_video_meta helper in callbacks.py."""
 import json
 import os
-import sys
 import asyncio
 import tempfile
 import unittest
 from unittest.mock import patch, AsyncMock
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-os.environ.setdefault("BOT_TOKEN", "test_token")
-
 from app.bot.callbacks import _extract_video_meta
-
 
 class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
     """Tests for _extract_video_meta helper."""
@@ -125,7 +120,6 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(meta["duration"], 123)
         finally:
             os.unlink(path)
-
 
 if __name__ == "__main__":
     unittest.main()

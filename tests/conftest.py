@@ -10,6 +10,9 @@ import sys
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
+# Ensure project root is on sys.path (centralised — no need in individual test files)
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 from telegram import Message
 
 
@@ -22,8 +25,11 @@ class MockHTTPException(Exception):
 
 
 def _is_real_fastapi() -> bool:
-    mod = sys.modules.get("fastapi")
-    return mod is not None and hasattr(mod, "__file__") and mod.__file__ is not None
+    try:
+        import fastapi
+        return hasattr(fastapi, "__file__") and fastapi.__file__ is not None
+    except ImportError:
+        return False
 
 
 if not _is_real_fastapi():

@@ -8,6 +8,7 @@ import contextlib
 import threading
 import logging
 from collections import defaultdict
+from typing import Generator, Union
 
 logger = logging.getLogger("app.core.metrics")
 
@@ -21,7 +22,7 @@ class _Counter:
         self._lock = threading.Lock()
         self._values: dict[tuple, float] = defaultdict(float)
 
-    def inc(self, value: float = 1.0, **labels) -> None:
+    def inc(self, value: float = 1.0, **labels: str) -> None:
         key = tuple(sorted(labels.items()))
         with self._lock:
             self._values[key] += value
@@ -40,17 +41,17 @@ class _Gauge:
         self._lock = threading.Lock()
         self._values: dict[tuple, float] = defaultdict(float)
 
-    def set(self, value: float, **labels) -> None:
+    def set(self, value: float, **labels: str) -> None:
         key = tuple(sorted(labels.items()))
         with self._lock:
             self._values[key] = value
 
-    def inc(self, value: float = 1.0, **labels) -> None:
+    def inc(self, value: float = 1.0, **labels: str) -> None:
         key = tuple(sorted(labels.items()))
         with self._lock:
             self._values[key] += value
 
-    def dec(self, value: float = 1.0, **labels) -> None:
+    def dec(self, value: float = 1.0, **labels: str) -> None:
         key = tuple(sorted(labels.items()))
         with self._lock:
             self._values[key] -= value
@@ -75,14 +76,14 @@ class _Histogram:
         self._counts: dict[tuple, int] = defaultdict(int)
         self._sums: dict[tuple, float] = defaultdict(float)
 
-    def observe(self, duration: float, **labels) -> None:
+    def observe(self, duration: float, **labels: str) -> None:
         key = tuple(sorted(labels.items()))
         with self._lock:
             self._counts[key] += 1
             self._sums[key] += duration
 
     @contextlib.contextmanager
-    def time(self, **labels):
+    def time(self, **labels: str) -> Generator[None, None, None]:
         """Context manager that measures elapsed time and records it."""
         start = time.monotonic()
         try:
@@ -171,7 +172,7 @@ class MetricsCollector:
         lines.append(f"ytdlbot_uptime_seconds {uptime:.1f}")
         lines.append("")
 
-        for metric in [
+        counter_and_gauge_metrics: list[Union[_Counter, _Gauge]] = [
             self.downloads_total,
             self.downloads_success,
             self.downloads_failed,
@@ -180,7 +181,8 @@ class MetricsCollector:
             self.parse_requests,
             self.parse_cancellations,
             self.active_downloads,
-        ]:
+        ]
+        for metric in counter_and_gauge_metrics:
             is_gauge = isinstance(metric, _Gauge)
             metric_type = "gauge" if is_gauge else "counter"
             lines.append(f"# HELP {metric.name} {metric.help_text}")
@@ -207,12 +209,12 @@ class MetricsCollector:
         ]:
             lines.append(f"# HELP {hist.name} {hist.help_text}")
             lines.append(f"# TYPE {hist.name} summary")
-            entries = hist.collect()
-            if not entries:
+            hist_entries = hist.collect()
+            if not hist_entries:
                 lines.append(f"{hist.name}_count 0")
                 lines.append(f"{hist.name}_sum 0")
             else:
-                for labels, count, total in entries:
+                for labels, count, total in hist_entries:
                     if labels:
                         label_str = ",".join(f'{k}="{v}"' for k, v in sorted(labels.items()))
                         lines.append(f"{hist.name}_count{{{label_str}}} {count}")

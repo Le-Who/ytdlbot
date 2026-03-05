@@ -54,7 +54,7 @@ class ProcessHandle:
 async def run_subprocess(
     cmd: list[str],
     *,
-    stdin=asyncio.subprocess.DEVNULL,
+    stdin: int = asyncio.subprocess.DEVNULL,
     stdout_pipe: bool = True,
     stderr_pipe: bool = True,
     timeout: float | None = None,

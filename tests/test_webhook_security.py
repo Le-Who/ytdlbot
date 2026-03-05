@@ -1,42 +1,71 @@
-"""Tests for webhook HMAC authentication — full validation."""
+"""Tests for webhook endpoint — verifies real route behavior via FastAPI TestClient."""
 import unittest
-import hmac
-import os
-import sys
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-os.environ.setdefault("BOT_TOKEN", "test_token")
-os.environ.setdefault("WEBHOOK_URL", "https://example.com/webhook")
-os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "super-secret-token")
+from unittest.mock import patch
+from fastapi.testclient import TestClient
+from fastapi import FastAPI
 
+from app.api.routes import router
 from app.core.config import TELEGRAM_SECRET_TOKEN
 
+_app = FastAPI()
+_app.include_router(router)
 
-class TestWebhookSecurity(unittest.TestCase):
-    """Test webhook auth logic: HMAC token validation."""
+class TestWebhookEndpoint(unittest.TestCase):
+    """Test the real /webhook endpoint via TestClient."""
 
-    def _simulate_auth_check(self, header_token: str | None) -> bool:
-        """Reproduce the exact auth check from routes.py telegram_webhook."""
-        if not header_token or not hmac.compare_digest(header_token, TELEGRAM_SECRET_TOKEN):
-            return False
-        return True
+    def setUp(self):
+        self.client = TestClient(_app)
 
-    def test_webhook_no_auth_header(self):
-        """Request WITHOUT auth header must be rejected."""
-        self.assertFalse(self._simulate_auth_check(None))
+    def test_webhook_no_auth_header_returns_401(self):
+        """Request WITHOUT auth header must be 401."""
+        resp = self.client.post("/webhook", json={})
+        self.assertEqual(resp.status_code, 401)
 
-    def test_webhook_wrong_auth_header(self):
-        """Request with WRONG auth header must be rejected."""
-        self.assertFalse(self._simulate_auth_check("wrong-token"))
+    def test_webhook_wrong_token_returns_401(self):
+        """Request with WRONG auth header must be 401."""
+        resp = self.client.post(
+            "/webhook",
+            json={},
+            headers={"X-Telegram-Bot-Api-Secret-Token": "wrong-token"},
+        )
+        self.assertEqual(resp.status_code, 401)
 
-    def test_webhook_with_auth_header(self):
+    def test_webhook_empty_token_returns_401(self):
+        """Empty string token must be 401."""
+        resp = self.client.post(
+            "/webhook",
+            json={},
+            headers={"X-Telegram-Bot-Api-Secret-Token": ""},
+        )
+        self.assertEqual(resp.status_code, 401)
+
+    @patch("app.api.routes.state")
+    def test_webhook_correct_token_returns_200(self, mock_state):
         """Request WITH correct auth header must be accepted."""
-        self.assertTrue(self._simulate_auth_check(TELEGRAM_SECRET_TOKEN))
+        mock_state.bot_app = None
+        mock_state.limiter.allow_ip.return_value = True
+        resp = self.client.post(
+            "/webhook",
+            json={"update_id": 1},
+            headers={"X-Telegram-Bot-Api-Secret-Token": TELEGRAM_SECRET_TOKEN},
+        )
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.json(), {"ok": True})
 
-    def test_webhook_empty_string_header(self):
-        """Empty string header must be rejected."""
-        self.assertFalse(self._simulate_auth_check(""))
-
+    @patch("app.api.routes.state")
+    def test_webhook_rate_limited_returns_429(self, mock_state):
+        """Rate-limited request must be 429."""
+        mock_state.limiter.allow_ip.return_value = False
+        resp = self.client.post(
+            "/webhook",
+            json={"update_id": 1},
+            headers={
+                "X-Telegram-Bot-Api-Secret-Token": TELEGRAM_SECRET_TOKEN,
+                "x-forwarded-for": "1.2.3.4",
+            },
+        )
+        self.assertEqual(resp.status_code, 429)
 
 if __name__ == "__main__":
     unittest.main()

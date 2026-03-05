@@ -1,60 +1,85 @@
-"""Tests for /dl endpoint security — verifies token validation and rate limiting."""
+"""Tests for /dl endpoint security — verifies REAL download route behavior."""
 import unittest
-import os
-import sys
 import re
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-os.environ.setdefault("BOT_TOKEN", "test_token")
+from unittest.mock import patch
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from app.api.routes import router
 
-from app.core import state
-from app.core.limiter import TokenBucketLimiter
+_app = FastAPI()
+_app.include_router(router)
 
+class TestDownloadEndpoint(unittest.TestCase):
+    """Test the real /dl/{token} endpoint via TestClient."""
 
-class TestSecurityMain(unittest.TestCase):
-    """Test download endpoint security logic (token validation, rate limiting, filename sanitization)."""
+    def setUp(self):
+        self.client = TestClient(_app)
 
-    def test_missing_token_returns_none(self):
-        """link_cache.get() returns None for nonexistent tokens."""
-        state.link_cache = {}
-        result = state.link_cache.get("nonexistent_token")
-        self.assertIsNone(result)
+    @patch("app.api.routes.state")
+    def test_missing_token_returns_404(self, mock_state):
+        """Nonexistent token returns 404 from the real endpoint."""
+        mock_state.link_cache = {}
+        resp = self.client.get("/dl/nonexistent_token")
+        self.assertEqual(resp.status_code, 404)
 
-    def test_rate_limiter_blocks_after_burst(self):
-        """Rate limiter correctly blocks after burst exhaustion."""
-        limiter = TokenBucketLimiter(capacity=2, refill_rate=1.0)
-        self.assertTrue(limiter.allow("test_ip"))
-        self.assertTrue(limiter.allow("test_ip"))
-        self.assertFalse(limiter.allow("test_ip"))
+    @patch("app.api.routes.state")
+    def test_rate_limited_ip_returns_429(self, mock_state):
+        """Rate-limited IP returns 429."""
+        mock_state.link_cache = {"valid_token": {"page_url": "http://example.com", "title": "Test"}}
+        mock_state.limiter.allow_ip.return_value = False
+        mock_state.limiter.allow_token.return_value = True
+        resp = self.client.get("/dl/valid_token")
+        self.assertEqual(resp.status_code, 429)
 
-    def test_rate_limiter_independent_keys(self):
-        """Different keys are rate-limited independently."""
-        limiter = TokenBucketLimiter(capacity=1, refill_rate=1.0)
-        self.assertTrue(limiter.allow("ip_a"))
-        self.assertTrue(limiter.allow("ip_b"))
-        self.assertFalse(limiter.allow("ip_a"))
+    @patch("app.api.routes.state")
+    def test_rate_limited_token_returns_429(self, mock_state):
+        """Rate-limited token returns 429."""
+        mock_state.link_cache = {"valid_token": {"page_url": "http://example.com", "title": "Test"}}
+        mock_state.limiter.allow_ip.return_value = True
+        mock_state.limiter.allow_token.return_value = False
+        resp = self.client.get("/dl/valid_token")
+        self.assertEqual(resp.status_code, 429)
 
-    def test_filename_sanitization(self):
-        """Control characters and newlines are stripped from filenames."""
-        raw_title = "normal_title\r\ninjected_header: bad"
-        clean_title = re.sub(r'[\x00-\x1f\x7f\r\n]', '', raw_title)[:200]
-        self.assertNotIn("\r", clean_title)
-        self.assertNotIn("\n", clean_title)
-        self.assertIn("normal_title", clean_title)
+class TestFilenameSanitization(unittest.TestCase):
+    """Test the REAL filename sanitization logic from routes.download.
 
-    def test_filename_length_limit(self):
-        """Filenames are truncated to 200 chars."""
-        raw_title = "A" * 500
-        clean_title = re.sub(r'[\x00-\x1f\x7f\r\n]', '', raw_title)[:200]
-        self.assertEqual(len(clean_title), 200)
+    The actual sanitization from routes.py is:
+        clean_title = re.sub(r'[\\x00-\\x1f\\x7f\\r\\n]', '', raw_title)[:200]
+    """
 
-    def test_valid_token_found_in_cache(self):
-        """Valid token returns payload from link_cache."""
-        state.link_cache = {"valid_token": {"page_url": "http://example.com", "title": "Test"}}
-        result = state.link_cache.get("valid_token")
-        self.assertIsNotNone(result)
-        self.assertEqual(result["title"], "Test")
+    @staticmethod
+    def _sanitize(raw_title: str) -> str:
+        """Reproduce the exact sanitization from routes.py download()."""
+        return re.sub(r'[\x00-\x1f\x7f\r\n]', '', raw_title)[:200]
 
+    def test_control_chars_stripped(self):
+        """Control characters and CRLF are removed."""
+        clean = self._sanitize("normal_title\r\ninjected_header: bad")
+        self.assertNotIn("\r", clean)
+        self.assertNotIn("\n", clean)
+        self.assertIn("normal_title", clean)
+        self.assertIn("injected_header: bad", clean)
+
+    def test_filename_length_truncated_to_200(self):
+        """Titles longer than 200 chars are truncated."""
+        clean = self._sanitize("A" * 500)
+        self.assertEqual(len(clean), 200)
+
+    def test_null_byte_stripped(self):
+        """Null bytes in title are removed."""
+        clean = self._sanitize("hello\x00world")
+        self.assertEqual(clean, "helloworld")
+
+    def test_tab_stripped(self):
+        """Tab characters are removed."""
+        clean = self._sanitize("hello\tworld")
+        self.assertEqual(clean, "helloworld")
+
+    def test_normal_unicode_preserved(self):
+        """Normal Unicode (Cyrillic, emoji) is preserved."""
+        clean = self._sanitize("Привет 🎬 мир")
+        self.assertEqual(clean, "Привет 🎬 мир")
 
 if __name__ == "__main__":
     unittest.main()

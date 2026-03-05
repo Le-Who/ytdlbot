@@ -1,6 +1,10 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+addopts = "--cov=app --cov-report=term-missing:skip-covered --cov-fail-under=75 -q -m 'not integration'"
+markers = [
+    "integration: requires real yt-dlp/ffmpeg binaries (skipped by default)",
+]
 
 [tool.coverage.run]
 source = ["app"]
@@ -13,6 +17,7 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
+fail_under = 75
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.",
@@ -23,4 +28,26 @@ exclude_lines = [
 "tests/*" = ["E402"]
 
 [tool.mypy]
+python_version = "3.12"
 ignore_missing_imports = true
+disable_error_code = ["import-untyped"]
+# Practical-strict: catches real bugs without full annotation burden
+warn_return_any = true
+warn_unused_configs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+strict_equality = true
+check_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_decorators = true
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+check_untyped_defs = false
+
+[tool.mutmut]
+paths_to_mutate = "app/services/ytdlp/parsers.py"
+tests_dir = "tests/"
+runner = "python -m pytest tests/test_parsers_full.py tests/test_property_based.py --no-cov -x -q"

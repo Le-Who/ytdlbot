@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 from app.tasks import janitor
 
-
 class TestJanitor(unittest.TestCase):
     def test_cleanup_temp_dir(self):
         with tempfile.TemporaryDirectory() as d:
@@ -32,7 +31,6 @@ class TestJanitor(unittest.TestCase):
                 deleted, orphan = janitor.cleanup_temp_dir()
                 self.assertEqual(deleted, 0)
                 self.assertTrue(os.path.exists(p))
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -30,7 +30,7 @@ async def metrics_endpoint():
 
 
 @router.get("/dl/{token}")
-async def download(token: str, request: Request):
+async def download(token: str, request: Request):  # type: ignore[no-untyped-def]
     payload = state.link_cache.get(token)
     if not payload:
         raise HTTPException(404, "Link expired")
@@ -97,28 +97,28 @@ async def download(token: str, request: Request):
                     async def read_ytdlp_write_ffmpeg():
                         try:
                             while True:
-                                chunk = await dl_handle.proc.stdout.read(CHUNK_SIZE)
+                                chunk = await dl_handle.proc.stdout.read(CHUNK_SIZE)  # type: ignore[union-attr]
                                 if not chunk:
                                     break
-                                ff_handle.proc.stdin.write(chunk)
-                                await ff_handle.proc.stdin.drain()
+                                ff_handle.proc.stdin.write(chunk)  # type: ignore[union-attr]
+                                await ff_handle.proc.stdin.drain()  # type: ignore[union-attr]
                         except Exception as e:
-                            logger.debug(f"Pipe stream error: {e}")
+                            logger.debug("Pipe stream error", extra={"error": str(e)})
                         finally:
                             try:
-                                ff_handle.proc.stdin.close()
+                                ff_handle.proc.stdin.close()  # type: ignore[union-attr]
                             except Exception:
                                 pass
 
                     pipe_task = asyncio.create_task(read_ytdlp_write_ffmpeg())
                     try:
                         while True:
-                            chunk = await ff_handle.proc.stdout.read(CHUNK_SIZE)
+                            chunk = await ff_handle.proc.stdout.read(CHUNK_SIZE)  # type: ignore[union-attr]
                             if not chunk:
                                 break
                             bytes_sent += len(chunk)
                             if bytes_sent > max_bytes:
-                                logger.warning(f"Stream exceeded {MAX_DL_MB}MB limit, terminating")
+                                logger.warning("Stream exceeded size limit", extra={"limit_mb": MAX_DL_MB})
                                 return
                             yield chunk
                     finally:
@@ -133,12 +133,12 @@ async def download(token: str, request: Request):
             async with run_subprocess(cmd, timeout=DL_TIMEOUT_HTTP) as handle:
                 proc = handle.proc
                 while True:
-                    chunk = await proc.stdout.read(CHUNK_SIZE)
+                    chunk = await proc.stdout.read(CHUNK_SIZE)  # type: ignore[union-attr]
                     if not chunk:
                         break
                     bytes_sent += len(chunk)
                     if bytes_sent > max_bytes:
-                        logger.warning(f"Stream exceeded {MAX_DL_MB}MB limit, terminating")
+                        logger.warning("Stream exceeded size limit", extra={"limit_mb": MAX_DL_MB})
                         return
                     yield chunk
 
@@ -152,7 +152,7 @@ async def download(token: str, request: Request):
 
 
 @router.post("/webhook")
-async def telegram_webhook(request: Request):
+async def telegram_webhook(request: Request) -> dict[str, bool]:
     token = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
     if not token or not hmac.compare_digest(token, TELEGRAM_SECRET_TOKEN):
         raise HTTPException(401, "Unauthorized")
@@ -169,5 +169,5 @@ async def telegram_webhook(request: Request):
             update = Update.de_json(await request.json(), state.bot_app.bot)
             await state.bot_app.process_update(update)
         except Exception as e:
-            logger.error(f"Webhook update error: {e}")
+            logger.error("Webhook update error", extra={"error": str(e)})
     return {"ok": True}

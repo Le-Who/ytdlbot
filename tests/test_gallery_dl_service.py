@@ -2,19 +2,11 @@
 
 import json
 import os
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch, MagicMock
 
-os.environ.setdefault("BOT_TOKEN", "test_token")
-os.environ.setdefault("WEBHOOK_URL", "https://example.com")
-os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "secret")
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 from app.services.gallery_dl.service import GalleryDlService, SlideshowResult
-
 
 class TestGalleryDlService(unittest.TestCase):
     """Tests for GalleryDlService."""
@@ -166,7 +158,6 @@ class TestGalleryDlService(unittest.TestCase):
         self.assertIsNone(error)
         basenames = [os.path.basename(p) for p in result.images]
         self.assertEqual(basenames, ["001.jpg", "002.jpg", "003.jpg"])
-
 
 if __name__ == "__main__":
     unittest.main()

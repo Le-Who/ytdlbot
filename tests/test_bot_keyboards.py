@@ -1,14 +1,8 @@
 import unittest
-import os
-import sys
 
 # Ensure app can be imported
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-os.environ.setdefault("BOT_TOKEN", "test_token")
-
 from app.bot.keyboards import build_format_keyboard
 from app.services.ytdlp.models import FormatItem
-
 
 class TestBuildFormatKeyboard(unittest.TestCase):
 
@@ -93,7 +87,6 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         all_data = [btn.callback_data for row in buttons for btn in row]
         self.assertIn("pick|MY_FORMAT_ID", all_data)
         self.assertIn("pick|MY_AUDIO_ID", all_data)
-
 
 if __name__ == "__main__":
     unittest.main()

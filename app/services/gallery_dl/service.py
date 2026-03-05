@@ -75,7 +75,7 @@ class GalleryDlService:
 
             if result.returncode != 0:
                 stderr = result.stderr.strip()
-                logger.error(f"[GALLERY-DL] Failed: {stderr}")
+                logger.error("gallery-dl failed", extra={"stderr": stderr})
 
                 if "login" in stderr.lower() or "cookie" in stderr.lower():
                     return None, "⚠️ Требуется авторизация (Sign-in required)."
@@ -88,7 +88,7 @@ class GalleryDlService:
             logger.error("[GALLERY-DL] Download timed out")
             return None, "⚠️ Время ожидания загрузки истекло."
         except Exception as e:
-            logger.error(f"[GALLERY-DL] Unexpected error: {e}", exc_info=True)
+            logger.error("gallery-dl unexpected error", extra={"error": str(e)}, exc_info=True)
             return None, "⚠️ Внутренняя ошибка при загрузке."
 
         # Collect downloaded files
@@ -125,7 +125,7 @@ class GalleryDlService:
 
         cmd.extend(["--", url])
 
-        logger.info(f"[GALLERY-DL] Attempting TikTok video download: {url}")
+        logger.info("Attempting TikTok video download", extra={"url": url})
 
         try:
             result = subprocess.run(
@@ -137,7 +137,7 @@ class GalleryDlService:
 
             if result.returncode != 0:
                 stderr = result.stderr.strip()
-                logger.error(f"[GALLERY-DL] Video download failed: {stderr}")
+                logger.error("Video download failed", extra={"stderr": stderr})
                 return None, f"gallery-dl error: {stderr[:200]}"
 
         except FileNotFoundError:
@@ -147,7 +147,7 @@ class GalleryDlService:
             logger.error("[GALLERY-DL] Video download timed out")
             return None, "gallery-dl timeout"
         except Exception as e:
-            logger.error(f"[GALLERY-DL] Unexpected error: {e}", exc_info=True)
+            logger.error("Video download unexpected error", extra={"error": str(e)}, exc_info=True)
             return None, str(e)
 
         # Find the video file
@@ -165,7 +165,7 @@ class GalleryDlService:
                     return video_path, None
 
         # No video found — might be a slideshow or failed extraction
-        logger.warning(f"[GALLERY-DL] No video file found in {output_dir}")
+        logger.warning("No video file found", extra={"dir": output_dir})
         return None, "No video file found"
 
     @staticmethod
@@ -208,7 +208,7 @@ class GalleryDlService:
                         pass
 
         if not images:
-            logger.warning(f"[GALLERY-DL] No images found in {output_dir}")
+            logger.warning("No images found", extra={"dir": output_dir})
             return None, "⚠️ Не удалось найти фото в слайдшоу."
 
         logger.info(

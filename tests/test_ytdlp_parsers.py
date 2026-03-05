@@ -405,6 +405,5 @@ class TestFacebookFormats(unittest.TestCase):
         result = deduplicate_formats(formats, is_tiktok_url=False)
         self.assertEqual(len(result), 2)
 
-
 if __name__ == "__main__":
     unittest.main()

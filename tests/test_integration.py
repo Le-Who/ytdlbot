@@ -6,14 +6,8 @@ pipeline through the real handler functions, verifying state transitions
 and data flow between components.
 """
 import unittest
-import os
-import sys
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
-
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-os.environ.setdefault("BOT_TOKEN", "test_token")
 
 from telegram import Message
 
@@ -29,7 +23,6 @@ from app.services.ytdlp.parsers import (
 )
 from app.services.ytdlp.models import FormatItem, FormatMetadata
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
-
 
 class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
     """Integration: URL → list_formats → keyboard → pick flow."""
@@ -118,7 +111,6 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Video Title", args[0])
         self.assertIn("03:00", args[0])
 
-
 class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
     """Integration: pick → send → download → deliver flow."""
 
@@ -200,7 +192,6 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
         args, _ = update.callback_query.edit_message_text.call_args
         self.assertIn("Слишком много запросов", args[0])
 
-
 class TestParserIntegration(unittest.TestCase):
     """Integration: URL detection → format parsing → deduplication → label generation."""
 
@@ -257,7 +248,6 @@ class TestParserIntegration(unittest.TestCase):
         self.assertEqual(fmt.format_id, GIF_FORMAT_ID)
         self.assertIn("GIF", fmt.label)
 
-
 class TestPolicyIntegration(unittest.TestCase):
     """Integration: size policy checks."""
 
@@ -277,9 +267,6 @@ class TestPolicyIntegration(unittest.TestCase):
         exact = MAX_TG_UPLOAD_MB * 1024 * 1024
         self.assertTrue(size_allowed(exact, target="telegram"))
         self.assertFalse(size_allowed(exact + 1, target="telegram"))
-
-
-
 
 if __name__ == "__main__":
     unittest.main()

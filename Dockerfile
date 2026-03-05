@@ -1,42 +1,63 @@
+# ── Stage 1: Builder ──────────────────────────────────────────────
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+
+# System deps needed for building wheels
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  gcc \
+  curl unzip \
+  && rm -rf /var/lib/apt/lists/*
+
+# Install Deno (needed at runtime for YouTube n-parameter challenge)
+RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh
+
+# Install Python deps into a venv for clean copy
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt yt-dlp-ejs
+
+
+# ── Stage 2: Runtime ─────────────────────────────────────────────
 FROM python:3.12-slim
 
 WORKDIR /app
 
-# 1. Устанавливаем системные зависимости
-# ffmpeg - для склеивания видео+аудио
-# aria2 - для ускорения загрузки (многопоточность)
-# ca-certificates - для HTTPS
-# curl + unzip - для установки Deno
+# Runtime-only system deps (no gcc, no curl)
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ffmpeg \
   aria2 \
   ca-certificates \
-  curl unzip \
+  curl \
   && rm -rf /var/lib/apt/lists/* \
   && aria2c --version | head -1
 
-# 1.1. Устанавливаем Deno (JS runtime для YouTube n-parameter challenge)
-RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh \
-  && deno --version
+# Copy Deno from builder
+COPY --from=builder /usr/local/bin/deno /usr/local/bin/deno
 
-# 2. Устанавливаем Python-зависимости
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt yt-dlp-ejs
+# Copy Python venv from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# 3. Копируем код приложения
+# Copy application code
 COPY app ./app
 
-# 4. Настройка окружения
+# Environment
 ENV PYTHONUNBUFFERED=1
-# Порт по умолчанию (Northflank/Heroku обычно переопределяют его через ENV)
-ENV PORT=8000 
+ENV PORT=8000
 
-# 5. Создание пользователя без root-прав для безопасности
+# Non-root user
 RUN useradd -m -s /bin/bash botuser
 USER botuser
 
-# 6. Graceful shutdown: uvicorn получает SIGINT напрямую
+# Health check — uses /health endpoint
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -f http://localhost:${PORT}/health || exit 1
+
+# Graceful shutdown
 STOPSIGNAL SIGINT
 
-# 7. Запуск: exec заменяет sh на uvicorn (PID 1 = корректные сигналы)
+# Start: exec replaces sh with uvicorn (PID 1 = correct signal handling)
 CMD ["sh", "-c", "exec uvicorn app.main:api --host 0.0.0.0 --port ${PORT}"]

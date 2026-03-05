@@ -1,17 +1,8 @@
 """Tests for TikTok slideshow detection in parsers."""
 
-import os
-import sys
 import unittest
 
-os.environ.setdefault("BOT_TOKEN", "test_token")
-os.environ.setdefault("WEBHOOK_URL", "https://example.com")
-os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "secret")
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
 from app.services.ytdlp.parsers import detect_tiktok_slideshow
-
 
 class TestDetectTikTokSlideshow(unittest.TestCase):
     """Tests for detect_tiktok_slideshow()."""
@@ -82,7 +73,6 @@ class TestDetectTikTokSlideshow(unittest.TestCase):
         self.assertFalse(
             detect_tiktok_slideshow(info, "https://pinterest.com/pin/123")
         )
-
 
 if __name__ == "__main__":
     unittest.main()

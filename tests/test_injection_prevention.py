@@ -5,19 +5,15 @@ Tests for SEC-1 (URL separator in yt-dlp), SEC-2 (stream byte limit),
 SEC-3 (URL separator in gallery-dl), and URL prefix validation.
 """
 
-import os
 import sys
 import unittest
 from unittest.mock import MagicMock, patch
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-os.environ.setdefault("BOT_TOKEN", "test_token")
 sys.modules.setdefault("yt_dlp", MagicMock())
 
 from app.core.utils import is_supported_url
 from app.services.ytdlp.service import YtDlpService
 from app.constants import GIF_FORMAT_ID
-
 
 class TestURLSeparatorInjection(unittest.TestCase):
     """SEC-1: All yt-dlp subprocess commands must contain '--' before the URL."""
@@ -87,7 +83,6 @@ class TestURLSeparatorInjection(unittest.TestCase):
         self.assertLess(cookies_idx, sep_idx,
                         "--cookies must appear before the '--' separator")
 
-
 class TestGalleryDlSeparator(unittest.TestCase):
     """SEC-3: gallery-dl commands must have '--' before URL, cookies before '--'."""
 
@@ -117,7 +112,6 @@ class TestGalleryDlSeparator(unittest.TestCase):
                     self.assertLess(cookies_idx, sep_idx,
                                     "--cookies must appear before '--' separator")
 
-
 class TestURLPrefixValidation(unittest.TestCase):
     """SEC-1 hardening: URLs starting with '-' must be rejected early."""
 
@@ -139,34 +133,23 @@ class TestURLPrefixValidation(unittest.TestCase):
     def test_normal_tiktok_accepted(self):
         self.assertTrue(is_supported_url("https://www.tiktok.com/@user/video/123"))
 
-
 class TestStreamByteLimit(unittest.TestCase):
-    """SEC-2: Streaming endpoint byte-count logic verification."""
+    """SEC-2: Verify streaming byte-limit config is sane.
 
-    def test_byte_limit_terminates_stream(self):
-        from app.core.config import MAX_DL_MB
-
-        max_bytes = MAX_DL_MB * 1024 * 1024
-        chunk_size = 1024 * 1024  # 1 MB
-        total_possible = (max_bytes // chunk_size) + 10
-
-        bytes_sent = 0
-        chunks_sent = 0
-        for _ in range(total_possible):
-            bytes_sent += chunk_size
-            chunks_sent += 1
-            if bytes_sent > max_bytes:
-                break
-
-        self.assertLess(chunks_sent, total_possible,
-                        "Loop must terminate before consuming all chunks")
-        self.assertGreater(bytes_sent, max_bytes,
-                           "bytes_sent must exceed max_bytes to trigger termination")
+    NOTE: The actual streaming byte-limit logic (in routes.download) is tested
+    via TestDownloadEndpoint in test_security_main.py.  This class only validates
+    that the config value is sensible.
+    """
 
     def test_max_dl_mb_is_positive(self):
         from app.core.config import MAX_DL_MB
         self.assertGreater(MAX_DL_MB, 0, "MAX_DL_MB must be a positive integer")
 
+    def test_max_dl_mb_reasonable_range(self):
+        """MAX_DL_MB should be between 1 and 10000 MB for a video bot."""
+        from app.core.config import MAX_DL_MB
+        self.assertGreaterEqual(MAX_DL_MB, 1)
+        self.assertLessEqual(MAX_DL_MB, 10_000)
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,11 +1,8 @@
 
 import unittest
 import os
-import sys
 
 # Add repo root to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 # Set dummy env vars for app.main import
 os.environ["BOT_TOKEN"] = "123456:ABC-DEF"
 os.environ["BASE_URL"] = "http://localhost:8000"

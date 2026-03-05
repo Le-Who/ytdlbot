@@ -8,7 +8,6 @@ from app.services.ytdlp.parsers import (
     TikTokError,
 )
 
-
 class TestIsFacebook(unittest.TestCase):
     def test_facebook_com(self):
         self.assertTrue(_is_facebook("https://www.facebook.com/watch/123"))
@@ -26,7 +25,6 @@ class TestIsFacebook(unittest.TestCase):
         self.assertFalse(_is_facebook("https://youtube.com"))
         self.assertFalse(_is_facebook("https://tiktok.com"))
         self.assertFalse(_is_facebook(""))
-
 
 class TestClassifyTikTokContent(unittest.TestCase):
     def test_photo_url(self):
@@ -59,7 +57,6 @@ class TestClassifyTikTokContent(unittest.TestCase):
             ),
             "slideshow",
         )
-
 
 class TestClassifyTikTokError(unittest.TestCase):
     def test_auth_required(self):
@@ -124,7 +121,6 @@ class TestClassifyTikTokError(unittest.TestCase):
             classify_tiktok_error("Some unknown error occurred"),
             TikTokError.GENERIC,
         )
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,8 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator
+from typing import Any
 
 from fastapi import FastAPI, Request
 from telegram.ext import (
@@ -22,7 +24,7 @@ logger = logging.getLogger("app.main")
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting up...")
     logger.info("aria2c: %s", "enabled ✅" if state.ytdlp.has_aria2 else "not found ❌")
     stop_event = asyncio.Event()
@@ -96,7 +98,7 @@ api.include_router(api_router)
 
 
 @api.middleware("http")
-async def add_security_headers(request: Request, call_next):
+async def add_security_headers(request: Request, call_next: Any) -> Any:
     set_correlation_id(request.headers.get("X-Correlation-ID"))
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"

@@ -1,12 +1,8 @@
 
 import unittest
-import os
-import sys
 from unittest.mock import MagicMock
 
 # Add repo root to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-
 from app.services.ytdlp.service import YtDlpService
 from app.core.config import CONCURRENT_FRAGMENTS
 

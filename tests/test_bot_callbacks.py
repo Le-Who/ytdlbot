@@ -8,6 +8,7 @@ from app.bot import callbacks
 from app.core import state
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from telegram import Message
+from app.services.ytdlp.models import ExtractionResult
 
 
 class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
@@ -52,14 +53,14 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         mock_formats = [MagicMock(format_id="137", label="1080p")]
         mock_special_format = MagicMock(format_id="audio", label="Audio")
-        state.info_cache[page_url] = (
-            "Test Title",
-            mock_formats,
-            mock_special_format,
-            "10:00",
-            False,
-            None,
-            "https://example.com/thumb.jpg",
+        state.info_cache[page_url] = ExtractionResult(
+            title="Test Title",
+            formats=mock_formats,
+            special_format=mock_special_format,
+            duration_str="10:00",
+            is_slideshow=False,
+            info_json_path=None,
+            thumbnail_url="https://example.com/thumb.jpg",
         )
 
         with patch("app.bot.callbacks.build_format_keyboard") as mock_build_kb:
@@ -81,21 +82,21 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         mock_formats = [MagicMock(format_id="137", label="1080p")]
         mock_special_format = MagicMock(format_id="audio", label="Audio")
-        state.ytdlp.list_formats.return_value = (
-            "Refreshed Title",
-            mock_formats,
-            mock_special_format,
-            "5:00",
-            False,
-            None,
-            "https://example.com/thumb.jpg",
+        state.ytdlp.list_formats.return_value = ExtractionResult(
+            title="Refreshed Title",
+            formats=mock_formats,
+            special_format=mock_special_format,
+            duration_str="5:00",
+            is_slideshow=False,
+            info_json_path=None,
+            thumbnail_url="https://example.com/thumb.jpg",
         )
 
         with patch("app.bot.callbacks.build_format_keyboard"):
             await callbacks.on_back(self.update, self.context)
             state.ytdlp.list_formats.assert_called_with(page_url)
             self.assertIn(page_url, state.info_cache)
-            self.assertEqual(state.info_cache[page_url][0], "Refreshed Title")
+            self.assertEqual(state.info_cache[page_url].title, "Refreshed Title")
 
     async def test_on_back_cache_miss_failure(self):
         page_url = "http://example.com/video"
@@ -126,7 +127,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(len(state.link_cache) > 0)
         token = list(state.link_cache.keys())[0]
         cached_data = state.link_cache[token]
-        self.assertEqual(cached_data["format_id"], "137")
+        self.assertEqual(cached_data.format_id, "137")
 
         args, kwargs = self.update.callback_query.edit_message_text.call_args
         self.assertIn("✅ <b>Готово", args[0])

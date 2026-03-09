@@ -20,7 +20,7 @@ from app.services.ytdlp.parsers import (
     get_special_format,
     deduplicate_formats,
 )
-from app.services.ytdlp.models import FormatItem, FormatMetadata
+from app.services.ytdlp.models import FormatItem, FormatMetadata, ExtractionResult
 from app.bot.format_formatter import format_label
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 
@@ -68,14 +68,14 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
             filesize=None,
             format_note="audio",
         )
-        state.info_cache[url] = (
-            "Test Video",
-            formats,
-            audio,
-            "05:30",
-            False,
-            None,
-            "https://i.ytimg.com/vi/test123/maxresdefault.jpg",
+        state.info_cache[url] = ExtractionResult(
+            title="Test Video",
+            formats=formats,
+            special_format=audio,
+            duration_str="05:30",
+            is_slideshow=False,
+            info_json_path=None,
+            thumbnail_url="https://i.ytimg.com/vi/test123/maxresdefault.jpg",
         )
 
         update = MagicMock()
@@ -97,8 +97,8 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(len(state.link_cache) > 0)
         token = list(state.link_cache.keys())[0]
         cached = state.link_cache[token]
-        self.assertEqual(cached["format_id"], "137")
-        self.assertEqual(cached["page_url"], url)
+        self.assertEqual(cached.format_id, "137")
+        self.assertEqual(cached.page_url, url)
 
         args, kwargs = update.callback_query.edit_message_text.call_args
         msg = args[0]
@@ -123,14 +123,14 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
         audio = MagicMock(
             spec=FormatItem, format_id="audio", format_note="audio", is_tiktok=False
         )
-        state.info_cache[url] = (
-            "Video Title",
-            formats,
-            audio,
-            "03:00",
-            False,
-            None,
-            None,
+        state.info_cache[url] = ExtractionResult(
+            title="Video Title",
+            formats=formats,
+            special_format=audio,
+            duration_str="03:00",
+            is_slideshow=False,
+            info_json_path=None,
+            thumbnail_url=None,
         )
 
         update = MagicMock()

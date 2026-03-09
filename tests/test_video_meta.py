@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch, AsyncMock
 
-from app.bot.callbacks import _extract_video_meta
+from app.services.orchestrator import _extract_video_meta
 
 
 class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):

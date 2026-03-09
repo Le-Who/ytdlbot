@@ -9,6 +9,7 @@ from app.core import state
 from app.core.config import MAX_TG_UPLOAD_MB
 from app.core.utils import extract_supported_url
 from app.services.downloader import MediaSender
+from app.core.models import DownloadContext
 from app.core.texts import Texts
 from app.services.ytdlp.parsers import _is_tiktok
 
@@ -102,12 +103,12 @@ async def handle_group_message(
 
     if is_slideshow:
         # TikTok slideshow — offer format choice (album vs video)
-        state.link_cache[token] = {
-            "page_url": url,
-            "user_tag": user_tag,
-            "chat_id": chat.id,
-            "original_msg_id": update.message.message_id,
-        }
+        state.link_cache[token] = DownloadContext(
+            page_url=url,
+            user_tag=user_tag,
+            chat_id=chat.id,
+            original_msg_id=update.message.message_id,
+        )
 
         kb = InlineKeyboardMarkup(
             [
@@ -214,10 +215,13 @@ async def on_group_slideshow(
             pass
         return
 
-    page_url = payload["page_url"]
-    user_tag = payload["user_tag"]
-    chat_id = payload["chat_id"]
-    original_msg_id = payload.get("original_msg_id")
+    if isinstance(payload, dict):
+        payload = DownloadContext(**payload)
+
+    page_url = payload.page_url
+    user_tag = payload.user_tag
+    chat_id = payload.chat_id
+    original_msg_id = payload.original_msg_id
     is_photo_mode = mode == "photo"
 
     try:

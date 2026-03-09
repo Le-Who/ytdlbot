@@ -12,6 +12,7 @@ from app.constants import AUDIO_FORMAT_ID, CHUNK_SIZE, GIF_FORMAT_ID
 from app.core import state
 from app.core.config import TELEGRAM_SECRET_TOKEN, DL_TIMEOUT_HTTP, MAX_DL_MB
 from app.core.logging import set_correlation_id
+from app.core.models import DownloadContext
 from app.core.process import run_subprocess
 
 logger = logging.getLogger("app.api")
@@ -36,7 +37,10 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
     if not payload:
         raise HTTPException(404, "Link expired")
 
-    host = urlsplit(payload.get("page_url", "")).hostname or "unknown"
+    if isinstance(payload, dict):
+        payload = DownloadContext(**payload)
+
+    host = urlsplit(payload.page_url).hostname or "unknown"
     set_correlation_id(token)
     logger.info(
         "download request", extra={"op": "download", "token": token, "url_host": host}
@@ -46,10 +50,10 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
     if not state.limiter.allow_ip(ip) or not state.limiter.allow_token(token):
         raise HTTPException(429, "Too many requests")
 
-    raw_title = payload.get("title") or "video"
+    raw_title = payload.title or "video"
     clean_title = re.sub(r"[\x00-\x1f\x7f\r\n]", "", raw_title)[:200]
     encoded_filename = quote(clean_title or "video")
-    format_id = payload.get("format_id")
+    format_id = payload.format_id
     is_gif = format_id == GIF_FORMAT_ID
     is_audio = format_id == AUDIO_FORMAT_ID
 
@@ -68,9 +72,9 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
         if is_gif:
             # GIF = download video directly to ffmpeg pipe
             cmd = state.ytdlp.build_command(
-                payload["page_url"],
-                payload["format_id"],
-                payload.get("height"),
+                payload.page_url,
+                payload.format_id,
+                payload.height,
                 output="-",
             )
             # Mute MP4: strip audio, copy video stream (no quality loss, instant)
@@ -129,9 +133,9 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
                         pipe_task.cancel()
         else:
             cmd = state.ytdlp.build_command(
-                payload["page_url"],
-                payload["format_id"],
-                payload.get("height"),
+                payload.page_url,
+                payload.format_id,
+                payload.height,
                 output="-",
             )
             async with run_subprocess(cmd, timeout=DL_TIMEOUT_HTTP) as handle:

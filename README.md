@@ -32,10 +32,11 @@ The project is well-structured and highly tested (>400 tests, CI/CD pipeline). H
 ## Architecture
 
 - **Web Layer**: FastAPI serves HTTP endpoints (health checks, Prometheus metrics, and chunked video streams) and handles incoming Telegram Webhooks.
-- **Telegram Logic**: `python-telegram-bot` processes updates (messages, callbacks) routing them to the appropriate handlers.
+- **Telegram Logic**: `python-telegram-bot` processes updates. Callback handlers are uniquely "thin", dispatching tasks immediately to the orchestrator.
+- **Orchestration Layer**: `DownloadOrchestrator` centralizes all download lifecycles, safely encapsulating complex rules like concurrency queues (`asyncio.Semaphore`), file-size checks, and fallback mechanisms.
 - **Data Fetchers**: `YtDlpService` and `GalleryDlService` act as async wrappers over CLI binaries.
 - **Media Processing**: `FFmpeg` is utilized exclusively for post-processing tasks (GIF conversion, slideshow building).
-- **State Management**: In-memory `TTLCache` structures govern rate limiting limits and URL metadata caching to minimize IO bottlenecks.
+- **State Management**: In-memory `TTLCache` structures govern rate limiting and URL metadata caching securely using a strongly-typed `DownloadContext` dataclass.
 
 ```mermaid
 flowchart TD

@@ -42,6 +42,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Typed Use-Case Orchestration**: Extracted overarching download logistics out of `callbacks.py` into a new `DownloadOrchestrator` service to dramatically thin out the Telegram UI presentation layer.
+- **Typed State Caching**: Replaced arbitrary, string-indexed dictionaries in `state.link_cache` with a heavily annotated `DownloadContext` dataclass ensuring firm data contracts across web scopes and bot groups.
 - **`list_formats()` return type**: Completely refactored from a 7-element Tuple into a strongly-typed `ExtractionResult` Dataclass. This removes leaky abstractions, massive code duplication for TikTok testing, and fragile tuple indexing throughout the UI layer (`messages.py` & `callbacks.py`).
 - **Group chat TikTok handling**: Removed duplicated `extract()` execution from `group_logic.py`, eliminating a double-extraction bug, accelerating group chat TikTok processing.
 - **Strict Format Binding**: Replaced legacy `height` overriding with deterministic 1:1 `format_id` binding. UI format choices are now exact guarantees, removing implicit `ffmpeg` mismatches.

@@ -210,7 +210,6 @@ def deduplicate_formats(
         return s
 
     from collections import OrderedDict
-    from typing import cast
 
     groups: OrderedDict[int | None, list[FormatMetadata]] = OrderedDict()
     for fmt in formats:

@@ -34,7 +34,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     text = url
 
-    if not await state.limiter.allow_user(user.id) or not await state.limiter.allow_chat(chat.id):
+    if not await state.limiter.allow_user(
+        user.id
+    ) or not await state.limiter.allow_chat(chat.id):
         await msg.reply_text(Texts.RATE_LIMITED)
         return
 
@@ -108,9 +110,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                         _platform = (
                             "youtube"
                             if "youtu" in text
-                            else "tiktok"
-                            if "tiktok" in text
-                            else "other"
+                            else "tiktok" if "tiktok" in text else "other"
                         )
                         _m.extraction_duration.observe(
                             _time.monotonic() - _ext_start,

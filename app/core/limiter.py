@@ -100,7 +100,13 @@ else
 end
 """
 
-    def __init__(self, redis_client: Any, capacity: float, refill_rate: float, burst: float | None = None):
+    def __init__(
+        self,
+        redis_client: Any,
+        capacity: float,
+        refill_rate: float,
+        burst: float | None = None,
+    ):
         self.redis = redis_client
         self.capacity = burst if burst is not None else capacity
         self.refill_rate = refill_rate
@@ -112,7 +118,7 @@ end
         try:
             result = await self._script(
                 keys=[f"ratelimit:{key}"],
-                args=[self.capacity, self.refill_rate, cost, now]
+                args=[self.capacity, self.refill_rate, cost, now],
             )
             return bool(result)
         except Exception:

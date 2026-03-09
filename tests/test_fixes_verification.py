@@ -7,6 +7,7 @@ os.environ["BOT_TOKEN"] = "123456:ABC-DEF"
 os.environ["BASE_URL"] = "http://localhost:8000"
 
 from app.services.ytdlp.service import YtDlpService
+
 # from app.main import build_format_keyboard # Remove for now if not used
 
 

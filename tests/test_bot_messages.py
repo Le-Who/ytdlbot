@@ -1,15 +1,20 @@
 from unittest.mock import AsyncMock
+
 """Tests for on_message handler — the core user flow."""
 
 import unittest
 
+
 class AsyncMockCache(dict):
     async def get(self, key, default=None):
         return super().get(key, default)
+
     async def set(self, key, value):
         self[key] = value
+
     async def delete(self, key):
         self.pop(key, None)
+
 
 from unittest.mock import MagicMock, patch
 

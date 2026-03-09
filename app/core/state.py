@@ -54,6 +54,7 @@ bot_app: Application | None = None
 
 if REDIS_URL:
     import redis.asyncio as redis
+
     redis_client: Any = redis.from_url(REDIS_URL, decode_responses=False)
 else:
     redis_client = None
@@ -81,16 +82,24 @@ file_cache: FileTTLCache = FileTTLCache(
 
 if redis_client:
     from app.core.limiter import RedisTokenBucketLimiter
-    
+
     limiter = LimiterRegistry(
-        user=RedisTokenBucketLimiter(redis_client, LIMITER_USER_CAPACITY, LIMITER_USER_REFILL_PER_SEC),
-        chat=RedisTokenBucketLimiter(redis_client, LIMITER_CHAT_CAPACITY, LIMITER_CHAT_REFILL_PER_SEC),
-        ip=RedisTokenBucketLimiter(redis_client, LIMITER_IP_CAPACITY, LIMITER_IP_REFILL_PER_SEC),
-        token=RedisTokenBucketLimiter(redis_client, LIMITER_TOKEN_CAPACITY, LIMITER_TOKEN_REFILL_PER_SEC),
+        user=RedisTokenBucketLimiter(
+            redis_client, LIMITER_USER_CAPACITY, LIMITER_USER_REFILL_PER_SEC
+        ),
+        chat=RedisTokenBucketLimiter(
+            redis_client, LIMITER_CHAT_CAPACITY, LIMITER_CHAT_REFILL_PER_SEC
+        ),
+        ip=RedisTokenBucketLimiter(
+            redis_client, LIMITER_IP_CAPACITY, LIMITER_IP_REFILL_PER_SEC
+        ),
+        token=RedisTokenBucketLimiter(
+            redis_client, LIMITER_TOKEN_CAPACITY, LIMITER_TOKEN_REFILL_PER_SEC
+        ),
     )
 else:
     from app.core.limiter import TokenBucketLimiter
-    
+
     limiter = LimiterRegistry(
         user=TokenBucketLimiter(LIMITER_USER_CAPACITY, LIMITER_USER_REFILL_PER_SEC),
         chat=TokenBucketLimiter(LIMITER_CHAT_CAPACITY, LIMITER_CHAT_REFILL_PER_SEC),

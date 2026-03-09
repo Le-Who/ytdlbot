@@ -84,42 +84,6 @@ class VideoDownloader:
             If success: file_path is str, error_message is None.
             If fail: file_path is None, error_message is str.
         """
-        if format_id == "tikwm_fallback":
-            from app.services.tikwm import TikWMService
-
-            _metrics().downloads_total.inc(platform="tiktok_fallback")
-            _metrics().active_downloads.inc()
-            try:
-                res, err = await TikWMService.download_video(page_url)
-                if res and not err:
-                    _metrics().downloads_success.inc(platform="tiktok_fallback")
-                    state.file_cache[token] = res
-                else:
-                    _metrics().downloads_failed.inc(platform="tiktok_fallback")
-                return res, err
-            finally:
-                _metrics().active_downloads.dec()
-
-        if format_id == "gallerydl_fallback":
-            from app.services.gallery_dl.service import GalleryDlService
-
-            _metrics().downloads_total.inc(platform="tiktok_fallback")
-            _metrics().active_downloads.inc()
-            try:
-                res, err = await asyncio.to_thread(
-                    GalleryDlService.download_video,
-                    page_url,
-                    state.ytdlp.cookies_path,
-                    state.ytdlp.tiktok_proxy,
-                )
-                if res and not err:
-                    _metrics().downloads_success.inc(platform="tiktok_fallback")
-                    state.file_cache[token] = res
-                else:
-                    _metrics().downloads_failed.inc(platform="tiktok_fallback")
-                return res, err
-            finally:
-                _metrics().active_downloads.dec()
 
         tmp_dir = TEMP_DIR
         is_gif = format_id == GIF_FORMAT_ID
@@ -192,14 +156,37 @@ class VideoDownloader:
                 if proc.returncode != 0:
                     _metrics().downloads_failed.inc(platform="telegram")
                     _metrics().active_downloads.dec()
-                    err = b"".join(stderr).decode("utf-8", errors="ignore").lower()
-                    logger.error("yt-dlp download failed", extra={"stderr": err})
+                    err_text = b"".join(stderr).decode("utf-8", errors="ignore")
+                    logger.error("yt-dlp download failed", extra={"stderr": err_text})
 
-                    if "file larger" in err or "filesize" in err:
-                        return None, f"⚠️ Файл слишком большой (>{MAX_TG_UPLOAD_MB} МБ)."
-                    elif "sign in" in err or "cookies" in err:
+                    from app.services.ytdlp.exceptions import (
+                        map_ytdlp_error,
+                        AccessDeniedError,
+                        VideoNotFoundError,
+                        ExtractionError,
+                    )
+
+                    mapped_err = map_ytdlp_error(err_text, page_url)
+
+                    if (
+                        "file larger" in err_text.lower()
+                        or "filesize" in err_text.lower()
+                    ):
+                        return (
+                            None,
+                            f"⚠️ Файл слишком большой (>{MAX_TG_UPLOAD_MB} МБ).",
+                        )
+
+                    if isinstance(mapped_err, AccessDeniedError):
                         return None, "⚠️ Требуется авторизация (Sign-in required)."
-                    elif "requested format is not available" in err:
+                    elif isinstance(mapped_err, VideoNotFoundError):
+                        return (
+                            None,
+                            "⚠️ Видео не найдено или скрыто настройками приватности.",
+                        )
+                    elif isinstance(
+                        mapped_err, ExtractionError
+                    ) and "формат недоступен" in str(mapped_err):
                         return None, "⚠️ Формат недоступен. Попробуйте другое качество."
                     else:
                         return (

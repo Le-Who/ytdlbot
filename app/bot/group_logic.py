@@ -47,7 +47,9 @@ async def handle_group_message(
     user = update.effective_user
     chat = update.effective_chat
     assert user is not None and chat is not None
-    if not await state.limiter.allow_user(user.id) or not await state.limiter.allow_chat(chat.id):
+    if not await state.limiter.allow_user(
+        user.id
+    ) or not await state.limiter.allow_chat(chat.id):
         return
 
     # Send "Typing..." or "Uploading video..." action
@@ -101,12 +103,15 @@ async def handle_group_message(
 
     if is_slideshow:
         # TikTok slideshow — offer format choice (album vs video)
-        await state.link_cache.set(token, DownloadContext(
-            page_url=url,
-            user_tag=user_tag,
-            chat_id=chat.id,
-            original_msg_id=update.message.message_id,
-        ))
+        await state.link_cache.set(
+            token,
+            DownloadContext(
+                page_url=url,
+                user_tag=user_tag,
+                chat_id=chat.id,
+                original_msg_id=update.message.message_id,
+            ),
+        )
 
         kb = InlineKeyboardMarkup(
             [

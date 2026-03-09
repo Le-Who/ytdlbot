@@ -25,8 +25,15 @@ class TestProcess(unittest.IsolatedAsyncioTestCase):
         proc.returncode = None
         proc.stderr.readline.side_effect = [b""]
         proc.kill = Mock()
+        proc.terminate = Mock()
         proc.wait = AsyncMock()
-        proc.wait.side_effect = [asyncio.TimeoutError, 0, 0]
+        proc.wait.side_effect = [
+            asyncio.TimeoutError(),
+            asyncio.TimeoutError(),
+            0,
+            0,
+            0,
+        ]
         with patch("asyncio.create_subprocess_exec", return_value=proc):
             async with run_subprocess(["sleep", "10"]) as handle:
                 await handle.cancel()

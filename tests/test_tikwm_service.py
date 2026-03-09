@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock
+
 """Tests for app.services.tikwm — TikWMService.
 
 Skipped if curl_cffi is not installed (it's optional, only needed at runtime).

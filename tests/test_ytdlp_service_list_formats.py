@@ -56,7 +56,7 @@ class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(title, "Test Video")
             self.assertEqual(duration, "02:00")
-            
+
             self.assertEqual(len(formats), 1)
             self.assertEqual(formats[0].format_id, "137")
             self.assertEqual(formats[0].height, 1080)
@@ -73,125 +73,29 @@ class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):
             self.assertIn("прямая трансляция", str(cm.exception))
 
     async def test_access_denied_exception(self):
-        """Test that 403 Forbidden raises a user-friendly exception."""
-        with patch.object(
-            self.service, "extract", new_callable=AsyncMock
-        ) as mock_ext:
-            mock_ext.side_effect = Exception("HTTP Error 403: Forbidden")
+        """Test that AccessDeniedError is re-raised correctly."""
+        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
+            mock_ext.side_effect = AccessDeniedError("Доступ запрещен")
             with self.assertRaises(AccessDeniedError) as cm:
                 await self.service.list_formats("http://example.com/private")
             self.assertIn("Доступ запрещен", str(cm.exception))
 
     async def test_not_found_exception(self):
-        """Test that 404 Not Found raises a user-friendly exception."""
-        with patch.object(
-            self.service, "extract", new_callable=AsyncMock
-        ) as mock_ext:
-            mock_ext.side_effect = Exception("HTTP Error 404: Not Found")
+        """Test that VideoNotFoundError is re-raised correctly."""
+        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
+            mock_ext.side_effect = VideoNotFoundError("Видео не найдено")
             with self.assertRaises(VideoNotFoundError) as cm:
                 await self.service.list_formats("http://example.com/missing")
             self.assertIn("Видео не найдено", str(cm.exception))
 
     async def test_generic_extraction_error(self):
         """Test that generic errors are wrapped."""
-        with patch.object(
-            self.service, "extract", new_callable=AsyncMock
-        ) as mock_ext:
+        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
             mock_ext.side_effect = Exception("Some random error")
             with self.assertRaises(ExtractionError) as cm:
                 await self.service.list_formats("http://example.com/error")
             self.assertIn("Ошибка извлечения", str(cm.exception))
             self.assertIn("Some random error", str(cm.exception))
-
-    async def test_youtube_subprocess_fallback_on_error(self):
-        """Test fallback to subprocess when extract fails for YouTube."""
-        url = "https://youtube.com/watch?v=123"
-        mock_info = {
-            "title": "Fallback Video",
-            "duration": 60,
-            "formats": [
-                {"format_id": "22", "ext": "mp4", "height": 720, "filesize": 50000}
-            ],
-        }
-
-        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
-            mock_ext.side_effect = Exception("API Error")
-            with patch.object(
-                self.service, "_extract_youtube_via_subprocess", new_callable=AsyncMock
-            ) as mock_subprocess:
-                mock_subprocess.return_value = mock_info
-                result = await self.service.list_formats(url)
-                title = result.title
-                formats = result.formats
-
-                mock_subprocess.assert_called_once_with(url)
-                self.assertEqual(title, "Fallback Video")
-                self.assertEqual(len(formats), 1)
-                self.assertEqual(formats[0].format_id, "22")
-
-    async def test_youtube_subprocess_fallback_on_empty_formats(self):
-        """Test fallback to subprocess when extract returns no formats for YouTube."""
-        url = "https://youtube.com/watch?v=123"
-        mock_info_initial = {"title": "Empty Formats", "duration": 60, "formats": []}
-        mock_info_subprocess = {
-            "title": "Subprocess Video",
-            "duration": 60,
-            "formats": [
-                {"format_id": "18", "ext": "mp4", "height": 360, "filesize": 20000}
-            ],
-        }
-
-        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
-            mock_ext.return_value = mock_info_initial
-            with patch.object(
-                self.service,
-                "_extract_youtube_via_subprocess",
-                new_callable=AsyncMock
-            ) as mock_subprocess:
-                mock_subprocess.return_value = mock_info_subprocess
-
-                result = await self.service.list_formats(url)
-                title = result.title
-                formats = result.formats
-
-                mock_subprocess.assert_called_once_with(url)
-                self.assertEqual(title, "Empty Formats")
-
-                self.assertEqual(len(formats), 1)
-                self.assertEqual(formats[0].format_id, "18")
-
-    async def test_youtube_subprocess_fallback_on_filtered_formats(self):
-        """Test fallback to subprocess when all formats are filtered out."""
-        url = "https://youtube.com/watch?v=123"
-        mock_info_initial = {
-            "title": "Filtered Formats",
-            "duration": 60,
-            "formats": [{"format_id": "bad", "ext": "xyz", "height": 720}],
-        }
-        mock_info_subprocess = {
-            "title": "Subprocess Video",
-            "duration": 60,
-            "formats": [
-                {"format_id": "good", "ext": "mp4", "height": 720, "filesize": 50000}
-            ],
-        }
-
-        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
-            mock_ext.return_value = mock_info_initial
-            with patch.object(
-                self.service,
-                "_extract_youtube_via_subprocess",
-                new_callable=AsyncMock
-            ) as mock_subprocess:
-                mock_subprocess.return_value = mock_info_subprocess
-                result = await self.service.list_formats(url)
-                title = result.title
-                formats = result.formats
-
-                mock_subprocess.assert_called_once_with(url)
-                self.assertEqual(title, "Filtered Formats")
-                self.assertEqual(len(formats), 1)
-                self.assertEqual(formats[0].format_id, "good")
 
     async def test_tiktok_is_passed_to_parsers(self):
         """Test that TikTok URLs trigger correct flags in parsers."""
@@ -279,11 +183,7 @@ class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):
         """Test that TikTok /photo/ URLs that fail yt-dlp return is_slideshow=True."""
         url = "https://www.tiktok.com/@user/photo/7611488001083886868"
 
-        with patch.object(
-            self.service,
-            "extract",
-            new_callable=AsyncMock
-        ) as mock_ext:
+        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
             mock_ext.side_effect = Exception("ERROR: Unsupported URL: " + url)
             result = await self.service.list_formats(url)
             title = result.title
@@ -302,9 +202,7 @@ class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):
         """Any TikTok URL that yt-dlp can't handle should fallback to slideshow."""
         url = "https://tiktok.com/@creator/photo/123456789"
 
-        with patch.object(
-            self.service, "extract", new_callable=AsyncMock
-        ) as mock_ext:
+        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
             mock_ext.side_effect = Exception("Unsupported URL")
             result = await self.service.list_formats(url)
             is_slideshow = result.is_slideshow
@@ -314,9 +212,7 @@ class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):
         """Non-TikTok unsupported URLs should still raise ExtractionError."""
         url = "https://example.com/video/123"
 
-        with patch.object(
-            self.service, "extract", new_callable=AsyncMock
-        ) as mock_ext:
+        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
             mock_ext.side_effect = Exception("Unsupported URL")
             with self.assertRaises(ExtractionError):
                 await self.service.list_formats(url)
@@ -345,9 +241,7 @@ class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):
         """TikTok 'sign in' errors: return tikwm_fallback if no proxy."""
         url = "https://tiktok.com/@user/video/456"
         self.service.tiktok_proxy = None
-        with patch.object(
-            self.service, "extract", new_callable=AsyncMock
-        ) as mock_ext:
+        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
             mock_ext.side_effect = Exception("Sign in to confirm")
             result = await self.service.list_formats(url)
             formats = result.formats
@@ -371,13 +265,12 @@ class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):
     async def test_tiktok_unknown_error_falls_back_to_slideshow(self):
         """TikTok unknown errors (not auth, not unsupported) still try slideshow."""
         url = "https://tiktok.com/@user/video/789"
-        with patch.object(
-            self.service, "extract", new_callable=AsyncMock
-        ) as mock_ext:
+        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
             mock_ext.side_effect = Exception("Some weird TikTok error")
             result = await self.service.list_formats(url)
             is_slideshow = result.is_slideshow
             self.assertTrue(is_slideshow)
+
 
 if __name__ == "__main__":
     unittest.main()

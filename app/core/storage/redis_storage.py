@@ -7,6 +7,7 @@ from .base import StateStorage
 T = TypeVar("T")
 logger = logging.getLogger("app.storage.redis")
 
+
 class RedisStorage(StateStorage):
     def __init__(self, redis_client: Any, default_ttl: int):
         self.redis = redis_client

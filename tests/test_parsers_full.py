@@ -21,7 +21,6 @@ from app.services.ytdlp.parsers import (
 from app.services.ytdlp.models import FormatMetadata
 from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
-
 # ── Platform detection ────────────────────────────────────────────
 
 

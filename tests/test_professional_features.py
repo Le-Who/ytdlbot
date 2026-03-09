@@ -10,17 +10,6 @@ class TestProfessionalRefinements(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.service = YtDlpService()
 
-    def test_format_sort_in_opts(self):
-        opts = self.service._base_opts()
-        self.assertIn("format_sort", opts)
-        self.assertEqual(opts["format_sort"], ["res:1080", "vcodec:vp9", "br", "size"])
-
-    def test_concurrency_in_opts(self):
-        opts = self.service._base_opts()
-        self.assertEqual(
-            opts.get("concurrent_fragment_downloads"), CONCURRENT_FRAGMENTS
-        )
-
     async def test_live_stream_rejection(self):
         # Mock extract to return a live stream info
         self.service.extract = AsyncMock(

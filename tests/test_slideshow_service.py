@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock
+
 """Tests for app.services.slideshow — SlideshowPipeline."""
 
 import os

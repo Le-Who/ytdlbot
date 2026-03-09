@@ -2,6 +2,7 @@ from typing import Any, Optional, Protocol, TypeVar
 
 T = TypeVar("T")
 
+
 class StateStorage(Protocol):
     async def get(self, key: str, type_hint: Any = None) -> Any: ...
     async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None: ...

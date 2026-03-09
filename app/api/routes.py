@@ -47,7 +47,9 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
     )
 
     ip = request.client.host if request.client else "unknown"
-    if not await state.limiter.allow_ip(ip) or not await state.limiter.allow_token(token):
+    if not await state.limiter.allow_ip(ip) or not await state.limiter.allow_token(
+        token
+    ):
         raise HTTPException(429, "Too many requests")
 
     raw_title = payload.title or "video"

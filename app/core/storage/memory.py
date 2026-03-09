@@ -5,6 +5,7 @@ from .base import StateStorage
 
 T = TypeVar("T")
 
+
 class MemoryStorage(StateStorage):
     def __init__(self, maxsize: int, ttl: int):
         self._cache = TTLCache(maxsize=maxsize, ttl=ttl)

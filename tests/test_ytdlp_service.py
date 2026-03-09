@@ -15,7 +15,9 @@ class TestYtDlpService(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.service = YtDlpService()
         # Mock PlatformCookiesManager to return a deterministic cookies path
-        self.service.cookies_manager.get_cookies_path = MagicMock(return_value="/tmp/cookies.txt")
+        self.service.cookies_manager.get_cookies_path = MagicMock(
+            return_value="/tmp/cookies.txt"
+        )
         self.service.cookies_manager._global_cookies_path = "/tmp/cookies.txt"
 
     def test_build_command_video(self):
@@ -25,11 +27,12 @@ class TestYtDlpService(unittest.IsolatedAsyncioTestCase):
             height=1080,
             output="/tmp/out.mp4",
         )
-        self.assertIn("yt-dlp", cmd)
+        self.assertTrue(any("yt-dlp" in arg or "yt_dlp" in arg for arg in cmd))
         # Check format string construction
         # We check substring
         self.assertTrue(any("137+140" in arg for arg in cmd))
         self.assertIn("/tmp/out.mp4", cmd)
+        self.assertIn("--", cmd)
         self.assertIn("https://www.tiktok.com/@user/video/123", cmd)
         self.assertIn("--cookies", cmd)
         self.assertIn("/tmp/cookies.txt", cmd)
@@ -81,7 +84,9 @@ class TestYtDlpService(unittest.IsolatedAsyncioTestCase):
             ],
         }
 
-        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_extract:
+        with patch.object(
+            self.service, "extract", new_callable=AsyncMock
+        ) as mock_extract:
             mock_extract.return_value = mock_info
             with patch(
                 "app.services.ytdlp.service.parse_format_metadata"

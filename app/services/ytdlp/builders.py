@@ -3,110 +3,135 @@ from app.constants import GIF_FORMAT_ID
 from app.core.config import CONCURRENT_FRAGMENTS
 
 
-def _get_base_cmd(format_arg: str, output: str) -> List[str]:
-    """Возвращает базовую команду yt-dlp с общими флагами"""
-    return [
-        "yt-dlp",
-        "--format",
-        format_arg,
-        "--output",
-        output,
-        "--merge-output-format",
-        "mp4",
-        "--quiet",
-        "--no-warnings",
-        "--no-playlist",
-        "--force-ipv4",
-        "--retries",
-        "3",
-        "--fragment-retries",
-        "5",
-        "--retry-sleep",
-        "linear=1::2",
-    ]
+class YtDlpCLIBuilder:
+    """Consolidated builder for yt-dlp CLI arguments.
+    Handles generic extraction, fallback extraction, and direct downloading."""
 
-
-def _append_common_opts(
-    cmd: List[str],
-    page_url: str,
-    cookies_path: Optional[str] = None,
-    max_filesize: Optional[int] = None,
-    proxy: Optional[str] = None,
-    info_json_path: Optional[str] = None,
-) -> None:
-    """Добавляет cookies, прокси, лимит размера и URL/info-json в конец команды"""
-    if cookies_path:
-        cmd.extend(["--cookies", cookies_path])
-    if proxy:
-        cmd.extend(["--proxy", proxy])
-    if max_filesize:
-        cmd.extend(["--max-filesize", f"{max_filesize}M"])
-    if info_json_path:
-        cmd.extend(["--load-info-json", info_json_path])
-    else:
-        cmd.append("--")
-        cmd.append(page_url)
-
-
-def build_command(
-    page_url: str,
-    format_id: str,
-    height: Optional[int],
-    output: str,
-    cookies_path: Optional[str] = None,
-    max_filesize: Optional[int] = None,
-    proxy: Optional[str] = None,
-    use_aria2: bool = False,
-    has_aria2_installed: bool = False,
-    info_json_path: Optional[str] = None,
-) -> List[str]:
-    """Строит команду yt-dlp"""
-
-    # Проверяем, является ли это GIF форматом для Pinterest
-    is_gif_format = format_id == GIF_FORMAT_ID
-
-    if is_gif_format:
-        # Для GIF используем bestvideo без аудио
-        final_fmt = "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
-    elif format_id in ("bestaudio/best", "best", "audio"):
-        final_fmt = "bestaudio/best" if format_id == "audio" else format_id
-    else:
-        # Аудио/Рав или составной формат: формат жестко сгенерирован в parsers.py.
-        # Strict binding + fallback
-        height_cap = height or 1080
-        fallback = f"bestvideo[height<={height_cap}]+bestaudio/bestvideo+bestaudio/best"
-        final_fmt = f"{format_id}/{fallback}"
-
-    cmd = _get_base_cmd(final_fmt, output)
-    cmd.extend(
-        [
+    def __init__(self, youtube_player_clients: Optional[List[str]] = None):
+        self._base_args = [
+            "yt-dlp",
+            "--force-ipv4",
             "--geo-bypass",
             "--ignore-config",
-            "--no-mtime",
-            "--concurrent-fragments",
-            str(CONCURRENT_FRAGMENTS),
+            "--no-warnings",
         ]
-    )
+        self.youtube_player_clients = youtube_player_clients
 
-    # aria2c для ускорения скачивания (только для HTTP загрузок)
-    if output != "-" and use_aria2 and has_aria2_installed:
+    def build_extraction_cmd(
+        self,
+        url: str,
+        cookies_path: Optional[str] = None,
+        proxy: Optional[str] = None,
+        user_agent: Optional[str] = None,
+        timeout: int = 120,
+    ) -> List[str]:
+        """Build args for dumping JSON info"""
+        cmd = self._base_args.copy()
         cmd.extend(
             [
-                "--downloader",
-                "http:aria2c",
-                "--downloader-args",
-                "aria2c:-x 16 -s 16 -k 1M",
+                "--dump-json",
+                "--no-download",
+                "--no-playlist",
+                "--socket-timeout",
+                str(timeout),
             ]
         )
 
-    cmd.extend(
-        [
-            "--postprocessor-args",
-            "Merger+ffmpeg:-movflags frag_keyframe+empty_moov",
-        ]
-    )
+        # TikTok specific edge case applied generically for strict JSON extraction
+        cmd.extend(["--extractor-args", "tiktok:app_info="])
 
-    _append_common_opts(
-        cmd, page_url, cookies_path, max_filesize, proxy, info_json_path
-    )
-    return cmd
+        if self.youtube_player_clients:
+            clients_str = ",".join(self.youtube_player_clients)
+            cmd.extend(["--extractor-args", f"youtube:player_client={clients_str}"])
+
+        self._append_network_opts(cmd, cookies_path, proxy, user_agent)
+        cmd.extend(["--", url])
+        return cmd
+
+    def build_download_cmd(
+        self,
+        url: str,
+        format_id: str,
+        output_path: str,
+        height: Optional[int] = None,
+        cookies_path: Optional[str] = None,
+        proxy: Optional[str] = None,
+        max_filesize_mb: Optional[int] = None,
+        use_aria2: bool = False,
+        info_json_path: Optional[str] = None,
+    ) -> List[str]:
+        """Build args for downloading media"""
+        cmd = self._base_args.copy()
+
+        # Format resolution logic
+        is_gif_format = format_id == GIF_FORMAT_ID
+        if is_gif_format:
+            final_fmt = "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
+        elif format_id in ("bestaudio/best", "best", "audio"):
+            final_fmt = "bestaudio/best" if format_id == "audio" else format_id
+        else:
+            height_cap = height or 1080
+            fallback = (
+                f"bestvideo[height<={height_cap}]+bestaudio/bestvideo+bestaudio/best"
+            )
+            final_fmt = f"{format_id}/{fallback}"
+
+        cmd.extend(
+            [
+                "--format",
+                final_fmt,
+                "--output",
+                output_path,
+                "--merge-output-format",
+                "mp4",
+                "--quiet",
+                "--no-playlist",
+                "--no-mtime",
+                "--retries",
+                "3",
+                "--fragment-retries",
+                "5",
+                "--retry-sleep",
+                "linear=1::2",
+                "--concurrent-fragments",
+                str(CONCURRENT_FRAGMENTS),
+                "--postprocessor-args",
+                "Merger+ffmpeg:-movflags frag_keyframe+empty_moov",
+            ]
+        )
+
+        if output_path != "-" and use_aria2:
+            cmd.extend(
+                [
+                    "--downloader",
+                    "http:aria2c",
+                    "--downloader-args",
+                    "aria2c:-x 16 -s 16 -k 1M",
+                ]
+            )
+
+        if max_filesize_mb:
+            cmd.extend(["--max-filesize", f"{max_filesize_mb}M"])
+
+        self._append_network_opts(cmd, cookies_path, proxy, None)
+
+        if info_json_path:
+            cmd.extend(["--load-info-json", info_json_path])
+        else:
+            cmd.extend(["--", url])
+
+        return cmd
+
+    def _append_network_opts(
+        self,
+        cmd: List[str],
+        cookies_path: Optional[str],
+        proxy: Optional[str],
+        user_agent: Optional[str],
+    ) -> None:
+        if cookies_path:
+            cmd.extend(["--cookies", cookies_path])
+        if proxy:
+            cmd.extend(["--proxy", proxy])
+        if user_agent:
+            cmd.extend(["--user-agent", user_agent])

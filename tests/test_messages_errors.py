@@ -3,13 +3,17 @@
 import asyncio
 import unittest
 
+
 class AsyncMockCache(dict):
     async def get(self, key, default=None):
         return super().get(key, default)
+
     async def set(self, key, value):
         self[key] = value
+
     async def delete(self, key):
         self.pop(key, None)
+
 
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -57,7 +61,9 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         """AccessDeniedError shows access denied text."""
         from app.bot.messages import on_message
 
-        state.ytdlp.list_formats = AsyncMock(side_effect=AccessDeniedError("Login required"))
+        state.ytdlp.list_formats = AsyncMock(
+            side_effect=AccessDeniedError("Login required")
+        )
         await on_message(self.update, self.context)
 
         self.status_msg.edit_text.assert_awaited_with(Texts.ACCESS_DENIED)
@@ -84,7 +90,9 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         """ExtractionError with 'pinterest' shows pinterest error text."""
         from app.bot.messages import on_message
 
-        state.ytdlp.list_formats = AsyncMock(side_effect=ExtractionError("pinterest: failed to extract"))
+        state.ytdlp.list_formats = AsyncMock(
+            side_effect=ExtractionError("pinterest: failed to extract")
+        )
         await on_message(self.update, self.context)
 
         self.status_msg.edit_text.assert_awaited_with(Texts.PINTEREST_ERROR)
@@ -93,7 +101,9 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         """Generic ExtractionError shows the error message."""
         from app.bot.messages import on_message
 
-        state.ytdlp.list_formats = AsyncMock(side_effect=ExtractionError("some random error"))
+        state.ytdlp.list_formats = AsyncMock(
+            side_effect=ExtractionError("some random error")
+        )
         await on_message(self.update, self.context)
 
         args = self.status_msg.edit_text.call_args[0][0]
@@ -103,7 +113,9 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         """Unknown exception shows generic error with detail."""
         from app.bot.messages import on_message
 
-        state.ytdlp.list_formats = AsyncMock(side_effect=RuntimeError("unexpected crash"))
+        state.ytdlp.list_formats = AsyncMock(
+            side_effect=RuntimeError("unexpected crash")
+        )
         await on_message(self.update, self.context)
 
         args = self.status_msg.edit_text.call_args[0][0]

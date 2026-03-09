@@ -20,11 +20,34 @@ class ProcessHandle:
         import sys
         import subprocess
         import os
+        import signal
+        from app.core import logging
+
+        logger = logging.logging.getLogger("process_manager")
 
         try:
+            # First attempt graceful termination
             if sys.platform != "win32":
-                import signal
+                try:
+                    os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+            else:
+                try:
+                    self.proc.terminate()
+                except ProcessLookupError:
+                    pass
 
+            # Give it a tiny bit of time to term gracefully
+            try:
+                await asyncio.wait_for(self.proc.wait(), timeout=1.0)
+                if self.proc.returncode is not None:
+                    return
+            except asyncio.TimeoutError:
+                pass
+
+            # Force kill if it didn't terminate
+            if sys.platform != "win32":
                 try:
                     os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
                 except ProcessLookupError:
@@ -34,8 +57,8 @@ class ProcessHandle:
                     ["taskkill", "/F", "/T", "/PID", str(self.proc.pid)],
                     capture_output=True,
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Error during process cancellation: {e}")
 
         try:
             await asyncio.wait_for(self.proc.wait(), timeout=2.0)

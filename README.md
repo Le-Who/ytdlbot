@@ -35,7 +35,7 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 - **Web Layer**: FastAPI serves HTTP endpoints (health checks, Prometheus metrics, and chunked video streams) and handles incoming Telegram Webhooks.
 - **Telegram Logic**: `python-telegram-bot` processes updates. Callback handlers are uniquely "thin", dispatching tasks immediately to the orchestrator.
 - **Orchestration Layer**: `DownloadOrchestrator` centralizes all download lifecycles, safely encapsulating complex rules like concurrency queues (`asyncio.Semaphore`), file-size checks, and fallback mechanisms.
-- **Data Fetchers**: `YtDlpService` and `GalleryDlService` act as async wrappers over CLI binaries.
+- **Data Fetchers**: `YtDlpService` acts as a resilient async wrapper with a CLI Builder pattern and structured error mapping, while `GalleryDlService` handles fallback media arrays.
 - **Media Processing**: `FFmpeg` is utilized exclusively for post-processing tasks (GIF conversion, slideshow building).
 - **State Management**: In-memory `TTLCache` structures govern rate limiting and URL metadata caching securely using a strongly-typed `DownloadContext` dataclass.
 
@@ -63,7 +63,7 @@ flowchart TD
 | `app/core/`     | Global config, rate limiter logic, caching, and state structures.          |
 | `app/services/` | Wrappers for `yt-dlp`, `gallery-dl`, `ffmpeg` conversion, and downloading. |
 | `app/tasks/`    | Background periodic tasks (e.g., `janitor.py` for temp cleanup).           |
-| `tests/`        | 434+ Pytest tests covering unit, integration, and security.                |
+| `tests/`        | 420+ Pytest tests covering unit, integration, and security.                |
 | `Dockerfile`    | Multi-stage build definition for containerized deployment.                 |
 | `scripts`       | Python standalone script for local debugging of `yt-dlp` extraction.       |
 

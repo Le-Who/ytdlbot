@@ -15,6 +15,8 @@ from app.core.texts import Texts
 from app.core.models import DownloadContext
 from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 from app.services.downloader import MediaSender
+from app.services.tikwm import TikWMService
+from app.services.gallery_dl.service import GalleryDlService
 
 logger = logging.getLogger("app.services.orchestrator")
 
@@ -122,13 +124,31 @@ class DownloadOrchestrator:
             except Exception:
                 pass
 
-            file_path, error = await MediaSender.download_video(
-                payload.page_url,
-                payload.format_id or "",
-                payload.height,
-                token,
-                info_json_path=payload.info_json_path,
-            )
+            file_path = None
+            error = None
+
+            # Orchestrate TikTok fallbacks locally to decouple downloader
+            if payload.format_id == "tikwm_fallback":
+                file_path, error = await TikWMService.download_video(payload.page_url)
+                if file_path and not error:
+                    state.file_cache[token] = file_path
+            elif payload.format_id == "gallerydl_fallback":
+                file_path, error = await asyncio.to_thread(
+                    GalleryDlService.download_video,
+                    payload.page_url,
+                    state.ytdlp.cookies_path,
+                    state.ytdlp.tiktok_proxy,
+                )
+                if file_path and not error:
+                    state.file_cache[token] = file_path
+            else:
+                file_path, error = await MediaSender.download_video(
+                    payload.page_url,
+                    payload.format_id or "",
+                    payload.height,
+                    token,
+                    info_json_path=payload.info_json_path,
+                )
 
             if error or not file_path:
                 await update_ui(error or Texts.GENERIC_ERROR_SHORT, kb_error)

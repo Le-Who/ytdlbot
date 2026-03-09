@@ -144,13 +144,16 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     token = uuid.uuid4().hex
-    await state.link_cache.set(token, DownloadContext(
-        page_url=data["page_url"],
-        format_id=format_id,
-        height=data["format_map"].get(format_id),
-        title=data["title"],
-        info_json_path=data.get("info_json_path"),
-    ))
+    await state.link_cache.set(
+        token,
+        DownloadContext(
+            page_url=data["page_url"],
+            format_id=format_id,
+            height=data["format_map"].get(format_id),
+            title=data["title"],
+            info_json_path=data.get("info_json_path"),
+        ),
+    )
 
     dl_link = f"{BASE_URL}/dl/{token}"
 
@@ -216,9 +219,9 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
 
-    if not await state.limiter.allow_user(user_id) or not await state.limiter.allow_chat(
-        q.message.chat_id
-    ):
+    if not await state.limiter.allow_user(
+        user_id
+    ) or not await state.limiter.allow_chat(q.message.chat_id):
         await q.edit_message_text(Texts.TOO_MANY_REQUESTS)
         return
 
@@ -253,6 +256,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     fmt_size = data.get("size_map", {}).get(payload.format_id)
 
     from typing import Optional
+
     async def update_progress_ui(text: str, markup: Optional[object] = None) -> None:
         try:
             await q.edit_message_text(text, reply_markup=markup)  # type: ignore
@@ -362,9 +366,9 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception:
         pass
 
-    if not await state.limiter.allow_user(user_id) or not await state.limiter.allow_chat(
-        q.message.chat_id
-    ):
+    if not await state.limiter.allow_user(
+        user_id
+    ) or not await state.limiter.allow_chat(q.message.chat_id):
         await q.edit_message_text(Texts.TOO_MANY_REQUESTS)
         return
 

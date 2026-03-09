@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock
+
 """Tests for _extract_video_meta helper in callbacks.py."""
 
 import json

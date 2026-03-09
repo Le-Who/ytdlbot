@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock
+
 """
 conftest.py — runs before any test module is collected.
 Mocks FastAPI if not genuinely installed so tests that import app.api.routes
@@ -63,7 +64,7 @@ def mock_state():
     """Pre-configure app.core.state with common test mocks."""
     from app.core import state
     from app.core.storage.memory import MemoryStorage
-    
+
     # We use MemoryStorage implicitly typed as AsyncMockCache
     state.info_cache = MemoryStorage()
     state.link_cache = MemoryStorage()

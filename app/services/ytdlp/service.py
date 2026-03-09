@@ -190,11 +190,7 @@ class YtDlpService:
         import asyncio
         from app.services.tikwm import TikWMService
         try:
-            loop = asyncio.get_event_loop()
-            future = asyncio.run_coroutine_threadsafe(
-                TikWMService.download_video(url), loop
-            )
-            return future.result(timeout=60)
+            return asyncio.run(TikWMService.download_video(url))
         except Exception as e:
             logger.warning("TikWM async bridge failed: %s", e)
             return None, f"TikWM error: {e}"

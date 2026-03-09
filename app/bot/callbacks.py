@@ -91,6 +91,22 @@ async def _extract_video_meta(
     return meta
 
 
+async def _safe_edit_text(q, text: str, reply_markup=None, **kwargs):
+    if q.message and (q.message.photo or q.message.video or q.message.animation or q.message.document):
+        try:
+            caption_kwargs = {k: v for k, v in kwargs.items() if k not in ("link_preview_options", "disable_web_page_preview")}
+            await q.edit_message_caption(caption=text, reply_markup=reply_markup, **caption_kwargs)
+        except Exception as e:
+            if "not modified" not in str(e).lower():
+                pass
+    else:
+        try:
+            await q.edit_message_text(text=text, reply_markup=reply_markup, **kwargs)
+        except Exception as e:
+            if "not modified" not in str(e).lower():
+                pass
+
+
 async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     assert q is not None
@@ -100,13 +116,13 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     assert data is not None
     page_url = data.get("page_url")
     if not page_url:
-        await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
+        await _safe_edit_text(q, Texts.CACHE_EXPIRED_RESEND)
         return
 
     cached = state.info_cache.get(page_url)
     if not cached:
         try:
-            await q.edit_message_text(Texts.CACHE_REFRESHING)
+            await _safe_edit_text(q, Texts.CACHE_REFRESHING)
             async with state.parsing_sem:
                 title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url = await asyncio.to_thread(
                     state.ytdlp.list_formats, page_url
@@ -114,7 +130,7 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             state.info_cache[page_url] = (title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url)
         except Exception as e:
             logger.error("Refresh error on back", extra={"error": str(e)})
-            await q.edit_message_text(Texts.CACHE_REFRESH_FAIL)
+            await _safe_edit_text(q, Texts.CACHE_REFRESH_FAIL)
             return
     else:
         title, formats, special_format, duration, is_slideshow, *rest = cached
@@ -123,7 +139,7 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if is_slideshow:
         from app.bot.keyboards import build_slideshow_keyboard
         reply_markup = build_slideshow_keyboard()
-        await q.edit_message_text(
+        await _safe_edit_text(q, 
             Texts.SLIDESHOW_DETECTED.format(title=html.escape(title)),
             reply_markup=reply_markup,
             parse_mode="HTML",
@@ -144,13 +160,13 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 )
             except Exception:
                 # Fallback: original message might be text-only
-                await q.edit_message_text(
+                await _safe_edit_text(q, 
                     caption,
                     reply_markup=reply_markup,
                     parse_mode="HTML",
                 )
         else:
-            await q.edit_message_text(
+            await _safe_edit_text(q, 
                 caption,
                 reply_markup=reply_markup,
                 parse_mode="HTML",
@@ -179,7 +195,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     data = context.user_data
     assert data is not None
     if not data.get("page_url"):
-        await q.edit_message_text(Texts.DATA_EXPIRED_RESEND)
+        await _safe_edit_text(q, Texts.DATA_EXPIRED_RESEND)
         return
 
     token = uuid.uuid4().hex
@@ -222,7 +238,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     quality_str = f" ({' • '.join(quality_parts)})" if quality_parts else ""
 
-    await q.edit_message_text(
+    await _safe_edit_text(q, 
         Texts.READY_LINK.format(quality=quality_str, ttl=LINK_TTL_MINUTES, link=html.escape(dl_link)),
         reply_markup=InlineKeyboardMarkup(kb),
         link_preview_options=LinkPreviewOptions(is_disabled=True),
@@ -241,7 +257,7 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         _, token = q.data.split("|", 1)
         state.cancel_cache[token] = True
-        await q.edit_message_text(Texts.CANCELLED)
+        await _safe_edit_text(q, Texts.CANCELLED)
     except (ValueError, AttributeError) as e:
         logger.error("Invalid callback data in on_cancel", extra={"error": str(e)})
 
@@ -260,7 +276,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not state.limiter.allow_user(user_id) or not state.limiter.allow_chat(
         q.message.chat_id
     ):
-        await q.edit_message_text(Texts.TOO_MANY_REQUESTS)
+        await _safe_edit_text(q, Texts.TOO_MANY_REQUESTS)
         return
 
     if not q.data:
@@ -275,7 +291,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     set_correlation_id(token)
     payload = state.link_cache.get(token)
     if not payload:
-        await q.edit_message_text(Texts.LINK_EXPIRED)
+        await _safe_edit_text(q, Texts.LINK_EXPIRED)
         return
 
     dl_link = f"{BASE_URL}/dl/{token}"
@@ -287,7 +303,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
     if state.tasks_sem.locked():
-        await q.edit_message_text(Texts.QUEUE_FULL, reply_markup=kb_error)
+        await _safe_edit_text(q, Texts.QUEUE_FULL, reply_markup=kb_error)
         return
 
     await state.tasks_sem.acquire()
@@ -298,7 +314,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not size_allowed(fmt_size, target="telegram"):
         state.tasks_sem.release()
         mb = fmt_size / (1024 * 1024)
-        await q.edit_message_text(
+        await _safe_edit_text(q, 
             Texts.FILE_TOO_BIG.format(size_mb=mb, max_mb=MAX_TG_UPLOAD_MB),
             reply_markup=kb_error,
         )
@@ -306,12 +322,12 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     async def update_progress_ui(text, markup):
         try:
-            await q.edit_message_text(text, reply_markup=markup)
+            await _safe_edit_text(q, text, reply_markup=markup)
         except Exception as e:
             logger.warning("UI update failed", extra={"error": str(e)})
 
     try:
-        await q.edit_message_text(Texts.STARTING_DOWNLOAD)
+        await _safe_edit_text(q, Texts.STARTING_DOWNLOAD)
         try:
             await context.bot.send_chat_action(chat_id=q.message.chat_id, action=ChatAction.UPLOAD_VIDEO)
         except Exception:
@@ -326,10 +342,10 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
         if error or not file_path:
-            await q.edit_message_text(error or Texts.GENERIC_ERROR_SHORT, reply_markup=kb_error)
+            await _safe_edit_text(q, error or Texts.GENERIC_ERROR_SHORT, reply_markup=kb_error)
             return
 
-        await q.edit_message_text(Texts.SENDING_TO_TG)
+        await _safe_edit_text(q, Texts.SENDING_TO_TG)
 
         is_gif = payload["format_id"] == GIF_FORMAT_ID
         is_audio = payload["format_id"] == AUDIO_FORMAT_ID
@@ -354,7 +370,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if success:
             await q.delete_message()
         else:
-            await q.edit_message_text(Texts.SEND_ERROR, reply_markup=kb_error)
+            await _safe_edit_text(q, Texts.SEND_ERROR, reply_markup=kb_error)
 
         # Cleanup is handled by MediaSender if it created a new file, but we should ensure cache policy
         # If it was a cached file, don't remove.
@@ -459,7 +475,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not state.limiter.allow_user(user_id) or not state.limiter.allow_chat(
         q.message.chat_id
     ):
-        await q.edit_message_text(Texts.TOO_MANY_REQUESTS)
+        await _safe_edit_text(q, Texts.TOO_MANY_REQUESTS)
         return
 
     if not q.data:
@@ -475,29 +491,29 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     assert data is not None
     page_url = data.get("page_url")
     if not page_url:
-        await q.edit_message_text(Texts.DATA_EXPIRED_RESEND)
+        await _safe_edit_text(q, Texts.DATA_EXPIRED_RESEND)
         return
 
     is_photo_mode = mode == SLIDESHOW_PHOTO_FORMAT_ID
 
     if state.tasks_sem.locked():
-        await q.edit_message_text(Texts.QUEUE_FULL)
+        await _safe_edit_text(q, Texts.QUEUE_FULL)
         return
 
     await state.tasks_sem.acquire()
     try:
-        await q.edit_message_text(Texts.SLIDESHOW_DOWNLOADING)
+        await _safe_edit_text(q, Texts.SLIDESHOW_DOWNLOADING)
 
         result, error = await MediaSender.download_slideshow(page_url)
 
         if error or not result:
-            await q.edit_message_text(error or Texts.SLIDESHOW_ERROR)
+            await _safe_edit_text(q, error or Texts.SLIDESHOW_ERROR)
             return
 
         try:
             if is_photo_mode:
                 # Send as photo album
-                await q.edit_message_text(Texts.SLIDESHOW_SENDING)
+                await _safe_edit_text(q, Texts.SLIDESHOW_SENDING)
 
                 total = len(result.images)
                 caption = "📸"
@@ -514,20 +530,20 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 if success:
                     await q.delete_message()
                 else:
-                    await q.edit_message_text(Texts.SEND_ERROR)
+                    await _safe_edit_text(q, Texts.SEND_ERROR)
             else:
                 # Convert to video and send
-                await q.edit_message_text(Texts.SLIDESHOW_CONVERTING)
+                await _safe_edit_text(q, Texts.SLIDESHOW_CONVERTING)
 
                 video_path = await MediaSender.images_to_video(
                     result.images, result.audio
                 )
 
                 if not video_path:
-                    await q.edit_message_text(Texts.SLIDESHOW_ERROR)
+                    await _safe_edit_text(q, Texts.SLIDESHOW_ERROR)
                     return
 
-                await q.edit_message_text(Texts.SENDING_TO_TG)
+                await _safe_edit_text(q, Texts.SENDING_TO_TG)
 
                 success = await MediaSender.send_file(
                     context.bot,
@@ -539,7 +555,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 if success:
                     await q.delete_message()
                 else:
-                    await q.edit_message_text(Texts.SEND_ERROR)
+                    await _safe_edit_text(q, Texts.SEND_ERROR)
 
                 # Cleanup video file
                 await asyncio.to_thread(safe_remove, video_path)

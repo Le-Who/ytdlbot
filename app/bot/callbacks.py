@@ -3,14 +3,15 @@ import os
 import asyncio
 import logging
 import html
-from typing import Optional
+from typing import Any, Optional
 from telegram import (
-    Update,
-    Message,
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputMediaPhoto,
     LinkPreviewOptions,
+    Message,
+    Update,
 )
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
@@ -110,7 +111,9 @@ async def _extract_video_meta(
     return meta
 
 
-async def _safe_edit_text(q, text: str, reply_markup=None, **kwargs):
+async def _safe_edit_text(
+    q: CallbackQuery, text: str, reply_markup: Optional[InlineKeyboardMarkup] = None, **kwargs: Any
+) -> None:
     try:
         await q.edit_message_text(text, reply_markup=reply_markup, **kwargs)
     except Exception as e:

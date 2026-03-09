@@ -10,6 +10,7 @@ from app.services.ytdlp.service import YtDlpService
 from app.services.ytdlp.models import FormatItem, FormatMetadata
 from app.constants import GIF_FORMAT_ID
 
+
 class TestYtDlpService(unittest.TestCase):
     def setUp(self):
         self.service = YtDlpService()
@@ -22,13 +23,12 @@ class TestYtDlpService(unittest.TestCase):
             page_url="https://www.tiktok.com/@user/video/123",
             format_id="137+140",
             height=1080,
-            output="/tmp/out.mp4"
+            output="/tmp/out.mp4",
         )
         self.assertIn("yt-dlp", cmd)
         # Check format string construction
-        # expected format contains: bestvideo[height=1080]+(bestaudio[format_note*=original]/bestaudio[language^=en]/bestaudio[language^=orig]/bestaudio)/best[height=1080]/best
         # We check substring
-        self.assertTrue(any("bestvideo[height=1080]" in arg for arg in cmd))
+        self.assertTrue(any("137+140" in arg for arg in cmd))
         self.assertIn("/tmp/out.mp4", cmd)
         self.assertIn("https://www.tiktok.com/@user/video/123", cmd)
         self.assertIn("--cookies", cmd)
@@ -39,7 +39,7 @@ class TestYtDlpService(unittest.TestCase):
             page_url="http://pinterest.com/pin/123",
             format_id=GIF_FORMAT_ID,
             height=None,
-            output="/tmp/out.mp4"
+            output="/tmp/out.mp4",
         )
         # Should select video only for GIF conversion
         expected_fmt = "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
@@ -50,7 +50,7 @@ class TestYtDlpService(unittest.TestCase):
             page_url="https://www.tiktok.com/@user/video/456",
             format_id="bestaudio/best",
             height=None,
-            output="/tmp/out.mp3"
+            output="/tmp/out.mp3",
         )
         self.assertIn("bestaudio/best", cmd)
         self.assertIn("--cookies", cmd)
@@ -76,20 +76,30 @@ class TestYtDlpService(unittest.TestCase):
                     "height": 720,
                     "filesize": 1000,
                     "protocol": "https",
-                    "vcodec": "h264"
+                    "vcodec": "h264",
                 }
-            ]
+            ],
         }
 
-        with patch.object(self.service, 'extract', return_value=mock_info):
-            with patch('app.services.ytdlp.service.parse_format_metadata') as mock_parse:
+        with patch.object(self.service, "extract", return_value=mock_info):
+            with patch(
+                "app.services.ytdlp.service.parse_format_metadata"
+            ) as mock_parse:
                 mock_parse.return_value = FormatMetadata("1", "mp4", 720, 1000, "https")
 
-                with patch('app.services.ytdlp.service.deduplicate_formats') as mock_dedup:
-                    mock_dedup.return_value = [FormatMetadata("1", "mp4", 720, 1000, "https")]
+                with patch(
+                    "app.services.ytdlp.service.deduplicate_formats"
+                ) as mock_dedup:
+                    mock_dedup.return_value = [
+                        FormatMetadata("1", "mp4", 720, 1000, "https")
+                    ]
 
-                    with patch('app.services.ytdlp.service.create_format_item') as mock_create:
-                        mock_create.return_value = FormatItem("1", "Label", "mp4", 720, 1000)
+                    with patch(
+                        "app.services.ytdlp.service.create_format_item"
+                    ) as mock_create:
+                        mock_create.return_value = FormatItem(
+                            "1", "Label", "mp4", 720, 1000
+                        )
 
                         # Test YouTube
                         url = "https://youtube.com/watch?v=123"
@@ -97,11 +107,17 @@ class TestYtDlpService(unittest.TestCase):
 
                         # Verify parse_format_metadata arg
                         args_parse = mock_parse.call_args[0]
-                        self.assertFalse(args_parse[2], "parse_format: is_tiktok should be False for YouTube")
+                        self.assertFalse(
+                            args_parse[2],
+                            "parse_format: is_tiktok should be False for YouTube",
+                        )
 
                         # Verify deduplicate_formats arg
                         args_dedup = mock_dedup.call_args[0]
-                        self.assertFalse(args_dedup[1], "deduplicate_formats: is_tiktok should be False for YouTube")
+                        self.assertFalse(
+                            args_dedup[1],
+                            "deduplicate_formats: is_tiktok should be False for YouTube",
+                        )
 
                         # Test TikTok
                         url_tiktok = "https://tiktok.com/@user/video/123"
@@ -109,11 +125,18 @@ class TestYtDlpService(unittest.TestCase):
 
                         # Verify parse_format_metadata arg
                         args_parse = mock_parse.call_args[0]
-                        self.assertTrue(args_parse[2], "parse_format: is_tiktok should be True for TikTok")
+                        self.assertTrue(
+                            args_parse[2],
+                            "parse_format: is_tiktok should be True for TikTok",
+                        )
 
                         # Verify deduplicate_formats arg
                         args_dedup = mock_dedup.call_args[0]
-                        self.assertTrue(args_dedup[1], "deduplicate_formats: is_tiktok should be True for TikTok")
+                        self.assertTrue(
+                            args_dedup[1],
+                            "deduplicate_formats: is_tiktok should be True for TikTok",
+                        )
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

@@ -1,4 +1,5 @@
 """Tests for _extract_video_meta helper in callbacks.py."""
+
 import json
 import os
 import asyncio
@@ -7,6 +8,7 @@ import unittest
 from unittest.mock import patch, AsyncMock
 
 from app.bot.callbacks import _extract_video_meta
+
 
 class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
     """Tests for _extract_video_meta helper."""
@@ -35,7 +37,9 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
 
         try:
             # Mock ffprobe to also return empty (no ffprobe available in test)
-            with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_proc:
+            with patch(
+                "asyncio.create_subprocess_exec", new_callable=AsyncMock
+            ) as mock_proc:
                 proc_mock = AsyncMock()
                 proc_mock.communicate.return_value = (b"", b"")
                 mock_proc.return_value = proc_mock
@@ -50,15 +54,19 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_info_json_uses_ffprobe(self):
         """No info JSON → falls back to ffprobe."""
-        ffprobe_output = json.dumps({
-            "format": {"duration": "90.0"},
-            "streams": [
-                {"codec_type": "video", "width": 854, "height": 480},
-                {"codec_type": "audio"},
-            ]
-        })
+        ffprobe_output = json.dumps(
+            {
+                "format": {"duration": "90.0"},
+                "streams": [
+                    {"codec_type": "video", "width": 854, "height": 480},
+                    {"codec_type": "audio"},
+                ],
+            }
+        )
 
-        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_proc:
+        with patch(
+            "asyncio.create_subprocess_exec", new_callable=AsyncMock
+        ) as mock_proc:
             proc_mock = AsyncMock()
             proc_mock.communicate.return_value = (ffprobe_output.encode(), b"")
             mock_proc.return_value = proc_mock
@@ -100,7 +108,9 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
 
     async def test_ffprobe_timeout(self):
         """ffprobe exceeding timeout → returns gracefully."""
-        with patch("asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_proc:
+        with patch(
+            "asyncio.create_subprocess_exec", new_callable=AsyncMock
+        ) as mock_proc:
             proc_mock = AsyncMock()
             proc_mock.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
             mock_proc.return_value = proc_mock
@@ -120,6 +130,7 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(meta["duration"], 123)
         finally:
             os.unlink(path)
+
 
 if __name__ == "__main__":
     unittest.main()

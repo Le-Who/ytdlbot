@@ -9,6 +9,7 @@ os.environ.setdefault("BASE_URL", "http://localhost:8000")
 
 from app.core.state import inflight_parsing
 
+
 class TestLogicStability(unittest.IsolatedAsyncioTestCase):
     async def test_parsing_deduplication(self):
         url = "https://youtube.com/watch?v=unique_123"
@@ -18,6 +19,7 @@ class TestLogicStability(unittest.IsolatedAsyncioTestCase):
 
         def mock_list_formats(u):
             import time
+
             time.sleep(0.3)
             return ("Title", [], MagicMock(), "1:00")
 
@@ -44,6 +46,7 @@ class TestLogicStability(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results[0][0], "Title")
         self.assertEqual(results[1][0], "Title")
         self.assertEqual(len(inflight_parsing), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

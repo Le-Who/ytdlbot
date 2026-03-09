@@ -40,10 +40,13 @@ __all__ = [
 
 logger = logging.getLogger("app.services.downloader")
 
+
 # Late import to avoid circular dep — metrics is a lightweight singleton
 def _metrics():
     from app.core.metrics import metrics
+
     return metrics
+
 
 def _safe_remove_info_json(path):
     """Remove cached info JSON after download (prevent /tmp fill)."""

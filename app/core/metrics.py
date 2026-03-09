@@ -96,8 +96,7 @@ class _Histogram:
         with self._lock:
             keys = set(self._counts) | set(self._sums)
             return [
-                (dict(k), self._counts.get(k, 0), self._sums.get(k, 0.0))
-                for k in keys
+                (dict(k), self._counts.get(k, 0), self._sums.get(k, 0.0)) for k in keys
             ]
 
 
@@ -194,7 +193,9 @@ class MetricsCollector:
             else:
                 for labels, value in entries:
                     if labels:
-                        label_str = ",".join(f'{k}="{v}"' for k, v in sorted(labels.items()))
+                        label_str = ",".join(
+                            f'{k}="{v}"' for k, v in sorted(labels.items())
+                        )
                         lines.append(f"{metric.name}{{{label_str}}} {value}")
                     else:
                         lines.append(f"{metric.name} {value}")
@@ -216,7 +217,9 @@ class MetricsCollector:
             else:
                 for labels, count, total in hist_entries:
                     if labels:
-                        label_str = ",".join(f'{k}="{v}"' for k, v in sorted(labels.items()))
+                        label_str = ",".join(
+                            f'{k}="{v}"' for k, v in sorted(labels.items())
+                        )
                         lines.append(f"{hist.name}_count{{{label_str}}} {count}")
                         lines.append(f"{hist.name}_sum{{{label_str}}} {total:.3f}")
                     else:

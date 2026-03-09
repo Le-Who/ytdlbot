@@ -1,8 +1,10 @@
 """Tests for app.core.utils — is_supported_url, extract_supported_url, safe_remove."""
+
 import unittest
 from unittest.mock import patch
 
 from app.core.utils import is_supported_url, extract_supported_url, safe_remove
+
 
 class TestSafeRemove(unittest.TestCase):
     @patch("os.path.exists", return_value=True)
@@ -30,6 +32,7 @@ class TestSafeRemove(unittest.TestCase):
     def test_none_noop(self):
         """None path is a noop."""
         safe_remove(None)  # type: ignore  — Should not raise
+
 
 class TestIsSupportedUrl(unittest.TestCase):
     """Test is_supported_url against supported platforms from constants."""
@@ -86,6 +89,7 @@ class TestIsSupportedUrl(unittest.TestCase):
     def test_double_dash_rejected(self):
         self.assertFalse(is_supported_url("--version"))
 
+
 class TestExtractSupportedUrl(unittest.TestCase):
     """Test extract_supported_url which finds URLs from freeform text."""
 
@@ -125,6 +129,7 @@ class TestExtractSupportedUrl(unittest.TestCase):
         result = extract_supported_url(text)
         self.assertIsNotNone(result)
         self.assertFalse(result.endswith(")"))
+
 
 if __name__ == "__main__":
     unittest.main()

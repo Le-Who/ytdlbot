@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Quality & Testing
 
-- **Test suite expanded**: 257 → 432+ tests (76% coverage, threshold 75%)
+- **Test suite expanded**: 257 → 440+ tests (76% coverage, threshold 75%)
 - **Property-based testing**: 14 `hypothesis` properties (~1400 random examples) for parsers, URL detection, sanitization
 - **Integration tests**: 4 tests with real `yt-dlp` + `ffmpeg` binaries (`@pytest.mark.integration`)
 - **Mutation testing**: `mutmut` configured targeting `parsers.py` (runs in CI)
@@ -42,6 +42,9 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **Strict Format Binding**: Replaced legacy `height` overriding with deterministic 1:1 `format_id` binding. UI format choices are now exact guarantees, removing implicit `ffmpeg` mismatches.
+- **Pre-muxed Format Priority**: `parsers.py` strongly favors single-file muxed video+audio (`vcodec != none`, `acodec != none`). Allows TikTok/Facebook to bypass `ffmpeg` merges completely, increasing download speed.
+- **Audio Selectors**: Fallback to `+bestaudio` now occurs directly in parser logic, composing composite `format_id`s cleanly instead of relying on CLI append.
 - **TikWM service → async `curl_cffi`**: Rewrote `tikwm.py` from sync `urllib.request` to async `curl_cffi.requests.AsyncSession` with TLS fingerprint impersonation (`impersonate="chrome"`) and 3-retry logic
 - **Dockerfile graceful shutdown**: Added `exec` prefix to CMD and `STOPSIGNAL SIGINT` — uvicorn is now PID 1 and receives signals directly (prevents 10s SIGKILL timeout on `docker stop`)
 - **Thread-safety invariants**: Documented that all `TTLCache` reads/writes must happen from the event loop thread (cachetools is NOT thread-safe)

@@ -44,6 +44,7 @@ class MediaConverter:
         try:
             # Limit concurrency for CPU-intensive conversions
             from app.core.metrics import metrics as _m
+
             async with state.conversion_sem:
                 with _m.conversion_duration.time(type="gif"):
                     proc = await asyncio.create_subprocess_exec(
@@ -64,7 +65,9 @@ class MediaConverter:
                         return None
 
             if proc.returncode != 0:
-                logger.error("FFmpeg conversion failed", extra={"stderr": stderr.decode()})
+                logger.error(
+                    "FFmpeg conversion failed", extra={"stderr": stderr.decode()}
+                )
                 return None
 
             if not os.path.exists(gif_path) or os.path.getsize(gif_path) == 0:
@@ -108,35 +111,55 @@ class MediaConverter:
             cmd = [
                 "ffmpeg",
                 "-y",
-                "-f", "concat",
-                "-safe", "0",
-                "-i", concat_file,
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                concat_file,
             ]
 
             if audio_path and os.path.exists(audio_path):
                 cmd.extend(["-i", audio_path])
-                cmd.extend([
-                    "-c:v", "libx264",
-                    "-preset", "veryfast",
-                    "-pix_fmt", "yuv420p",
-                    "-vf", "scale='min(1080,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
-                    "-c:a", "aac",
-                    "-b:a", "128k",
-                    "-shortest",
-                    "-movflags", "+faststart",
-                    output_path,
-                ])
+                cmd.extend(
+                    [
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "veryfast",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-vf",
+                        "scale='min(1080,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+                        "-c:a",
+                        "aac",
+                        "-b:a",
+                        "128k",
+                        "-shortest",
+                        "-movflags",
+                        "+faststart",
+                        output_path,
+                    ]
+                )
             else:
-                cmd.extend([
-                    "-c:v", "libx264",
-                    "-preset", "veryfast",
-                    "-pix_fmt", "yuv420p",
-                    "-vf", "scale='min(1080,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
-                    "-movflags", "+faststart",
-                    output_path,
-                ])
+                cmd.extend(
+                    [
+                        "-c:v",
+                        "libx264",
+                        "-preset",
+                        "veryfast",
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-vf",
+                        "scale='min(1080,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
+                        "-movflags",
+                        "+faststart",
+                        output_path,
+                    ]
+                )
 
             from app.core.metrics import metrics as _m
+
             async with state.conversion_sem:
                 with _m.conversion_duration.time(type="slideshow"):
                     proc = await asyncio.create_subprocess_exec(
@@ -168,7 +191,9 @@ class MediaConverter:
             return output_path
 
         except Exception as e:
-            logger.error("Slideshow conversion exception", extra={"error": str(e)}, exc_info=True)
+            logger.error(
+                "Slideshow conversion exception", extra={"error": str(e)}, exc_info=True
+            )
             return None
         finally:
             safe_remove(concat_file)

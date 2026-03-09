@@ -8,6 +8,7 @@ sys.modules["yt_dlp"] = MagicMock()
 # Add repo root to path so we can import app
 from app.services.ytdlp.service import YtDlpService
 
+
 class TestYtDlpOpts(unittest.TestCase):
     def setUp(self):
         self.service = YtDlpService()
@@ -50,6 +51,7 @@ class TestYtDlpOpts(unittest.TestCase):
         self.assertNotIn("injected", opts2["extractor_args"])
         # TikTok defaults should be present but not the injected key
         self.assertIn("tiktok", opts2["extractor_args"])
+
 
 if __name__ == "__main__":
     unittest.main()

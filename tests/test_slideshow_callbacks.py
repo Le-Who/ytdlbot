@@ -11,6 +11,7 @@ from app.core import state
 from app.constants import SLIDESHOW_PHOTO_FORMAT_ID, SLIDESHOW_VIDEO_FORMAT_ID
 from app.services.gallery_dl.service import SlideshowResult
 
+
 class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         state.info_cache = {}
@@ -51,14 +52,16 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
             title="Test",
         )
 
-        with patch(
-            "app.bot.callbacks.MediaSender.download_slideshow",
-            new_callable=AsyncMock,
-        ) as mock_dl, patch(
-            "app.bot.callbacks.MediaSender.send_slideshow_photos",
-            new_callable=AsyncMock,
-        ) as mock_send, patch(
-            "app.bot.callbacks.MediaSender.cleanup_slideshow"
+        with (
+            patch(
+                "app.bot.callbacks.MediaSender.download_slideshow",
+                new_callable=AsyncMock,
+            ) as mock_dl,
+            patch(
+                "app.bot.callbacks.MediaSender.send_slideshow_photos",
+                new_callable=AsyncMock,
+            ) as mock_send,
+            patch("app.bot.callbacks.MediaSender.cleanup_slideshow"),
         ):
             mock_dl.return_value = (mock_result, None)
             mock_send.return_value = True
@@ -79,19 +82,21 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
             title="Test",
         )
 
-        with patch(
-            "app.bot.callbacks.MediaSender.download_slideshow",
-            new_callable=AsyncMock,
-        ) as mock_dl, patch(
-            "app.bot.callbacks.MediaSender.images_to_video",
-            new_callable=AsyncMock,
-        ) as mock_convert, patch(
-            "app.bot.callbacks.MediaSender.send_file",
-            new_callable=AsyncMock,
-        ) as mock_send, patch(
-            "app.bot.callbacks.MediaSender.cleanup_slideshow"
-        ), patch(
-            "app.bot.callbacks.safe_remove"
+        with (
+            patch(
+                "app.bot.callbacks.MediaSender.download_slideshow",
+                new_callable=AsyncMock,
+            ) as mock_dl,
+            patch(
+                "app.bot.callbacks.MediaSender.images_to_video",
+                new_callable=AsyncMock,
+            ) as mock_convert,
+            patch(
+                "app.bot.callbacks.MediaSender.send_file",
+                new_callable=AsyncMock,
+            ) as mock_send,
+            patch("app.bot.callbacks.MediaSender.cleanup_slideshow"),
+            patch("app.bot.callbacks.safe_remove"),
         ):
             mock_dl.return_value = (mock_result, None)
             mock_convert.return_value = "/tmp/slideshow.mp4"
@@ -100,9 +105,7 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
             await callbacks.on_slideshow(self.update, self.context)
 
             mock_dl.assert_awaited_once()
-            mock_convert.assert_awaited_once_with(
-                mock_result.images, mock_result.audio
-            )
+            mock_convert.assert_awaited_once_with(mock_result.images, mock_result.audio)
             mock_send.assert_awaited_once()
             self.update.callback_query.delete_message.assert_awaited()
 
@@ -161,14 +164,16 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
             title="Test",
         )
 
-        with patch(
-            "app.bot.callbacks.MediaSender.download_slideshow",
-            new_callable=AsyncMock,
-        ) as mock_dl, patch(
-            "app.bot.callbacks.MediaSender.images_to_video",
-            new_callable=AsyncMock,
-        ) as mock_convert, patch(
-            "app.bot.callbacks.MediaSender.cleanup_slideshow"
+        with (
+            patch(
+                "app.bot.callbacks.MediaSender.download_slideshow",
+                new_callable=AsyncMock,
+            ) as mock_dl,
+            patch(
+                "app.bot.callbacks.MediaSender.images_to_video",
+                new_callable=AsyncMock,
+            ) as mock_convert,
+            patch("app.bot.callbacks.MediaSender.cleanup_slideshow"),
         ):
             mock_dl.return_value = (mock_result, None)
             mock_convert.return_value = None  # Conversion failed
@@ -177,6 +182,7 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
 
             args, _ = self.update.callback_query.edit_message_text.call_args
             self.assertIn("Ошибка", args[0])
+
 
 if __name__ == "__main__":
     unittest.main()

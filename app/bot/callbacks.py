@@ -5,7 +5,14 @@ import asyncio
 import logging
 import html
 from typing import Optional
-from telegram import Update, Message, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, LinkPreviewOptions
+from telegram import (
+    Update,
+    Message,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+    LinkPreviewOptions,
+)
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
@@ -26,7 +33,14 @@ from app.core.policy import size_allowed
 from app.core.logging import set_correlation_id
 from app.services.downloader import MediaSender, MAX_TELEGRAM_ALBUM_SIZE
 
-__all__ = ["on_back", "on_pick", "on_cancel", "on_send", "on_convert_to_gif", "on_slideshow"]
+__all__ = [
+    "on_back",
+    "on_pick",
+    "on_cancel",
+    "on_send",
+    "on_convert_to_gif",
+    "on_slideshow",
+]
 
 logger = logging.getLogger("app.bot.callbacks")
 
@@ -62,8 +76,14 @@ async def _extract_video_meta(
     # 2. Fallback: ffprobe (available in Docker image)
     try:
         cmd = [
-            "ffprobe", "-v", "quiet", "-print_format", "json",
-            "-show_format", "-show_streams", file_path,
+            "ffprobe",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
+            "-show_format",
+            "-show_streams",
+            file_path,
         ]
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -108,10 +128,24 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await q.edit_message_text(Texts.CACHE_REFRESHING)
             async with state.parsing_sem:
-                title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url = await asyncio.to_thread(
-                    state.ytdlp.list_formats, page_url
-                )
-            state.info_cache[page_url] = (title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url)
+                (
+                    title,
+                    formats,
+                    special_format,
+                    duration,
+                    is_slideshow,
+                    info_json_path,
+                    thumbnail_url,
+                ) = await asyncio.to_thread(state.ytdlp.list_formats, page_url)
+            state.info_cache[page_url] = (
+                title,
+                formats,
+                special_format,
+                duration,
+                is_slideshow,
+                info_json_path,
+                thumbnail_url,
+            )
         except Exception as e:
             logger.error("Refresh error on back", extra={"error": str(e)})
             await q.edit_message_text(Texts.CACHE_REFRESH_FAIL)
@@ -122,6 +156,7 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     if is_slideshow:
         from app.bot.keyboards import build_slideshow_keyboard
+
         reply_markup = build_slideshow_keyboard()
         await q.edit_message_text(
             Texts.SLIDESHOW_DETECTED.format(title=html.escape(title)),
@@ -196,11 +231,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     kb = [[InlineKeyboardButton(Texts.BTN_DOWNLOAD_LINK, url=dl_link)]]
     if ENABLE_TELEGRAM_UPLOAD:
         kb.append(
-            [
-                InlineKeyboardButton(
-                    Texts.BTN_SEND_TG, callback_data=f"send|{token}"
-                )
-            ]
+            [InlineKeyboardButton(Texts.BTN_SEND_TG, callback_data=f"send|{token}")]
         )
 
     kb.append([InlineKeyboardButton(Texts.BTN_BACK, callback_data="back")])
@@ -223,7 +254,9 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     quality_str = f" ({' • '.join(quality_parts)})" if quality_parts else ""
 
     await q.edit_message_text(
-        Texts.READY_LINK.format(quality=quality_str, ttl=LINK_TTL_MINUTES, link=html.escape(dl_link)),
+        Texts.READY_LINK.format(
+            quality=quality_str, ttl=LINK_TTL_MINUTES, link=html.escape(dl_link)
+        ),
         reply_markup=InlineKeyboardMarkup(kb),
         link_preview_options=LinkPreviewOptions(is_disabled=True),
         parse_mode="HTML",
@@ -313,7 +346,9 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     try:
         await q.edit_message_text(Texts.STARTING_DOWNLOAD)
         try:
-            await context.bot.send_chat_action(chat_id=q.message.chat_id, action=ChatAction.UPLOAD_VIDEO)
+            await context.bot.send_chat_action(
+                chat_id=q.message.chat_id, action=ChatAction.UPLOAD_VIDEO
+            )
         except Exception:
             pass
 
@@ -326,7 +361,9 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
 
         if error or not file_path:
-            await q.edit_message_text(error or Texts.GENERIC_ERROR_SHORT, reply_markup=kb_error)
+            await q.edit_message_text(
+                error or Texts.GENERIC_ERROR_SHORT, reply_markup=kb_error
+            )
             return
 
         await q.edit_message_text(Texts.SENDING_TO_TG)
@@ -336,7 +373,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
         # Extract video metadata for faster Telegram delivery + preview
         video_meta = await _extract_video_meta(
-            file_path, info_json_path=payload.get("info_json_path"),
+            file_path,
+            info_json_path=payload.get("info_json_path"),
         )
 
         success = await MediaSender.send_file(
@@ -386,15 +424,15 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     _, token = q.data.split("|", 1)
 
-
-
     # 1. Get file path from cache
     video_path = state.file_cache.get(token)
     if not video_path or not os.path.exists(video_path):
         try:
             await q.message.reply_text(Texts.GIF_FILE_EXPIRED, do_quote=True)
         except Exception as e:
-            logger.warning("Failed to reply about missing file", extra={"error": str(e)})
+            logger.warning(
+                "Failed to reply about missing file", extra={"error": str(e)}
+            )
         return
 
     # Check/Add to processing set (Debounce) — atomic under lock
@@ -403,7 +441,9 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             try:
                 await q.message.reply_text(Texts.GIF_ALREADY_IN_PROGRESS, do_quote=True)
             except Exception as e:
-                logger.warning("Failed to reply about in-progress GIF", extra={"error": str(e)})
+                logger.warning(
+                    "Failed to reply about in-progress GIF", extra={"error": str(e)}
+                )
             return
         state.processing_gifs.add(token)
 
@@ -417,7 +457,9 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         try:
             await q.message.reply_text(Texts.GIF_CONVERSION_ERROR, do_quote=True)
         except Exception as e:
-            logger.warning("Failed to reply about conversion error", extra={"error": str(e)})
+            logger.warning(
+                "Failed to reply about conversion error", extra={"error": str(e)}
+            )
         return
 
     # 3. Send as Reply to the VIDEO message

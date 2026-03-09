@@ -1,4 +1,5 @@
 """Tests for app.services.slideshow — SlideshowPipeline."""
+
 import os
 import tempfile
 import shutil
@@ -66,9 +67,11 @@ class TestDownloadSlideshow(unittest.IsolatedAsyncioTestCase):
         state.ytdlp.tiktok_proxy = None
 
         mock_result = MagicMock()
-        with patch("app.services.slideshow.asyncio.to_thread",
-                    new_callable=AsyncMock,
-                    return_value=(mock_result, None)):
+        with patch(
+            "app.services.slideshow.asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=(mock_result, None),
+        ):
             result, error = await SlideshowPipeline.download_slideshow(
                 "https://tiktok.com/@user/photo/123"
             )
@@ -84,9 +87,11 @@ class TestDownloadSlideshow(unittest.IsolatedAsyncioTestCase):
         state.ytdlp.cookies_path = None
         state.ytdlp.tiktok_proxy = None
 
-        with patch("app.services.slideshow.asyncio.to_thread",
-                    new_callable=AsyncMock,
-                    return_value=(None, "gallery-dl failed")):
+        with patch(
+            "app.services.slideshow.asyncio.to_thread",
+            new_callable=AsyncMock,
+            return_value=(None, "gallery-dl failed"),
+        ):
             result, error = await SlideshowPipeline.download_slideshow(
                 "https://tiktok.com/@user/photo/123"
             )

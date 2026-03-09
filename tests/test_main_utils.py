@@ -3,6 +3,7 @@ import unittest
 # Add repo root to path
 from app.core.utils import is_supported_url
 
+
 class TestMainUtils(unittest.TestCase):
     def test_is_supported_url(self):
         # Supported exact
@@ -29,6 +30,7 @@ class TestMainUtils(unittest.TestCase):
 
         # Case insensitivity (urlparse handles domain as lowercase usually, but good to check)
         self.assertTrue(is_supported_url("https://YOUTUBE.COM/watch"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -3,6 +3,7 @@
 Skipped by default in local runs (pytest addopts: -m 'not integration').
 Run explicitly with:  pytest -m integration --no-cov
 """
+
 import os
 import shutil
 import tempfile
@@ -35,7 +36,10 @@ class TestYtdlpIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_list_formats_returns_data(self):
         """yt-dlp can list formats for a public YouTube video."""
         proc = await asyncio.create_subprocess_exec(
-            "yt-dlp", "--dump-json", "--skip-download", TEST_VIDEO_URL,
+            "yt-dlp",
+            "--dump-json",
+            "--skip-download",
+            TEST_VIDEO_URL,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
@@ -43,6 +47,7 @@ class TestYtdlpIntegration(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(proc.returncode, 0, f"yt-dlp failed: {stderr.decode()[:200]}")
 
         import json
+
         info = json.loads(stdout.decode())
         self.assertIn("formats", info)
         self.assertGreater(len(info["formats"]), 0)
@@ -54,21 +59,28 @@ class TestYtdlpIntegration(unittest.IsolatedAsyncioTestCase):
         try:
             out_path = os.path.join(tmpdir, "audio.%(ext)s")
             proc = await asyncio.create_subprocess_exec(
-                "yt-dlp", "-f", "bestaudio[ext=m4a]/bestaudio",
-                "--max-filesize", "5M",
-                "-o", out_path,
+                "yt-dlp",
+                "-f",
+                "bestaudio[ext=m4a]/bestaudio",
+                "--max-filesize",
+                "5M",
+                "-o",
+                out_path,
                 TEST_VIDEO_URL,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-            self.assertEqual(proc.returncode, 0, f"yt-dlp failed: {stderr.decode()[:200]}")
+            self.assertEqual(
+                proc.returncode, 0, f"yt-dlp failed: {stderr.decode()[:200]}"
+            )
 
             files = os.listdir(tmpdir)
             self.assertGreater(len(files), 0, "No audio file downloaded")
             self.assertGreater(
-                os.path.getsize(os.path.join(tmpdir, files[0])), 1000,
-                "Audio file too small"
+                os.path.getsize(os.path.join(tmpdir, files[0])),
+                1000,
+                "Audio file too small",
             )
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
@@ -89,12 +101,25 @@ class TestFfmpegIntegration(unittest.IsolatedAsyncioTestCase):
 
             # Generate 1-second test video with color source
             gen_proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-y",
-                "-f", "lavfi", "-i", "color=c=red:s=64x64:d=1",
-                "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono",
-                "-t", "1", "-shortest",
-                "-c:v", "libx264", "-preset", "ultrafast",
-                "-c:a", "aac",
+                "ffmpeg",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=red:s=64x64:d=1",
+                "-f",
+                "lavfi",
+                "-i",
+                "anullsrc=r=44100:cl=mono",
+                "-t",
+                "1",
+                "-shortest",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-c:a",
+                "aac",
                 src,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -105,11 +130,17 @@ class TestFfmpegIntegration(unittest.IsolatedAsyncioTestCase):
 
             # Mute it (strip audio, copy video)
             mute_proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-y",
-                "-i", src,
-                "-c:v", "copy", "-an",
-                "-movflags", "frag_keyframe+empty_moov",
-                "-f", "mp4",
+                "ffmpeg",
+                "-y",
+                "-i",
+                src,
+                "-c:v",
+                "copy",
+                "-an",
+                "-movflags",
+                "frag_keyframe+empty_moov",
+                "-f",
+                "mp4",
                 dst,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -124,7 +155,8 @@ class TestFfmpegIntegration(unittest.IsolatedAsyncioTestCase):
     async def test_ffmpeg_version(self):
         """ffmpeg binary reports its version."""
         proc = await asyncio.create_subprocess_exec(
-            "ffmpeg", "-version",
+            "ffmpeg",
+            "-version",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

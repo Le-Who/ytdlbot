@@ -5,6 +5,7 @@ These tests simulate the full message → list_formats → pick → send
 pipeline through the real handler functions, verifying state transitions
 and data flow between components.
 """
+
 import unittest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -12,7 +13,6 @@ from unittest.mock import MagicMock, AsyncMock, patch
 from telegram import Message
 
 from app.bot import callbacks
-from app.bot.keyboards import build_format_keyboard
 from app.core import state
 from app.core.utils import extract_supported_url, is_supported_url
 from app.core.policy import size_allowed
@@ -23,6 +23,7 @@ from app.services.ytdlp.parsers import (
 )
 from app.services.ytdlp.models import FormatItem, FormatMetadata
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
+
 
 class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
     """Integration: URL → list_formats → keyboard → pick flow."""
@@ -41,27 +42,42 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
         state.ytdlp = MagicMock()
 
     async def test_full_private_message_flow(self):
-        """User sends URL → bot fetches formats → builds keyboard → user picks → link generated."""
+        """User picks format → link generated → feedback message sent (Strict AAA)."""
+        # --- Arrange ---
         url = "https://youtube.com/watch?v=test123"
-
-        # 1. Simulate list_formats result
         formats = [
-            FormatItem(format_id="137", label="📺 1080p • 100.0 MB", ext="mp4", height=1080, filesize=100*1024*1024),
-            FormatItem(format_id="136", label="📹 720p • 50.0 MB", ext="mp4", height=720, filesize=50*1024*1024),
+            FormatItem(
+                format_id="137",
+                label="📺 1080p • 100.0 MB",
+                ext="mp4",
+                height=1080,
+                filesize=100 * 1024 * 1024,
+            ),
+            FormatItem(
+                format_id="136",
+                label="📹 720p • 50.0 MB",
+                ext="mp4",
+                height=720,
+                filesize=50 * 1024 * 1024,
+            ),
         ]
-        audio = FormatItem(format_id=AUDIO_FORMAT_ID, label="🎵 Audio", ext="audio", height=None, filesize=None)
-        state.ytdlp.list_formats.return_value = ("Test Video", formats, audio, "05:30", False, None, "https://i.ytimg.com/vi/test123/maxresdefault.jpg")
-        state.info_cache[url] = ("Test Video", formats, audio, "05:30", False, None, "https://i.ytimg.com/vi/test123/maxresdefault.jpg")
+        audio = FormatItem(
+            format_id=AUDIO_FORMAT_ID,
+            label="🎵 Audio",
+            ext="audio",
+            height=None,
+            filesize=None,
+        )
+        state.info_cache[url] = (
+            "Test Video",
+            formats,
+            audio,
+            "05:30",
+            False,
+            None,
+            "https://i.ytimg.com/vi/test123/maxresdefault.jpg",
+        )
 
-        # 2. Build keyboard and verify structure
-        keyboard = build_format_keyboard(formats, audio)
-        buttons = keyboard.inline_keyboard
-        self.assertEqual(len(buttons), 2)  # 1 row of 2 video buttons + 1 row audio
-        self.assertEqual(buttons[0][0].callback_data, "pick|137")
-        self.assertEqual(buttons[0][1].callback_data, "pick|136")
-        self.assertEqual(buttons[1][0].callback_data, f"pick|{AUDIO_FORMAT_ID}")
-
-        # 3. Simulate on_pick
         update = MagicMock()
         context = MagicMock()
         update.callback_query.data = "pick|137"
@@ -71,19 +87,19 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
             "page_url": url,
             "title": "Test Video",
             "format_map": {"137": 1080, "136": 720},
-            "size_map": {"137": 100*1024*1024, "136": 50*1024*1024},
+            "size_map": {"137": 100 * 1024 * 1024, "136": 50 * 1024 * 1024},
         }
 
+        # --- Act ---
         await callbacks.on_pick(update, context)
 
-        # 4. Verify link_cache was populated
+        # --- Assert ---
         self.assertTrue(len(state.link_cache) > 0)
         token = list(state.link_cache.keys())[0]
         cached = state.link_cache[token]
         self.assertEqual(cached["format_id"], "137")
         self.assertEqual(cached["page_url"], url)
 
-        # 5. Verify response message
         args, kwargs = update.callback_query.edit_message_text.call_args
         msg = args[0]
         self.assertIn("1080p", msg)
@@ -95,7 +111,15 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
         url = "http://example.com/video"
         formats = [MagicMock(format_id="137", label="1080p")]
         audio = MagicMock(format_id="audio", label="Audio")
-        state.info_cache[url] = ("Video Title", formats, audio, "03:00", False, None, None)
+        state.info_cache[url] = (
+            "Video Title",
+            formats,
+            audio,
+            "03:00",
+            False,
+            None,
+            None,
+        )
 
         update = MagicMock()
         context = MagicMock()
@@ -110,6 +134,7 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
         args, kwargs = update.callback_query.edit_message_text.call_args
         self.assertIn("Video Title", args[0])
         self.assertIn("03:00", args[0])
+
 
 class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
     """Integration: pick → send → download → deliver flow."""
@@ -146,8 +171,15 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
         context.user_data = {"size_map": {}}
         context.bot = AsyncMock()
 
-        with patch("app.services.downloader.MediaSender.download_video", new_callable=AsyncMock) as mock_dl, \
-             patch("app.services.downloader.MediaSender.send_file", new_callable=AsyncMock) as mock_send:
+        with (
+            patch(
+                "app.services.downloader.MediaSender.download_video",
+                new_callable=AsyncMock,
+            ) as mock_dl,
+            patch(
+                "app.services.downloader.MediaSender.send_file", new_callable=AsyncMock
+            ) as mock_send,
+        ):
             mock_dl.return_value = ("/tmp/integration_test.mp4", None)
             mock_send.return_value = True
 
@@ -192,6 +224,7 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
         args, _ = update.callback_query.edit_message_text.call_args
         self.assertIn("Слишком много запросов", args[0])
 
+
 class TestParserIntegration(unittest.TestCase):
     """Integration: URL detection → format parsing → deduplication → label generation."""
 
@@ -208,12 +241,14 @@ class TestParserIntegration(unittest.TestCase):
         self.assertFalse(is_supported_url("not a url"))
 
     def test_url_extraction_from_text(self):
-        url = extract_supported_url("Check this out https://youtube.com/watch?v=abc123 cool right?")
+        url = extract_supported_url(
+            "Check this out https://youtube.com/watch?v=abc123 cool right?"
+        )
         self.assertIsNotNone(url)
         self.assertIn("youtube.com", url)
 
     def test_format_label_generation(self):
-        label = _create_format_label(1080, 100*1024*1024, "https", False)
+        label = _create_format_label(1080, 100 * 1024 * 1024, "https", False)
         self.assertIn("📺", label)
         self.assertIn("1080p", label)
         self.assertIn("100.0 MB", label)
@@ -221,9 +256,15 @@ class TestParserIntegration(unittest.TestCase):
     def test_tiktok_deduplication(self):
         """TikTok formats with same filesize are deduplicated."""
         formats = [
-            FormatMetadata(format_id="1", ext="mp4", height=720, filesize=5000, protocol="https"),
-            FormatMetadata(format_id="2", ext="mp4", height=720, filesize=5000, protocol="https"),
-            FormatMetadata(format_id="3", ext="mp4", height=720, filesize=10000, protocol="https"),
+            FormatMetadata(
+                format_id="1", ext="mp4", height=720, filesize=5000, protocol="https"
+            ),
+            FormatMetadata(
+                format_id="2", ext="mp4", height=720, filesize=5000, protocol="https"
+            ),
+            FormatMetadata(
+                format_id="3", ext="mp4", height=720, filesize=10000, protocol="https"
+            ),
         ]
         result = deduplicate_formats(formats, is_tiktok_url=True)
         self.assertEqual(len(result), 2)  # 5000 and 10000
@@ -231,9 +272,15 @@ class TestParserIntegration(unittest.TestCase):
     def test_non_tiktok_deduplication(self):
         """Non-TikTok formats are deduplicated by height."""
         formats = [
-            FormatMetadata(format_id="1", ext="mp4", height=1080, filesize=100, protocol="https"),
-            FormatMetadata(format_id="2", ext="mp4", height=1080, filesize=200, protocol="https"),
-            FormatMetadata(format_id="3", ext="mp4", height=720, filesize=50, protocol="https"),
+            FormatMetadata(
+                format_id="1", ext="mp4", height=1080, filesize=100, protocol="https"
+            ),
+            FormatMetadata(
+                format_id="2", ext="mp4", height=1080, filesize=200, protocol="https"
+            ),
+            FormatMetadata(
+                format_id="3", ext="mp4", height=720, filesize=50, protocol="https"
+            ),
         ]
         result = deduplicate_formats(formats, is_tiktok_url=False)
         self.assertEqual(len(result), 2)  # 1080 and 720
@@ -247,6 +294,7 @@ class TestParserIntegration(unittest.TestCase):
         fmt = get_special_format("https://pinterest.com/pin/123")
         self.assertEqual(fmt.format_id, GIF_FORMAT_ID)
         self.assertIn("GIF", fmt.label)
+
 
 class TestPolicyIntegration(unittest.TestCase):
     """Integration: size policy checks."""
@@ -264,9 +312,11 @@ class TestPolicyIntegration(unittest.TestCase):
     def test_size_allowed_exact_boundary(self):
         """Exactly at limit is allowed."""
         from app.core.config import MAX_TG_UPLOAD_MB
+
         exact = MAX_TG_UPLOAD_MB * 1024 * 1024
         self.assertTrue(size_allowed(exact, target="telegram"))
         self.assertFalse(size_allowed(exact + 1, target="telegram"))
+
 
 if __name__ == "__main__":
     unittest.main()

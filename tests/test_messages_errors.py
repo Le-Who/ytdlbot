@@ -1,4 +1,5 @@
 """Extended tests for app.bot.messages — error paths and edge cases."""
+
 import asyncio
 import unittest
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -134,11 +135,25 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         from app.bot.messages import on_message
         from app.services.ytdlp.models import FormatItem
 
-        fmt = FormatItem(format_id="137", label="📺 1080p", ext="mp4", height=1080, filesize=50_000_000)
-        special = FormatItem(format_id="audio", label="🎵 Audio", ext="audio", height=None, filesize=None)
+        fmt = FormatItem(
+            format_id="137",
+            label="📺 1080p",
+            ext="mp4",
+            height=1080,
+            filesize=50_000_000,
+        )
+        special = FormatItem(
+            format_id="audio", label="🎵 Audio", ext="audio", height=None, filesize=None
+        )
 
         state.info_cache["https://youtube.com/watch?v=abc"] = (
-            "Test Video", [fmt], special, "05:00", False, None, None,
+            "Test Video",
+            [fmt],
+            special,
+            "05:00",
+            False,
+            None,
+            None,
         )
 
         await on_message(self.update, self.context)
@@ -152,10 +167,18 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         from app.bot.messages import on_message
         from app.services.ytdlp.models import FormatItem
 
-        special = FormatItem(format_id="audio", label="🎵 Audio", ext="audio", height=None, filesize=None)
+        special = FormatItem(
+            format_id="audio", label="🎵 Audio", ext="audio", height=None, filesize=None
+        )
 
         state.info_cache["https://youtube.com/watch?v=abc"] = (
-            "Slideshow", [], special, "00:30", True, None, None,
+            "Slideshow",
+            [],
+            special,
+            "00:30",
+            True,
+            None,
+            None,
         )
 
         await on_message(self.update, self.context)
@@ -168,11 +191,25 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         from app.bot.messages import on_message
         from app.services.ytdlp.models import FormatItem
 
-        fmt = FormatItem(format_id="137", label="📺 1080p", ext="mp4", height=1080, filesize=50_000_000)
-        special = FormatItem(format_id="audio", label="🎵 Audio", ext="audio", height=None, filesize=None)
+        fmt = FormatItem(
+            format_id="137",
+            label="📺 1080p",
+            ext="mp4",
+            height=1080,
+            filesize=50_000_000,
+        )
+        special = FormatItem(
+            format_id="audio", label="🎵 Audio", ext="audio", height=None, filesize=None
+        )
 
         state.info_cache["https://youtube.com/watch?v=abc"] = (
-            "Test Video", [fmt], special, "05:00", False, None, "https://example.com/thumb.jpg",
+            "Test Video",
+            [fmt],
+            special,
+            "05:00",
+            False,
+            None,
+            "https://example.com/thumb.jpg",
         )
 
         await on_message(self.update, self.context)

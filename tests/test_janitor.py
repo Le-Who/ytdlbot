@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from app.tasks import janitor
 
+
 class TestJanitor(unittest.TestCase):
     def test_cleanup_temp_dir(self):
         with tempfile.TemporaryDirectory() as d:
@@ -14,7 +15,10 @@ class TestJanitor(unittest.TestCase):
                 f.write("x")
             old = time.time() - 7200
             os.utime(p, (old, old))
-            with patch("app.tasks.janitor.TEMP_DIR", d), patch("app.tasks.janitor.MAX_TEMP_AGE_SECONDS", 10):
+            with (
+                patch("app.tasks.janitor.TEMP_DIR", d),
+                patch("app.tasks.janitor.MAX_TEMP_AGE_SECONDS", 10),
+            ):
                 deleted, orphan = janitor.cleanup_temp_dir()
                 self.assertEqual(deleted, 1)
                 self.assertEqual(orphan, 1)
@@ -27,10 +31,14 @@ class TestJanitor(unittest.TestCase):
                 f.write("x")
             old = time.time() - 7200
             os.utime(p, (old, old))
-            with patch("app.tasks.janitor.TEMP_DIR", d), patch("app.tasks.janitor.MAX_TEMP_AGE_SECONDS", 10):
+            with (
+                patch("app.tasks.janitor.TEMP_DIR", d),
+                patch("app.tasks.janitor.MAX_TEMP_AGE_SECONDS", 10),
+            ):
                 deleted, orphan = janitor.cleanup_temp_dir()
                 self.assertEqual(deleted, 0)
                 self.assertTrue(os.path.exists(p))
+
 
 if __name__ == "__main__":
     unittest.main()

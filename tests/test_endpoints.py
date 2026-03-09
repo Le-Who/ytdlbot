@@ -1,4 +1,5 @@
 """Tests for API endpoints — /health, /metrics, /dl."""
+
 import unittest
 from unittest.mock import patch
 from fastapi import FastAPI

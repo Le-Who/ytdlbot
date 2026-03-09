@@ -8,6 +8,7 @@ from app.services.ytdlp.parsers import (
     TikTokError,
 )
 
+
 class TestIsFacebook(unittest.TestCase):
     def test_facebook_com(self):
         self.assertTrue(_is_facebook("https://www.facebook.com/watch/123"))
@@ -26,20 +27,17 @@ class TestIsFacebook(unittest.TestCase):
         self.assertFalse(_is_facebook("https://tiktok.com"))
         self.assertFalse(_is_facebook(""))
 
+
 class TestClassifyTikTokContent(unittest.TestCase):
     def test_photo_url(self):
         self.assertEqual(
-            classify_tiktok_content(
-                "https://www.tiktok.com/@user/photo/12345"
-            ),
+            classify_tiktok_content("https://www.tiktok.com/@user/photo/12345"),
             "slideshow",
         )
 
     def test_video_url(self):
         self.assertEqual(
-            classify_tiktok_content(
-                "https://www.tiktok.com/@user/video/12345"
-            ),
+            classify_tiktok_content("https://www.tiktok.com/@user/video/12345"),
             "video",
         )
 
@@ -52,11 +50,10 @@ class TestClassifyTikTokContent(unittest.TestCase):
 
     def test_case_insensitive(self):
         self.assertEqual(
-            classify_tiktok_content(
-                "https://www.tiktok.com/@user/PHOTO/12345"
-            ),
+            classify_tiktok_content("https://www.tiktok.com/@user/PHOTO/12345"),
             "slideshow",
         )
+
 
 class TestClassifyTikTokError(unittest.TestCase):
     def test_auth_required(self):
@@ -76,9 +73,7 @@ class TestClassifyTikTokError(unittest.TestCase):
     def test_auth_status_code(self):
         """TikTok 'Video not available, status code 10231' → AUTH."""
         self.assertEqual(
-            classify_tiktok_error(
-                "Video not available, status code 10231"
-            ),
+            classify_tiktok_error("Video not available, status code 10231"),
             TikTokError.AUTH_REQUIRED,
         )
         self.assertEqual(
@@ -121,6 +116,7 @@ class TestClassifyTikTokError(unittest.TestCase):
             classify_tiktok_error("Some unknown error occurred"),
             TikTokError.GENERIC,
         )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -37,12 +37,13 @@ def _is_facebook(url: str) -> bool:
 
 class TikTokError(Enum):
     """Structured classification of TikTok extraction errors."""
-    AUTH_REQUIRED = "auth"       # login / cookies / sign in
-    SLIDESHOW = "slideshow"      # unsupported url → photo content
-    FORBIDDEN = "forbidden"      # 403
-    NOT_FOUND = "not_found"      # 404
-    LIVE = "live"                # live stream
-    GENERIC = "generic"          # everything else
+
+    AUTH_REQUIRED = "auth"  # login / cookies / sign in
+    SLIDESHOW = "slideshow"  # unsupported url → photo content
+    FORBIDDEN = "forbidden"  # 403
+    NOT_FOUND = "not_found"  # 404
+    LIVE = "live"  # live stream
+    GENERIC = "generic"  # everything else
 
 
 def classify_tiktok_content(url: str) -> str:
@@ -150,8 +151,14 @@ def parse_format_metadata(
     duration_factor: Optional[float],
     is_tiktok_url: bool,
 ) -> Optional[FormatMetadata]:
-    if format_dict.get("vcodec") == "none" and not is_tiktok_url:
+    vcodec = format_dict.get("vcodec")
+    acodec = format_dict.get("acodec")
+
+    if vcodec == "none" and not is_tiktok_url:
         return None
+
+    vcodec_val = vcodec or "unknown"
+    acodec_val = acodec or "unknown"
     ext = format_dict.get("ext")
     protocol = format_dict.get("protocol") or ""
     if ext not in VIDEO_EXTENSIONS and "m3u8" not in protocol:
@@ -186,6 +193,8 @@ def parse_format_metadata(
         height=height or 0,
         filesize=filesize,
         protocol=protocol,
+        vcodec=vcodec_val,
+        acodec=acodec_val,
     )
 
 
@@ -193,8 +202,19 @@ def create_format_item(metadata: FormatMetadata, is_tiktok: bool) -> FormatItem:
     label = _create_format_label(
         metadata.height, metadata.filesize, metadata.protocol, is_tiktok
     )
+
+    final_format_id = metadata.format_id
+    if (
+        metadata.vcodec != "unknown"
+        and metadata.vcodec != "none"
+        and metadata.acodec == "none"
+        and not is_tiktok
+    ):
+        audio_sel = "bestaudio[format_note*=original]/bestaudio[language^=en]/bestaudio[language^=orig]/bestaudio/bestaudio[ext=m4a]/bestaudio"
+        final_format_id = f"{metadata.format_id}+({audio_sel})"
+
     return FormatItem(
-        format_id=metadata.format_id,
+        format_id=final_format_id,
         label=label,
         ext=metadata.ext,
         height=metadata.height,
@@ -215,15 +235,39 @@ def deduplicate_formats(
                 unique.append(fmt)
                 seen_sizes.add(key)
         return unique
-    unique_formats = []
-    seen_heights = set()
+
+    def score(f: FormatMetadata) -> int:
+        s = 0
+        if f.vcodec not in ("none", "unknown") and f.acodec not in ("none", "unknown"):
+            s += 1000  # Premuxed is heavily preferred to save CPU and RAM
+        vcodec_low = f.vcodec.lower()
+        if "avc1" in vcodec_low or "h264" in vcodec_low:
+            s += 500  # H264 is the most compatible
+        elif "mp4" in vcodec_low:
+            s += 300
+        elif "vp" in vcodec_low:
+            s += 100
+        return s
+
+    from collections import OrderedDict
+
+    groups = OrderedDict()
     for fmt in formats:
         h = fmt.height
-        if h and h not in seen_heights:
-            unique_formats.append(fmt)
-            seen_heights.add(h)
-        elif not h:
-            unique_formats.append(fmt)
+        if h not in groups:
+            groups[h] = []
+        groups[h].append(fmt)
+
+    unique_formats = []
+    for h, fmts in groups.items():
+        if not h:
+            unique_formats.extend(fmts)
+        else:
+            best_fmt = sorted(
+                fmts, key=lambda f: (score(f), -(formats.index(f))), reverse=True
+            )[0]
+            unique_formats.append(best_fmt)
+
     return unique_formats
 
 
@@ -264,9 +308,6 @@ def detect_tiktok_slideshow(info: Dict[str, Any], url: str) -> bool:
         return True
 
     # Check if all formats are audio-only (vcodec == "none")
-    has_video = any(
-        fmt.get("vcodec") not in (None, "none")
-        for fmt in raw_formats
-    )
+    has_video = any(fmt.get("vcodec") not in (None, "none") for fmt in raw_formats)
 
     return not has_video

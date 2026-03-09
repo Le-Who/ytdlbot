@@ -1,17 +1,30 @@
 """Comprehensive tests for app.services.ytdlp.parsers — all public functions."""
+
 import unittest
 from app.services.ytdlp.parsers import (
-    _is_tiktok, _is_youtube, _is_pinterest, _is_facebook,
-    classify_tiktok_content, classify_tiktok_error, TikTokError,
-    _format_duration, _extract_height, _calculate_filesize,
-    _create_format_label, parse_format_metadata, create_format_item,
-    deduplicate_formats, get_special_format, detect_tiktok_slideshow,
+    _is_tiktok,
+    _is_youtube,
+    _is_pinterest,
+    _is_facebook,
+    classify_tiktok_content,
+    classify_tiktok_error,
+    TikTokError,
+    _format_duration,
+    _extract_height,
+    _calculate_filesize,
+    _create_format_label,
+    parse_format_metadata,
+    create_format_item,
+    deduplicate_formats,
+    get_special_format,
+    detect_tiktok_slideshow,
 )
 from app.services.ytdlp.models import FormatMetadata
 from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
 
 # ── Platform detection ────────────────────────────────────────────
+
 
 class TestPlatformDetection(unittest.TestCase):
     def test_is_tiktok(self):
@@ -36,6 +49,7 @@ class TestPlatformDetection(unittest.TestCase):
 
 # ── TikTok classification ────────────────────────────────────────
 
+
 class TestClassifyTikTokContent(unittest.TestCase):
     def test_photo_url_is_slideshow(self):
         self.assertEqual(
@@ -52,19 +66,29 @@ class TestClassifyTikTokContent(unittest.TestCase):
 
 class TestClassifyTikTokError(unittest.TestCase):
     def test_auth_required_login(self):
-        self.assertEqual(classify_tiktok_error("Please log in"), TikTokError.AUTH_REQUIRED)
+        self.assertEqual(
+            classify_tiktok_error("Please log in"), TikTokError.AUTH_REQUIRED
+        )
 
     def test_auth_required_cookies(self):
-        self.assertEqual(classify_tiktok_error("cookies required"), TikTokError.AUTH_REQUIRED)
+        self.assertEqual(
+            classify_tiktok_error("cookies required"), TikTokError.AUTH_REQUIRED
+        )
 
     def test_auth_required_sign_in(self):
-        self.assertEqual(classify_tiktok_error("Sign in to continue"), TikTokError.AUTH_REQUIRED)
+        self.assertEqual(
+            classify_tiktok_error("Sign in to continue"), TikTokError.AUTH_REQUIRED
+        )
 
     def test_auth_required_not_available(self):
-        self.assertEqual(classify_tiktok_error("Video not available"), TikTokError.AUTH_REQUIRED)
+        self.assertEqual(
+            classify_tiktok_error("Video not available"), TikTokError.AUTH_REQUIRED
+        )
 
     def test_slideshow(self):
-        self.assertEqual(classify_tiktok_error("Unsupported URL"), TikTokError.SLIDESHOW)
+        self.assertEqual(
+            classify_tiktok_error("Unsupported URL"), TikTokError.SLIDESHOW
+        )
 
     def test_forbidden(self):
         self.assertEqual(classify_tiktok_error("HTTP Error 403"), TikTokError.FORBIDDEN)
@@ -76,10 +100,13 @@ class TestClassifyTikTokError(unittest.TestCase):
         self.assertEqual(classify_tiktok_error("Live stream"), TikTokError.LIVE)
 
     def test_generic(self):
-        self.assertEqual(classify_tiktok_error("some random error"), TikTokError.GENERIC)
+        self.assertEqual(
+            classify_tiktok_error("some random error"), TikTokError.GENERIC
+        )
 
 
 # ── Duration formatting ──────────────────────────────────────────
+
 
 class TestFormatDuration(unittest.TestCase):
     def test_none(self):
@@ -100,6 +127,7 @@ class TestFormatDuration(unittest.TestCase):
 
 # ── Height extraction ────────────────────────────────────────────
 
+
 class TestExtractHeight(unittest.TestCase):
     def test_720p(self):
         self.assertEqual(_extract_height("720p"), 720)
@@ -115,6 +143,7 @@ class TestExtractHeight(unittest.TestCase):
 
 
 # ── Filesize calculation ─────────────────────────────────────────
+
 
 class TestCalculateFilesize(unittest.TestCase):
     def test_explicit_filesize(self):
@@ -136,6 +165,7 @@ class TestCalculateFilesize(unittest.TestCase):
 
 
 # ── Format label creation ────────────────────────────────────────
+
 
 class TestCreateFormatLabel(unittest.TestCase):
     def test_tiktok_label(self):
@@ -171,6 +201,7 @@ class TestCreateFormatLabel(unittest.TestCase):
 
 
 # ── parse_format_metadata ────────────────────────────────────────
+
 
 class TestParseFormatMetadata(unittest.TestCase):
     def test_valid_mp4_format(self):
@@ -235,11 +266,15 @@ class TestParseFormatMetadata(unittest.TestCase):
 
 # ── create_format_item ───────────────────────────────────────────
 
+
 class TestCreateFormatItem(unittest.TestCase):
     def test_creates_item(self):
         meta = FormatMetadata(
-            format_id="137", ext="mp4", height=1080,
-            filesize=50_000_000, protocol="https",
+            format_id="137",
+            ext="mp4",
+            height=1080,
+            filesize=50_000_000,
+            protocol="https",
         )
         item = create_format_item(meta, is_tiktok=False)
         self.assertEqual(item.format_id, "137")
@@ -247,6 +282,7 @@ class TestCreateFormatItem(unittest.TestCase):
 
 
 # ── deduplicate_formats ──────────────────────────────────────────
+
 
 class TestDeduplicateFormats(unittest.TestCase):
     def test_dedup_by_height(self):
@@ -279,6 +315,7 @@ class TestDeduplicateFormats(unittest.TestCase):
 
 # ── get_special_format ───────────────────────────────────────────
 
+
 class TestGetSpecialFormat(unittest.TestCase):
     def test_pinterest_returns_gif(self):
         item = get_special_format("https://pinterest.com/pin/123")
@@ -293,26 +330,29 @@ class TestGetSpecialFormat(unittest.TestCase):
 
 # ── detect_tiktok_slideshow ──────────────────────────────────────
 
+
 class TestDetectTikTokSlideshow(unittest.TestCase):
     def test_non_tiktok_returns_false(self):
         self.assertFalse(detect_tiktok_slideshow({}, "https://youtube.com"))
 
     def test_no_formats_returns_true(self):
-        self.assertTrue(detect_tiktok_slideshow(
-            {"formats": []}, "https://tiktok.com/@user/video/123"
-        ))
+        self.assertTrue(
+            detect_tiktok_slideshow(
+                {"formats": []}, "https://tiktok.com/@user/video/123"
+            )
+        )
 
     def test_audio_only_returns_true(self):
         info = {"formats": [{"vcodec": "none"}, {"vcodec": "none"}]}
-        self.assertTrue(detect_tiktok_slideshow(
-            info, "https://tiktok.com/@user/video/123"
-        ))
+        self.assertTrue(
+            detect_tiktok_slideshow(info, "https://tiktok.com/@user/video/123")
+        )
 
     def test_has_video_returns_false(self):
         info = {"formats": [{"vcodec": "avc1"}, {"vcodec": "none"}]}
-        self.assertFalse(detect_tiktok_slideshow(
-            info, "https://tiktok.com/@user/video/123"
-        ))
+        self.assertFalse(
+            detect_tiktok_slideshow(info, "https://tiktok.com/@user/video/123")
+        )
 
 
 if __name__ == "__main__":

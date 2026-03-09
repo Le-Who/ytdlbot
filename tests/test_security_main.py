@@ -1,4 +1,5 @@
 """Tests for /dl endpoint security — verifies REAL download route behavior."""
+
 import unittest
 import re
 
@@ -9,6 +10,7 @@ from app.api.routes import router
 
 _app = FastAPI()
 _app.include_router(router)
+
 
 class TestDownloadEndpoint(unittest.TestCase):
     """Test the real /dl/{token} endpoint via TestClient."""
@@ -26,7 +28,9 @@ class TestDownloadEndpoint(unittest.TestCase):
     @patch("app.api.routes.state")
     def test_rate_limited_ip_returns_429(self, mock_state):
         """Rate-limited IP returns 429."""
-        mock_state.link_cache = {"valid_token": {"page_url": "http://example.com", "title": "Test"}}
+        mock_state.link_cache = {
+            "valid_token": {"page_url": "http://example.com", "title": "Test"}
+        }
         mock_state.limiter.allow_ip.return_value = False
         mock_state.limiter.allow_token.return_value = True
         resp = self.client.get("/dl/valid_token")
@@ -35,11 +39,14 @@ class TestDownloadEndpoint(unittest.TestCase):
     @patch("app.api.routes.state")
     def test_rate_limited_token_returns_429(self, mock_state):
         """Rate-limited token returns 429."""
-        mock_state.link_cache = {"valid_token": {"page_url": "http://example.com", "title": "Test"}}
+        mock_state.link_cache = {
+            "valid_token": {"page_url": "http://example.com", "title": "Test"}
+        }
         mock_state.limiter.allow_ip.return_value = True
         mock_state.limiter.allow_token.return_value = False
         resp = self.client.get("/dl/valid_token")
         self.assertEqual(resp.status_code, 429)
+
 
 class TestFilenameSanitization(unittest.TestCase):
     """Test the REAL filename sanitization logic from routes.download.
@@ -51,7 +58,7 @@ class TestFilenameSanitization(unittest.TestCase):
     @staticmethod
     def _sanitize(raw_title: str) -> str:
         """Reproduce the exact sanitization from routes.py download()."""
-        return re.sub(r'[\x00-\x1f\x7f\r\n]', '', raw_title)[:200]
+        return re.sub(r"[\x00-\x1f\x7f\r\n]", "", raw_title)[:200]
 
     def test_control_chars_stripped(self):
         """Control characters and CRLF are removed."""
@@ -80,6 +87,7 @@ class TestFilenameSanitization(unittest.TestCase):
         """Normal Unicode (Cyrillic, emoji) is preserved."""
         clean = self._sanitize("Привет 🎬 мир")
         self.assertEqual(clean, "Привет 🎬 мир")
+
 
 if __name__ == "__main__":
     unittest.main()

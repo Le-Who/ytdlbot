@@ -1,4 +1,5 @@
 """Tests for app.tasks.janitor — cleanup_temp_dir and janitor_loop."""
+
 import os
 import time
 import asyncio
@@ -13,6 +14,7 @@ class TestCleanupTempDir(unittest.TestCase):
     def setUp(self):
         """Create a temp directory with test files."""
         import tempfile
+
         self.temp_dir = tempfile.mkdtemp()
         self._patches = []
 
@@ -26,6 +28,7 @@ class TestCleanupTempDir(unittest.TestCase):
         for p in self._patches:
             p.stop()
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_empty_dir_returns_zeros(self):

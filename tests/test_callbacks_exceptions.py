@@ -3,6 +3,7 @@
 Verifies that on_pick, on_cancel, on_send handle malformed/None callback data
 gracefully: no crash, correct early return, and appropriate user feedback.
 """
+
 import asyncio
 import unittest
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -11,6 +12,7 @@ from telegram import Message
 
 from app.bot import callbacks
 from app.core import state
+
 
 class TestCallbacksExceptions(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
@@ -116,6 +118,7 @@ class TestCallbacksExceptions(unittest.IsolatedAsyncioTestCase):
         await callbacks.on_send(self.update, self.context)
         args, _ = self.update.callback_query.edit_message_text.call_args
         self.assertEqual(args[0], "⚠️ Ссылка устарела.")
+
 
 if __name__ == "__main__":
     unittest.main()

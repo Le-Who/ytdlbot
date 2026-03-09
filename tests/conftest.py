@@ -5,19 +5,21 @@ or app.main can collect without ImportError.
 
 Also provides shared fixtures to DRY up test setup boilerplate.
 """
+
 import os
 import sys
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
 # Ensure project root is on sys.path (centralised — no need in individual test files)
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from telegram import Message
 
 
 class MockHTTPException(Exception):
     """Real Exception subclass standing in for fastapi.HTTPException."""
+
     def __init__(self, status_code: int = 500, detail: str = ""):
         self.status_code = status_code
         self.detail = detail
@@ -27,6 +29,7 @@ class MockHTTPException(Exception):
 def _is_real_fastapi() -> bool:
     try:
         import fastapi
+
         return hasattr(fastapi, "__file__") and fastapi.__file__ is not None
     except ImportError:
         return False

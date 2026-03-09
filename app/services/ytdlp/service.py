@@ -1,4 +1,3 @@
-
 import shutil
 import subprocess
 import json
@@ -77,7 +76,9 @@ class YtDlpService:
         """Backward-compat: return TikTok cookies (used by slideshow etc.)"""
         return self.cookies_manager.tiktok_cookies_path
 
-    def _base_opts(self, for_list_formats: bool = False, url: str = "") -> Dict[str, Any]:
+    def _base_opts(
+        self, for_list_formats: bool = False, url: str = ""
+    ) -> Dict[str, Any]:
         """Базовые опции для yt-dlp"""
         # Start with cached immutable options
         opts = self._BASE_OPTS_TEMPLATE.copy()
@@ -168,13 +169,14 @@ class YtDlpService:
             return info, True
         return None, used_subprocess
 
-    def _try_gallery_dl_video(
-        self, url: str
-    ) -> tuple[Optional[str], Optional[str]]:
+    def _try_gallery_dl_video(self, url: str) -> tuple[Optional[str], Optional[str]]:
         """Try downloading TikTok video via gallery-dl (fallback for classified content)."""
         from app.services.gallery_dl.service import GalleryDlService
+
         return GalleryDlService.download_video(
-            url, self.cookies_path, proxy=self.tiktok_proxy,
+            url,
+            self.cookies_path,
+            proxy=self.tiktok_proxy,
         )
 
     @staticmethod
@@ -189,6 +191,7 @@ class YtDlpService:
         """
         import asyncio
         from app.services.tikwm import TikWMService
+
         try:
             loop = asyncio.get_event_loop()
             future = asyncio.run_coroutine_threadsafe(
@@ -208,8 +211,10 @@ class YtDlpService:
         class _YtdlpLogger:
             def debug(self, msg, *args):
                 pass
+
             def info(self, msg, *args):
                 pass
+
             def warning(self, msg, *args):
                 formatted = msg % args if args else msg
                 # Known internal retry — not a real warning
@@ -217,6 +222,7 @@ class YtDlpService:
                     logger.debug("yt-dlp: %s", formatted)
                 else:
                     logger.warning("yt-dlp: %s", formatted)
+
             def error(self, msg, *args):
                 formatted = msg % args if args else msg
                 logger.error("yt-dlp: %s", formatted)
@@ -228,7 +234,9 @@ class YtDlpService:
 
     def list_formats(
         self, url: str, max_items: int = 12
-    ) -> Tuple[str, List[FormatItem], FormatItem, str, bool, Optional[str], Optional[str]]:
+    ) -> Tuple[
+        str, List[FormatItem], FormatItem, str, bool, Optional[str], Optional[str]
+    ]:
         """Извлекает форматы видео с обработкой ошибок.
 
         Returns:
@@ -263,25 +271,20 @@ class YtDlpService:
                         if self.tiktok_proxy:
                             logger.info(
                                 "TikTok classified content, trying gallery-dl "
-                                "(proxy configured): %s", url
+                                "(proxy configured): %s",
+                                url,
                             )
                             video_path, gdl_err = self._try_gallery_dl_video(url)
                             if video_path:
                                 raise DirectDownloadReady(video_path, "TikTok Video")
-                            logger.warning(
-                                "gallery-dl fallback failed: %s", gdl_err
-                            )
+                            logger.warning("gallery-dl fallback failed: %s", gdl_err)
 
                         # TikWM third-party API — works from datacenter IPs
-                        logger.info(
-                            "TikTok classified content, trying TikWM: %s", url
-                        )
+                        logger.info("TikTok classified content, trying TikWM: %s", url)
                         video_path, twm_err = self._try_tikwm_video(url)
                         if video_path:
                             raise DirectDownloadReady(video_path, "TikTok Video")
-                        logger.warning(
-                            "TikWM fallback also failed: %s", twm_err
-                        )
+                        logger.warning("TikWM fallback also failed: %s", twm_err)
                         raise AccessDeniedError(
                             "⚠️ Контент с ограниченным доступом. "
                             "Требуется авторизация (cookies могут быть устаревшими)."
@@ -292,7 +295,15 @@ class YtDlpService:
                             "TikTok unsupported URL, routing to slideshow: %s", url
                         )
                         special_format = get_special_format(url)
-                        return "TikTok Slideshow", [], special_format, "—", True, None, None
+                        return (
+                            "TikTok Slideshow",
+                            [],
+                            special_format,
+                            "—",
+                            True,
+                            None,
+                            None,
+                        )
 
                     elif error_class == TikTokError.FORBIDDEN:
                         raise AccessDeniedError(Texts.SVC_ACCESS_DENIED)
@@ -306,17 +317,30 @@ class YtDlpService:
                     else:  # TikTokError.GENERIC
                         logger.info(
                             "TikTok extraction failed (unknown error), "
-                            "trying slideshow fallback: %s", url
+                            "trying slideshow fallback: %s",
+                            url,
                         )
                         special_format = get_special_format(url)
-                        return "TikTok Slideshow", [], special_format, "—", True, None, None
+                        return (
+                            "TikTok Slideshow",
+                            [],
+                            special_format,
+                            "—",
+                            True,
+                            None,
+                            None,
+                        )
 
                 # Non-TikTok error handling
                 if "403" in error_msg or "forbidden" in error_msg:
                     raise AccessDeniedError(Texts.SVC_ACCESS_DENIED)
                 elif "404" in error_msg or "not found" in error_msg:
                     raise VideoNotFoundError(Texts.SVC_VIDEO_NOT_FOUND)
-                elif "log in" in error_msg or "cookies" in error_msg or "sign in" in error_msg:
+                elif (
+                    "log in" in error_msg
+                    or "cookies" in error_msg
+                    or "sign in" in error_msg
+                ):
                     raise AccessDeniedError(
                         "⚠️ Контент с ограниченным доступом. "
                         "Требуется авторизация (cookies могут быть устаревшими)."
@@ -328,7 +352,9 @@ class YtDlpService:
                     msg = str(e)
                     if "format is not available" in msg.lower():
                         msg = Texts.SVC_FORMAT_UNAVAILABLE
-                    raise ExtractionError(Texts.SVC_EXTRACTION_ERROR.format(detail=msg[:300]))
+                    raise ExtractionError(
+                        Texts.SVC_EXTRACTION_ERROR.format(detail=msg[:300])
+                    )
 
         if info.get("is_live") or info.get("live_status") == "is_live":
             raise LiveStreamError(
@@ -389,6 +415,7 @@ class YtDlpService:
         if info:
             try:
                 import uuid as _uuid
+
                 info_json_path = os.path.join(
                     TEMP_DIR, f"info_{_uuid.uuid4().hex}.json"
                 )
@@ -399,7 +426,15 @@ class YtDlpService:
                 logger.warning("Failed to cache info JSON: %s", exc)
                 info_json_path = None
 
-        return title, formats, special_format, duration_str, is_slideshow, info_json_path, thumbnail_url
+        return (
+            title,
+            formats,
+            special_format,
+            duration_str,
+            is_slideshow,
+            info_json_path,
+            thumbnail_url,
+        )
 
     def build_command(
         self,

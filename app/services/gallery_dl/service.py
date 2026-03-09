@@ -52,8 +52,10 @@ class GalleryDlService:
 
         cmd = [
             "gallery-dl",
-            "--directory", output_dir,
-            "--filename", "{num:>03}.{extension}",
+            "--directory",
+            output_dir,
+            "--filename",
+            "{num:>03}.{extension}",
             "--no-mtime",
             "--write-metadata",
         ]
@@ -88,7 +90,9 @@ class GalleryDlService:
             logger.error("[GALLERY-DL] Download timed out")
             return None, "⚠️ Время ожидания загрузки истекло."
         except Exception as e:
-            logger.error("gallery-dl unexpected error", extra={"error": str(e)}, exc_info=True)
+            logger.error(
+                "gallery-dl unexpected error", extra={"error": str(e)}, exc_info=True
+            )
             return None, "⚠️ Внутренняя ошибка при загрузке."
 
         # Collect downloaded files
@@ -113,8 +117,10 @@ class GalleryDlService:
 
         cmd = [
             "gallery-dl",
-            "--directory", output_dir,
-            "--filename", "{id}.{extension}",
+            "--directory",
+            output_dir,
+            "--filename",
+            "{id}.{extension}",
             "--no-mtime",
         ]
 
@@ -147,7 +153,11 @@ class GalleryDlService:
             logger.error("[GALLERY-DL] Video download timed out")
             return None, "gallery-dl timeout"
         except Exception as e:
-            logger.error("Video download unexpected error", extra={"error": str(e)}, exc_info=True)
+            logger.error(
+                "Video download unexpected error",
+                extra={"error": str(e)},
+                exc_info=True,
+            )
             return None, str(e)
 
         # Find the video file
@@ -212,8 +222,7 @@ class GalleryDlService:
             return None, "⚠️ Не удалось найти фото в слайдшоу."
 
         logger.info(
-            f"[GALLERY-DL] Found {len(images)} images, "
-            f"audio={'yes' if audio else 'no'}"
+            f"[GALLERY-DL] Found {len(images)} images, audio={'yes' if audio else 'no'}"
         )
 
         return SlideshowResult(images=images, audio=audio, title=title), None

@@ -1,4 +1,5 @@
 """Tests for app.services.downloader — VideoDownloader + helpers."""
+
 import unittest
 from unittest.mock import patch, MagicMock
 import os
@@ -30,6 +31,7 @@ class TestVideoDownloader(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         from app.core import state as s
+
         s.file_cache = {}
         s.cancel_cache = {}
         s.ytdlp = MagicMock()
@@ -51,7 +53,9 @@ class TestVideoDownloader(unittest.IsolatedAsyncioTestCase):
             s.file_cache["tok123"] = tmp.name
             path, error = await VideoDownloader.download_video(
                 "https://youtube.com/watch?v=abc",
-                "137", 1080, "tok123",
+                "137",
+                1080,
+                "tok123",
             )
             self.assertEqual(path, tmp.name)
             self.assertIsNone(error)
@@ -69,7 +73,9 @@ class TestVideoDownloader(unittest.IsolatedAsyncioTestCase):
         # doesn't produce a file — we just verify it doesn't return the ghost path
         path, error = await VideoDownloader.download_video(
             "https://youtube.com/watch?v=abc",
-            "137", 1080, "tok_ghost",
+            "137",
+            1080,
+            "tok_ghost",
         )
         # The ghost path should NOT be returned
         self.assertNotEqual(path, "/nonexistent/file.mp4")

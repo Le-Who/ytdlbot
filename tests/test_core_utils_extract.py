@@ -18,6 +18,7 @@ os.environ["BOT_TOKEN"] = "test_token"
 # Now import
 from app.core.utils import extract_supported_url
 
+
 class TestExtractSupportedUrl(unittest.TestCase):
     def test_extract_valid_url(self):
         text = "Check out https://youtube.com/watch?v=123"
@@ -41,6 +42,7 @@ class TestExtractSupportedUrl(unittest.TestCase):
         text = "Link: https://youtube.com/watch?v=123."
         expected = "https://youtube.com/watch?v=123"
         self.assertEqual(extract_supported_url(text), expected)
+
 
 if __name__ == "__main__":
     unittest.main()

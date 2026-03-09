@@ -1,11 +1,18 @@
 """Property-based tests using hypothesis for parsers and URL validation."""
+
 import unittest
 from hypothesis import given, strategies as st, settings
 
 from app.services.ytdlp.parsers import (
-    _is_tiktok, _is_youtube, _is_pinterest, _is_facebook,
-    _format_duration, _create_format_label, _calculate_filesize,
-    classify_tiktok_error, TikTokError,
+    _is_tiktok,
+    _is_youtube,
+    _is_pinterest,
+    _is_facebook,
+    _format_duration,
+    _create_format_label,
+    _calculate_filesize,
+    classify_tiktok_error,
+    TikTokError,
     deduplicate_formats,
 )
 from app.services.ytdlp.models import FormatMetadata
@@ -14,8 +21,8 @@ from app.core.utils import is_supported_url, extract_supported_url
 
 # ── Duration formatting properties ───────────────────────────────
 
-class TestDurationProperties(unittest.TestCase):
 
+class TestDurationProperties(unittest.TestCase):
     @given(st.floats(min_value=0, max_value=100_000, allow_nan=False))
     @settings(max_examples=100)
     def test_format_duration_never_crashes(self, seconds):
@@ -40,8 +47,8 @@ class TestDurationProperties(unittest.TestCase):
 
 # ── Format label properties ──────────────────────────────────────
 
-class TestFormatLabelProperties(unittest.TestCase):
 
+class TestFormatLabelProperties(unittest.TestCase):
     @given(
         height=st.one_of(st.none(), st.integers(min_value=1, max_value=4320)),
         filesize=st.one_of(st.none(), st.integers(min_value=0, max_value=10**10)),
@@ -49,7 +56,9 @@ class TestFormatLabelProperties(unittest.TestCase):
         is_tiktok=st.booleans(),
     )
     @settings(max_examples=200)
-    def test_create_format_label_never_crashes(self, height, filesize, protocol, is_tiktok):
+    def test_create_format_label_never_crashes(
+        self, height, filesize, protocol, is_tiktok
+    ):
         """_create_format_label should never raise for any input."""
         result = _create_format_label(height, filesize, protocol, is_tiktok)
         self.assertIsInstance(result, str)
@@ -75,8 +84,8 @@ class TestFormatLabelProperties(unittest.TestCase):
 
 # ── Filesize calculation properties ──────────────────────────────
 
-class TestFilesizeProperties(unittest.TestCase):
 
+class TestFilesizeProperties(unittest.TestCase):
     @given(filesize=st.integers(min_value=1, max_value=10**10))
     @settings(max_examples=50)
     def test_explicit_filesize_returned_directly(self, filesize):
@@ -85,8 +94,12 @@ class TestFilesizeProperties(unittest.TestCase):
         self.assertEqual(result, filesize)
 
     @given(
-        tbr=st.floats(min_value=1, max_value=100_000, allow_nan=False, allow_infinity=False),
-        factor=st.floats(min_value=0.1, max_value=10_000, allow_nan=False, allow_infinity=False),
+        tbr=st.floats(
+            min_value=1, max_value=100_000, allow_nan=False, allow_infinity=False
+        ),
+        factor=st.floats(
+            min_value=0.1, max_value=10_000, allow_nan=False, allow_infinity=False
+        ),
     )
     @settings(max_examples=50)
     def test_tbr_calculation_is_positive(self, tbr, factor):
@@ -98,8 +111,8 @@ class TestFilesizeProperties(unittest.TestCase):
 
 # ── TikTok error classification properties ───────────────────────
 
-class TestTikTokErrorProperties(unittest.TestCase):
 
+class TestTikTokErrorProperties(unittest.TestCase):
     @given(msg=st.text(min_size=0, max_size=500))
     @settings(max_examples=200)
     def test_classify_tiktok_error_always_returns_enum(self, msg):
@@ -110,8 +123,8 @@ class TestTikTokErrorProperties(unittest.TestCase):
 
 # ── URL detection properties ─────────────────────────────────────
 
-class TestURLDetectionProperties(unittest.TestCase):
 
+class TestURLDetectionProperties(unittest.TestCase):
     @given(url=st.text(min_size=0, max_size=300))
     @settings(max_examples=200)
     def test_platform_detectors_never_crash(self, url):
@@ -138,10 +151,12 @@ class TestURLDetectionProperties(unittest.TestCase):
 
 # ── Deduplication properties ─────────────────────────────────────
 
-class TestDeduplicationProperties(unittest.TestCase):
 
+class TestDeduplicationProperties(unittest.TestCase):
     @given(
-        heights=st.lists(st.integers(min_value=0, max_value=4320), min_size=0, max_size=20),
+        heights=st.lists(
+            st.integers(min_value=0, max_value=4320), min_size=0, max_size=20
+        ),
     )
     @settings(max_examples=100)
     def test_dedup_never_adds_formats(self, heights):
@@ -154,14 +169,15 @@ class TestDeduplicationProperties(unittest.TestCase):
         self.assertLessEqual(len(result), len(formats))
 
     @given(
-        sizes=st.lists(st.integers(min_value=0, max_value=10**8), min_size=0, max_size=20),
+        sizes=st.lists(
+            st.integers(min_value=0, max_value=10**8), min_size=0, max_size=20
+        ),
     )
     @settings(max_examples=100)
     def test_tiktok_dedup_never_adds_formats(self, sizes):
         """TikTok dedup by filesize never returns more items than input."""
         formats = [
-            FormatMetadata(f"f{i}", "mp4", 720, s, "https")
-            for i, s in enumerate(sizes)
+            FormatMetadata(f"f{i}", "mp4", 720, s, "https") for i, s in enumerate(sizes)
         ]
         result = deduplicate_formats(formats, is_tiktok_url=True)
         self.assertLessEqual(len(result), len(formats))

@@ -17,6 +17,7 @@ The project is well-structured and highly tested (>400 tests, CI/CD pipeline). H
 - **Smart Group Mode**: Automatically selects and downloads the best quality video (<45MB by default) when a link is sent in a group chat.
 - **Interactive Private Mode**: Presents inline keyboard options for users to select specific video qualities or audio-only formats.
 - **TikTok Slideshow Support**: Converts TikTok carousels into either a 📸 Photo Album (media group) or a 🎬 Video Slideshow (MP4 with audio) using `ffmpeg`.
+- **Strict Format Binding**: Guaranteed zero-mismatch downloads across platforms. Parses formats early to skip FFmpeg muxing (pre-mux priority), conserving resources and preventing Telegram size-limit errors.
 - **Zero-Disk Pipeline**: Converts video to GIF natively without saving intermediary files to disk (`yt-dlp` -> `ffmpeg` pipe).
 - **Concurrency & Caching**: Employs completely asynchronous logic, `TTLCache` for format metadata, and `--load-info-json` to bypass duplicate extraction API calls.
 - **Rate Limiting**: Multi-layered token bucket limiter preventing abuse per User, Chat, IP, and Token.

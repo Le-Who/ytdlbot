@@ -65,41 +65,17 @@ def build_command(
     # Проверяем, является ли это GIF форматом для Pinterest
     is_gif_format = format_id == GIF_FORMAT_ID
 
-    # 1. Селектор видео
-    if height:
-        video_sel = f"bestvideo[height={height}]"
-        prog_sel = f"best[height={height}]"
-    elif (
-        "+" not in format_id
-        and format_id not in ("bestaudio/best", "best")
-        and not is_gif_format
-    ):
-        video_sel = format_id
-        prog_sel = "best"
-    elif is_gif_format:
+    if is_gif_format:
         # Для GIF используем bestvideo без аудио
-        cmd = _get_base_cmd("bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best", output)
-        _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy, info_json_path)
-        return cmd
+        final_fmt = "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
+    elif format_id in ("bestaudio/best", "best", "audio"):
+        final_fmt = "bestaudio/best" if format_id == "audio" else format_id
     else:
-        # Аудио/Raw или составной формат (bestvideo+bestaudio)
-        cmd = _get_base_cmd(format_id, output)
-        if output != "-" and use_aria2 and has_aria2_installed:
-            cmd.extend([
-                "--downloader", "http:aria2c",
-                "--downloader-args",
-                "aria2c:-x 16 -s 16 -k 1M",
-            ])
-        _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy, info_json_path)
-        return cmd
-
-    # 2. Селектор аудио (Original -> English -> OrigTag -> Any)
-    audio_sel = "bestaudio[format_note*=original]/bestaudio[language^=en]/bestaudio[language^=orig]/bestaudio/bestaudio[ext=m4a]/bestaudio"
-
-    # 3. Финальный селектор с каскадным fallback
-    # Include height-capped fallback for HLS-only platforms (Rutube etc.)
-    height_cap = height or 1080
-    final_fmt = f"{video_sel}+({audio_sel})/{prog_sel}/bestvideo[height<={height_cap}]+bestaudio/bestvideo+bestaudio/best"
+        # Аудио/Рав или составной формат: формат жестко сгенерирован в parsers.py.
+        # Strict binding + fallback
+        height_cap = height or 1080
+        fallback = f"bestvideo[height<={height_cap}]+bestaudio/bestvideo+bestaudio/best"
+        final_fmt = f"{format_id}/{fallback}"
 
     cmd = _get_base_cmd(final_fmt, output)
     cmd.extend(
@@ -112,14 +88,16 @@ def build_command(
         ]
     )
 
-    # aria2c для ускорения скачивания (только для HTTP загрузок,
-    # для DASH/HLS используем нативный --concurrent-fragments)
+    # aria2c для ускорения скачивания (только для HTTP загрузок)
     if output != "-" and use_aria2 and has_aria2_installed:
-        cmd.extend([
-            "--downloader", "http:aria2c",
-            "--downloader-args",
-            "aria2c:-x 16 -s 16 -k 1M",
-        ])
+        cmd.extend(
+            [
+                "--downloader",
+                "http:aria2c",
+                "--downloader-args",
+                "aria2c:-x 16 -s 16 -k 1M",
+            ]
+        )
 
     cmd.extend(
         [
@@ -128,6 +106,7 @@ def build_command(
         ]
     )
 
-    _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy, info_json_path)
+    _append_common_opts(
+        cmd, page_url, cookies_path, max_filesize, proxy, info_json_path
+    )
     return cmd
-

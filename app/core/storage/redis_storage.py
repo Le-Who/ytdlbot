@@ -1,5 +1,5 @@
 import msgspec
-from typing import Any, Optional, Type, TypeVar
+from typing import Any, Optional, TypeVar
 import logging
 
 from .base import StateStorage
@@ -17,6 +17,8 @@ class RedisStorage(StateStorage):
         if not data:
             return None
         try:
+            if type_hint is None or type_hint is Any:
+                return msgspec.json.decode(data)
             return msgspec.json.decode(data, type=type_hint)
         except Exception as e:
             logger.error("Redis decode error for key %s: %s", key, str(e))

@@ -9,7 +9,8 @@ YTDL Bot solves the problem of friction in downloading and sharing media from so
 ## Current Status
 
 **Production-ish / API-Stabilized**
-The project is well-structured and highly tested (>400 tests, CI/CD pipeline). However, since it relies heavily on third-party extraction tools (`yt-dlp`, `gallery-dl`) and platform algorithms, it is inherently subject to platform-side changes (e.g., rate limits, blockages). Some advanced evasion techniques (proxies, cookies) are configured but require manual upkeep by the admin.
+The project is well-structured and highly tested (>430 tests, CI/CD pipeline). However, since it relies heavily on third-party extraction tools (`yt-dlp`, `gallery-dl`) and platform algorithms, it is inherently subject to platform-side changes (e.g., rate limits, blockages).
+Recent systemic fixes have stabilized asynchronous subprocess extraction and decoupled Redis caching dependencies, making the pipeline heavily resilient to coroutine clashes. Some advanced evasion techniques (proxies, cookies) are configured but require manual upkeep by the admin.
 
 ## Features
 

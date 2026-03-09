@@ -142,7 +142,9 @@ class YtDlpService:
             cmd = base_cmd + args + ["--", url]
             try:
                 async with run_subprocess(cmd, timeout=60) as handle:
-                    stdout, stderr = await handle.proc.communicate()
+                    assert handle.proc.stdout is not None
+                    stdout = await handle.proc.stdout.read()
+                    await handle.wait()
                     if handle.proc.returncode == 0 and stdout.strip():
                         return json.loads(stdout.decode())  # type: ignore
                     else:
@@ -217,9 +219,12 @@ class YtDlpService:
         cmd.append(url)
         
         async with run_subprocess(cmd, timeout=120) as handle:
-            stdout, stderr = await handle.proc.communicate()
+            assert handle.proc.stdout is not None
+            stdout = await handle.proc.stdout.read()
+            await handle.wait()
+            
             if handle.proc.returncode != 0:
-                err_text = stderr.decode() if stderr else ""
+                err_text = b"".join(handle.stderr_data).decode(errors="ignore") if handle.stderr_data else ""
                 logger.error("yt-dlp extract failed: retcode=%s, stderr=%s", handle.proc.returncode, err_text)
                 raise ExtractionError(f"yt-dlp execution failed: {err_text}")
             

@@ -62,10 +62,12 @@ os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "test-secret")
 def mock_state():
     """Pre-configure app.core.state with common test mocks."""
     from app.core import state
-
-    state.info_cache = AsyncMockCache()
-    state.link_cache = AsyncMockCache()
-    state.cancel_cache = AsyncMockCache()
+    from app.core.storage.memory import MemoryStorage
+    
+    # We use MemoryStorage implicitly typed as AsyncMockCache
+    state.info_cache = MemoryStorage()
+    state.link_cache = MemoryStorage()
+    state.cancel_cache = MemoryStorage()
     state.limiter = MagicMock()
     state.limiter.allow_user = AsyncMock(return_value=True)
     state.limiter.allow_chat = AsyncMock(return_value=True)

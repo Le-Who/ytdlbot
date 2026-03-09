@@ -65,6 +65,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **YouTube Extraction Deadlock (`RuntimeError`)**: Fixed a severe coroutine conflict in `YtDlpService` where `communicate()` was called concurrently with background `stderr` readers, causing all YouTube downloads to fail.
+- **Redis Cache Strict Decoding Failure**: Fixed an issue where `RedisStorage` would crash with `msgspec.json.DecodeError` when `type_hint=None` due to expecting a literal `"null"` instead of parsing standard JSON objects. This resolves the downstream UI bug where standard TikTok links wrongly triggered the Slideshow fallback.
 - **Cache unpacking bug** (CRITICAL): UI handlers previously raised exceptions during format unpacking after `list_formats` was extended. Safely isolated this behind `ExtractionResult` properties.
 
 ### Performance

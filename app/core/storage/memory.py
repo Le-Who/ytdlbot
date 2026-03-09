@@ -1,4 +1,4 @@
-from typing import Any, Optional, Type, TypeVar
+from typing import Any, Optional, TypeVar
 from cachetools import TTLCache
 
 from .base import StateStorage

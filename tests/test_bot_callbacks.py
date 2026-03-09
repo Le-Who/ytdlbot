@@ -9,6 +9,7 @@ from app.core import state
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from telegram import Message
 
+
 class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # Reset state mocks for each test
@@ -51,7 +52,15 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         mock_formats = [MagicMock(format_id="137", label="1080p")]
         mock_special_format = MagicMock(format_id="audio", label="Audio")
-        state.info_cache[page_url] = ("Test Title", mock_formats, mock_special_format, "10:00", False, None, "https://example.com/thumb.jpg")
+        state.info_cache[page_url] = (
+            "Test Title",
+            mock_formats,
+            mock_special_format,
+            "10:00",
+            False,
+            None,
+            "https://example.com/thumb.jpg",
+        )
 
         with patch("app.bot.callbacks.build_format_keyboard") as mock_build_kb:
             mock_kb = MagicMock()
@@ -72,7 +81,15 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         mock_formats = [MagicMock(format_id="137", label="1080p")]
         mock_special_format = MagicMock(format_id="audio", label="Audio")
-        state.ytdlp.list_formats.return_value = ("Refreshed Title", mock_formats, mock_special_format, "5:00", False, None, "https://example.com/thumb.jpg")
+        state.ytdlp.list_formats.return_value = (
+            "Refreshed Title",
+            mock_formats,
+            mock_special_format,
+            "5:00",
+            False,
+            None,
+            "https://example.com/thumb.jpg",
+        )
 
         with patch("app.bot.callbacks.build_format_keyboard"):
             await callbacks.on_back(self.update, self.context)
@@ -101,7 +118,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             "page_url": "http://example.com/video",
             "format_map": {"137": 1080},
             "title": "Test Video",
-            "size_map": {"137": 1024*1024*10}
+            "size_map": {"137": 1024 * 1024 * 10},
         }
 
         await callbacks.on_pick(self.update, self.context)
@@ -155,12 +172,15 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             "page_url": "http://example.com",
             "format_id": "137",
             "height": 1080,
-            "title": "Video"
+            "title": "Video",
         }
         self.context.user_data = {"size_map": {"137": 100}}
 
-        with patch("app.services.downloader.MediaSender.download_video", new_callable=AsyncMock) as mock_dl, \
-             patch("app.services.downloader.MediaSender.send_file", new_callable=AsyncMock) as mock_send:
+        with patch(
+            "app.services.downloader.MediaSender.download_video", new_callable=AsyncMock
+        ) as mock_dl, patch(
+            "app.services.downloader.MediaSender.send_file", new_callable=AsyncMock
+        ) as mock_send:
             mock_dl.return_value = ("/tmp/test.mp4", None)
             mock_send.return_value = True
 
@@ -175,12 +195,15 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.link_cache[token] = {
             "page_url": "http://example.com",
             "format_id": AUDIO_FORMAT_ID,
-            "title": "Audio"
+            "title": "Audio",
         }
         self.context.user_data = {"size_map": {}}
 
-        with patch("app.services.downloader.MediaSender.download_video", new_callable=AsyncMock) as mock_dl, \
-             patch("app.services.downloader.MediaSender.send_file", new_callable=AsyncMock) as mock_send:
+        with patch(
+            "app.services.downloader.MediaSender.download_video", new_callable=AsyncMock
+        ) as mock_dl, patch(
+            "app.services.downloader.MediaSender.send_file", new_callable=AsyncMock
+        ) as mock_send:
             mock_dl.return_value = ("/tmp/test.mp3", None)
             mock_send.return_value = True
 
@@ -196,12 +219,15 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.link_cache[token] = {
             "page_url": "http://example.com",
             "format_id": GIF_FORMAT_ID,
-            "title": "GIF"
+            "title": "GIF",
         }
         self.context.user_data = {"size_map": {}}
 
-        with patch("app.services.downloader.MediaSender.download_video", new_callable=AsyncMock) as mock_dl, \
-             patch("app.services.downloader.MediaSender.send_file", new_callable=AsyncMock) as mock_send:
+        with patch(
+            "app.services.downloader.MediaSender.download_video", new_callable=AsyncMock
+        ) as mock_dl, patch(
+            "app.services.downloader.MediaSender.send_file", new_callable=AsyncMock
+        ) as mock_send:
             mock_dl.return_value = ("/tmp/test.gif", None)
             mock_send.return_value = True
 
@@ -216,11 +242,13 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.link_cache[token] = {
             "page_url": "http://example.com",
             "format_id": "137",
-            "title": "Video"
+            "title": "Video",
         }
         self.context.user_data = {"size_map": {}}
 
-        with patch("app.services.downloader.MediaSender.download_video", new_callable=AsyncMock) as mock_dl:
+        with patch(
+            "app.services.downloader.MediaSender.download_video", new_callable=AsyncMock
+        ) as mock_dl:
             mock_dl.return_value = (None, "⚠️ Ошибка загрузки.")
             await callbacks.on_send(self.update, self.context)
             args, _ = self.update.callback_query.edit_message_text.call_args
@@ -232,7 +260,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.link_cache[token] = {
             "page_url": "http://example.com",
             "format_id": "137",
-            "title": "Big Video"
+            "title": "Big Video",
         }
         # > 50MB
         self.context.user_data = {"size_map": {"137": 60 * 1024 * 1024}}
@@ -247,11 +275,13 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.link_cache[token] = {
             "page_url": "http://example.com",
             "format_id": "137",
-            "title": "Video"
+            "title": "Video",
         }
         self.context.user_data = {"size_map": {}}
 
-        with patch("app.services.downloader.MediaSender.download_video", new_callable=AsyncMock) as mock_dl:
+        with patch(
+            "app.services.downloader.MediaSender.download_video", new_callable=AsyncMock
+        ) as mock_dl:
             # File too large after download
             mock_dl.return_value = (None, "⚠️ Файл слишком большой.")
             await callbacks.on_send(self.update, self.context)
@@ -264,12 +294,15 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.link_cache[token] = {
             "page_url": "http://example.com",
             "format_id": "137",
-            "title": "Video"
+            "title": "Video",
         }
         self.context.user_data = {"size_map": {}}
 
-        with patch("app.services.downloader.MediaSender.download_video", new_callable=AsyncMock) as mock_dl, \
-             patch("app.services.downloader.MediaSender.send_file", new_callable=AsyncMock) as mock_send:
+        with patch(
+            "app.services.downloader.MediaSender.download_video", new_callable=AsyncMock
+        ) as mock_dl, patch(
+            "app.services.downloader.MediaSender.send_file", new_callable=AsyncMock
+        ) as mock_send:
             mock_dl.return_value = ("/tmp/test.mp4", None)
             mock_send.return_value = True
 
@@ -335,6 +368,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         reply_markup = kwargs["reply_markup"]
         button_texts = [btn.text for row in reply_markup.inline_keyboard for btn in row]
         self.assertNotIn("📤 Отправить файл в TG", button_texts)
+
 
 if __name__ == "__main__":
     unittest.main()

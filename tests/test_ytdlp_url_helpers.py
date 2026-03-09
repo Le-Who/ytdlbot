@@ -1,5 +1,11 @@
 import unittest
-from app.services.ytdlp.parsers import _is_tiktok, _is_youtube, _is_pinterest, _is_facebook
+from app.services.ytdlp.parsers import (
+    _is_tiktok,
+    _is_youtube,
+    _is_pinterest,
+    _is_facebook,
+)
+
 
 class TestUrlHelpers(unittest.TestCase):
     def test_is_tiktok(self):
@@ -42,7 +48,9 @@ class TestUrlHelpers(unittest.TestCase):
         self.assertTrue(_is_pinterest("PiN.iT"))
 
         # Invalid URLs
-        self.assertFalse(_is_pinterest("pinterest.co.uk")) # Based on current implementation which checks for .com specifically
+        self.assertFalse(
+            _is_pinterest("pinterest.co.uk")
+        )  # Based on current implementation which checks for .com specifically
         self.assertFalse(_is_pinterest("google.com"))
         self.assertFalse(_is_pinterest(""))
 
@@ -60,6 +68,7 @@ class TestUrlHelpers(unittest.TestCase):
         self.assertFalse(_is_facebook("youtube.com"))
         self.assertFalse(_is_facebook("tiktok.com"))
         self.assertFalse(_is_facebook(""))
+
 
 if __name__ == "__main__":
     unittest.main()

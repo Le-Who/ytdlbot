@@ -1,4 +1,5 @@
 """Tests for security headers middleware — verifies REAL middleware from app.main."""
+
 import unittest
 
 from fastapi import FastAPI
@@ -9,6 +10,7 @@ from app.main import add_security_headers
 _app = FastAPI()
 _app.include_router(router)
 _app.middleware("http")(add_security_headers)
+
 
 class TestSecurityHeaders(unittest.TestCase):
     """Test the REAL add_security_headers middleware via TestClient."""
@@ -57,6 +59,7 @@ class TestSecurityHeaders(unittest.TestCase):
         """Unknown path still gets strict CSP (even if 404)."""
         resp = self.client.get("/some/random/path")
         self.assertEqual(resp.headers["Content-Security-Policy"], "default-src 'none'")
+
 
 if __name__ == "__main__":
     unittest.main()

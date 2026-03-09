@@ -15,6 +15,7 @@ from app.core.utils import is_supported_url
 from app.services.ytdlp.service import YtDlpService
 from app.constants import GIF_FORMAT_ID
 
+
 class TestURLSeparatorInjection(unittest.TestCase):
     """SEC-1: All yt-dlp subprocess commands must contain '--' before the URL."""
 
@@ -26,8 +27,11 @@ class TestURLSeparatorInjection(unittest.TestCase):
         """Assert '--' appears in cmd and immediately precedes the URL."""
         self.assertIn("--", cmd, "Command must contain '--' end-of-options separator")
         sep_idx = cmd.index("--")
-        self.assertEqual(cmd[sep_idx + 1], url,
-                         f"URL must immediately follow '--', got: {cmd[sep_idx + 1]}")
+        self.assertEqual(
+            cmd[sep_idx + 1],
+            url,
+            f"URL must immediately follow '--', got: {cmd[sep_idx + 1]}",
+        )
         self.assertEqual(cmd[-1], url, "URL must be the last argument in the command")
 
     def test_video_command_has_separator(self):
@@ -67,8 +71,9 @@ class TestURLSeparatorInjection(unittest.TestCase):
         self._assert_separator_before_url(cmd, url)
         sep_idx = cmd.index("--")
         for arg in cmd[:sep_idx]:
-            self.assertFalse(arg.startswith("--exec"),
-                             "Malicious '--exec' found before separator")
+            self.assertFalse(
+                arg.startswith("--exec"), "Malicious '--exec' found before separator"
+            )
 
     def test_cookies_placed_before_separator(self):
         """--cookies flag must appear before the '--' separator."""
@@ -80,8 +85,10 @@ class TestURLSeparatorInjection(unittest.TestCase):
         self.assertIn("--cookies", cmd)
         cookies_idx = cmd.index("--cookies")
         sep_idx = cmd.index("--")
-        self.assertLess(cookies_idx, sep_idx,
-                        "--cookies must appear before the '--' separator")
+        self.assertLess(
+            cookies_idx, sep_idx, "--cookies must appear before the '--' separator"
+        )
+
 
 class TestGalleryDlSeparator(unittest.TestCase):
     """SEC-3: gallery-dl commands must have '--' before URL, cookies before '--'."""
@@ -105,12 +112,17 @@ class TestGalleryDlSeparator(unittest.TestCase):
                 cmd = mock_run.call_args[0][0]
                 self.assertIn("--", cmd)
                 sep_idx = cmd.index("--")
-                self.assertEqual(cmd[sep_idx + 1], url,
-                                 "URL must immediately follow '--'")
+                self.assertEqual(
+                    cmd[sep_idx + 1], url, "URL must immediately follow '--'"
+                )
                 if "--cookies" in cmd:
                     cookies_idx = cmd.index("--cookies")
-                    self.assertLess(cookies_idx, sep_idx,
-                                    "--cookies must appear before '--' separator")
+                    self.assertLess(
+                        cookies_idx,
+                        sep_idx,
+                        "--cookies must appear before '--' separator",
+                    )
+
 
 class TestURLPrefixValidation(unittest.TestCase):
     """SEC-1 hardening: URLs starting with '-' must be rejected early."""
@@ -133,6 +145,7 @@ class TestURLPrefixValidation(unittest.TestCase):
     def test_normal_tiktok_accepted(self):
         self.assertTrue(is_supported_url("https://www.tiktok.com/@user/video/123"))
 
+
 class TestStreamByteLimit(unittest.TestCase):
     """SEC-2: Verify streaming byte-limit config is sane.
 
@@ -143,13 +156,16 @@ class TestStreamByteLimit(unittest.TestCase):
 
     def test_max_dl_mb_is_positive(self):
         from app.core.config import MAX_DL_MB
+
         self.assertGreater(MAX_DL_MB, 0, "MAX_DL_MB must be a positive integer")
 
     def test_max_dl_mb_reasonable_range(self):
         """MAX_DL_MB should be between 1 and 10000 MB for a video bot."""
         from app.core.config import MAX_DL_MB
+
         self.assertGreaterEqual(MAX_DL_MB, 1)
         self.assertLessEqual(MAX_DL_MB, 10_000)
+
 
 if __name__ == "__main__":
     unittest.main()

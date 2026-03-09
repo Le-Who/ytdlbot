@@ -1,4 +1,5 @@
 """Tests for on_message handler — the core user flow."""
+
 import unittest
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -73,8 +74,12 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
         url = "https://youtube.com/watch?v=cached123"
         self.update.message.text = url
 
-        formats = [MagicMock(format_id="137", label="1080p", height=1080, filesize=50_000_000)]
-        special_format = MagicMock(format_id="bestaudio/best", label="Audio", filesize=None)
+        formats = [
+            MagicMock(format_id="137", label="1080p", height=1080, filesize=50_000_000)
+        ]
+        special_format = MagicMock(
+            format_id="bestaudio/best", label="Audio", filesize=None
+        )
 
         # Pre-populate cache
         state.info_cache[url] = (
@@ -82,9 +87,9 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
             formats,
             special_format,
             "5:00",
-            False,       # is_slideshow
-            None,        # info_json_path
-            None,        # thumbnail_url
+            False,  # is_slideshow
+            None,  # info_json_path
+            None,  # thumbnail_url
         )
 
         status_msg = AsyncMock()

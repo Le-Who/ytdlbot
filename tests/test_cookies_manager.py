@@ -9,6 +9,7 @@ from app.services.ytdlp.cookies import PlatformCookiesManager
 # Valid base64 of "# Netscape HTTP Cookie File\n.example.com\tTRUE\t/\tFALSE\t0\ttest_cookie\tvalue"
 _DUMMY_B64 = "IyBOZXRzY2FwZSBIVFRQIENvb2tpZSBGaWxlCi5leGFtcGxlLmNvbQlUUlVFCS8JRkFMU0UJMAlj b29raWVfbmFtZQljb29raWVfdmFsdWU="
 
+
 class TestPlatformCookiesManager(unittest.TestCase):
     """Test cookie routing logic."""
 
@@ -17,7 +18,9 @@ class TestPlatformCookiesManager(unittest.TestCase):
         """No env vars → all paths return None."""
         mgr = PlatformCookiesManager()
         self.assertIsNone(mgr.get_cookies_path("https://www.youtube.com/watch?v=123"))
-        self.assertIsNone(mgr.get_cookies_path("https://www.tiktok.com/@user/video/123"))
+        self.assertIsNone(
+            mgr.get_cookies_path("https://www.tiktok.com/@user/video/123")
+        )
         self.assertIsNone(mgr.get_cookies_path("https://www.facebook.com/watch/123"))
         self.assertIsNone(mgr.tiktok_cookies_path)
 
@@ -77,9 +80,8 @@ class TestPlatformCookiesManager(unittest.TestCase):
         self.assertEqual(fb_path, fbw_path)
 
         # Unknown platform → None (no global configured)
-        self.assertIsNone(
-            mgr.get_cookies_path("https://www.youtube.com/watch?v=123")
-        )
+        self.assertIsNone(mgr.get_cookies_path("https://www.youtube.com/watch?v=123"))
+
 
 if __name__ == "__main__":
     unittest.main()

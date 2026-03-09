@@ -1,4 +1,5 @@
 """Extended tests for group_logic.py on_group_slideshow callback and converter subprocess paths."""
+
 import asyncio
 import sys
 import unittest
@@ -134,7 +135,9 @@ class TestOnGroupSlideshowExtended(unittest.IsolatedAsyncioTestCase):
             "original_msg_id": 4,
         }
 
-        mock_sender.download_slideshow = AsyncMock(return_value=(None, "gallery-dl failed"))
+        mock_sender.download_slideshow = AsyncMock(
+            return_value=(None, "gallery-dl failed")
+        )
         mock_tikwm_cls.download_video = AsyncMock(return_value=("/tmp/tikwm.mp4", None))
         mock_sender.send_file = AsyncMock(return_value=True)
         mock_sender.cleanup_slideshow = MagicMock()
@@ -166,7 +169,9 @@ class TestOnGroupSlideshowExtended(unittest.IsolatedAsyncioTestCase):
         }
 
         mock_sender.download_slideshow = AsyncMock(return_value=(None, "failed"))
-        mock_tikwm_cls.download_video = AsyncMock(return_value=(None, "tikwm also failed"))
+        mock_tikwm_cls.download_video = AsyncMock(
+            return_value=(None, "tikwm also failed")
+        )
         mock_sender.cleanup_slideshow = MagicMock()
 
         q = AsyncMock()
@@ -211,14 +216,20 @@ class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
         mock_metrics.conversion_duration.time.return_value.__enter__ = MagicMock()
         mock_metrics.conversion_duration.time.return_value.__exit__ = MagicMock()
 
-        with patch("app.services.converter.state") as mock_state, \
-             patch("app.services.converter.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec, \
-             patch("app.services.converter.os.path.exists") as mock_exists, \
-             patch("app.services.converter.os.path.getsize", return_value=1000):
+        with patch("app.services.converter.state") as mock_state, patch(
+            "app.services.converter.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+        ) as mock_exec, patch(
+            "app.services.converter.os.path.exists"
+        ) as mock_exists, patch(
+            "app.services.converter.os.path.getsize", return_value=1000
+        ):
 
             mock_state.conversion_sem = mock_sem
             mock_exec.return_value = mock_proc
-            mock_exists.side_effect = lambda p: True  # both video_path and gif_path exist
+            mock_exists.side_effect = (
+                lambda p: True
+            )  # both video_path and gif_path exist
 
             with patch("app.core.metrics.metrics", mock_metrics):
                 result = await MediaConverter.convert_to_gif_ffmpeg(tmp.name)
@@ -246,8 +257,10 @@ class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
         mock_metrics.conversion_duration.time.return_value.__enter__ = MagicMock()
         mock_metrics.conversion_duration.time.return_value.__exit__ = MagicMock()
 
-        with patch("app.services.converter.state") as mock_state, \
-             patch("app.services.converter.asyncio.create_subprocess_exec", new_callable=AsyncMock) as mock_exec:
+        with patch("app.services.converter.state") as mock_state, patch(
+            "app.services.converter.asyncio.create_subprocess_exec",
+            new_callable=AsyncMock,
+        ) as mock_exec:
 
             mock_state.conversion_sem = mock_sem
             mock_exec.return_value = mock_proc

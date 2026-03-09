@@ -1,6 +1,7 @@
 import unittest
 from app.services.ytdlp.parsers import _calculate_filesize, BITRATE_COEFFICIENT
 
+
 class TestCalculateFilesize(unittest.TestCase):
     def test_filesize_present_int(self):
         """Should return filesize when present as int"""
@@ -73,6 +74,7 @@ class TestCalculateFilesize(unittest.TestCase):
         duration_factor = duration * BITRATE_COEFFICIENT
         expected = int(100 * duration_factor)
         self.assertEqual(_calculate_filesize(format_dict, duration_factor), expected)
+
 
 if __name__ == "__main__":
     unittest.main()

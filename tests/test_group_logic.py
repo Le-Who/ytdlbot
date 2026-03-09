@@ -1,4 +1,5 @@
 """Tests for app.bot.group_logic — handle_group_message + on_group_slideshow."""
+
 import unittest
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -33,6 +34,7 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
     async def test_no_message_returns_silently(self):
         """No message → return immediately (passive mode)."""
         from app.bot.group_logic import handle_group_message
+
         self.update.message = None
         await handle_group_message(self.update, self.context)
         # No reply, no crash
@@ -40,12 +42,14 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
     async def test_no_text_returns_silently(self):
         """Message without text → return immediately."""
         from app.bot.group_logic import handle_group_message
+
         self.update.message.text = None
         await handle_group_message(self.update, self.context)
 
     async def test_unsupported_url_returns_silently(self):
         """Unsupported URL → no reply in group (passive mode)."""
         from app.bot.group_logic import handle_group_message
+
         self.update.message.text = "https://example.com/not-supported"
         await handle_group_message(self.update, self.context)
         self.update.message.reply_text.assert_not_awaited()
@@ -53,6 +57,7 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
     async def test_plain_text_returns_silently(self):
         """Plain text → no reply in group (passive mode)."""
         from app.bot.group_logic import handle_group_message
+
         self.update.message.text = "just chatting"
         await handle_group_message(self.update, self.context)
         self.update.message.reply_text.assert_not_awaited()
@@ -60,6 +65,7 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
     async def test_rate_limited_user_returns_silently(self):
         """Rate-limited user → no reply, no download."""
         from app.bot.group_logic import handle_group_message
+
         state.limiter.allow_user.return_value = False
         self.update.message.text = "https://youtube.com/watch?v=abc"
         await handle_group_message(self.update, self.context)
@@ -68,6 +74,7 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
     async def test_rate_limited_chat_returns_silently(self):
         """Rate-limited chat → no reply, no download."""
         from app.bot.group_logic import handle_group_message
+
         state.limiter.allow_chat.return_value = False
         self.update.message.text = "https://youtube.com/watch?v=abc"
         await handle_group_message(self.update, self.context)
@@ -98,9 +105,7 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
         status_msg = AsyncMock()
         self.update.message.reply_text = AsyncMock(return_value=status_msg)
 
-        mock_sender.download_video = AsyncMock(
-            return_value=("/tmp/video.mp4", None)
-        )
+        mock_sender.download_video = AsyncMock(return_value=("/tmp/video.mp4", None))
         mock_sender.send_file = AsyncMock(return_value=True)
 
         state.ytdlp = MagicMock()

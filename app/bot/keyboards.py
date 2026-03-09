@@ -1,13 +1,19 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
-from app.constants import AUDIO_FORMAT_ID, SLIDESHOW_PHOTO_FORMAT_ID, SLIDESHOW_VIDEO_FORMAT_ID
+from app.constants import (
+    AUDIO_FORMAT_ID,
+    SLIDESHOW_PHOTO_FORMAT_ID,
+    SLIDESHOW_VIDEO_FORMAT_ID,
+)
 from app.core.texts import Texts
 
 
 from typing import Any
 
 
-def build_format_keyboard(formats: list[Any], special_format: Any) -> InlineKeyboardMarkup:
+def build_format_keyboard(
+    formats: list[Any], special_format: Any
+) -> InlineKeyboardMarkup:
     """Helper to build format selection buttons in 2 columns."""
     buttons = []
     formats_slice = formats[:8]
@@ -28,24 +34,36 @@ def build_format_keyboard(formats: list[Any], special_format: Any) -> InlineKeyb
         buttons.append(row)
 
     buttons.append(
-        [InlineKeyboardButton(special_format.label, callback_data=f"pick|{special_format.format_id}")]
+        [
+            InlineKeyboardButton(
+                special_format.label, callback_data=f"pick|{special_format.format_id}"
+            )
+        ]
     )
     return InlineKeyboardMarkup(buttons)
 
 
 def build_slideshow_keyboard() -> InlineKeyboardMarkup:
     """Build keyboard for TikTok slideshow (image carousel) posts."""
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton(
-            Texts.BTN_SLIDESHOW_PHOTOS,
-            callback_data=f"slideshow|{SLIDESHOW_PHOTO_FORMAT_ID}",
-        )],
-        [InlineKeyboardButton(
-            Texts.BTN_SLIDESHOW_VIDEO,
-            callback_data=f"slideshow|{SLIDESHOW_VIDEO_FORMAT_ID}",
-        )],
-        [InlineKeyboardButton(
-            "🎵 Audio",
-            callback_data=f"pick|{AUDIO_FORMAT_ID}",
-        )],
-    ])
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    Texts.BTN_SLIDESHOW_PHOTOS,
+                    callback_data=f"slideshow|{SLIDESHOW_PHOTO_FORMAT_ID}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    Texts.BTN_SLIDESHOW_VIDEO,
+                    callback_data=f"slideshow|{SLIDESHOW_VIDEO_FORMAT_ID}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "🎵 Audio",
+                    callback_data=f"pick|{AUDIO_FORMAT_ID}",
+                )
+            ],
+        ]
+    )

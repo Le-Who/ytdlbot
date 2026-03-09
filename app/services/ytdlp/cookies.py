@@ -21,9 +21,9 @@ class PlatformCookiesManager:
 
     # platform keyword (matched against URL) → env var name
     _PLATFORM_ENV_MAP: dict[str, str] = {
-        "tiktok.com":   "TIKTOK_COOKIES_B64",
+        "tiktok.com": "TIKTOK_COOKIES_B64",
         "facebook.com": "FACEBOOK_COOKIES_B64",
-        "fb.watch":     "FACEBOOK_COOKIES_B64",
+        "fb.watch": "FACEBOOK_COOKIES_B64",
     }
 
     _GLOBAL_ENV_VAR = "YTDLP_COOKIES_B64"
@@ -37,9 +37,7 @@ class PlatformCookiesManager:
     def _initialize(self) -> None:
         """Decode and write all cookie files from env vars."""
         # 1. Global cookies (fallback for all platforms)
-        self._global_cookies_path = self._decode_cookies(
-            self._GLOBAL_ENV_VAR, "global"
-        )
+        self._global_cookies_path = self._decode_cookies(self._GLOBAL_ENV_VAR, "global")
 
         # 2. Platform-specific cookies
         # Deduplicate env vars (facebook.com and fb.watch share same var)
@@ -58,9 +56,7 @@ class PlatformCookiesManager:
         # Log summary
         configured = [k for k, v in self._platform_cookies.items() if v]
         if configured:
-            logger.info(
-                "Platform cookies configured: %s", ", ".join(configured)
-            )
+            logger.info("Platform cookies configured: %s", ", ".join(configured))
         if self._global_cookies_path:
             logger.info("Global cookies configured (YTDLP_COOKIES_B64)")
 
@@ -79,15 +75,10 @@ class PlatformCookiesManager:
     @property
     def tiktok_cookies_path(self) -> Optional[str]:
         """Shortcut for TikTok cookies (used by gallery-dl, TikWM)."""
-        return (
-            self._platform_cookies.get("tiktok.com")
-            or self._global_cookies_path
-        )
+        return self._platform_cookies.get("tiktok.com") or self._global_cookies_path
 
     @staticmethod
-    def _decode_cookies(
-        env_var: str, label: str
-    ) -> Optional[str]:
+    def _decode_cookies(env_var: str, label: str) -> Optional[str]:
         """Decode a base64 env var into a temp cookies file."""
         b64 = os.getenv(env_var, "").strip()
         if not b64:
@@ -99,17 +90,13 @@ class PlatformCookiesManager:
             try:
                 content = raw_data.decode("utf-8")
             except UnicodeDecodeError:
-                logger.warning(
-                    "[%s] Cookies not UTF-8, trying cp1252", label
-                )
+                logger.warning("[%s] Cookies not UTF-8, trying cp1252", label)
                 try:
                     content = raw_data.decode("cp1252")
                 except UnicodeDecodeError:
                     content = raw_data.decode("latin1")
 
-            fd, path = tempfile.mkstemp(
-                prefix=f"cookies_{label}_", suffix=".txt"
-            )
+            fd, path = tempfile.mkstemp(prefix=f"cookies_{label}_", suffix=".txt")
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(content)
 
@@ -128,13 +115,27 @@ class PlatformCookiesManager:
 
 _CRITICAL_COOKIES = {
     # TikTok
-    "sid_tt", "sessionid", "sessionid_ss", "sid_guard",
-    "passport_csrf_token", "tt_csrf_token", "msToken",
-    "odin_tt", "ttwid",
+    "sid_tt",
+    "sessionid",
+    "sessionid_ss",
+    "sid_guard",
+    "passport_csrf_token",
+    "tt_csrf_token",
+    "msToken",
+    "odin_tt",
+    "ttwid",
     # Facebook
-    "c_user", "xs", "datr", "fr",
+    "c_user",
+    "xs",
+    "datr",
+    "fr",
     # YouTube / Google
-    "SID", "HSID", "SSID", "APISID", "SAPISID", "LOGIN_INFO",
+    "SID",
+    "HSID",
+    "SSID",
+    "APISID",
+    "SAPISID",
+    "LOGIN_INFO",
 }
 
 
@@ -156,7 +157,10 @@ def _log_cookie_diagnostics(content: str, label: str) -> None:
 
     logger.info(
         "[%s] Cookie diagnostics: %d total, %d/%d critical present",
-        label, total, len(found), len(_CRITICAL_COOKIES),
+        label,
+        total,
+        len(found),
+        len(_CRITICAL_COOKIES),
     )
     if found:
         logger.info(

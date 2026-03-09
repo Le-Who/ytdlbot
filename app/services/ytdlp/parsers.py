@@ -37,12 +37,13 @@ def _is_facebook(url: str) -> bool:
 
 class TikTokError(Enum):
     """Structured classification of TikTok extraction errors."""
-    AUTH_REQUIRED = "auth"       # login / cookies / sign in
-    SLIDESHOW = "slideshow"      # unsupported url → photo content
-    FORBIDDEN = "forbidden"      # 403
-    NOT_FOUND = "not_found"      # 404
-    LIVE = "live"                # live stream
-    GENERIC = "generic"          # everything else
+
+    AUTH_REQUIRED = "auth"  # login / cookies / sign in
+    SLIDESHOW = "slideshow"  # unsupported url → photo content
+    FORBIDDEN = "forbidden"  # 403
+    NOT_FOUND = "not_found"  # 404
+    LIVE = "live"  # live stream
+    GENERIC = "generic"  # everything else
 
 
 def classify_tiktok_content(url: str) -> str:
@@ -264,9 +265,6 @@ def detect_tiktok_slideshow(info: Dict[str, Any], url: str) -> bool:
         return True
 
     # Check if all formats are audio-only (vcodec == "none")
-    has_video = any(
-        fmt.get("vcodec") not in (None, "none")
-        for fmt in raw_formats
-    )
+    has_video = any(fmt.get("vcodec") not in (None, "none") for fmt in raw_formats)
 
     return not has_video

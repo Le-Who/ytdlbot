@@ -46,7 +46,8 @@ class TokenBucketLimiter:
             return
         self._last_prune = now
         stale_keys = [
-            k for k, b in self._buckets.items()
+            k
+            for k, b in self._buckets.items()
             if now - b.updated_at > self._max_idle_sec
         ]
         for k in stale_keys:

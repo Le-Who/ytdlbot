@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 from app.core.process import run_subprocess
 
+
 class TestProcess(unittest.IsolatedAsyncioTestCase):
     async def test_run_subprocess_success(self):
         proc = AsyncMock()
@@ -30,6 +31,7 @@ class TestProcess(unittest.IsolatedAsyncioTestCase):
             async with run_subprocess(["sleep", "10"]) as handle:
                 await handle.cancel()
             proc.kill.assert_called()
+
 
 if __name__ == "__main__":
     unittest.main()

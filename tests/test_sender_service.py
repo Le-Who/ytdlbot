@@ -1,4 +1,5 @@
 """Tests for app.services.sender — TelegramSender."""
+
 import unittest
 from unittest.mock import AsyncMock, patch
 import tempfile
@@ -50,6 +51,7 @@ class TestSendFile(unittest.IsolatedAsyncioTestCase):
     async def test_returns_false_on_network_error(self):
         """NetworkError returns False."""
         from telegram.error import NetworkError
+
         self.bot.send_video.side_effect = NetworkError("timeout")
         with patch("app.services.sender._m", create=True):
             result = await TelegramSender.send_file(self.bot, 123, self.tmp.name)
@@ -78,6 +80,7 @@ class TestSendSlideshowPhotos(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         import shutil
+
         shutil.rmtree(self.tmpdir, ignore_errors=True)
 
     async def test_sends_media_group(self):
@@ -95,10 +98,9 @@ class TestSendSlideshowPhotos(unittest.IsolatedAsyncioTestCase):
 
     async def test_network_error_returns_false(self):
         from telegram.error import NetworkError
+
         self.bot.send_media_group.side_effect = NetworkError("timeout")
-        result = await TelegramSender.send_slideshow_photos(
-            self.bot, 123, self.images
-        )
+        result = await TelegramSender.send_slideshow_photos(self.bot, 123, self.images)
         self.assertFalse(result)
 
     async def test_caps_at_max_album_size(self):

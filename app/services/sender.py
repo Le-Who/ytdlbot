@@ -32,6 +32,7 @@ class TelegramSender:
     ) -> bool:
         """Sends a single file (video, audio, or GIF) to Telegram."""
         from app.core.metrics import metrics as _m
+
         try:
             with _m.upload_duration.time(), open(file_path, "rb") as f:
                 if is_gif:

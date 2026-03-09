@@ -8,6 +8,7 @@ from unittest.mock import patch, MagicMock
 
 from app.services.gallery_dl.service import GalleryDlService, SlideshowResult
 
+
 class TestGalleryDlService(unittest.TestCase):
     """Tests for GalleryDlService."""
 
@@ -16,9 +17,7 @@ class TestGalleryDlService(unittest.TestCase):
         """Verify gallery-dl command includes correct flags."""
         mock_run.return_value = MagicMock(returncode=0, stderr="")
 
-        with patch.object(
-            GalleryDlService, "_collect_files"
-        ) as mock_collect:
+        with patch.object(GalleryDlService, "_collect_files") as mock_collect:
             mock_collect.return_value = (
                 SlideshowResult(images=["/tmp/a.jpg"], title="Test"),
                 None,
@@ -73,9 +72,7 @@ class TestGalleryDlService(unittest.TestCase):
     @patch("app.services.gallery_dl.service.subprocess.run")
     def test_download_login_required_error(self, mock_run):
         """Login-related error should return auth error message."""
-        mock_run.return_value = MagicMock(
-            returncode=1, stderr="Error: login required"
-        )
+        mock_run.return_value = MagicMock(returncode=1, stderr="Error: login required")
         result, error = GalleryDlService.download_slideshow(
             "https://tiktok.com/@user/video/123",
         )
@@ -158,6 +155,7 @@ class TestGalleryDlService(unittest.TestCase):
         self.assertIsNone(error)
         basenames = [os.path.basename(p) for p in result.images]
         self.assertEqual(basenames, ["001.jpg", "002.jpg", "003.jpg"])
+
 
 if __name__ == "__main__":
     unittest.main()

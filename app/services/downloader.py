@@ -40,10 +40,13 @@ __all__ = [
 
 logger = logging.getLogger("app.services.downloader")
 
+
 # Late import to avoid circular dep — metrics is a lightweight singleton
 def _metrics():
     from app.core.metrics import metrics
+
     return metrics
+
 
 def _safe_remove_info_json(path):
     """Remove cached info JSON after download (prevent /tmp fill)."""
@@ -156,7 +159,10 @@ class VideoDownloader:
                     logger.error("yt-dlp download failed", extra={"stderr": err})
 
                     if "file larger" in err or "filesize" in err:
-                        return None, f"⚠️ Файл слишком большой (>{MAX_TG_UPLOAD_MB} МБ)."
+                        return (
+                            None,
+                            f"⚠️ Файл слишком большой (>{MAX_TG_UPLOAD_MB} МБ).",
+                        )
                     elif "sign in" in err or "cookies" in err:
                         return None, "⚠️ Требуется авторизация (Sign-in required)."
                     elif "requested format is not available" in err:

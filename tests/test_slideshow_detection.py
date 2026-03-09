@@ -4,12 +4,15 @@ import unittest
 
 from app.services.ytdlp.parsers import detect_tiktok_slideshow
 
+
 class TestDetectTikTokSlideshow(unittest.TestCase):
     """Tests for detect_tiktok_slideshow()."""
 
     def test_non_tiktok_url_returns_false(self):
         info = {"formats": []}
-        self.assertFalse(detect_tiktok_slideshow(info, "https://youtube.com/watch?v=123"))
+        self.assertFalse(
+            detect_tiktok_slideshow(info, "https://youtube.com/watch?v=123")
+        )
 
     def test_tiktok_with_no_formats_returns_true(self):
         info = {"formats": []}
@@ -70,9 +73,8 @@ class TestDetectTikTokSlideshow(unittest.TestCase):
 
     def test_pinterest_url_returns_false(self):
         info = {"formats": []}
-        self.assertFalse(
-            detect_tiktok_slideshow(info, "https://pinterest.com/pin/123")
-        )
+        self.assertFalse(detect_tiktok_slideshow(info, "https://pinterest.com/pin/123"))
+
 
 if __name__ == "__main__":
     unittest.main()

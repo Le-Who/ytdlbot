@@ -1,8 +1,10 @@
 """Tests for webhook authentication — verifies REAL auth logic from routes.py."""
+
 import unittest
 import hmac
 
 from app.core.config import TELEGRAM_SECRET_TOKEN
+
 
 class TestWebhookAuth(unittest.TestCase):
     """Test the REAL webhook auth check logic from routes.telegram_webhook.
@@ -17,7 +19,9 @@ class TestWebhookAuth(unittest.TestCase):
 
     def _auth_check(self, header_token: str | None) -> bool:
         """Apply the real auth condition from routes.py."""
-        if not header_token or not hmac.compare_digest(header_token, TELEGRAM_SECRET_TOKEN):
+        if not header_token or not hmac.compare_digest(
+            header_token, TELEGRAM_SECRET_TOKEN
+        ):
             return False
         return True
 
@@ -39,12 +43,13 @@ class TestWebhookAuth(unittest.TestCase):
 
     def test_partial_token_rejected(self):
         """Prefix of secret token must be rejected."""
-        partial = TELEGRAM_SECRET_TOKEN[:len(TELEGRAM_SECRET_TOKEN) // 2]
+        partial = TELEGRAM_SECRET_TOKEN[: len(TELEGRAM_SECRET_TOKEN) // 2]
         self.assertFalse(self._auth_check(partial))
 
     def test_token_with_extra_chars_rejected(self):
         """Token with appended characters must be rejected."""
         self.assertFalse(self._auth_check(TELEGRAM_SECRET_TOKEN + "extra"))
+
 
 if __name__ == "__main__":
     unittest.main()

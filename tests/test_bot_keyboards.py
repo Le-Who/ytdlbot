@@ -4,10 +4,13 @@ import unittest
 from app.bot.keyboards import build_format_keyboard
 from app.services.ytdlp.models import FormatItem
 
+
 class TestBuildFormatKeyboard(unittest.TestCase):
 
     def _make_format(self, label: str, fid: str) -> FormatItem:
-        return FormatItem(label=label, format_id=fid, ext="mp4", height=None, filesize=None)
+        return FormatItem(
+            label=label, format_id=fid, ext="mp4", height=None, filesize=None
+        )
 
     def test_empty_formats(self):
         audio = self._make_format("Audio Only", "audio_id")
@@ -87,6 +90,7 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         all_data = [btn.callback_data for row in buttons for btn in row]
         self.assertIn("pick|MY_FORMAT_ID", all_data)
         self.assertIn("pick|MY_AUDIO_ID", all_data)
+
 
 if __name__ == "__main__":
     unittest.main()

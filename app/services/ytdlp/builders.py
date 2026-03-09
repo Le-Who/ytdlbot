@@ -79,18 +79,25 @@ def build_command(
     elif is_gif_format:
         # Для GIF используем bestvideo без аудио
         cmd = _get_base_cmd("bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best", output)
-        _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy, info_json_path)
+        _append_common_opts(
+            cmd, page_url, cookies_path, max_filesize, proxy, info_json_path
+        )
         return cmd
     else:
         # Аудио/Raw или составной формат (bestvideo+bestaudio)
         cmd = _get_base_cmd(format_id, output)
         if output != "-" and use_aria2 and has_aria2_installed:
-            cmd.extend([
-                "--downloader", "http:aria2c",
-                "--downloader-args",
-                "aria2c:-x 16 -s 16 -k 1M",
-            ])
-        _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy, info_json_path)
+            cmd.extend(
+                [
+                    "--downloader",
+                    "http:aria2c",
+                    "--downloader-args",
+                    "aria2c:-x 16 -s 16 -k 1M",
+                ]
+            )
+        _append_common_opts(
+            cmd, page_url, cookies_path, max_filesize, proxy, info_json_path
+        )
         return cmd
 
     # 2. Селектор аудио (Original -> English -> OrigTag -> Any)
@@ -115,11 +122,14 @@ def build_command(
     # aria2c для ускорения скачивания (только для HTTP загрузок,
     # для DASH/HLS используем нативный --concurrent-fragments)
     if output != "-" and use_aria2 and has_aria2_installed:
-        cmd.extend([
-            "--downloader", "http:aria2c",
-            "--downloader-args",
-            "aria2c:-x 16 -s 16 -k 1M",
-        ])
+        cmd.extend(
+            [
+                "--downloader",
+                "http:aria2c",
+                "--downloader-args",
+                "aria2c:-x 16 -s 16 -k 1M",
+            ]
+        )
 
     cmd.extend(
         [
@@ -128,6 +138,7 @@ def build_command(
         ]
     )
 
-    _append_common_opts(cmd, page_url, cookies_path, max_filesize, proxy, info_json_path)
+    _append_common_opts(
+        cmd, page_url, cookies_path, max_filesize, proxy, info_json_path
+    )
     return cmd
-

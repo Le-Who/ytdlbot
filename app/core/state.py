@@ -35,8 +35,12 @@ parsing_sem = asyncio.Semaphore(5)  # Лимит на одновременный
 active_processes_lock = asyncio.Lock()
 active_processes: set[asyncio.subprocess.Process] = set()
 processing_gifs: set[str] = set()  # Set of tokens currently being converted to GIF
-conversion_sem = asyncio.Semaphore(3)  # Bounded concurrency for CPU-intensive conversions
-ytdlp_executor = ThreadPoolExecutor(max_workers=10, thread_name_prefix="ytdlp")  # Dedicated pool for yt-dlp
+conversion_sem = asyncio.Semaphore(
+    3
+)  # Bounded concurrency for CPU-intensive conversions
+ytdlp_executor = ThreadPoolExecutor(
+    max_workers=10, thread_name_prefix="ytdlp"
+)  # Dedicated pool for yt-dlp
 
 # Глобальный объект приложения Telegram (инициализируется в main.py)
 if TYPE_CHECKING:
@@ -51,7 +55,9 @@ bot_app: Application | None = None
 link_cache: TTLCache = TTLCache(maxsize=500, ttl=LINK_TTL_MINUTES * 60)
 info_cache: TTLCache = TTLCache(maxsize=200, ttl=600)
 cancel_cache: TTLCache = TTLCache(maxsize=100, ttl=3600)
-inflight_parsing: TTLCache = TTLCache(maxsize=100, ttl=600)  # url -> asyncio.Event (auto-evicts after 10 min)
+inflight_parsing: TTLCache = TTLCache(
+    maxsize=100, ttl=600
+)  # url -> asyncio.Event (auto-evicts after 10 min)
 file_cache: FileTTLCache = FileTTLCache(
     maxsize=100, ttl=3600, on_eviction=safe_remove
 )  # token -> file_path

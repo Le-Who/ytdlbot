@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from app.services.ytdlp.service import YtDlpService
 
+
 class TestYtDlpCaching(unittest.TestCase):
     """Test that YtDlpService.extract() properly creates/uses YoutubeDL instances."""
 
@@ -37,6 +38,7 @@ class TestYtDlpCaching(unittest.TestCase):
             mock_instance.extract_info.assert_called_once_with(
                 "http://test.com", download=False
             )
+
 
 if __name__ == "__main__":
     unittest.main()

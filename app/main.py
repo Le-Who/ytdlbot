@@ -33,19 +33,38 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     bot_app = Application.builder().token(config.BOT_TOKEN).build()
     bot_app.add_handler(CommandHandler("start", commands.cmd_start))
     bot_app.add_handler(CommandHandler("help", commands.cmd_help))
-    bot_app.add_handler(MessageHandler(filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, messages.on_message))
+    bot_app.add_handler(
+        MessageHandler(
+            filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
+            messages.on_message,
+        )
+    )
 
     from app.bot import group_logic
-    bot_app.add_handler(MessageHandler(filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND, group_logic.handle_group_message))
+
+    bot_app.add_handler(
+        MessageHandler(
+            filters.ChatType.GROUPS & filters.TEXT & ~filters.COMMAND,
+            group_logic.handle_group_message,
+        )
+    )
 
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_back, pattern=r"^back$"))
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_pick, pattern=r"^pick\|"))
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_cancel, pattern=r"^cancel\|"))
-    bot_app.add_handler(CallbackQueryHandler(callbacks.on_cancel, pattern=r"^cancel_parse\|"))
+    bot_app.add_handler(
+        CallbackQueryHandler(callbacks.on_cancel, pattern=r"^cancel_parse\|")
+    )
     bot_app.add_handler(CallbackQueryHandler(callbacks.on_send, pattern=r"^send\|"))
-    bot_app.add_handler(CallbackQueryHandler(callbacks.on_convert_to_gif, pattern=r"^gif\|"))
-    bot_app.add_handler(CallbackQueryHandler(callbacks.on_slideshow, pattern=r"^slideshow\|"))
-    bot_app.add_handler(CallbackQueryHandler(group_logic.on_group_slideshow, pattern=r"^grpslide\|"))
+    bot_app.add_handler(
+        CallbackQueryHandler(callbacks.on_convert_to_gif, pattern=r"^gif\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(callbacks.on_slideshow, pattern=r"^slideshow\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(group_logic.on_group_slideshow, pattern=r"^grpslide\|")
+    )
 
     async def _global_error_handler(update, context):
         logger.error(
@@ -76,7 +95,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         await bot_app.bot.delete_webhook()
         assert bot_app.updater is not None
-        await bot_app.updater.start_polling(allowed_updates=["message", "callback_query"])
+        await bot_app.updater.start_polling(
+            allowed_updates=["message", "callback_query"]
+        )
 
     yield
 
@@ -106,7 +127,9 @@ async def add_security_headers(request: Request, call_next: Any) -> Any:
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
 
     if request.url.path.startswith(("/docs", "/redoc", "/openapi.json")):
-        response.headers["Content-Security-Policy"] = "default-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net data:"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net data:"
+        )
     else:
         response.headers["Content-Security-Policy"] = "default-src 'none'"
 

@@ -3,8 +3,10 @@
 Verifies that html.escape() is correctly applied to user-supplied titles
 before being used in Telegram parse_mode=HTML messages.
 """
+
 import unittest
 import html
+
 
 class TestHtmlEscaping(unittest.TestCase):
     """Test that the html.escape function used in messages.py and callbacks.py
@@ -38,7 +40,7 @@ class TestHtmlEscaping(unittest.TestCase):
 
     def test_quotes_escaped(self):
         """Quotes must be escaped to prevent attribute injection."""
-        title = 'Title with "quotes" and \'apostrophes\''
+        title = "Title with \"quotes\" and 'apostrophes'"
         escaped = html.escape(title, quote=True)
         self.assertNotIn('"', escaped)
         self.assertIn("&quot;", escaped)
@@ -49,7 +51,9 @@ class TestHtmlEscaping(unittest.TestCase):
         escaped = html.escape(title)
         self.assertNotIn("<img", escaped)
         self.assertNotIn("<a ", escaped)
-        self.assertNotIn("javascript:", escaped.replace("javascript:", ""))  # still present as text
+        self.assertNotIn(
+            "javascript:", escaped.replace("javascript:", "")
+        )  # still present as text
         self.assertIn("&lt;img", escaped)
         self.assertIn("&lt;a ", escaped)
 
@@ -78,6 +82,7 @@ class TestHtmlEscaping(unittest.TestCase):
         self.assertEqual(caption.count("</b>"), 1)
         # No raw script tags
         self.assertNotIn("<script>", caption.replace("&lt;script&gt;", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

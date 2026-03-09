@@ -1,8 +1,10 @@
 """Tests for TokenBucketLimiter — deterministic, no time.sleep."""
+
 import unittest
 from unittest.mock import patch
 
 from app.core.limiter import TokenBucketLimiter
+
 
 class TestTokenBucketLimiter(unittest.TestCase):
     """Test token bucket rate limiter with monkeypatched time."""
@@ -87,6 +89,7 @@ class TestTokenBucketLimiter(unittest.TestCase):
             limiter.allow("trigger_prune")  # triggers prune
 
         self.assertNotIn("stale_key", limiter._buckets)
+
 
 if __name__ == "__main__":
     unittest.main()

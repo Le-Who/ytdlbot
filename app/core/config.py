@@ -12,7 +12,9 @@ os.makedirs(TEMP_DIR, exist_ok=True)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
-TELEGRAM_SECRET_TOKEN: str = os.getenv("TELEGRAM_SECRET_TOKEN") or secrets.token_urlsafe(32)
+TELEGRAM_SECRET_TOKEN: str = os.getenv(
+    "TELEGRAM_SECRET_TOKEN"
+) or secrets.token_urlsafe(32)
 
 LINK_TTL_MINUTES = int(os.getenv("LINK_TTL_MINUTES", "30"))
 ENABLE_TELEGRAM_UPLOAD = os.getenv("ENABLE_TELEGRAM_UPLOAD", "1").strip() == "1"

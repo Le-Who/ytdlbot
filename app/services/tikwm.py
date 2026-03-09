@@ -32,7 +32,9 @@ class TikWMService:
     """Fetches TikTok video URLs via the TikWM public API."""
 
     @staticmethod
-    async def fetch_video(url: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    async def fetch_video(
+        url: str,
+    ) -> tuple[Optional[str], Optional[str], Optional[str]]:
         """
         Fetch a TikTok video URL via TikWM API.
 
@@ -56,7 +58,9 @@ class TikWMService:
                 last_error = f"TikWM API error: {e}"
                 logger.warning(
                     "[TIKWM] Attempt %d/%d failed: %s",
-                    attempt + 1, MAX_RETRIES, e,
+                    attempt + 1,
+                    MAX_RETRIES,
+                    e,
                 )
                 continue
 
@@ -97,9 +101,7 @@ class TikWMService:
             return None, error
 
         # Download the video from CDN
-        output_path = os.path.join(
-            TEMP_DIR, f"tikwm_{uuid.uuid4().hex}.mp4"
-        )
+        output_path = os.path.join(TEMP_DIR, f"tikwm_{uuid.uuid4().hex}.mp4")
 
         try:
             assert video_url is not None  # guaranteed by fetch_video success path
@@ -114,9 +116,7 @@ class TikWMService:
                     f.write(resp.content)
 
             size_mb = os.path.getsize(output_path) / (1024 * 1024)
-            logger.info(
-                "[TIKWM] Downloaded: %s (%.1f MB)", output_path, size_mb
-            )
+            logger.info("[TIKWM] Downloaded: %s (%.1f MB)", output_path, size_mb)
             return output_path, None
 
         except Exception as e:

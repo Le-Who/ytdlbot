@@ -1,7 +1,16 @@
 import unittest
-from app.services.ytdlp.parsers import parse_format_metadata, create_format_item, get_special_format, deduplicate_formats, _extract_height, _format_duration, BITRATE_COEFFICIENT
+from app.services.ytdlp.parsers import (
+    parse_format_metadata,
+    create_format_item,
+    get_special_format,
+    deduplicate_formats,
+    _extract_height,
+    _format_duration,
+    BITRATE_COEFFICIENT,
+)
 from app.services.ytdlp.models import FormatMetadata
 from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
+
 
 class TestYtDlpParsers(unittest.TestCase):
     def test_format_duration(self):
@@ -36,8 +45,8 @@ class TestYtDlpParsers(unittest.TestCase):
             "ext": "mp4",
             "vcodec": "avc1.640028",
             "height": 1080,
-            "filesize": 100 * 1024 * 1024, # 100 MB
-            "protocol": "https"
+            "filesize": 100 * 1024 * 1024,  # 100 MB
+            "protocol": "https",
         }
         url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         is_tiktok = "tiktok.com" in url
@@ -60,7 +69,7 @@ class TestYtDlpParsers(unittest.TestCase):
             "format_id": "140",
             "ext": "m4a",
             "vcodec": "none",
-            "protocol": "https"
+            "protocol": "https",
         }
         url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
         is_tiktok = "tiktok.com" in url
@@ -74,7 +83,7 @@ class TestYtDlpParsers(unittest.TestCase):
             "ext": "mp4",
             "vcodec": "none",
             "protocol": "https",
-            "height": None
+            "height": None,
         }
         url = "https://www.tiktok.com/@user/video/123"
         is_tiktok = "tiktok.com" in url
@@ -82,18 +91,14 @@ class TestYtDlpParsers(unittest.TestCase):
 
         self.assertIsNotNone(metadata)
         self.assertEqual(metadata.format_id, "tiktok_fmt")
-        self.assertEqual(metadata.height, 720) # Default for TikTok
+        self.assertEqual(metadata.height, 720)  # Default for TikTok
 
         item = create_format_item(metadata, is_tiktok)
         self.assertIn("🎵 TikTok", item.label)
 
     def test_parse_format_unsupported_extension(self):
         """Should return None for unsupported extensions like jpg"""
-        format_dict = {
-            "format_id": "img",
-            "ext": "jpg",
-            "protocol": "https"
-        }
+        format_dict = {"format_id": "img", "ext": "jpg", "protocol": "https"}
         url = "https://example.com/video"
         is_tiktok = "tiktok.com" in url
         result = parse_format_metadata(format_dict, None, is_tiktok)
@@ -105,7 +110,7 @@ class TestYtDlpParsers(unittest.TestCase):
             "format_id": "hls_fmt",
             "ext": "m3u8",
             "protocol": "m3u8_native",
-            "height": 720
+            "height": 720,
         }
         url = "https://example.com/video"
         is_tiktok = "tiktok.com" in url
@@ -119,11 +124,7 @@ class TestYtDlpParsers(unittest.TestCase):
 
     def test_parse_format_missing_id(self):
         """Should return None if format_id is missing"""
-        format_dict = {
-            "ext": "mp4",
-            "vcodec": "avc1",
-            "height": 720
-        }
+        format_dict = {"ext": "mp4", "vcodec": "avc1", "height": 720}
         url = "https://example.com/video"
         is_tiktok = "tiktok.com" in url
         result = parse_format_metadata(format_dict, None, is_tiktok)
@@ -136,7 +137,7 @@ class TestYtDlpParsers(unittest.TestCase):
             "ext": "mp4",
             "vcodec": "avc1",
             "format_note": "720p HD",
-            "protocol": "https"
+            "protocol": "https",
         }
         url = "https://example.com/video"
         is_tiktok = "tiktok.com" in url
@@ -155,7 +156,7 @@ class TestYtDlpParsers(unittest.TestCase):
             "vcodec": "avc1",
             "height": 480,
             "filesize_approx": 50 * 1024 * 1024,
-            "protocol": "https"
+            "protocol": "https",
         }
         url = "https://example.com/video"
         is_tiktok = "tiktok.com" in url
@@ -173,8 +174,8 @@ class TestYtDlpParsers(unittest.TestCase):
             "ext": "mp4",
             "vcodec": "avc1",
             "height": 720,
-            "tbr": 1000, # 1000 kbps
-            "protocol": "https"
+            "tbr": 1000,  # 1000 kbps
+            "protocol": "https",
         }
         duration_sec = 10.0
         duration_factor = duration_sec * BITRATE_COEFFICIENT
@@ -192,17 +193,23 @@ class TestYtDlpParsers(unittest.TestCase):
     def test_parse_format_label_icons(self):
         """Verify correct icons for different heights"""
         # 1080p -> 📺
-        m1080 = parse_format_metadata({"format_id": "1", "ext": "mp4", "height": 1080}, None, False)
+        m1080 = parse_format_metadata(
+            {"format_id": "1", "ext": "mp4", "height": 1080}, None, False
+        )
         item1080 = create_format_item(m1080, False)
         self.assertIn("📺", item1080.label)
 
         # 720p -> 📹
-        m720 = parse_format_metadata({"format_id": "2", "ext": "mp4", "height": 720}, None, False)
+        m720 = parse_format_metadata(
+            {"format_id": "2", "ext": "mp4", "height": 720}, None, False
+        )
         item720 = create_format_item(m720, False)
         self.assertIn("📹", item720.label)
 
         # 480p -> 📱
-        m480 = parse_format_metadata({"format_id": "3", "ext": "mp4", "height": 480}, None, False)
+        m480 = parse_format_metadata(
+            {"format_id": "3", "ext": "mp4", "height": 480}, None, False
+        )
         item480 = create_format_item(m480, False)
         self.assertIn("📱", item480.label)
 
@@ -211,19 +218,24 @@ class TestYtDlpParsers(unittest.TestCase):
         format_dict = {
             "format_id": "small",
             "ext": "mp4",
-            "filesize": 500 * 1024, # 500 KB
-            "height": 360
+            "filesize": 500 * 1024,  # 500 KB
+            "height": 360,
         }
         metadata = parse_format_metadata(format_dict, None, False)
         item = create_format_item(metadata, False)
         self.assertIn("500 KB", item.label)
 
+
 class TestDeduplicateFormats(unittest.TestCase):
     def test_deduplicate_formats_tiktok(self):
         """TikTok formats should not be deduplicated"""
         formats = [
-            FormatMetadata(format_id="1", ext="mp4", height=720, filesize=100, protocol="https"),
-            FormatMetadata(format_id="2", ext="mp4", height=720, filesize=200, protocol="https"),
+            FormatMetadata(
+                format_id="1", ext="mp4", height=720, filesize=100, protocol="https"
+            ),
+            FormatMetadata(
+                format_id="2", ext="mp4", height=720, filesize=200, protocol="https"
+            ),
         ]
         result = deduplicate_formats(formats, is_tiktok_url=True)
         self.assertEqual(len(result), 2)
@@ -232,9 +244,15 @@ class TestDeduplicateFormats(unittest.TestCase):
     def test_deduplicate_formats_standard(self):
         """Standard deduplication based on height"""
         formats = [
-            FormatMetadata(format_id="1", ext="mp4", height=1080, filesize=100, protocol="https"),
-            FormatMetadata(format_id="2", ext="mp4", height=1080, filesize=200, protocol="https"), # Duplicate height
-            FormatMetadata(format_id="3", ext="mp4", height=720, filesize=300, protocol="https"),
+            FormatMetadata(
+                format_id="1", ext="mp4", height=1080, filesize=100, protocol="https"
+            ),
+            FormatMetadata(
+                format_id="2", ext="mp4", height=1080, filesize=200, protocol="https"
+            ),  # Duplicate height
+            FormatMetadata(
+                format_id="3", ext="mp4", height=720, filesize=300, protocol="https"
+            ),
         ]
         result = deduplicate_formats(formats, is_tiktok_url=False)
         self.assertEqual(len(result), 2)
@@ -244,9 +262,15 @@ class TestDeduplicateFormats(unittest.TestCase):
     def test_deduplicate_formats_none_height(self):
         """Formats with None height should all be kept"""
         formats = [
-            FormatMetadata(format_id="1", ext="mp4", height=None, filesize=100, protocol="https"),
-            FormatMetadata(format_id="2", ext="mp4", height=None, filesize=200, protocol="https"),
-            FormatMetadata(format_id="3", ext="mp4", height=720, filesize=300, protocol="https"),
+            FormatMetadata(
+                format_id="1", ext="mp4", height=None, filesize=100, protocol="https"
+            ),
+            FormatMetadata(
+                format_id="2", ext="mp4", height=None, filesize=200, protocol="https"
+            ),
+            FormatMetadata(
+                format_id="3", ext="mp4", height=720, filesize=300, protocol="https"
+            ),
         ]
         result = deduplicate_formats(formats, is_tiktok_url=False)
         self.assertEqual(len(result), 3)
@@ -254,16 +278,27 @@ class TestDeduplicateFormats(unittest.TestCase):
     def test_deduplicate_formats_mixed(self):
         """Mixed scenario with duplicates and None heights"""
         formats = [
-            FormatMetadata(format_id="1", ext="mp4", height=1080, filesize=100, protocol="https"),
-            FormatMetadata(format_id="2", ext="mp4", height=1080, filesize=200, protocol="https"), # Dup
-            FormatMetadata(format_id="3", ext="mp4", height=None, filesize=300, protocol="https"),
-            FormatMetadata(format_id="4", ext="mp4", height=None, filesize=400, protocol="https"),
-            FormatMetadata(format_id="5", ext="mp4", height=720, filesize=500, protocol="https"),
+            FormatMetadata(
+                format_id="1", ext="mp4", height=1080, filesize=100, protocol="https"
+            ),
+            FormatMetadata(
+                format_id="2", ext="mp4", height=1080, filesize=200, protocol="https"
+            ),  # Dup
+            FormatMetadata(
+                format_id="3", ext="mp4", height=None, filesize=300, protocol="https"
+            ),
+            FormatMetadata(
+                format_id="4", ext="mp4", height=None, filesize=400, protocol="https"
+            ),
+            FormatMetadata(
+                format_id="5", ext="mp4", height=720, filesize=500, protocol="https"
+            ),
         ]
         result = deduplicate_formats(formats, is_tiktok_url=False)
         self.assertEqual(len(result), 4)
         ids = [f.format_id for f in result]
         self.assertEqual(ids, ["1", "3", "4", "5"])
+
 
 class TestGetSpecialFormat(unittest.TestCase):
     def test_get_special_format_pinterest(self):
@@ -290,7 +325,7 @@ class TestGetSpecialFormat(unittest.TestCase):
             "https://youtu.be/123",
             "https://www.tiktok.com/@user/video/123",
             "https://example.com/video",
-            ""
+            "",
         ]
         for url in urls:
             with self.subTest(url=url):
@@ -300,6 +335,7 @@ class TestGetSpecialFormat(unittest.TestCase):
                 self.assertEqual(item.ext, "audio")
                 self.assertIsNone(item.height)
                 self.assertIsNone(item.filesize)
+
 
 class TestExtractHeight(unittest.TestCase):
     def test_extract_height_valid(self):
@@ -320,8 +356,8 @@ class TestExtractHeight(unittest.TestCase):
         """Should return None for strings without valid height pattern"""
         self.assertIsNone(_extract_height("audio"))
         self.assertIsNone(_extract_height("unknown"))
-        self.assertIsNone(_extract_height("p720")) # Pattern expects digits then p
-        self.assertIsNone(_extract_height("1080")) # Missing p
+        self.assertIsNone(_extract_height("p720"))  # Pattern expects digits then p
+        self.assertIsNone(_extract_height("1080"))  # Missing p
         self.assertIsNone(_extract_height("myp"))
 
     def test_extract_height_none_empty(self):
@@ -333,12 +369,17 @@ class TestExtractHeight(unittest.TestCase):
         """Should handle 0p edge case"""
         self.assertEqual(_extract_height("0p"), 0)
 
+
 class TestFacebookFormats(unittest.TestCase):
     """Tests for Facebook-specific format handling."""
 
     def test_facebook_sd_format(self):
         """Facebook SD format: format_id='sd', no ext, no height → 360p."""
-        fmt = {"format_id": "sd", "quality": -3, "url": "https://video.xx.fbcdn.net/sd.mp4"}
+        fmt = {
+            "format_id": "sd",
+            "quality": -3,
+            "url": "https://video.xx.fbcdn.net/sd.mp4",
+        }
         metadata = parse_format_metadata(fmt, None, False)
 
         self.assertIsNotNone(metadata)
@@ -352,7 +393,11 @@ class TestFacebookFormats(unittest.TestCase):
 
     def test_facebook_hd_format(self):
         """Facebook HD format: format_id='hd', no ext, no height → 720p."""
-        fmt = {"format_id": "hd", "quality": -2, "url": "https://video.xx.fbcdn.net/hd.mp4"}
+        fmt = {
+            "format_id": "hd",
+            "quality": -2,
+            "url": "https://video.xx.fbcdn.net/hd.mp4",
+        }
         metadata = parse_format_metadata(fmt, None, False)
 
         self.assertIsNotNone(metadata)
@@ -399,11 +444,16 @@ class TestFacebookFormats(unittest.TestCase):
     def test_facebook_dedup_keeps_both_sd_hd(self):
         """Facebook SD and HD should not be deduped (different heights)."""
         formats = [
-            FormatMetadata(format_id="sd", ext="mp4", height=360, filesize=None, protocol=""),
-            FormatMetadata(format_id="hd", ext="mp4", height=720, filesize=None, protocol=""),
+            FormatMetadata(
+                format_id="sd", ext="mp4", height=360, filesize=None, protocol=""
+            ),
+            FormatMetadata(
+                format_id="hd", ext="mp4", height=720, filesize=None, protocol=""
+            ),
         ]
         result = deduplicate_formats(formats, is_tiktok_url=False)
         self.assertEqual(len(result), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

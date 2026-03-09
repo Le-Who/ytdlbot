@@ -1,4 +1,5 @@
 """Tests for webhook endpoint — verifies real route behavior via FastAPI TestClient."""
+
 import unittest
 
 from unittest.mock import patch
@@ -10,6 +11,7 @@ from app.core.config import TELEGRAM_SECRET_TOKEN
 
 _app = FastAPI()
 _app.include_router(router)
+
 
 class TestWebhookEndpoint(unittest.TestCase):
     """Test the real /webhook endpoint via TestClient."""
@@ -66,6 +68,7 @@ class TestWebhookEndpoint(unittest.TestCase):
             },
         )
         self.assertEqual(resp.status_code, 429)
+
 
 if __name__ == "__main__":
     unittest.main()

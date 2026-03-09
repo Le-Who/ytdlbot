@@ -2,12 +2,14 @@
 
 Skipped if curl_cffi is not installed (it's optional, only needed at runtime).
 """
+
 import unittest
 from unittest.mock import patch, AsyncMock, MagicMock
 import os
 
 try:
     import curl_cffi  # noqa: F401
+
     HAS_CURL_CFFI = True
 except ImportError:
     HAS_CURL_CFFI = False
@@ -109,7 +111,8 @@ class TestTikWMDownloadVideo(unittest.IsolatedAsyncioTestCase):
         from app.services.tikwm import TikWMService
 
         with patch.object(
-            TikWMService, "fetch_video",
+            TikWMService,
+            "fetch_video",
             new_callable=AsyncMock,
             return_value=(None, None, "TikWM: not found"),
         ):
@@ -135,12 +138,15 @@ class TestTikWMDownloadVideo(unittest.IsolatedAsyncioTestCase):
         mock_session.get = AsyncMock(return_value=mock_resp)
 
         with patch.object(
-            TikWMService, "fetch_video",
+            TikWMService,
+            "fetch_video",
             new_callable=AsyncMock,
             return_value=("https://cdn.tikwm.com/video.mp4", "Title", None),
         ):
             with patch("app.services.tikwm.TEMP_DIR", tmpdir):
-                with patch("app.services.tikwm.AsyncSession", return_value=mock_session):
+                with patch(
+                    "app.services.tikwm.AsyncSession", return_value=mock_session
+                ):
                     path, error = await TikWMService.download_video(
                         "https://tiktok.com/video/123"
                     )

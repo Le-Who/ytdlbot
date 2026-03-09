@@ -50,4 +50,6 @@ class SlideshowPipeline:
                 shutil.rmtree(parent_dir, ignore_errors=True)
                 logger.info("Removed slideshow dir", extra={"dir": parent_dir})
             except Exception as e:
-                logger.warning("Failed to remove slideshow dir", extra={"error": str(e)})
+                logger.warning(
+                    "Failed to remove slideshow dir", extra={"error": str(e)}
+                )

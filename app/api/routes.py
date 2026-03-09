@@ -26,6 +26,7 @@ async def health():
 @router.get("/metrics")
 async def metrics_endpoint():
     from app.core.metrics import metrics
+
     return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
 
 
@@ -46,7 +47,7 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
         raise HTTPException(429, "Too many requests")
 
     raw_title = payload.get("title") or "video"
-    clean_title = re.sub(r'[\x00-\x1f\x7f\r\n]', '', raw_title)[:200]
+    clean_title = re.sub(r"[\x00-\x1f\x7f\r\n]", "", raw_title)[:200]
     encoded_filename = quote(clean_title or "video")
     format_id = payload.get("format_id")
     is_gif = format_id == GIF_FORMAT_ID
@@ -118,7 +119,10 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
                                 break
                             bytes_sent += len(chunk)
                             if bytes_sent > max_bytes:
-                                logger.warning("Stream exceeded size limit", extra={"limit_mb": MAX_DL_MB})
+                                logger.warning(
+                                    "Stream exceeded size limit",
+                                    extra={"limit_mb": MAX_DL_MB},
+                                )
                                 return
                             yield chunk
                     finally:
@@ -138,7 +142,9 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
                         break
                     bytes_sent += len(chunk)
                     if bytes_sent > max_bytes:
-                        logger.warning("Stream exceeded size limit", extra={"limit_mb": MAX_DL_MB})
+                        logger.warning(
+                            "Stream exceeded size limit", extra={"limit_mb": MAX_DL_MB}
+                        )
                         return
                     yield chunk
 

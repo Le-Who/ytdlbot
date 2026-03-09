@@ -5,11 +5,22 @@ from app.bot.keyboards import build_format_keyboard
 from app.services.ytdlp.models import FormatItem
 
 
+from unittest.mock import patch, MagicMock
+
+
 class TestBuildFormatKeyboard(unittest.TestCase):
-    def _make_format(self, label: str, fid: str) -> FormatItem:
-        return FormatItem(
-            label=label, format_id=fid, ext="mp4", height=None, filesize=None
+    def setUp(self):
+        self.patcher = patch("app.bot.keyboards.format_label")
+        self.mock_format_label = self.patcher.start()
+        self.mock_format_label.side_effect = lambda x: getattr(
+            x, "_test_label", "Unknown"
         )
+
+    def tearDown(self):
+        self.patcher.stop()
+
+    def _make_format(self, label: str, fid: str) -> MagicMock:
+        return MagicMock(spec=FormatItem, format_id=fid, _test_label=label)
 
     def test_empty_formats(self):
         audio = self._make_format("Audio Only", "audio_id")

@@ -1,4 +1,5 @@
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from app.bot.format_formatter import format_label
 
 from app.constants import (
     AUDIO_FORMAT_ID,
@@ -20,14 +21,14 @@ def build_format_keyboard(
     for i in range(0, len(formats_slice), 2):
         row = [
             InlineKeyboardButton(
-                formats_slice[i].label,
+                format_label(formats_slice[i]),
                 callback_data=f"pick|{formats_slice[i].format_id}",
             )
         ]
         if i + 1 < len(formats_slice):
             row.append(
                 InlineKeyboardButton(
-                    formats_slice[i + 1].label,
+                    format_label(formats_slice[i + 1]),
                     callback_data=f"pick|{formats_slice[i + 1].format_id}",
                 )
             )
@@ -36,7 +37,8 @@ def build_format_keyboard(
     buttons.append(
         [
             InlineKeyboardButton(
-                special_format.label, callback_data=f"pick|{special_format.format_id}"
+                format_label(special_format),
+                callback_data=f"pick|{special_format.format_id}",
             )
         ]
     )

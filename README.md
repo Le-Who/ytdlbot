@@ -61,7 +61,7 @@ flowchart TD
 | `app/core/`     | Global config, rate limiter logic, caching, and state structures.          |
 | `app/services/` | Wrappers for `yt-dlp`, `gallery-dl`, `ffmpeg` conversion, and downloading. |
 | `app/tasks/`    | Background periodic tasks (e.g., `janitor.py` for temp cleanup).           |
-| `tests/`        | 430+ Pytest tests covering unit, integration, and security.                |
+| `tests/`        | 434+ Pytest tests covering unit, integration, and security.                |
 | `Dockerfile`    | Multi-stage build definition for containerized deployment.                 |
 | `scripts`       | Python standalone script for local debugging of `yt-dlp` extraction.       |
 

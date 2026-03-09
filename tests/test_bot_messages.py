@@ -81,15 +81,18 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
             format_id="bestaudio/best", label="Audio", filesize=None
         )
 
+        from app.services.ytdlp.models import ExtractionResult
+
         # Pre-populate cache
-        state.info_cache[url] = (
-            "Cached Video Title",
-            formats,
-            special_format,
-            "5:00",
-            False,  # is_slideshow
-            None,  # info_json_path
-            None,  # thumbnail_url
+        state.info_cache[url] = ExtractionResult(
+            title="Cached Video Title",
+            formats=formats,
+            special_format=special_format,
+            duration_str="5:00",
+            is_slideshow=False,
+            info_json_path=None,
+            thumbnail_url=None,
+            tiktok_auth_error=False,
         )
 
         status_msg = AsyncMock()

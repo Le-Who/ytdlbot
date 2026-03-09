@@ -137,23 +137,29 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
 
         fmt = FormatItem(
             format_id="137",
-            label="📺 1080p",
             ext="mp4",
             height=1080,
             filesize=50_000_000,
         )
         special = FormatItem(
-            format_id="audio", label="🎵 Audio", ext="audio", height=None, filesize=None
+            format_id="audio",
+            ext="audio",
+            height=None,
+            filesize=None,
+            format_note="audio",
         )
 
-        state.info_cache["https://youtube.com/watch?v=abc"] = (
-            "Test Video",
-            [fmt],
-            special,
-            "05:00",
-            False,
-            None,
-            None,
+        from app.services.ytdlp.models import ExtractionResult
+
+        state.info_cache["https://youtube.com/watch?v=abc"] = ExtractionResult(
+            title="Test Video",
+            formats=[fmt],
+            special_format=special,
+            duration_str="05:00",
+            is_slideshow=False,
+            info_json_path=None,
+            thumbnail_url=None,
+            tiktok_auth_error=False,
         )
 
         await on_message(self.update, self.context)
@@ -168,17 +174,24 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         from app.services.ytdlp.models import FormatItem
 
         special = FormatItem(
-            format_id="audio", label="🎵 Audio", ext="audio", height=None, filesize=None
+            format_id="audio",
+            ext="audio",
+            height=None,
+            filesize=None,
+            format_note="audio",
         )
 
-        state.info_cache["https://youtube.com/watch?v=abc"] = (
-            "Slideshow",
-            [],
-            special,
-            "00:30",
-            True,
-            None,
-            None,
+        from app.services.ytdlp.models import ExtractionResult
+
+        state.info_cache["https://youtube.com/watch?v=abc"] = ExtractionResult(
+            title="Slideshow",
+            formats=[],
+            special_format=special,
+            duration_str="00:30",
+            is_slideshow=True,
+            info_json_path=None,
+            thumbnail_url=None,
+            tiktok_auth_error=False,
         )
 
         await on_message(self.update, self.context)
@@ -193,23 +206,29 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
 
         fmt = FormatItem(
             format_id="137",
-            label="📺 1080p",
             ext="mp4",
             height=1080,
             filesize=50_000_000,
         )
         special = FormatItem(
-            format_id="audio", label="🎵 Audio", ext="audio", height=None, filesize=None
+            format_id="audio",
+            ext="audio",
+            height=None,
+            filesize=None,
+            format_note="audio",
         )
 
-        state.info_cache["https://youtube.com/watch?v=abc"] = (
-            "Test Video",
-            [fmt],
-            special,
-            "05:00",
-            False,
-            None,
-            "https://example.com/thumb.jpg",
+        from app.services.ytdlp.models import ExtractionResult
+
+        state.info_cache["https://youtube.com/watch?v=abc"] = ExtractionResult(
+            title="Test Video",
+            formats=[fmt],
+            special_format=special,
+            duration_str="05:00",
+            is_slideshow=False,
+            info_json_path=None,
+            thumbnail_url="https://example.com/thumb.jpg",
+            tiktok_auth_error=False,
         )
 
         await on_message(self.update, self.context)

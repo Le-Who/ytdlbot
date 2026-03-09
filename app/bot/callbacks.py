@@ -128,31 +128,26 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await q.edit_message_text(Texts.CACHE_REFRESHING)
             async with state.parsing_sem:
-                (
-                    title,
-                    formats,
-                    special_format,
-                    duration,
-                    is_slideshow,
-                    info_json_path,
-                    thumbnail_url,
-                ) = await asyncio.to_thread(state.ytdlp.list_formats, page_url)
-            state.info_cache[page_url] = (
-                title,
-                formats,
-                special_format,
-                duration,
-                is_slideshow,
-                info_json_path,
-                thumbnail_url,
-            )
+                result = await asyncio.to_thread(state.ytdlp.list_formats, page_url)
+            state.info_cache[page_url] = result
+            
+            title = result.title
+            formats = result.formats
+            special_format = result.special_format
+            duration = result.duration_str
+            is_slideshow = result.is_slideshow
+            thumbnail_url = result.thumbnail_url
         except Exception as e:
             logger.error("Refresh error on back", extra={"error": str(e)})
             await q.edit_message_text(Texts.CACHE_REFRESH_FAIL)
             return
     else:
-        title, formats, special_format, duration, is_slideshow, *rest = cached
-        thumbnail_url = rest[1] if len(rest) > 1 else None
+        title = cached.title
+        formats = cached.formats
+        special_format = cached.special_format
+        duration = cached.duration_str
+        is_slideshow = cached.is_slideshow
+        thumbnail_url = cached.thumbnail_url
 
     if is_slideshow:
         from app.bot.keyboards import build_slideshow_keyboard

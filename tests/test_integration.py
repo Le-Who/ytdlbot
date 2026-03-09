@@ -18,10 +18,10 @@ from app.core.utils import extract_supported_url, is_supported_url
 from app.core.policy import size_allowed
 from app.services.ytdlp.parsers import (
     get_special_format,
-    _create_format_label,
     deduplicate_formats,
 )
 from app.services.ytdlp.models import FormatItem, FormatMetadata
+from app.bot.format_formatter import format_label
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 
 
@@ -48,25 +48,25 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
         formats = [
             FormatItem(
                 format_id="137",
-                label="📺 1080p • 100.0 MB",
                 ext="mp4",
                 height=1080,
                 filesize=100 * 1024 * 1024,
+                protocol="https",
             ),
             FormatItem(
                 format_id="136",
-                label="📹 720p • 50.0 MB",
                 ext="mp4",
                 height=720,
                 filesize=50 * 1024 * 1024,
+                protocol="https",
             ),
         ]
         audio = FormatItem(
             format_id=AUDIO_FORMAT_ID,
-            label="🎵 Audio",
             ext="audio",
             height=None,
             filesize=None,
+            format_note="audio",
         )
         state.info_cache[url] = (
             "Test Video",
@@ -109,8 +109,20 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
     async def test_back_button_restores_format_selection(self):
         """After pick, pressing back shows format selection again."""
         url = "http://example.com/video"
-        formats = [MagicMock(format_id="137", label="1080p")]
-        audio = MagicMock(format_id="audio", label="Audio")
+        formats = [
+            MagicMock(
+                spec=FormatItem,
+                format_id="137",
+                height=1080,
+                is_tiktok=False,
+                filesize=None,
+                protocol="https",
+                format_note="",
+            )
+        ]
+        audio = MagicMock(
+            spec=FormatItem, format_id="audio", format_note="audio", is_tiktok=False
+        )
         state.info_cache[url] = (
             "Video Title",
             formats,
@@ -248,7 +260,10 @@ class TestParserIntegration(unittest.TestCase):
         self.assertIn("youtube.com", url)
 
     def test_format_label_generation(self):
-        label = _create_format_label(1080, 100 * 1024 * 1024, "https", False)
+        item = FormatItem(
+            "id", "mp4", 1080, 100 * 1024 * 1024, is_tiktok=False, protocol="https"
+        )
+        label = format_label(item)
         self.assertIn("📺", label)
         self.assertIn("1080p", label)
         self.assertIn("100.0 MB", label)
@@ -288,12 +303,12 @@ class TestParserIntegration(unittest.TestCase):
     def test_special_format_audio(self):
         fmt = get_special_format("https://youtube.com/watch?v=123")
         self.assertEqual(fmt.format_id, AUDIO_FORMAT_ID)
-        self.assertIn("Audio", fmt.label)
+        self.assertEqual(fmt.format_note, "audio")
 
     def test_special_format_pinterest_gif(self):
         fmt = get_special_format("https://pinterest.com/pin/123")
         self.assertEqual(fmt.format_id, GIF_FORMAT_ID)
-        self.assertIn("GIF", fmt.label)
+        self.assertEqual(fmt.format_note, "gif")
 
 
 class TestPolicyIntegration(unittest.TestCase):

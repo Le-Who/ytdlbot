@@ -9,6 +9,7 @@ from app.services.ytdlp.parsers import (
     BITRATE_COEFFICIENT,
 )
 from app.services.ytdlp.models import FormatMetadata
+from app.bot.format_formatter import format_label
 from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
 
@@ -58,10 +59,11 @@ class TestYtDlpParsers(unittest.TestCase):
         self.assertEqual(metadata.filesize, 100 * 1024 * 1024)
         self.assertEqual(metadata.ext, "mp4")
 
-        # Verify label creation separately
+        # Verify label creation via formatter
         item = create_format_item(metadata, is_tiktok)
-        self.assertIn("📺", item.label)
-        self.assertIn("100.0 MB", item.label)
+        label = format_label(item)
+        self.assertIn("📺", label)
+        self.assertIn("100.0 MB", label)
 
     def test_parse_format_filtering_vcodec_none(self):
         """Non-TikTok URLs should filter out audio-only formats"""
@@ -94,7 +96,8 @@ class TestYtDlpParsers(unittest.TestCase):
         self.assertEqual(metadata.height, 720)  # Default for TikTok
 
         item = create_format_item(metadata, is_tiktok)
-        self.assertIn("🎵 TikTok", item.label)
+        label = format_label(item)
+        self.assertIn("🎵 TikTok", label)
 
     def test_parse_format_unsupported_extension(self):
         """Should return None for unsupported extensions like jpg"""
@@ -120,7 +123,8 @@ class TestYtDlpParsers(unittest.TestCase):
         self.assertEqual(metadata.format_id, "hls_fmt")
 
         item = create_format_item(metadata, is_tiktok)
-        self.assertIn("HLS", item.label)
+        label = format_label(item)
+        self.assertIn("HLS", label)
 
     def test_parse_format_missing_id(self):
         """Should return None if format_id is missing"""
@@ -146,7 +150,8 @@ class TestYtDlpParsers(unittest.TestCase):
         self.assertEqual(metadata.height, 720)
 
         item = create_format_item(metadata, is_tiktok)
-        self.assertIn("📹 720p", item.label)
+        label = format_label(item)
+        self.assertIn("📹 720p", label)
 
     def test_parse_format_filesize_approx(self):
         """Should use filesize_approx if filesize is missing"""
@@ -165,7 +170,8 @@ class TestYtDlpParsers(unittest.TestCase):
         self.assertEqual(metadata.filesize, 50 * 1024 * 1024)
 
         item = create_format_item(metadata, is_tiktok)
-        self.assertIn("50.0 MB", item.label)
+        label = format_label(item)
+        self.assertIn("50.0 MB", label)
 
     def test_parse_format_filesize_from_tbr(self):
         """Should calculate filesize from tbr and duration factor"""
@@ -188,30 +194,8 @@ class TestYtDlpParsers(unittest.TestCase):
         self.assertEqual(metadata.filesize, expected_size)
 
         item = create_format_item(metadata, is_tiktok)
-        self.assertIn("1.2 MB", item.label)
-
-    def test_parse_format_label_icons(self):
-        """Verify correct icons for different heights"""
-        # 1080p -> 📺
-        m1080 = parse_format_metadata(
-            {"format_id": "1", "ext": "mp4", "height": 1080}, None, False
-        )
-        item1080 = create_format_item(m1080, False)
-        self.assertIn("📺", item1080.label)
-
-        # 720p -> 📹
-        m720 = parse_format_metadata(
-            {"format_id": "2", "ext": "mp4", "height": 720}, None, False
-        )
-        item720 = create_format_item(m720, False)
-        self.assertIn("📹", item720.label)
-
-        # 480p -> 📱
-        m480 = parse_format_metadata(
-            {"format_id": "3", "ext": "mp4", "height": 480}, None, False
-        )
-        item480 = create_format_item(m480, False)
-        self.assertIn("📱", item480.label)
+        label = format_label(item)
+        self.assertIn("1.2 MB", label)
 
     def test_parse_format_size_units(self):
         """Verify KB formatting for small files"""
@@ -223,7 +207,8 @@ class TestYtDlpParsers(unittest.TestCase):
         }
         metadata = parse_format_metadata(format_dict, None, False)
         item = create_format_item(metadata, False)
-        self.assertIn("500 KB", item.label)
+        label = format_label(item)
+        self.assertIn("500 KB", label)
 
 
 class TestDeduplicateFormats(unittest.TestCase):
@@ -313,7 +298,7 @@ class TestGetSpecialFormat(unittest.TestCase):
             with self.subTest(url=url):
                 item = get_special_format(url)
                 self.assertEqual(item.format_id, GIF_FORMAT_ID)
-                self.assertIn("GIF", item.label)
+                self.assertEqual(item.format_note, "gif")
                 self.assertEqual(item.ext, "gif")
                 self.assertIsNone(item.height)
                 self.assertIsNone(item.filesize)
@@ -331,7 +316,7 @@ class TestGetSpecialFormat(unittest.TestCase):
             with self.subTest(url=url):
                 item = get_special_format(url)
                 self.assertEqual(item.format_id, AUDIO_FORMAT_ID)
-                self.assertIn("Audio", item.label)
+                self.assertEqual(item.format_note, "audio")
                 self.assertEqual(item.ext, "audio")
                 self.assertIsNone(item.height)
                 self.assertIsNone(item.filesize)
@@ -388,8 +373,9 @@ class TestFacebookFormats(unittest.TestCase):
         self.assertIsNone(metadata.filesize)
 
         item = create_format_item(metadata, False)
-        self.assertIn("📱", item.label)
-        self.assertIn("360p", item.label)
+        label = format_label(item)
+        self.assertIn("📱", label)
+        self.assertIn("360p", label)
 
     def test_facebook_hd_format(self):
         """Facebook HD format: format_id='hd', no ext, no height → 720p."""
@@ -405,8 +391,9 @@ class TestFacebookFormats(unittest.TestCase):
         self.assertEqual(metadata.ext, "mp4")
 
         item = create_format_item(metadata, False)
-        self.assertIn("📹", item.label)
-        self.assertIn("720p", item.label)
+        label = format_label(item)
+        self.assertIn("📹", label)
+        self.assertIn("720p", label)
 
     def test_facebook_legacy_format_ids(self):
         """Facebook legacy format_id patterns with _sd/_hd suffixes."""
@@ -438,8 +425,9 @@ class TestFacebookFormats(unittest.TestCase):
         self.assertIsNotNone(metadata)
 
         item = create_format_item(metadata, False)
-        self.assertIn("📹 Video", item.label)
-        self.assertNotIn("???", item.label)
+        label = format_label(item)
+        self.assertIn("📹 Video", label)
+        self.assertNotIn("???", label)
 
     def test_facebook_dedup_keeps_both_sd_hd(self):
         """Facebook SD and HD should not be deduped (different heights)."""

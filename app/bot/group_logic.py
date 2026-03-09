@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import os
 import uuid
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
@@ -11,7 +10,7 @@ from app.core.config import MAX_TG_UPLOAD_MB
 from app.core.utils import extract_supported_url
 from app.services.downloader import MediaSender
 from app.core.texts import Texts
-from app.services.ytdlp.parsers import _is_tiktok, classify_tiktok_error, TikTokError
+from app.services.ytdlp.parsers import _is_tiktok
 
 logger = logging.getLogger("app.bot.group_logic")
 
@@ -72,92 +71,34 @@ async def handle_group_message(
     info_json_path = None  # cached extraction JSON for --load-info-json reuse
 
     if is_tiktok_url:
-        # Fast path: /photo/ URLs are always slideshows (no extraction needed)
-        if "/photo/" in url:
+        try:
+            result = await asyncio.get_event_loop().run_in_executor(
+                state.ytdlp_executor, state.ytdlp.list_formats, url
+            )
+            is_slideshow = result.is_slideshow
+            tiktok_auth_error = result.tiktok_auth_error
+            info_json_path = result.info_json_path
+        except Exception as exc:
+            # list_formats already handles TikTok routing and fallbacks,
+            # so if it still throws, we default to slideshow fallback.
+            logger.info(
+                "TikTok list_formats error in group, falling back to slideshow: %s", exc
+            )
             is_slideshow = True
-        else:
-            try:
-                info = await asyncio.to_thread(state.ytdlp.extract, url, True)
-                raw_formats = info.get("formats", [])
-                has_video = any(
-                    fmt.get("vcodec") not in (None, "none") for fmt in raw_formats
-                )
-                is_slideshow = not has_video
 
-                # Cache extraction as info JSON for download reuse (skip re-extraction)
-                if has_video and info:
-                    import json as _json
-                    import uuid as _uuid
-                    from app.core.config import TEMP_DIR
-
-                    try:
-                        info_json_path = os.path.join(
-                            TEMP_DIR, f"info_{_uuid.uuid4().hex}.json"
-                        )
-                        with open(info_json_path, "w", encoding="utf-8") as f:
-                            _json.dump(info, f, ensure_ascii=False)
-                    except Exception:
-                        info_json_path = None
-            except Exception as exc:
-                err_msg = str(exc).lower()
-                error_class = classify_tiktok_error(err_msg)
-                if error_class == TikTokError.AUTH_REQUIRED:
-                    # Auth/age-restricted — NOT a slideshow, use TikWM directly
-                    logger.info("TikTok auth error in group, will use TikWM: %s", url)
-                    tiktok_auth_error = True
-                elif error_class == TikTokError.SLIDESHOW:
-                    is_slideshow = True
-                else:
-                    # Unknown error — assume slideshow as fallback
-                    is_slideshow = True
-
-    # TikTok auth-restricted video → bypass slideshow UI, go straight to TikWM
+    # TikTok auth-restricted video (handled via virtual formats)
     if tiktok_auth_error:
-        from app.services.tikwm import TikWMService
-
-        await status_msg.edit_text(Texts.GROUP_SENDING)
-        tikwm_path, tikwm_err = await TikWMService.download_video(url)
-        if tikwm_path:
-            caption = f"👤 {user_tag}"
-            gif_token = uuid.uuid4().hex
-            state.file_cache[gif_token] = tikwm_path
-            kb = InlineKeyboardMarkup(
-                [
-                    [
-                        InlineKeyboardButton(
-                            "🎬 Send GIF", callback_data=f"gif|{gif_token}"
-                        )
-                    ]
-                ]
-            )
-            try:
-                await context.bot.send_chat_action(
-                    chat_id=chat.id, action=ChatAction.UPLOAD_VIDEO
-                )
-            except Exception:
-                pass
-            success = await MediaSender.send_file(
-                context.bot,
-                chat.id,
-                tikwm_path,
-                is_audio=False,
-                is_gif=False,
-                caption=caption,
-                parse_mode="HTML",
-                reply_markup=kb,
-            )
-            if success:
-                try:
-                    await update.message.delete()
-                except Exception:
-                    pass
-                await status_msg.delete()
-            else:
-                await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
+        if getattr(state.ytdlp, "tiktok_proxy", None):
+            video_format = "gallerydl_fallback"
         else:
-            logger.warning("TikWM fallback failed for auth-restricted: %s", tikwm_err)
-            await status_msg.edit_text(Texts.GROUP_ERROR)
-        return
+            video_format = "tikwm_fallback"
+    else:
+        # Detect Pinterest to use a simpler format
+        is_pinterest = "pinterest" in url or "pin.it" in url
+        if is_pinterest:
+            video_format = "best[ext=mp4]/best"
+        else:
+            video_format = GROUP_VIDEO_FORMAT
 
     if is_slideshow:
         # TikTok slideshow — offer format choice (album vs video)
@@ -191,14 +132,6 @@ async def handle_group_message(
                 await status_msg.edit_text(text, reply_markup=markup)
         except Exception as e:
             logger.debug("Group UI update failed", extra={"error": str(e)})
-
-    # Detect Pinterest to use a simpler format
-    is_pinterest = "pinterest" in url or "pin.it" in url
-
-    if is_pinterest:
-        video_format = "best[ext=mp4]/best"
-    else:
-        video_format = GROUP_VIDEO_FORMAT
 
     file_path, error = await MediaSender.download_video(
         page_url=url,

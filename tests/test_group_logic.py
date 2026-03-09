@@ -90,7 +90,8 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
 
         mock_sender.download_video = AsyncMock(return_value=(None, "⚠️ Ошибка загрузки"))
 
-        state.ytdlp = MagicMock()
+        state.ytdlp = AsyncMock()
+        state.ytdlp.tiktok_proxy = None
         self.update.message.text = "https://youtube.com/watch?v=abc"
         await handle_group_message(self.update, self.context)
         status_msg.edit_text.assert_awaited()
@@ -107,6 +108,23 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
         mock_sender.send_file = AsyncMock(return_value=True)
 
         state.ytdlp = MagicMock()
+        state.ytdlp.tiktok_proxy = None
+        state.ytdlp_executor = None
+
+        from app.services.ytdlp.models import ExtractionResult
+
+        mock_result = ExtractionResult(
+            title="Video",
+            formats=[],
+            special_format=MagicMock(),
+            duration_str="1:00",
+            is_slideshow=False,
+            info_json_path=None,
+            thumbnail_url=None,
+            tiktok_auth_error=False,
+        )
+        state.ytdlp.list_formats = MagicMock(return_value=mock_result)
+
         self.update.message.text = "https://youtube.com/watch?v=abc"
         await handle_group_message(self.update, self.context)
 
@@ -120,6 +138,24 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
 
         status_msg = AsyncMock()
         self.update.message.reply_text = AsyncMock(return_value=status_msg)
+        state.ytdlp = MagicMock()
+        state.ytdlp.tiktok_proxy = None
+        state.ytdlp_executor = None
+
+        from app.services.ytdlp.models import ExtractionResult
+
+        mock_result = ExtractionResult(
+            title="Slideshow",
+            formats=[],
+            special_format=MagicMock(),
+            duration_str="—",
+            is_slideshow=True,
+            info_json_path=None,
+            thumbnail_url=None,
+            tiktok_auth_error=False,
+        )
+        state.ytdlp.list_formats = MagicMock(return_value=mock_result)
+
         self.update.message.text = "https://tiktok.com/@user/photo/123"
 
         await handle_group_message(self.update, self.context)

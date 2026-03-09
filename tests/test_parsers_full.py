@@ -12,7 +12,6 @@ from app.services.ytdlp.parsers import (
     _format_duration,
     _extract_height,
     _calculate_filesize,
-    _create_format_label,
     parse_format_metadata,
     create_format_item,
     deduplicate_formats,
@@ -164,39 +163,69 @@ class TestCalculateFilesize(unittest.TestCase):
         self.assertIsNone(_calculate_filesize({"tbr": 1000}, None))
 
 
-# ── Format label creation ────────────────────────────────────────
+# ── Format formatter ───────────────────────────────────────────────
 
 
-class TestCreateFormatLabel(unittest.TestCase):
+class TestFormatFormatter(unittest.TestCase):
     def test_tiktok_label(self):
-        label = _create_format_label(720, 5_000_000, "https", is_tiktok=True)
+        from app.bot.format_formatter import format_label
+        from app.services.ytdlp.models import FormatItem
+
+        item = FormatItem("id", "mp4", 720, 5_000_000, is_tiktok=True, protocol="https")
+        label = format_label(item)
         self.assertIn("TikTok", label)
         self.assertIn("MB", label)
 
     def test_1080p_label(self):
-        label = _create_format_label(1080, 50_000_000, "https", is_tiktok=False)
+        from app.bot.format_formatter import format_label
+        from app.services.ytdlp.models import FormatItem
+
+        item = FormatItem(
+            "id", "mp4", 1080, 50_000_000, is_tiktok=False, protocol="https"
+        )
+        label = format_label(item)
         self.assertIn("📺", label)
         self.assertIn("1080p", label)
 
     def test_720p_label(self):
-        label = _create_format_label(720, None, "https", is_tiktok=False)
+        from app.bot.format_formatter import format_label
+        from app.services.ytdlp.models import FormatItem
+
+        item = FormatItem("id", "mp4", 720, None, is_tiktok=False, protocol="https")
+        label = format_label(item)
         self.assertIn("📹", label)
         self.assertIn("720p", label)
 
     def test_480p_label(self):
-        label = _create_format_label(480, None, "https", is_tiktok=False)
+        from app.bot.format_formatter import format_label
+        from app.services.ytdlp.models import FormatItem
+
+        item = FormatItem("id", "mp4", 480, None, is_tiktok=False, protocol="https")
+        label = format_label(item)
         self.assertIn("📱", label)
 
     def test_no_height(self):
-        label = _create_format_label(None, None, "https", is_tiktok=False)
+        from app.bot.format_formatter import format_label
+        from app.services.ytdlp.models import FormatItem
+
+        item = FormatItem("id", "mp4", None, None, is_tiktok=False, protocol="https")
+        label = format_label(item)
         self.assertIn("Video", label)
 
     def test_hls_protocol(self):
-        label = _create_format_label(720, None, "m3u8", is_tiktok=False)
+        from app.bot.format_formatter import format_label
+        from app.services.ytdlp.models import FormatItem
+
+        item = FormatItem("id", "mp4", 720, None, is_tiktok=False, protocol="m3u8")
+        label = format_label(item)
         self.assertIn("HLS", label)
 
     def test_small_filesize_kb(self):
-        label = _create_format_label(720, 500, "https", is_tiktok=False)
+        from app.bot.format_formatter import format_label
+        from app.services.ytdlp.models import FormatItem
+
+        item = FormatItem("id", "mp4", 720, 500, is_tiktok=False, protocol="https")
+        label = format_label(item)
         self.assertIn("KB", label)
 
 
@@ -278,7 +307,7 @@ class TestCreateFormatItem(unittest.TestCase):
         )
         item = create_format_item(meta, is_tiktok=False)
         self.assertEqual(item.format_id, "137")
-        self.assertIn("1080p", item.label)
+        self.assertEqual(item.height, 1080)
 
 
 # ── deduplicate_formats ──────────────────────────────────────────
@@ -320,12 +349,12 @@ class TestGetSpecialFormat(unittest.TestCase):
     def test_pinterest_returns_gif(self):
         item = get_special_format("https://pinterest.com/pin/123")
         self.assertEqual(item.format_id, GIF_FORMAT_ID)
-        self.assertIn("GIF", item.label)
+        self.assertEqual(item.format_note, "gif")
 
     def test_non_pinterest_returns_audio(self):
         item = get_special_format("https://youtube.com/watch?v=abc")
         self.assertEqual(item.format_id, AUDIO_FORMAT_ID)
-        self.assertIn("Audio", item.label)
+        self.assertEqual(item.format_note, "audio")
 
 
 # ── detect_tiktok_slideshow ──────────────────────────────────────

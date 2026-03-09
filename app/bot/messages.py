@@ -15,9 +15,7 @@ from app.services.ytdlp.exceptions import (
     VideoNotFoundError,
     LiveStreamError,
     ExtractionError,
-    DirectDownloadReady,
 )
-from app.services.sender import TelegramSender
 
 logger = logging.getLogger("app.bot.messages")
 
@@ -58,15 +56,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     cached = state.info_cache.get(text)
     if cached:
         logger.info("Cache hit", extra={"url": text})
-        (
-            title,
-            formats,
-            special_format,
-            duration,
-            is_slideshow,
-            info_json_path,
-            thumbnail_url,
-        ) = cached
+        result = cached
+        title = result.title
+        formats = result.formats
+        special_format = result.special_format
+        duration = result.duration_str
+        is_slideshow = result.is_slideshow
+        info_json_path = result.info_json_path
+        thumbnail_url = result.thumbnail_url
     else:
         if text in state.inflight_parsing:
             logger.info("Waiting for inflight parse", extra={"url": text})
@@ -79,15 +76,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 return
             cached = state.info_cache.get(text)
             if cached:
-                (
-                    title,
-                    formats,
-                    special_format,
-                    duration,
-                    is_slideshow,
-                    info_json_path,
-                    thumbnail_url,
-                ) = cached
+                result = cached
+                title = result.title
+                formats = result.formats
+                special_format = result.special_format
+                duration = result.duration_str
+                is_slideshow = result.is_slideshow
+                info_json_path = result.info_json_path
+                thumbnail_url = result.thumbnail_url
             else:
                 await status_msg.edit_text(Texts.FETCH_ERROR_RETRY)
                 return
@@ -101,17 +97,16 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                         from app.core.metrics import metrics as _m
 
                         _ext_start = _time.monotonic()
-                        (
-                            title,
-                            formats,
-                            special_format,
-                            duration,
-                            is_slideshow,
-                            info_json_path,
-                            thumbnail_url,
-                        ) = await asyncio.get_event_loop().run_in_executor(
+                        result = await asyncio.get_event_loop().run_in_executor(
                             state.ytdlp_executor, state.ytdlp.list_formats, text
                         )
+                        title = result.title
+                        formats = result.formats
+                        special_format = result.special_format
+                        duration = result.duration_str
+                        is_slideshow = result.is_slideshow
+                        info_json_path = result.info_json_path
+                        thumbnail_url = result.thumbnail_url
                         _platform = (
                             "youtube"
                             if "youtu" in text
@@ -130,37 +125,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     await status_msg.edit_text(Texts.CANCELLED)
                     return
 
-                state.info_cache[text] = (
-                    title,
-                    formats,
-                    special_format,
-                    duration,
-                    is_slideshow,
-                    info_json_path,
-                    thumbnail_url,
-                )
+                state.info_cache[text] = result
             except asyncio.TimeoutError:
                 await status_msg.edit_text(Texts.TIMEOUT_UNAVAILABLE)
                 return
-            except DirectDownloadReady as dd:
-                await status_msg.edit_text(
-                    "📦 Загрузка через альтернативный источник..."
-                )
-                sent = await TelegramSender.send_file(
-                    bot=context.bot,
-                    chat_id=chat.id,
-                    file_path=dd.video_path,
-                    caption=f"🎬 {html.escape(dd.title)}",
-                    parse_mode="HTML",
-                    reply_to_message_id=msg.message_id,
-                )
-                if sent:
-                    await status_msg.delete()
-                else:
-                    await status_msg.edit_text(
-                        "❌ Не удалось отправить видео (файл слишком большой?)"
-                    )
-                return
+
             except AccessDeniedError:
                 await status_msg.edit_text(Texts.ACCESS_DENIED)
                 return

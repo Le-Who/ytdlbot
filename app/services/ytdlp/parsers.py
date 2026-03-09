@@ -109,43 +109,6 @@ def _calculate_filesize(
     return None
 
 
-def _create_format_label(
-    height: Optional[int],
-    filesize: Optional[int],
-    protocol: str,
-    is_tiktok: bool,
-) -> str:
-    parts = []
-
-    # 1. Icon & Type
-    if is_tiktok:
-        parts.append("🎵 TikTok")
-    else:
-        if height:
-            if height >= 1080:
-                icon = "📺"
-            elif height >= 720:
-                icon = "📹"
-            else:
-                icon = "📱"
-            parts.append(f"{icon} {height}p")
-        else:
-            parts.append("📹 Video")
-
-    # 2. Size / Protocol
-    if filesize:
-        mb = filesize / BYTES_IN_MB
-        if mb < 1:
-            size_str = f"{int(filesize / BYTES_IN_KB)} KB"
-        else:
-            size_str = f"{mb:.1f} MB"
-        parts.append(f"• {size_str}")
-    elif "m3u8" in protocol:
-        parts.append("• HLS")
-
-    return " ".join(parts)
-
-
 def parse_format_metadata(
     format_dict: Dict[str, Any],
     duration_factor: Optional[float],
@@ -199,10 +162,6 @@ def parse_format_metadata(
 
 
 def create_format_item(metadata: FormatMetadata, is_tiktok: bool) -> FormatItem:
-    label = _create_format_label(
-        metadata.height, metadata.filesize, metadata.protocol, is_tiktok
-    )
-
     final_format_id = metadata.format_id
     if (
         metadata.vcodec != "unknown"
@@ -215,10 +174,11 @@ def create_format_item(metadata: FormatMetadata, is_tiktok: bool) -> FormatItem:
 
     return FormatItem(
         format_id=final_format_id,
-        label=label,
         ext=metadata.ext,
         height=metadata.height,
         filesize=metadata.filesize,
+        is_tiktok=is_tiktok,
+        protocol=metadata.protocol,
     )
 
 
@@ -250,8 +210,9 @@ def deduplicate_formats(
         return s
 
     from collections import OrderedDict
+    from typing import cast
 
-    groups = OrderedDict()
+    groups: OrderedDict[int | None, list[FormatMetadata]] = OrderedDict()
     for fmt in formats:
         h = fmt.height
         if h not in groups:
@@ -275,18 +236,18 @@ def get_special_format(url: str) -> FormatItem:
     if _is_pinterest(url):
         return FormatItem(
             format_id=GIF_FORMAT_ID,
-            label="🎬 Только GIF",
             ext="gif",
             height=None,
             filesize=None,
+            format_note="gif",
         )
     else:
         return FormatItem(
             format_id=AUDIO_FORMAT_ID,
-            label="🎵 Audio",
             ext="audio",
             height=None,
             filesize=None,
+            format_note="audio",
         )
 
 

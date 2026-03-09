@@ -42,6 +42,8 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
+- **`list_formats()` return type**: Completely refactored from a 7-element Tuple into a strongly-typed `ExtractionResult` Dataclass. This removes leaky abstractions, massive code duplication for TikTok testing, and fragile tuple indexing throughout the UI layer (`messages.py` & `callbacks.py`).
+- **Group chat TikTok handling**: Removed duplicated `extract()` execution from `group_logic.py`, eliminating a double-extraction bug, accelerating group chat TikTok processing.
 - **Strict Format Binding**: Replaced legacy `height` overriding with deterministic 1:1 `format_id` binding. UI format choices are now exact guarantees, removing implicit `ffmpeg` mismatches.
 - **Pre-muxed Format Priority**: `parsers.py` strongly favors single-file muxed video+audio (`vcodec != none`, `acodec != none`). Allows TikTok/Facebook to bypass `ffmpeg` merges completely, increasing download speed.
 - **Audio Selectors**: Fallback to `+bestaudio` now occurs directly in parser logic, composing composite `format_id`s cleanly instead of relying on CLI append.
@@ -49,13 +51,11 @@ All notable changes to this project will be documented in this file.
 - **Dockerfile graceful shutdown**: Added `exec` prefix to CMD and `STOPSIGNAL SIGINT` — uvicorn is now PID 1 and receives signals directly (prevents 10s SIGKILL timeout on `docker stop`)
 - **Thread-safety invariants**: Documented that all `TTLCache` reads/writes must happen from the event loop thread (cachetools is NOT thread-safe)
 - **`sender.py`**: `send_file()` now accepts `duration`, `width`, `height` params → forwarded to `send_video`/`send_animation`/`send_audio`
-- **`list_formats()` return type**: Extended from 6-tuple to 7-tuple with `thumbnail_url` (from yt-dlp `info.get("thumbnail")`)
-- **Test suite**: Expanded from 249 to 264 tests (257 passed + 7 skipped)
+- **Test suite**: Expanded from 249 to 434 tests (434 passed)
 
 ### Fixed
 
-- **Cache unpacking bug** (CRITICAL): `on_back` and cache-hit in `on_message` unpacked `info_cache` as 5-tuple, but `info_cache` stores 6-tuple (with `info_json_path`) → `ValueError` on «Back» button press. Fixed in `callbacks.py` and `messages.py`
-- **Test fixtures**: Updated 5-tuple → 6-tuple in `test_bot_callbacks.py`, `test_ux_back_button.py`, `test_integration.py`
+- **Cache unpacking bug** (CRITICAL): UI handlers previously raised exceptions during format unpacking after `list_formats` was extended. Safely isolated this behind `ExtractionResult` properties.
 
 ### Performance
 

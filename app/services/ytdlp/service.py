@@ -11,7 +11,7 @@ import yt_dlp
 __all__ = ["YtDlpService"]
 
 from app.core.config import TIKTOK_PROXY, TEMP_DIR, CONCURRENT_FRAGMENTS
-from .models import FormatItem, FormatMetadata
+from .models import FormatItem, FormatMetadata, ExtractionResult
 from .cookies import PlatformCookiesManager
 from .builders import build_command
 from .parsers import (
@@ -33,7 +33,6 @@ from .exceptions import (
     VideoNotFoundError,
     LiveStreamError,
     ExtractionError,
-    DirectDownloadReady,
 )
 from app.core.texts import Texts
 
@@ -169,39 +168,6 @@ class YtDlpService:
             return info, True
         return None, used_subprocess
 
-    def _try_gallery_dl_video(self, url: str) -> tuple[Optional[str], Optional[str]]:
-        """Try downloading TikTok video via gallery-dl (fallback for classified content)."""
-        from app.services.gallery_dl.service import GalleryDlService
-
-        return GalleryDlService.download_video(
-            url,
-            self.cookies_path,
-            proxy=self.tiktok_proxy,
-        )
-
-    @staticmethod
-    def _try_tikwm_video(
-        url: str,
-    ) -> tuple[Optional[str], Optional[str]]:
-        """Try downloading TikTok video via TikWM third-party API.
-
-        Note: TikWMService.download_video is async (uses curl_cffi AsyncSession).
-        Since list_formats runs in a ThreadPoolExecutor, we schedule the coroutine
-        on the running event loop via run_coroutine_threadsafe.
-        """
-        import asyncio
-        from app.services.tikwm import TikWMService
-
-        try:
-            loop = asyncio.get_event_loop()
-            future = asyncio.run_coroutine_threadsafe(
-                TikWMService.download_video(url), loop
-            )
-            return future.result(timeout=60)
-        except Exception as e:
-            logger.warning("TikWM async bridge failed: %s", e)
-            return None, f"TikWM error: {e}"
-
     def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
         """Извлекает метаданные видео."""
         opts = self._base_opts(for_list_formats=for_list_formats, url=url)
@@ -232,18 +198,8 @@ class YtDlpService:
         with yt_dlp.YoutubeDL(opts) as ydl:
             return ydl.extract_info(url, download=False)  # type: ignore[no-any-return]
 
-    def list_formats(
-        self, url: str, max_items: int = 12
-    ) -> Tuple[
-        str, List[FormatItem], FormatItem, str, bool, Optional[str], Optional[str]
-    ]:
-        """Извлекает форматы видео с обработкой ошибок.
-
-        Returns:
-            (title, formats, special_format, duration_str, is_slideshow, info_json_path, thumbnail_url)
-            info_json_path: path to cached extraction JSON for --load-info-json reuse.
-            thumbnail_url: URL of the video thumbnail (from yt-dlp metadata).
-        """
+    def list_formats(self, url: str, max_items: int = 12) -> ExtractionResult:
+        """Извлекает форматы видео с обработкой ошибок."""
         info: Optional[Dict[str, Any]] = None
         used_subprocess = False
 
@@ -253,7 +209,15 @@ class YtDlpService:
             if content_type == "slideshow":
                 logger.info("TikTok /photo/ URL, routing to slideshow: %s", url)
                 special_format = get_special_format(url)
-                return "TikTok Slideshow", [], special_format, "—", True, None, None
+                return ExtractionResult(
+                    title="TikTok Slideshow",
+                    formats=[],
+                    special_format=special_format,
+                    duration_str="—",
+                    is_slideshow=True,
+                    info_json_path=None,
+                    thumbnail_url=None,
+                )
 
         try:
             info = self.extract(url, for_list_formats=True)
@@ -267,27 +231,42 @@ class YtDlpService:
                     error_class = classify_tiktok_error(error_msg)
 
                     if error_class == TikTokError.AUTH_REQUIRED:
-                        # Try gallery-dl (only if proxy configured)
+                        logger.info(
+                            "TikTok auth required, returning proxy fallback formats: %s",
+                            url,
+                        )
+                        formats = []
                         if self.tiktok_proxy:
-                            logger.info(
-                                "TikTok classified content, trying gallery-dl "
-                                "(proxy configured): %s",
-                                url,
+                            formats.append(
+                                FormatItem(
+                                    format_id="gallerydl_fallback",
+                                    ext="mp4",
+                                    height=None,
+                                    filesize=None,
+                                    is_tiktok=True,
+                                    format_note="proxy_fallback",
+                                )
                             )
-                            video_path, gdl_err = self._try_gallery_dl_video(url)
-                            if video_path:
-                                raise DirectDownloadReady(video_path, "TikTok Video")
-                            logger.warning("gallery-dl fallback failed: %s", gdl_err)
-
-                        # TikWM third-party API — works from datacenter IPs
-                        logger.info("TikTok classified content, trying TikWM: %s", url)
-                        video_path, twm_err = self._try_tikwm_video(url)
-                        if video_path:
-                            raise DirectDownloadReady(video_path, "TikTok Video")
-                        logger.warning("TikWM fallback also failed: %s", twm_err)
-                        raise AccessDeniedError(
-                            "⚠️ Контент с ограниченным доступом. "
-                            "Требуется авторизация (cookies могут быть устаревшими)."
+                        formats.append(
+                            FormatItem(
+                                format_id="tikwm_fallback",
+                                ext="mp4",
+                                height=None,
+                                filesize=None,
+                                is_tiktok=True,
+                                format_note="alt_fallback",
+                            )
+                        )
+                        special_format = get_special_format(url)
+                        return ExtractionResult(
+                            title="TikTok Video",
+                            formats=formats,
+                            special_format=special_format,
+                            duration_str="—",
+                            is_slideshow=False,
+                            info_json_path=None,
+                            thumbnail_url=None,
+                            tiktok_auth_error=True,
                         )
 
                     elif error_class == TikTokError.SLIDESHOW:
@@ -295,14 +274,14 @@ class YtDlpService:
                             "TikTok unsupported URL, routing to slideshow: %s", url
                         )
                         special_format = get_special_format(url)
-                        return (
-                            "TikTok Slideshow",
-                            [],
-                            special_format,
-                            "—",
-                            True,
-                            None,
-                            None,
+                        return ExtractionResult(
+                            title="TikTok Slideshow",
+                            formats=[],
+                            special_format=special_format,
+                            duration_str="—",
+                            is_slideshow=True,
+                            info_json_path=None,
+                            thumbnail_url=None,
                         )
 
                     elif error_class == TikTokError.FORBIDDEN:
@@ -321,14 +300,14 @@ class YtDlpService:
                             url,
                         )
                         special_format = get_special_format(url)
-                        return (
-                            "TikTok Slideshow",
-                            [],
-                            special_format,
-                            "—",
-                            True,
-                            None,
-                            None,
+                        return ExtractionResult(
+                            title="TikTok Slideshow",
+                            formats=[],
+                            special_format=special_format,
+                            duration_str="—",
+                            is_slideshow=True,
+                            info_json_path=None,
+                            thumbnail_url=None,
                         )
 
                 # Non-TikTok error handling
@@ -426,14 +405,14 @@ class YtDlpService:
                 logger.warning("Failed to cache info JSON: %s", exc)
                 info_json_path = None
 
-        return (
-            title,
-            formats,
-            special_format,
-            duration_str,
-            is_slideshow,
-            info_json_path,
-            thumbnail_url,
+        return ExtractionResult(
+            title=title,
+            formats=formats,
+            special_format=special_format,
+            duration_str=duration_str,
+            is_slideshow=is_slideshow,
+            info_json_path=info_json_path,
+            thumbnail_url=thumbnail_url,
         )
 
     def build_command(

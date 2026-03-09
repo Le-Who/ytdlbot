@@ -46,9 +46,11 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
         }
 
         with patch.object(self.service, "extract", return_value=mock_info):
-            title, formats, special_format, duration, _, _, _ = (
-                self.service.list_formats("http://example.com/video")
-            )
+            result = self.service.list_formats("http://example.com/video")
+            title = result.title
+            formats = result.formats
+            special_format = result.special_format
+            duration = result.duration_str
 
             self.assertEqual(title, "Test Video")
             self.assertEqual(duration, "02:00")
@@ -64,7 +66,7 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
             # Format 137 has height 1080.
             self.assertEqual(len(formats), 1)
             self.assertEqual(formats[0].format_id, "137")
-            self.assertIn("📺 1080p", formats[0].label)
+            self.assertEqual(formats[0].height, 1080)
 
             self.assertEqual(special_format.format_id, "bestaudio/best")
 
@@ -120,7 +122,9 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
             with patch.object(
                 self.service, "_extract_youtube_via_subprocess", return_value=mock_info
             ) as mock_subprocess:
-                title, formats, _, _, _, _, _ = self.service.list_formats(url)
+                result = self.service.list_formats(url)
+                title = result.title
+                formats = result.formats
 
                 mock_subprocess.assert_called_once_with(url)
                 self.assertEqual(title, "Fallback Video")
@@ -148,7 +152,9 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
                 # Mock parse_format_metadata to ensure the subprocess format is accepted
                 # Actually, real parser works fine for simple dicts
 
-                title, formats, _, _, _, _, _ = self.service.list_formats(url)
+                result = self.service.list_formats(url)
+                title = result.title
+                formats = result.formats
 
                 # Logic: extract -> empty formats -> check if is_youtube and not used_subprocess -> call subprocess
                 mock_subprocess.assert_called_once_with(url)
@@ -185,7 +191,9 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
                 "_extract_youtube_via_subprocess",
                 return_value=mock_info_subprocess,
             ) as mock_subprocess:
-                title, formats, _, _, _, _, _ = self.service.list_formats(url)
+                result = self.service.list_formats(url)
+                title = result.title
+                formats = result.formats
 
                 mock_subprocess.assert_called_once_with(url)
                 self.assertEqual(title, "Filtered Formats")
@@ -239,7 +247,8 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
 
         with patch.object(self.service, "extract", return_value=mock_info):
             # Pass max_items=5
-            _, formats_list, _, _, _, _, _ = self.service.list_formats(url, max_items=5)
+            result = self.service.list_formats(url, max_items=5)
+            formats_list = result.formats
             self.assertEqual(len(formats_list), 5)
             # Should return the top 5 (highest height/size)
             # Since we appended 100+i, the last ones are the biggest.
@@ -270,7 +279,8 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
         mock_info = {"title": "Sort Test", "duration": 100, "formats": formats}
 
         with patch.object(self.service, "extract", return_value=mock_info):
-            _, formats_list, _, _, _, _, _ = self.service.list_formats(url)
+            result = self.service.list_formats(url)
+            formats_list = result.formats
 
             # Expected behavior:
             # Sort order before deduplication:
@@ -299,9 +309,11 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
             "extract",
             side_effect=Exception("ERROR: Unsupported URL: " + url),
         ):
-            title, formats, special_format, duration, is_slideshow, _, _ = (
-                self.service.list_formats(url)
-            )
+            result = self.service.list_formats(url)
+            title = result.title
+            formats = result.formats
+            duration = result.duration_str
+            is_slideshow = result.is_slideshow
 
             self.assertTrue(
                 is_slideshow, "TikTok /photo/ URL should be detected as slideshow"
@@ -317,7 +329,8 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
         with patch.object(
             self.service, "extract", side_effect=Exception("Unsupported URL")
         ):
-            _, _, _, _, is_slideshow, _, _ = self.service.list_formats(url)
+            result = self.service.list_formats(url)
+            is_slideshow = result.is_slideshow
             self.assertTrue(is_slideshow)
 
     def test_non_tiktok_unsupported_url_raises_error(self):
@@ -330,81 +343,51 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
             with self.assertRaises(ExtractionError):
                 self.service.list_formats(url)
 
-    def test_tiktok_auth_error_raises_access_denied(self):
-        """TikTok auth errors: skip gallery-dl (no proxy), try tikwm, raise AccessDeniedError."""
+    def test_tiktok_auth_error_returns_tikwm_fallback(self):
+        """TikTok auth errors: return tikwm_fallback if no proxy is configured."""
         url = "https://tiktok.com/@user/video/123"
         error_msg = (
             "ERROR: [TikTok] 123: This post may not be comfortable. "
             "Log in for access. Use --cookies-from-browser or --cookies"
         )
-        self.service.tiktok_proxy = None  # no proxy → skip gallery-dl
-        with (
-            patch.object(self.service, "extract", side_effect=Exception(error_msg)),
-            patch.object(
-                self.service, "_try_tikwm_video", return_value=(None, "tikwm error")
-            ),
-        ):
-            with self.assertRaises(AccessDeniedError) as cm:
-                self.service.list_formats(url)
-            self.assertIn("cookies", str(cm.exception).lower())
+        self.service.tiktok_proxy = None  # no proxy
+        with patch.object(self.service, "extract", side_effect=Exception(error_msg)):
+            result = self.service.list_formats(url)
+            title = result.title
+            formats = result.formats
+            is_slideshow = result.is_slideshow
+            self.assertEqual(title, "TikTok Video")
+            self.assertFalse(is_slideshow)
 
-    def test_tiktok_sign_in_error_raises_access_denied(self):
-        """TikTok 'sign in' errors: skip gallery-dl (no proxy), try tikwm, raise error."""
+            # Format list should only contain tikwm_fallback since no proxy
+            self.assertEqual(len(formats), 1)
+            self.assertEqual(formats[0].format_id, "tikwm_fallback")
+
+    def test_tiktok_sign_in_error_returns_tikwm_fallback(self):
+        """TikTok 'sign in' errors: return tikwm_fallback if no proxy."""
         url = "https://tiktok.com/@user/video/456"
         self.service.tiktok_proxy = None
-        with (
-            patch.object(
-                self.service, "extract", side_effect=Exception("Sign in to confirm")
-            ),
-            patch.object(
-                self.service, "_try_tikwm_video", return_value=(None, "failed")
-            ),
+        with patch.object(
+            self.service, "extract", side_effect=Exception("Sign in to confirm")
         ):
-            with self.assertRaises(AccessDeniedError):
-                self.service.list_formats(url)
+            result = self.service.list_formats(url)
+            formats = result.formats
+            self.assertEqual(formats[0].format_id, "tikwm_fallback")
 
-    def test_tiktok_auth_error_gallery_dl_direct_download(self):
-        """When proxy configured and gallery-dl succeeds, DirectDownloadReady is raised."""
-        from app.services.ytdlp.exceptions import DirectDownloadReady
-
+    def test_tiktok_auth_error_with_proxy_returns_gallerydl_fallback(self):
+        """When proxy configured, auth error returns both gallerydl_fallback and tikwm_fallback."""
         url = "https://tiktok.com/@user/video/789"
         error_msg = "This post may not be comfortable. Log in for access"
         self.service.tiktok_proxy = "socks5://proxy:1080"  # enable gallery-dl path
-        with (
-            patch.object(self.service, "extract", side_effect=Exception(error_msg)),
-            patch.object(
-                self.service,
-                "_try_gallery_dl_video",
-                return_value=("/tmp/video.mp4", None),
-            ),
-        ):
-            with self.assertRaises(DirectDownloadReady) as cm:
-                self.service.list_formats(url)
-            self.assertEqual(cm.exception.video_path, "/tmp/video.mp4")
+        with patch.object(self.service, "extract", side_effect=Exception(error_msg)):
+            result = self.service.list_formats(url)
+            formats = result.formats
+            self.assertEqual(len(formats), 2)
+            # Should have gallerydl and tikwm formats
+            format_ids = [f.format_id for f in formats]
+            self.assertIn("gallerydl_fallback", format_ids)
+            self.assertIn("tikwm_fallback", format_ids)
         self.service.tiktok_proxy = None  # reset
-
-    def test_tiktok_auth_error_tikwm_direct_download(self):
-        """When gallery-dl fails but TikWM succeeds, DirectDownloadReady is raised."""
-        from app.services.ytdlp.exceptions import DirectDownloadReady
-
-        url = "https://tiktok.com/@user/video/999"
-        error_msg = "This post may not be comfortable. Log in for access"
-        with (
-            patch.object(self.service, "extract", side_effect=Exception(error_msg)),
-            patch.object(
-                self.service,
-                "_try_gallery_dl_video",
-                return_value=(None, "gallery-dl 403"),
-            ),
-            patch.object(
-                self.service,
-                "_try_tikwm_video",
-                return_value=("/tmp/tikwm_video.mp4", None),
-            ),
-        ):
-            with self.assertRaises(DirectDownloadReady) as cm:
-                self.service.list_formats(url)
-            self.assertEqual(cm.exception.video_path, "/tmp/tikwm_video.mp4")
 
     def test_tiktok_unknown_error_falls_back_to_slideshow(self):
         """TikTok unknown errors (not auth, not unsupported) still try slideshow."""
@@ -412,7 +395,8 @@ class TestYtDlpServiceListFormats(unittest.TestCase):
         with patch.object(
             self.service, "extract", side_effect=Exception("Some weird TikTok error")
         ):
-            _, _, _, _, is_slideshow, _, _ = self.service.list_formats(url)
+            result = self.service.list_formats(url)
+            is_slideshow = result.is_slideshow
             self.assertTrue(is_slideshow)
 
 

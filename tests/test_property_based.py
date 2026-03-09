@@ -9,7 +9,6 @@ from app.services.ytdlp.parsers import (
     _is_pinterest,
     _is_facebook,
     _format_duration,
-    _create_format_label,
     _calculate_filesize,
     classify_tiktok_error,
     TikTokError,
@@ -59,8 +58,14 @@ class TestFormatLabelProperties(unittest.TestCase):
     def test_create_format_label_never_crashes(
         self, height, filesize, protocol, is_tiktok
     ):
+        from app.bot.format_formatter import format_label
+        from app.services.ytdlp.models import FormatItem
+
         """_create_format_label should never raise for any input."""
-        result = _create_format_label(height, filesize, protocol, is_tiktok)
+        item = FormatItem(
+            "id", "mp4", height, filesize, is_tiktok=is_tiktok, protocol=protocol
+        )
+        result = format_label(item)
         self.assertIsInstance(result, str)
         self.assertTrue(len(result) > 0)
 
@@ -70,15 +75,23 @@ class TestFormatLabelProperties(unittest.TestCase):
     )
     @settings(max_examples=50)
     def test_tiktok_label_always_starts_with_tiktok(self, filesize, protocol):
+        from app.bot.format_formatter import format_label
+        from app.services.ytdlp.models import FormatItem
+
         """TikTok labels always contain 'TikTok'."""
-        result = _create_format_label(720, filesize, protocol, is_tiktok=True)
+        item = FormatItem("id", "mp4", 720, filesize, is_tiktok=True, protocol=protocol)
+        result = format_label(item)
         self.assertIn("TikTok", result)
 
     @given(height=st.integers(min_value=1080, max_value=8000))
     @settings(max_examples=50)
     def test_high_res_gets_tv_icon(self, height):
+        from app.bot.format_formatter import format_label
+        from app.services.ytdlp.models import FormatItem
+
         """Height >= 1080 gets 📺 icon."""
-        result = _create_format_label(height, None, "https", is_tiktok=False)
+        item = FormatItem("id", "mp4", height, None, is_tiktok=False, protocol="https")
+        result = format_label(item)
         self.assertIn("📺", result)
 
 

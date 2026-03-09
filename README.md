@@ -1,199 +1,208 @@
-# SyncWatch (YTDL Bot)
+# YTDL Bot - Telegram Media Downloader
 
-A high-performance asynchronous Telegram bot built with FastAPI and `python-telegram-bot` for downloading media from popular platforms (YouTube, TikTok, Pinterest, VK, etc.) using `yt-dlp` and `gallery-dl`.
+A high-performance Telegram bot for downloading media from popular platforms (YouTube, TikTok, Pinterest, VK, etc.) using `yt-dlp` and `gallery-dl`. Built with **FastAPI**, **python-telegram-bot**, and **asyncio** for maximum concurrency, offering direct downloads, smart caching, and on-the-fly media conversion.
 
 ## What It Does
 
-The bot processes user-provided media URLs and provides a direct HTTP download link, a native Telegram media upload, or converts standard video formats into a playable GIF seamlessly. It also supports extracting TikTok slideshows as image albums or compiling them into MP4 videos on the fly.
+YTDL Bot solves the problem of friction in downloading and sharing media from social networks. Instead of using third-party websites loaded with ads, users can interact with this Telegram bot to directly download videos, audio, and TikTok image carousels. It handles extraction, conversion, size limitations, and streaming (both direct link and Telegram upload) automatically in the background.
 
 ## Current Status
 
-**Production-ish**. The project has a solid test suite (>430 tests), CI pipelines via GitHub Actions, structured metrics, caching, and multi-process handling in a Dockerized environment.
-_Note: Support for live streams is explicitly omitted._
+**Production-ish / API-Stabilized**
+The project is well-structured and highly tested (>400 tests, CI/CD pipeline). However, since it relies heavily on third-party extraction tools (`yt-dlp`, `gallery-dl`) and platform algorithms, it is inherently subject to platform-side changes (e.g., rate limits, blockages). Some advanced evasion techniques (proxies, cookies) are configured but require manual upkeep by the admin.
 
 ## Features
 
-- **Multi-Platform Support**: YouTube, TikTok (no watermark), Pinterest, VK, Facebook, RuTube via `yt-dlp`.
-- **Slideshow Processing**: Extracts images/audio from TikTok via `gallery-dl` and delivers them as a MediaGroup album (up to 10 photos) or converts them to an MP4 slideshow via `ffmpeg`.
-- **Quality Selection**: Private chat offers dynamic interactive keyboards for quality selection (res, audio, video).
-- **Group Mode**: Automatically downloads the optimal video format (<45MB) to ensure group chat friendliness.
-- **GIF Conversion**: Single-click conversion of MP4 videos to GIF via `ffmpeg` directly in the chat.
-- **Async & Observability**: Powered by `asyncio`, with internal Promotheus-compatible `/metrics` endpoint and structured JSON logging.
-- **Rate Limiting**: Defended by token bucket rules (IP, User, Chat, Token).
+- **Multi-Platform Support**: Extracts video/audio from YouTube, TikTok (watermark-free), Pinterest, VK, Facebook, and RuTube.
+- **Smart Group Mode**: Automatically selects and downloads the best quality video (<45MB by default) when a link is sent in a group chat.
+- **Interactive Private Mode**: Presents inline keyboard options for users to select specific video qualities or audio-only formats.
+- **TikTok Slideshow Support**: Converts TikTok carousels into either a 📸 Photo Album (media group) or a 🎬 Video Slideshow (MP4 with audio) using `ffmpeg`.
+- **Zero-Disk Pipeline**: Converts video to GIF natively without saving intermediary files to disk (`yt-dlp` -> `ffmpeg` pipe).
+- **Concurrency & Caching**: Employs completely asynchronous logic, `TTLCache` for format metadata, and `--load-info-json` to bypass duplicate extraction API calls.
+- **Rate Limiting**: Multi-layered token bucket limiter preventing abuse per User, Chat, IP, and Token.
+- **Monitoring**: Built-in Prometheus-compatible metrics endpoint for observability.
 
 ## Non-Goals / Limitations
 
-- **Live Streams**: Deliberately disabled (`LiveStreamError` is gracefully handled).
-- **Infinite File Sizes**: Strict constraints for direct HTTP downloads (`MAX_DL_MB=1000`) and Telegram uploads (`MAX_TG_UPLOAD_MB=45`).
-- **Distributed Caching**: Primarily relies on local in-memory TTLCache. Not configured for Redis/Memcached.
-- **Persistent Storage**: Media files exist only temporarily in `TMPDIR` and are swept by a janitor task.
+- Exceeding Telegram's hard 50MB bot upload limit is fundamentally restricted (downloads >45MB are either aborted or sent as direct HTTP download links).
+- Direct age-restricted or pure-private content downloads might fail unless `*_COOKIES_B64` variables are manually configured and refreshed by the server admin.
+- The bot is not a permanent file host. HTTP direct download links expire based on `LINK_TTL_MINUTES`.
 
 ## Architecture
 
-- **Web Layer**: FastAPI serves `/health`, `/metrics`, HTTP downloads (`/dl/{token}`), and the Telegram `/webhook`.
-- **Bot Engine**: `python-telegram-bot` handles UI callbacks, format pickers, and sending data to users.
-- **Core Services**: Orchestrates extraction (`yt-dlp`), batch imaging (`gallery-dl`), fallback logic (`tikwm.py` via `curl_cffi`), and media processing (`ffmpeg`).
-- **Data Flow**: URL -> Bot -> `ytdlp` -> Extracted Info -> Cached locally. On user choice -> `ytdlp` subprocess downloads to `TMPDIR` -> Sent via `TelegramSender` -> Cleaned up by Janitor.
+- **Web Layer**: FastAPI serves HTTP endpoints (health checks, Prometheus metrics, and chunked video streams) and handles incoming Telegram Webhooks.
+- **Telegram Logic**: `python-telegram-bot` processes updates (messages, callbacks) routing them to the appropriate handlers.
+- **Data Fetchers**: `YtDlpService` and `GalleryDlService` act as async wrappers over CLI binaries.
+- **Media Processing**: `FFmpeg` is utilized exclusively for post-processing tasks (GIF conversion, slideshow building).
+- **State Management**: In-memory `TTLCache` structures govern rate limiting limits and URL metadata caching to minimize IO bottlenecks.
 
 ```mermaid
-graph TD;
-    Client--Webhook-->FastAPI;
-    FastAPI--Bot Updates-->PTB[python-telegram-bot];
-    PTB-->Downloader;
-    Downloader--Subprocess-->yt-dlp;
-    Downloader--Subprocess-->gallery-dl;
-    Downloader--Subprocess-->FFmpeg;
-    Downloader--Media-->TelegramSender;
-    TelegramSender--Upload-->Telegram;
+flowchart TD
+    User([Telegram User]) -- Message/URL --> TG[Telegram API]
+    TG -- Webhook --> FA[FastAPI App]
+    FA -- Extract Meta --> YD[yt-dlp / gallery-dl]
+    FA -- User Picks Format --> TG
+    User -- Click Download --> TG
+    TG -- Callback --> FA
+    FA -- Stream / Download --> YD
+    YD -- HTTP Stream --> FA
+    FA -- FFmpeg Pipe --> FF[FFmpeg Converter]
+    FF -- GIF/MP4 --> TG
+    FA -- Direct Link --> User
 ```
 
 ## Repository Structure
 
-| Path            | Purpose                                                                       |
-| --------------- | ----------------------------------------------------------------------------- |
-| `app/api/`      | FastAPI endpoints (`/health`, `/metrics`, `/dl/{token}`, `/webhook`).         |
-| `app/bot/`      | Telegram handlers, commands, callbacks, UI texts, and keyboards.              |
-| `app/core/`     | Global state, rate limiting, logging, metrics, config, process supervision.   |
-| `app/services/` | Wrappers for `yt-dlp`, `gallery-dl`, media processing, and sender logic.      |
-| `app/tasks/`    | Background task loop (`janitor.py` for temp dir cleanup).                     |
-| `tests/`        | Pytest suite: Unit, integration, property-based (Hypothesis), security tests. |
-| `Dockerfile`    | Multi-stage image build for deploying the bot.                                |
+| Path            | Purpose                                                                    |
+| --------------- | -------------------------------------------------------------------------- |
+| `app/api/`      | FastAPI routes for Webhooks, `/health`, `/metrics`, and `/dl/{token}`.     |
+| `app/bot/`      | Telegram bot command/message handlers and inline keyboards.                |
+| `app/core/`     | Global config, rate limiter logic, caching, and state structures.          |
+| `app/services/` | Wrappers for `yt-dlp`, `gallery-dl`, `ffmpeg` conversion, and downloading. |
+| `app/tasks/`    | Background periodic tasks (e.g., `janitor.py` for temp cleanup).           |
+| `tests/`        | 430+ Pytest tests covering unit, integration, and security.                |
+| `Dockerfile`    | Multi-stage build definition for containerized deployment.                 |
+| `scripts`       | Python standalone script for local debugging of `yt-dlp` extraction.       |
 
 ## Tech Stack
 
-| Layer                      | Technology                 | Purpose                                                             |
-| -------------------------- | -------------------------- | ------------------------------------------------------------------- |
-| **Web Server**             | FastAPI / Uvicorn          | Routing HTTP downloads, webhooks, health checks.                    |
-| **Bot Framework**          | python-telegram-bot        | Asynchronous bot handling (`Application.builder()`).                |
-| **Extraction Executables** | yt-dlp, gallery-dl         | Heavy-lifting parsing and media fetching.                           |
-| **Browser Faking**         | curl_cffi                  | Used as fallback TLS-fingerprint simulator for TikTok (`tikwm.py`). |
-| **Processing Executable**  | FFmpeg                     | Direct video streaming, slideshow conversion, and GIF creation.     |
-| **Testing**                | pytest, hypothesis, mutmut | Test automation, fuzzing inputs, and mutation coverage.             |
+| Layer           | Technology          | Purpose                                              |
+| --------------- | ------------------- | ---------------------------------------------------- |
+| Web Framework   | FastAPI / Uvicorn   | Webhooks, streaming downloads, metrics               |
+| Bot Framework   | python-telegram-bot | Telegram API interface and callback routing          |
+| Extraction Core | yt-dlp / gallery-dl | Resolving platform links to raw media URLs           |
+| Media Engine    | FFmpeg              | Media manipulation, GIF conversion, merging          |
+| Fingerprinting  | curl_cffi           | TLS impersonation (used for TikWM fallback handling) |
 
 ## Setup
 
-### Prerequisites
-
-- Python 3.12+
-- FFmpeg (Must be in `PATH`)
-- `yt-dlp` and `gallery-dl`
-- Deno (Required for yt-dlp's YouTube parameter challenges. See `Known Documentation Gaps`)
-- aria2 (Optional, but used in Docker for faster fragmented downloads)
-
-### Step-by-Step
-
-1. Clone the repository: `git clone <repo>`
-2. Create and activate a Virtual Environment: `python -m venv venv && source venv/bin/activate`
-3. Install dependencies: `pip install -r requirements.txt`
-4. Copy env file: `cp .env.example .env`
-5. Configure `.env` (`BOT_TOKEN` is mandatory).
+1. **Clone Repo**:
+   ```bash
+   git clone https://github.com/yourusername/ytdlbot.git
+   cd ytdlbot
+   ```
+2. **Setup Virtual Environment**:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate
+   ```
+3. **Install Requirements**: Ensure system `ffmpeg` is installed first.
+   ```bash
+   pip install -r requirements.txt
+   ```
+4. **Environment Configuration**:
+   ```bash
+   cp .env.example .env
+   # Add your BOT_TOKEN to .env
+   ```
 
 ## Configuration
 
-| Variable                     | Required | Default                 | Description                                              | Used In                          |
-| ---------------------------- | -------- | ----------------------- | -------------------------------------------------------- | -------------------------------- |
-| `BOT_TOKEN`                  | **Yes**  | —                       | Telegram Bot setup token                                 | `app.main`                       |
-| `BASE_URL`                   | No       | `http://localhost:8000` | Used for generating HTTP direct download links           | `app/bot/callbacks.py`           |
-| `WEBHOOK_URL`                | No       | —                       | If set, bot relies on webhook. If empty, uses polling.   | `app.main`                       |
-| `TELEGRAM_SECRET_TOKEN`      | No       | _Randomly Generated_    | Webhook authentication header check                      | `app/api/routes.py`              |
-| `TMPDIR`                     | No       | System Temp             | Root directory for all transient media files             | `app/core/config.py`             |
-| `MAX_TG_UPLOAD_MB`           | No       | `45`                    | Limit for Telegram uploads in MB                         | `app/bot/callbacks.py`           |
-| `MAX_DL_MB`                  | No       | `1000`                  | HTTP direct download maximum limit in MB                 | `app/api/routes.py`              |
-| `MAX_CONCURRENT_TASKS`       | No       | `5`                     | Semaphores controlling bot thread concurrency            | `app/core/state.py`              |
-| `YTDLP_CONCURRENT_FRAGMENTS` | No       | `8`                     | Parallel fragment downloads parameter in yt-dlp          | `app/services/ytdlp/builders.py` |
-| `TIKTOK_PROXY`               | No       | —                       | SOCKS5 Proxy config specific for bypassing TikTok blocks | `app/services/tikwm.py`          |
+Selected key variables from `.env.example`:
 
-_(Refer to `.env.example` for all detailed variables including Rate Limiters and Cookies)._
+| Variable                | Required | Default                 | Description                                     | Used In          |
+| ----------------------- | -------- | ----------------------- | ----------------------------------------------- | ---------------- |
+| `BOT_TOKEN`             | **Yes**  | —                       | Telegram Bot Token from @BotFather              | Core Bot Setup   |
+| `BASE_URL`              | No       | `http://localhost:8000` | External endpoint base for generated DL links   | HTTP API         |
+| `WEBHOOK_URL`           | No       | —                       | If set, FastAPI acts as webhook. Else, polling  | Webhook setup    |
+| `MAX_TG_UPLOAD_MB`      | No       | `45`                    | Maximum size for direct Telegram upload         | Download Limiter |
+| `LIMITER_USER_CAPACITY` | No       | `10`                    | Rate limit tokens per user                      | Core Limiter     |
+| `YTDLP_COOKIES_B64`     | No       | —                       | Base64-encoded Netscape cookies for Auth bypass | `yt-dlp` Service |
 
 ## Run
 
-### Locally (Polling or Webhook)
+Run the bot natively using Uvicorn (uses Polling if `WEBHOOK_URL` is empty):
 
 ```bash
 uvicorn app.main:api --reload
 ```
 
-### Docker
-
-```bash
-docker build -t ytdlbot .
-docker run -d --name ytdlbot -p 8000:8000 -e BOT_TOKEN=YOUR_TOKEN ytdlbot
-```
-
 ## Scripts
 
-| Command                 | Purpose                               |
-| ----------------------- | ------------------------------------- |
-| `pre-commit install`    | Installs Git hooks for safety checks. |
-| `ruff check .`          | Linting codebase errors.              |
-| `ruff format --check .` | Verifying formatting.                 |
-| `python -m mypy app/`   | Strict Type checking.                 |
+| Command          | Purpose                                                                                            |
+| ---------------- | -------------------------------------------------------------------------------------------------- |
+| `python scripts` | Standalone script for testing `yt-dlp` raw format extraction locally without running the full bot. |
 
 ## Testing
 
-- **Unit & Property Tests**: Standard offline tests and hypothesis fuzzers.
-- **Integration Tests**: Reaches out via `yt-dlp` and `ffmpeg` externally.
-- **Tooling**: `pytest`, `pytest-cov`, `hypothesis`, `mutmut`.
-- **Prerequisites**: Functional ffmpeg/yt-dlp installed if running the `integration` mark.
+The project uses `pytest` heavily, along with `mutmut` for mutation testing and `hypothesis` for property-based tests. Test thresholds are strictly enforced via the CI pipeline (`.github/workflows/test.yml`).
 
-| Test Type            | Tooling | Command                                           | Scope                                                                    |
-| -------------------- | ------- | ------------------------------------------------- | ------------------------------------------------------------------------ |
-| Fast Unit/Mock Tests | pytest  | `pytest tests/ --cov=app -q -m 'not integration'` | Excludes live binary execution. Focuses on logic and routing boundaries. |
-| Integration Tests    | pytest  | `pytest -m integration`                           | Executes yt-dlp to assert external format extraction capabilities.       |
-| Full Suite Coverage  | pytest  | `BOT_TOKEN=test pytest tests/ -v`                 | Complete execution across the board.                                     |
+| Test Type       | Tooling               | Command                                                                                          | Scope                                                                    |
+| --------------- | --------------------- | ------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| **Unit**        | `pytest` + `coverage` | `python -m pytest tests/ --cov=app --cov-report=term-missing -v --tb=short -m "not integration"` | Tests core logic, mock external APIs, parsers. Fails under 75% coverage. |
+| **Integration** | `pytest`              | `python -m pytest tests/test_integration_real.py -m integration --no-cov -v`                     | Requires real `yt-dlp` and `ffmpeg` binaries. Verifies real downloads.   |
+| **Mutation**    | `mutmut`              | `mutmut run`                                                                                     | Mutates format parsing logic to check test robustness.                   |
+
+_Prerequisites: System must have `ffmpeg` and local `python -m pytest` available._
 
 ## API / Events / Contracts
 
-- **HTTP Routes**:
-  - `GET /health` -> System ready-check `{"ok": True}`.
-  - `GET /metrics` -> Returns Prometheus text format counters/timers.
-  - `GET /dl/{token}` -> Direct HTTP stream pipe via `StreamingResponse` (mp3/mp4).
-  - `POST /webhook` -> Telegram Webhook handler endpoint expecting `X-Telegram-Bot-Api-Secret-Token`.
-- **Main Telegram Events**:
-  - Text triggers `app.bot.messages.on_message` (Parses URL context).
-  - Callback Queries route to specific function commands dynamically (`pick|{token}`, `cancel|{token}`, `send|{token}`, `gif|{token}`).
-- **Payloads**: The `info_cache` passes JSON parameters from `yt-dlp` internally bridging processes logic.
+### HTTP Routes (FastAPI)
+
+- `GET /health` : Liveness probe.
+- `GET /metrics` : Prometheus-compatible metrics output.
+- `GET /dl/{token}` : Streams media chunks directly to clients given a valid token payload.
+- `POST /webhook` : Telegram Webhook destination. Validates `X-Telegram-Bot-Api-Secret-Token`.
+
+### Telegram Commands (PTB)
+
+- `/start` : Initializes bot, registers user intent, prints welcome menu.
+- `/help` : Displays supported platforms and current size limit constants.
+
+### Action Callbacks
+
+- `^pick\|` : Quality format selected by user.
+- `^cancel\|` : Task cancellation request.
+- `^send\|` | `^gif\|` : Post-download interactive transforms.
+- `^slideshow\|` / `^grpslide\|` : Specific selectors for TikTok carousel behavior.
 
 ## Main User Flows
 
-### 1. Simple Video Download (Private Chat)
+### Flow 1: Private Quality Selection
 
-- **Preconditions**: Bot running, valid URL.
-- **Steps**: User sends URL -> Bot validates and launches `yt-dlp --dump-json` -> Keyboard prompts quality options -> User picks option -> Video is downloaded incrementally and `TelegramSender` dispatches to user.
-- **Expected Outcome**: Final MP4/MP3 arrives in chat. Temporary payload cleared from `TMPDIR`.
+- **Preconditions**: User sends a valid supported link to the bot privately.
+- **Steps**:
+  1. Bot replies with "Processing..." and extracts formats.
+  2. Bot presents inline keyboard with specific resolutions (e.g., 1080p, 720p) and sizes.
+  3. User clicks an inline button.
+- **Expected Outcome**: Bot downloads the requested track, uploads it back to Telegram, and removes its temporary files.
 
-### 2. GIF Auto-Conversion (Group Chat)
+### Flow 2: Smart Group Mode
 
-- **Preconditions**: User previously requested video in Group (bot uploaded < 45MB format natively).
-- **Steps**: User clicks `Send GIF` attached on bot video reply -> Bot queries `file_cache` -> Strips audio tracks using `ffmpeg` memory copy -> Responds natively bypassing new HTTP calls.
-- **Expected Outcome**: Accelerated GIF presentation linked synchronously to parent video reply.
+- **Preconditions**: Bot is added to a group with message read permissions, and someone posts a link.
+- **Steps**:
+  1. Bot intercepts the link and parses formats.
+  2. Logic bypasses interactive keys, auto-selecting the best format below `MAX_TG_UPLOAD_MB`.
+  3. Bot posts the video directly as a reply to the original message.
+- **Expected Outcome**: Immediate, seamless media playback in group without menu spam.
 
-### 3. TikTok Slideshow
+### Flow 3: Fast GIF Conversion
 
-- **Preconditions**: User sends a multi-page TikTok post URL.
-- **Steps**: Bot identifies `is_slideshow=True` via custom parsers -> Asks for "Photo Album" (Send MediaGroup arrays) or "Video" -> Fetches images with `gallery-dl` -> Optionally transcodes frames with mp3 backdrop in `ffmpeg` -> Uploads.
-- **Expected Outcome**: Visually dense MediaGroup or generated MP4 file arrives inside Telegram UI cleanly.
+- **Preconditions**: Bot previously posted a video into the chat.
+- **Steps**:
+  1. User presses the inline "Send GIF" button attached to the bot's video message.
+  2. Webhook triggers GIF callback handler.
+- **Expected Outcome**: Bot relies on the cached stream (zero-disk streaming via `pipe:0` to `ffmpeg`), converts it instantly, and returns an animated GIF version.
 
 ## Troubleshooting
 
-- **No Upload Button Working**: Ensure `ENABLE_TELEGRAM_UPLOAD` is `1`. Limit checking stops large loads instantly.
-- **URL Timeout**: TikTok occasionally bans unproxied datacenters. Fix by deploying `TIKTOK_COOKIES_B64` or `TIKTOK_PROXY` globally.
-- **Missing FFMPEG Error**: `ffmpeg` binary dictates almost everything under the hood (GIF converter, TikTok streams); make sure it evaluates fine globally via `$PATH`.
-- **Zombie Process Spillage**: High memory? Docker handles Process Groups inherently for ungraceful exits, but in local polling verify `janitor.py` intervals (`JANITOR_INTERVAL_SECONDS`).
+- **Large file fails to upload**: Verify `MAX_TG_UPLOAD_MB` is not set above Telegram's 50MB hard limit. The bot cleanly aborts uploads larger than this context.
+- **429 Too Many Requests**: You hit the token bucket. Inspect `LIMITER_*` variables in `.env` if developing locally.
+- **TikTok extraction fails**: Usually caused by aggressive datacentre IP blocks. Feed `TIKTOK_COOKIES_B64` or a residential `TIKTOK_PROXY` into the environment.
 
 ## Known Documentation Gaps
 
-1. **Deno Dependency Mapping**: `Deno` is structurally required by the `Dockerfile` to circumvent recent YouTube `n-parameter` token obfuscations within `yt-dlp`, but it isn't listed among standard Local Dev "Prerequisites" initially.
-2. **Concurrency Mismatches**: Local `.env.example` documents `MAX_CONCURRENT_TASKS` default as `2`, yet `app/core/config.py` enforces it natively at `5`.
-3. **Metrics Endpoint Unlisted**: Real-time observability tracking (via `/metrics`) is fully configured but wasn't clearly indicated on initial endpoint guides.
-4. **Mutation Testing Local Use**: Although `pyproject.toml` references `mutmut` directly alongside tests, GitHub CI documentation lacks explicit developer commands to manually orchestrate those tasks locally.
+- **Script naming discrepancy**: Older documentation specifies a `scripts` folder containing CLI scripts, but the repo possesses a single `scripts` flat file containing python code used for debug purposes.
+- **Metrics documentation missing**: Although the bot exposes a standard operational `/metrics` route (Prometheus histograms), this was notably under-documented in prior iterations despite being active in `app.api.routes`.
+- **Property testing details**: The GitHub Actions integration testing workflow actually defaults to `mutmut run` succeeding loosely (`|| true`), indicating mutation metrics are likely informative, not strictly enforcing build failure at this time in the test suite.
 
 ## Contributing
 
-- Target branch for fixes is typically `main` unless stated otherwise.
-- Format code before submitting: Execute `ruff format --check .` and `python -m mypy app/`.
-- Verify coverage boundaries (`75%` baseline) holding ground post-PR with `pytest`.
+1. Create feature branches (`feature/Name`).
+2. Pass `pre-commit run --all-files` locally (which triggers `ruff`, `mypy`).
+3. Ensure the unit test suite passes with `python -m pytest tests`.
+4. Submit PRs against `main`. All CI checks must pass.
 
 ## License
 
-**MIT License** (Based on `README.md` and repository standards. Subject to root `LICENSE` if present).
+Distributed under the MIT License.

@@ -7,6 +7,15 @@ and data flow between components.
 """
 
 import unittest
+
+class AsyncMockCache(dict):
+    async def get(self, key, default=None):
+        return super().get(key, default)
+    async def set(self, key, value):
+        self[key] = value
+    async def delete(self, key):
+        self.pop(key, None)
+
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -29,12 +38,12 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
     """Integration: URL → list_formats → keyboard → pick flow."""
 
     async def asyncSetUp(self):
-        state.info_cache = {}
-        state.link_cache = {}
-        state.cancel_cache = {}
+        state.info_cache = AsyncMockCache()
+        state.link_cache = AsyncMockCache()
+        state.cancel_cache = AsyncMockCache()
         state.limiter = MagicMock()
-        state.limiter.allow_user.return_value = True
-        state.limiter.allow_chat.return_value = True
+        state.limiter.allow_user = AsyncMock(return_value=True)
+        state.limiter.allow_chat = AsyncMock(return_value=True)
         state.parsing_sem = MagicMock()
         state.parsing_sem.__aenter__ = AsyncMock(return_value=None)
         state.parsing_sem.__aexit__ = AsyncMock(return_value=None)
@@ -152,13 +161,13 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
     """Integration: pick → send → download → deliver flow."""
 
     async def asyncSetUp(self):
-        state.info_cache = {}
-        state.link_cache = {}
-        state.cancel_cache = {}
+        state.info_cache = AsyncMockCache()
+        state.link_cache = AsyncMockCache()
+        state.cancel_cache = AsyncMockCache()
         state.tasks_sem = asyncio.Semaphore(5)
         state.limiter = MagicMock()
-        state.limiter.allow_user.return_value = True
-        state.limiter.allow_chat.return_value = True
+        state.limiter.allow_user = AsyncMock(return_value=True)
+        state.limiter.allow_chat = AsyncMock(return_value=True)
 
     async def test_send_download_deliver_flow(self):
         """on_send downloads file and delivers it to user."""
@@ -219,7 +228,7 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
 
     async def test_rate_limit_rejects_request(self):
         """Rate-limited users see rejection message."""
-        state.limiter.allow_user.return_value = False
+        state.limiter.allow_user = AsyncMock(return_value=False)
 
         update = MagicMock()
         context = MagicMock()

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from cachetools import TTLCache
 from app.core.cache import FileTTLCache
 from app.core.config import (
@@ -17,11 +17,14 @@ from app.core.config import (
     LIMITER_IP_REFILL_PER_SEC,
     LIMITER_TOKEN_CAPACITY,
     LIMITER_TOKEN_REFILL_PER_SEC,
+    REDIS_URL,
 )
-from app.core.limiter import TokenBucketLimiter, LimiterRegistry
+from app.core.limiter import LimiterRegistry
 from app.core.utils import safe_remove
 
 from app.services.ytdlp.service import YtDlpService
+from app.core.storage.base import StateStorage
+from app.core.storage import MemoryStorage, RedisStorage
 
 # Инициализация логгера
 logger = logging.getLogger("app")
@@ -38,6 +41,8 @@ processing_gifs: set[str] = set()  # Set of tokens currently being converted to 
 conversion_sem = asyncio.Semaphore(
     3
 )  # Bounded concurrency for CPU-intensive conversions
+
+# Мы убираем ytdlp_executor в следующем шаге (subprocess rework)
 ytdlp_executor = ThreadPoolExecutor(
     max_workers=10, thread_name_prefix="ytdlp"
 )  # Dedicated pool for yt-dlp
@@ -47,14 +52,26 @@ if TYPE_CHECKING:
     from telegram.ext import Application
 bot_app: Application | None = None
 
+if REDIS_URL:
+    import redis.asyncio as redis
+    redis_client: Any = redis.from_url(REDIS_URL, decode_responses=False)
+else:
+    redis_client = None
 
-# Кэши
-# INVARIANT: All cache reads/writes MUST happen from the asyncio event-loop
-# thread.  cachetools.TTLCache is NOT thread-safe.  The executor (ytdlp_executor)
-# returns data to the caller in the event loop, which writes to cache — safe.
-link_cache: TTLCache = TTLCache(maxsize=500, ttl=LINK_TTL_MINUTES * 60)
-info_cache: TTLCache = TTLCache(maxsize=200, ttl=600)
-cancel_cache: TTLCache = TTLCache(maxsize=100, ttl=3600)
+# Explicitly type hints for state storage variables
+link_cache: StateStorage
+info_cache: StateStorage
+cancel_cache: StateStorage
+
+if redis_client:
+    link_cache = RedisStorage(redis_client, default_ttl=LINK_TTL_MINUTES * 60)
+    info_cache = RedisStorage(redis_client, default_ttl=600)
+    cancel_cache = RedisStorage(redis_client, default_ttl=3600)
+else:
+    link_cache = MemoryStorage(maxsize=500, ttl=LINK_TTL_MINUTES * 60)
+    info_cache = MemoryStorage(maxsize=200, ttl=600)
+    cancel_cache = MemoryStorage(maxsize=100, ttl=3600)
+
 inflight_parsing: TTLCache = TTLCache(
     maxsize=100, ttl=600
 )  # url -> asyncio.Event (auto-evicts after 10 min)
@@ -62,9 +79,21 @@ file_cache: FileTTLCache = FileTTLCache(
     maxsize=100, ttl=3600, on_eviction=safe_remove
 )  # token -> file_path
 
-limiter = LimiterRegistry(
-    user=TokenBucketLimiter(LIMITER_USER_CAPACITY, LIMITER_USER_REFILL_PER_SEC),
-    chat=TokenBucketLimiter(LIMITER_CHAT_CAPACITY, LIMITER_CHAT_REFILL_PER_SEC),
-    ip=TokenBucketLimiter(LIMITER_IP_CAPACITY, LIMITER_IP_REFILL_PER_SEC),
-    token=TokenBucketLimiter(LIMITER_TOKEN_CAPACITY, LIMITER_TOKEN_REFILL_PER_SEC),
-)
+if redis_client:
+    from app.core.limiter import RedisTokenBucketLimiter
+    
+    limiter = LimiterRegistry(
+        user=RedisTokenBucketLimiter(redis_client, LIMITER_USER_CAPACITY, LIMITER_USER_REFILL_PER_SEC),
+        chat=RedisTokenBucketLimiter(redis_client, LIMITER_CHAT_CAPACITY, LIMITER_CHAT_REFILL_PER_SEC),
+        ip=RedisTokenBucketLimiter(redis_client, LIMITER_IP_CAPACITY, LIMITER_IP_REFILL_PER_SEC),
+        token=RedisTokenBucketLimiter(redis_client, LIMITER_TOKEN_CAPACITY, LIMITER_TOKEN_REFILL_PER_SEC),
+    )
+else:
+    from app.core.limiter import TokenBucketLimiter
+    
+    limiter = LimiterRegistry(
+        user=TokenBucketLimiter(LIMITER_USER_CAPACITY, LIMITER_USER_REFILL_PER_SEC),
+        chat=TokenBucketLimiter(LIMITER_CHAT_CAPACITY, LIMITER_CHAT_REFILL_PER_SEC),
+        ip=TokenBucketLimiter(LIMITER_IP_CAPACITY, LIMITER_IP_REFILL_PER_SEC),
+        token=TokenBucketLimiter(LIMITER_TOKEN_CAPACITY, LIMITER_TOKEN_REFILL_PER_SEC),
+    )

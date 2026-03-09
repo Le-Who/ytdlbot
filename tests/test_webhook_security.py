@@ -1,3 +1,4 @@
+from unittest.mock import AsyncMock
 """Tests for webhook endpoint — verifies real route behavior via FastAPI TestClient."""
 
 import unittest
@@ -46,7 +47,7 @@ class TestWebhookEndpoint(unittest.TestCase):
     def test_webhook_correct_token_returns_200(self, mock_state):
         """Request WITH correct auth header must be accepted."""
         mock_state.bot_app = None
-        mock_state.limiter.allow_ip.return_value = True
+        mock_state.limiter.allow_ip = AsyncMock(return_value=True)
         resp = self.client.post(
             "/webhook",
             json={"update_id": 1},
@@ -58,7 +59,7 @@ class TestWebhookEndpoint(unittest.TestCase):
     @patch("app.api.routes.state")
     def test_webhook_rate_limited_returns_429(self, mock_state):
         """Rate-limited request must be 429."""
-        mock_state.limiter.allow_ip.return_value = False
+        mock_state.limiter.allow_ip = AsyncMock(return_value=False)
         resp = self.client.post(
             "/webhook",
             json={"update_id": 1},

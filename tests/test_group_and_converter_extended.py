@@ -1,9 +1,19 @@
+from unittest.mock import AsyncMock
 """Extended tests for group_logic.py on_group_slideshow callback and converter subprocess paths."""
 
 import asyncio
 import sys
 import unittest
-from unittest.mock import MagicMock, AsyncMock, patch
+
+class AsyncMockCache(dict):
+    async def get(self, key, default=None):
+        return super().get(key, default)
+    async def set(self, key, value):
+        self[key] = value
+    async def delete(self, key):
+        self.pop(key, None)
+
+from unittest.mock import MagicMock, patch
 
 # Pre-mock curl_cffi so that tikwm.py can be imported without the real package
 if "curl_cffi" not in sys.modules:
@@ -20,8 +30,8 @@ class TestOnGroupSlideshowExtended(unittest.IsolatedAsyncioTestCase):
     """Test on_group_slideshow callback in more detail."""
 
     async def asyncSetUp(self):
-        state.link_cache = {}
-        state.file_cache = {}
+        state.link_cache = AsyncMockCache()
+        state.file_cache = AsyncMockCache()
 
     @patch("app.bot.group_logic.MediaSender")
     async def test_photo_mode_success(self, mock_sender):

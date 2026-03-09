@@ -1,13 +1,13 @@
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock
 
 # Add repo root to path
 from app.services.ytdlp.service import YtDlpService
 from app.core.config import CONCURRENT_FRAGMENTS
 
 
-class TestProfessionalRefinements(unittest.TestCase):
-    def setUp(self):
+class TestProfessionalRefinements(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
         self.service = YtDlpService()
 
     def test_format_sort_in_opts(self):
@@ -21,14 +21,14 @@ class TestProfessionalRefinements(unittest.TestCase):
             opts.get("concurrent_fragment_downloads"), CONCURRENT_FRAGMENTS
         )
 
-    def test_live_stream_rejection(self):
+    async def test_live_stream_rejection(self):
         # Mock extract to return a live stream info
-        self.service.extract = MagicMock(
+        self.service.extract = AsyncMock(
             return_value={"is_live": True, "title": "Live Video"}
         )
 
         with self.assertRaises(Exception) as cm:
-            self.service.list_formats("https://youtube.com/live/video")
+            await self.service.list_formats("https://youtube.com/live/video")
 
         self.assertIn("прямая трансляция", str(cm.exception).lower())
 

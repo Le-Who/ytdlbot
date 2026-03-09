@@ -1,7 +1,17 @@
+from unittest.mock import AsyncMock
 """Tests for on_message handler — the core user flow."""
 
 import unittest
-from unittest.mock import MagicMock, AsyncMock, patch
+
+class AsyncMockCache(dict):
+    async def get(self, key, default=None):
+        return super().get(key, default)
+    async def set(self, key, value):
+        self[key] = value
+    async def delete(self, key):
+        self.pop(key, None)
+
+from unittest.mock import MagicMock, patch
 
 from app.bot import messages
 from app.core import state
@@ -12,13 +22,13 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
     """Test the on_message handler for the happy path, edge cases, and errors."""
 
     async def asyncSetUp(self):
-        state.info_cache = {}
-        state.link_cache = {}
-        state.cancel_cache = {}
+        state.info_cache = AsyncMockCache()
+        state.link_cache = AsyncMockCache()
+        state.cancel_cache = AsyncMockCache()
         state.inflight_parsing = {}
         state.limiter = MagicMock()
-        state.limiter.allow_user.return_value = True
-        state.limiter.allow_chat.return_value = True
+        state.limiter.allow_user = AsyncMock(return_value=True)
+        state.limiter.allow_chat = AsyncMock(return_value=True)
 
         state.parsing_sem = MagicMock()
         state.parsing_sem.__aenter__ = AsyncMock(return_value=None)
@@ -57,15 +67,15 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
     async def test_rate_limited_user_replies_rate_limited(self):
         """Rate-limited user gets RATE_LIMITED reply."""
         self.update.message.text = "https://youtube.com/watch?v=abc"
-        state.limiter.allow_user.return_value = False
+        state.limiter.allow_user = AsyncMock(return_value=False)
         await messages.on_message(self.update, self.context)
         self.update.message.reply_text.assert_awaited_with(Texts.RATE_LIMITED)
 
     async def test_rate_limited_chat_replies_rate_limited(self):
         """Rate-limited chat gets RATE_LIMITED reply."""
         self.update.message.text = "https://youtube.com/watch?v=abc"
-        state.limiter.allow_user.return_value = True
-        state.limiter.allow_chat.return_value = False
+        state.limiter.allow_user = AsyncMock(return_value=True)
+        state.limiter.allow_chat = AsyncMock(return_value=False)
         await messages.on_message(self.update, self.context)
         self.update.message.reply_text.assert_awaited_with(Texts.RATE_LIMITED)
 

@@ -1,6 +1,16 @@
+from unittest.mock import AsyncMock
 """Tests for /dl endpoint security — verifies REAL download route behavior."""
 
 import unittest
+
+class AsyncMockCache(dict):
+    async def get(self, key, default=None):
+        return super().get(key, default)
+    async def set(self, key, value):
+        self[key] = value
+    async def delete(self, key):
+        self.pop(key, None)
+
 import re
 
 from unittest.mock import patch
@@ -21,29 +31,29 @@ class TestDownloadEndpoint(unittest.TestCase):
     @patch("app.api.routes.state")
     def test_missing_token_returns_404(self, mock_state):
         """Nonexistent token returns 404 from the real endpoint."""
-        mock_state.link_cache = {}
+        mock_state.link_cache = AsyncMockCache()
         resp = self.client.get("/dl/nonexistent_token")
         self.assertEqual(resp.status_code, 404)
 
     @patch("app.api.routes.state")
     def test_rate_limited_ip_returns_429(self, mock_state):
         """Rate-limited IP returns 429."""
-        mock_state.link_cache = {
+        mock_state.link_cache = AsyncMockCache({
             "valid_token": {"page_url": "http://example.com", "title": "Test"}
-        }
-        mock_state.limiter.allow_ip.return_value = False
-        mock_state.limiter.allow_token.return_value = True
+        })
+        mock_state.limiter.allow_ip = AsyncMock(return_value=False)
+        mock_state.limiter.allow_token = AsyncMock(return_value=True)
         resp = self.client.get("/dl/valid_token")
         self.assertEqual(resp.status_code, 429)
 
     @patch("app.api.routes.state")
     def test_rate_limited_token_returns_429(self, mock_state):
         """Rate-limited token returns 429."""
-        mock_state.link_cache = {
+        mock_state.link_cache = AsyncMockCache({
             "valid_token": {"page_url": "http://example.com", "title": "Test"}
-        }
-        mock_state.limiter.allow_ip.return_value = True
-        mock_state.limiter.allow_token.return_value = False
+        })
+        mock_state.limiter.allow_ip = AsyncMock(return_value=True)
+        mock_state.limiter.allow_token = AsyncMock(return_value=False)
         resp = self.client.get("/dl/valid_token")
         self.assertEqual(resp.status_code, 429)
 

@@ -1,6 +1,16 @@
+from unittest.mock import AsyncMock
 import asyncio
 import unittest
-from unittest.mock import MagicMock, AsyncMock, patch
+
+class AsyncMockCache(dict):
+    async def get(self, key, default=None):
+        return super().get(key, default)
+    async def set(self, key, value):
+        self[key] = value
+    async def delete(self, key):
+        self.pop(key, None)
+
+from unittest.mock import MagicMock, patch
 
 # Mock environment variables
 # Ensure app can be imported
@@ -14,10 +24,11 @@ from app.services.ytdlp.models import ExtractionResult
 class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         # Reset state mocks for each test
-        state.info_cache = {}
-        state.link_cache = {}
-        state.cancel_cache = {}
+        state.info_cache = AsyncMockCache()
+        state.link_cache = AsyncMockCache()
+        state.cancel_cache = AsyncMockCache()
         state.ytdlp = MagicMock()
+        state.ytdlp.list_formats = AsyncMock()
         state.tasks_sem = asyncio.Semaphore(5)
 
         state.parsing_sem = MagicMock()
@@ -26,8 +37,8 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         # Mock limiter to allow by default
         state.limiter = MagicMock()
-        state.limiter.allow_user.return_value = True
-        state.limiter.allow_chat.return_value = True
+        state.limiter.allow_user = AsyncMock(return_value=True)
+        state.limiter.allow_chat = AsyncMock(return_value=True)
 
         # Mock Context
         self.context = MagicMock()
@@ -95,8 +106,10 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         with patch("app.bot.callbacks.build_format_keyboard"):
             await callbacks.on_back(self.update, self.context)
             state.ytdlp.list_formats.assert_called_with(page_url)
+            cached = await state.info_cache.get(page_url)
+            self.assertIsNotNone(cached)
+            self.assertEqual(cached.title, "Refreshed Title")
             self.assertIn(page_url, state.info_cache)
-            self.assertEqual(state.info_cache[page_url].title, "Refreshed Title")
 
     async def test_on_back_cache_miss_failure(self):
         page_url = "http://example.com/video"
@@ -151,7 +164,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
     async def test_on_send_rate_limit(self):
         self.update.callback_query.data = "send|token123"
         # Rate limit by making limiter reject
-        state.limiter.allow_user.return_value = False
+        state.limiter.allow_user = AsyncMock(return_value=False)
         await callbacks.on_send(self.update, self.context)
         args, _ = self.update.callback_query.edit_message_text.call_args
         self.assertIn("Слишком много запросов", args[0])

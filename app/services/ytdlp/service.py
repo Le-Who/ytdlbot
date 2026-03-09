@@ -1,12 +1,10 @@
 import shutil
-import subprocess
 import json
 import os
 import sys
 import logging
 from typing import Dict, Any, List, Optional, Tuple
 
-import yt_dlp
 
 __all__ = ["YtDlpService"]
 
@@ -114,8 +112,10 @@ class YtDlpService:
 
         return opts
 
-    def _extract_youtube_via_subprocess(self, url: str) -> Optional[Dict[str, Any]]:
+    async def _extract_youtube_via_subprocess(self, url: str) -> Optional[Dict[str, Any]]:
         """Извлечение через yt-dlp CLI для YouTube — надёжный обход ошибок API."""
+        from app.core.process import run_subprocess
+        
         base_cmd = [
             sys.executable,
             "-m",
@@ -141,13 +141,14 @@ class YtDlpService:
         for args in arg_variants:
             cmd = base_cmd + args + ["--", url]
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-                if result.returncode == 0 and result.stdout.strip():
-                    return json.loads(result.stdout)  # type: ignore[no-any-return]
-                else:
-                    logger.debug(
-                        f"Subprocess attempt failed (args={args}), retcode={result.returncode}"
-                    )
+                async with run_subprocess(cmd, timeout=60) as handle:
+                    stdout, stderr = await handle.proc.communicate()
+                    if handle.proc.returncode == 0 and stdout.strip():
+                        return json.loads(stdout.decode())  # type: ignore
+                    else:
+                        logger.debug(
+                            f"Subprocess attempt failed (args={args}), retcode={handle.proc.returncode}"
+                        )
             except Exception as e:
                 logger.debug(
                     f"YouTube subprocess fallback exception (args={args}): {e}"
@@ -155,7 +156,7 @@ class YtDlpService:
 
         return None
 
-    def _attempt_youtube_fallback(
+    async def _attempt_youtube_fallback(
         self, url: str, used_subprocess: bool
     ) -> Tuple[Optional[Dict[str, Any]], bool]:
         """
@@ -164,41 +165,70 @@ class YtDlpService:
         """
         if not used_subprocess and _is_youtube(url):
             logger.info("Attempting YouTube subprocess fallback...")
-            info = self._extract_youtube_via_subprocess(url)
+            info = await self._extract_youtube_via_subprocess(url)
             return info, True
         return None, used_subprocess
 
-    def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
-        """Извлекает метаданные видео."""
+    async def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
+        """Извлекает метаданные видео через subprocess yt-dlp (async isolation)."""
+        from app.core.process import run_subprocess
+        
         opts = self._base_opts(for_list_formats=for_list_formats, url=url)
+        cmd = [
+            sys.executable,
+            "-m",
+            "yt_dlp",
+            "--dump-json",
+            "--no-download",
+        ]
+        
+        if opts.get("quiet"):
+            cmd.append("--quiet")
+        if opts.get("no_warnings"):
+            cmd.append("--no-warnings")
+        if opts.get("noplaylist"):
+            cmd.append("--no-playlist")
+        if opts.get("force_ipv4"):
+            cmd.append("--force-ipv4")
+        if opts.get("geo_bypass"):
+            cmd.append("--geo-bypass")
+        if opts.get("ignoreconfig"):
+            cmd.append("--ignore-config")
+        
+        if opts.get("cookiefile"):
+            cmd.extend(["--cookies", opts["cookiefile"]])
+            
+        if opts.get("proxy"):
+            cmd.extend(["--proxy", opts["proxy"]])
+            
+        if opts.get("user_agent"):
+            cmd.extend(["--user-agent", opts["user_agent"]])
+            
+        if opts.get("extractor_args"):
+            for ext, args in opts["extractor_args"].items():
+                for arg_key, arg_val in args.items():
+                    val_str = ""
+                    if isinstance(arg_val, list):
+                        val_str = ",".join(str(v) for v in arg_val)
+                    else:
+                        val_str = str(arg_val)
+                    cmd.extend(["--extractor-args", f"{ext}:{arg_key}={val_str}"])
 
-        # Capture yt-dlp warnings/errors via custom logger
-        # (quiet=True suppresses them, but they're critical for debugging)
-        class _YtdlpLogger:
-            def debug(self, msg, *args):
-                pass
+        cmd.append(url)
+        
+        async with run_subprocess(cmd, timeout=120) as handle:
+            stdout, stderr = await handle.proc.communicate()
+            if handle.proc.returncode != 0:
+                err_text = stderr.decode() if stderr else ""
+                logger.error("yt-dlp extract failed: retcode=%s, stderr=%s", handle.proc.returncode, err_text)
+                raise ExtractionError(f"yt-dlp execution failed: {err_text}")
+            
+            if not stdout:
+                raise ExtractionError("yt-dlp returned empty stdout")
+                
+            return json.loads(stdout.decode())  # type: ignore
 
-            def info(self, msg, *args):
-                pass
-
-            def warning(self, msg, *args):
-                formatted = msg % args if args else msg
-                # Known internal retry — not a real warning
-                if "Failed to parse JSON" in formatted:
-                    logger.debug("yt-dlp: %s", formatted)
-                else:
-                    logger.warning("yt-dlp: %s", formatted)
-
-            def error(self, msg, *args):
-                formatted = msg % args if args else msg
-                logger.error("yt-dlp: %s", formatted)
-
-        opts["logger"] = _YtdlpLogger()
-
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            return ydl.extract_info(url, download=False)  # type: ignore[no-any-return]
-
-    def list_formats(self, url: str, max_items: int = 12) -> ExtractionResult:
+    async def list_formats(self, url: str, max_items: int = 12) -> ExtractionResult:
         """Извлекает форматы видео с обработкой ошибок."""
         info: Optional[Dict[str, Any]] = None
         used_subprocess = False
@@ -220,9 +250,9 @@ class YtDlpService:
                 )
 
         try:
-            info = self.extract(url, for_list_formats=True)
+            info = await self.extract(url, for_list_formats=True)
         except Exception as e:
-            info, used_subprocess = self._attempt_youtube_fallback(url, used_subprocess)
+            info, used_subprocess = await self._attempt_youtube_fallback(url, used_subprocess)
 
             if not info:
                 error_msg = str(e).lower()
@@ -354,7 +384,7 @@ class YtDlpService:
 
         raw_formats = info.get("formats", [])
         if not raw_formats:
-            info2, used_subprocess = self._attempt_youtube_fallback(
+            info2, used_subprocess = await self._attempt_youtube_fallback(
                 url, used_subprocess
             )
             if info2:
@@ -368,7 +398,7 @@ class YtDlpService:
                 formats_meta.append(fmt)
 
         if not formats_meta:
-            info2, used_subprocess = self._attempt_youtube_fallback(
+            info2, used_subprocess = await self._attempt_youtube_fallback(
                 url, used_subprocess
             )
             if info2:

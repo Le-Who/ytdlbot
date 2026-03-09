@@ -33,7 +33,7 @@ async def metrics_endpoint():
 
 @router.get("/dl/{token}")
 async def download(token: str, request: Request):  # type: ignore[no-untyped-def]
-    payload = state.link_cache.get(token)
+    payload = await state.link_cache.get(token)
     if not payload:
         raise HTTPException(404, "Link expired")
 
@@ -47,7 +47,7 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
     )
 
     ip = request.client.host if request.client else "unknown"
-    if not state.limiter.allow_ip(ip) or not state.limiter.allow_token(token):
+    if not await state.limiter.allow_ip(ip) or not await state.limiter.allow_token(token):
         raise HTTPException(429, "Too many requests")
 
     raw_title = payload.title or "video"
@@ -171,7 +171,7 @@ async def telegram_webhook(request: Request) -> dict[str, bool]:
     ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
     if not ip and request.client:
         ip = request.client.host
-    if ip and not state.limiter.allow_ip(ip):
+    if ip and not await state.limiter.allow_ip(ip):
         raise HTTPException(429, "Too many requests")
 
     if state.bot_app:

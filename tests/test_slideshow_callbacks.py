@@ -1,8 +1,18 @@
+from unittest.mock import AsyncMock
 """Tests for slideshow callbacks and downloader methods."""
 
 import asyncio
 import unittest
-from unittest.mock import MagicMock, AsyncMock, patch
+
+class AsyncMockCache(dict):
+    async def get(self, key, default=None):
+        return super().get(key, default)
+    async def set(self, key, value):
+        self[key] = value
+    async def delete(self, key):
+        self.pop(key, None)
+
+from unittest.mock import MagicMock, patch
 
 from telegram import Message
 
@@ -14,9 +24,9 @@ from app.services.gallery_dl.service import SlideshowResult
 
 class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        state.info_cache = {}
-        state.link_cache = {}
-        state.cancel_cache = {}
+        state.info_cache = AsyncMockCache()
+        state.link_cache = AsyncMockCache()
+        state.cancel_cache = AsyncMockCache()
         state.ytdlp = MagicMock()
         state.tasks_sem = asyncio.Semaphore(5)
         state.parsing_sem = MagicMock()
@@ -24,8 +34,8 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
         state.parsing_sem.__aexit__ = AsyncMock(return_value=None)
 
         state.limiter = MagicMock()
-        state.limiter.allow_user.return_value = True
-        state.limiter.allow_chat.return_value = True
+        state.limiter.allow_user = AsyncMock(return_value=True)
+        state.limiter.allow_chat = AsyncMock(return_value=True)
 
         self.context = MagicMock()
         self.context.user_data = {"page_url": "https://tiktok.com/@user/video/123"}
@@ -127,7 +137,7 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
     async def test_on_slideshow_rate_limited(self):
         """Rate-limited user should see error."""
         self.update.callback_query.data = f"slideshow|{SLIDESHOW_PHOTO_FORMAT_ID}"
-        state.limiter.allow_user.return_value = False
+        state.limiter.allow_user = AsyncMock(return_value=False)
 
         await callbacks.on_slideshow(self.update, self.context)
 

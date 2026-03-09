@@ -41,6 +41,8 @@ DL_TIMEOUT_HTTP = int(os.getenv("DL_TIMEOUT_HTTP", "900"))
 # Above 10 risks rate-limiting on YouTube. Configurable for easy tuning.
 CONCURRENT_FRAGMENTS = int(os.getenv("YTDLP_CONCURRENT_FRAGMENTS", "8"))
 
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+
 # TikTok proxy — route TikTok requests through WireGuard/SOCKS5 to bypass
 # datacenter IP blocks on age-restricted content.
 # Example: socks5://wireguard-proxy:1080

@@ -1,6 +1,16 @@
+from unittest.mock import AsyncMock
 """Tests for API endpoints — /health, /metrics, /dl."""
 
 import unittest
+
+class AsyncMockCache(dict):
+    async def get(self, key, default=None):
+        return super().get(key, default)
+    async def set(self, key, value):
+        self[key] = value
+    async def delete(self, key):
+        self.pop(key, None)
+
 from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -61,7 +71,7 @@ class TestDownloadEndpointErrors(unittest.TestCase):
     def test_nonexistent_token_returns_404(self):
         """Token not in cache returns 404."""
         with patch("app.api.routes.state") as mock_state:
-            mock_state.link_cache = {}
+            mock_state.link_cache = AsyncMockCache()
             resp = self.client.get("/dl/fake_token")
             self.assertEqual(resp.status_code, 404)
             self.assertIn("expired", resp.json()["detail"].lower())
@@ -69,18 +79,18 @@ class TestDownloadEndpointErrors(unittest.TestCase):
     @patch("app.api.routes.state")
     def test_rate_limited_ip_returns_429(self, mock_state):
         """Rate-limited IP returns 429."""
-        mock_state.link_cache = {"t1": {"page_url": "http://x.com", "title": "T"}}
-        mock_state.limiter.allow_ip.return_value = False
-        mock_state.limiter.allow_token.return_value = True
+        mock_state.link_cache = AsyncMockCache({"t1": {"page_url": "http://x.com", "title": "T"}})
+        mock_state.limiter.allow_ip = AsyncMock(return_value=False)
+        mock_state.limiter.allow_token = AsyncMock(return_value=True)
         resp = self.client.get("/dl/t1")
         self.assertEqual(resp.status_code, 429)
 
     @patch("app.api.routes.state")
     def test_rate_limited_token_returns_429(self, mock_state):
         """Rate-limited token returns 429."""
-        mock_state.link_cache = {"t2": {"page_url": "http://x.com", "title": "T"}}
-        mock_state.limiter.allow_ip.return_value = True
-        mock_state.limiter.allow_token.return_value = False
+        mock_state.link_cache = AsyncMockCache({"t2": {"page_url": "http://x.com", "title": "T"}})
+        mock_state.limiter.allow_ip = AsyncMock(return_value=True)
+        mock_state.limiter.allow_token = AsyncMock(return_value=False)
         resp = self.client.get("/dl/t2")
         self.assertEqual(resp.status_code, 429)
 

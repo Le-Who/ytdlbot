@@ -1,3 +1,4 @@
+from unittest.mock import AsyncMock
 """Tests for callback handler exception/malformed-data resilience.
 
 Verifies that on_pick, on_cancel, on_send handle malformed/None callback data
@@ -6,7 +7,16 @@ gracefully: no crash, correct early return, and appropriate user feedback.
 
 import asyncio
 import unittest
-from unittest.mock import MagicMock, AsyncMock, patch
+
+class AsyncMockCache(dict):
+    async def get(self, key, default=None):
+        return super().get(key, default)
+    async def set(self, key, value):
+        self[key] = value
+    async def delete(self, key):
+        self.pop(key, None)
+
+from unittest.mock import MagicMock, patch
 
 from telegram import Message
 
@@ -16,9 +26,9 @@ from app.core import state
 
 class TestCallbacksExceptions(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        state.info_cache = {}
-        state.link_cache = {}
-        state.cancel_cache = {}
+        state.info_cache = AsyncMockCache()
+        state.link_cache = AsyncMockCache()
+        state.cancel_cache = AsyncMockCache()
         state.ytdlp = MagicMock()
         state.tasks_sem = asyncio.Semaphore(5)
 
@@ -27,8 +37,8 @@ class TestCallbacksExceptions(unittest.IsolatedAsyncioTestCase):
         state.parsing_sem.__aexit__ = AsyncMock(return_value=None)
 
         state.limiter = MagicMock()
-        state.limiter.allow_user.return_value = True
-        state.limiter.allow_chat.return_value = True
+        state.limiter.allow_user = AsyncMock(return_value=True)
+        state.limiter.allow_chat = AsyncMock(return_value=True)
 
         self.context = MagicMock()
         self.context.user_data = {}
@@ -114,7 +124,7 @@ class TestCallbacksExceptions(unittest.IsolatedAsyncioTestCase):
     async def test_on_send_missing_token_in_cache_shows_expired(self):
         """on_send with valid data format but nonexistent token shows link expired."""
         self.update.callback_query.data = "send|nonexistent_token"
-        state.link_cache = {}
+        state.link_cache = AsyncMockCache()
         await callbacks.on_send(self.update, self.context)
         args, _ = self.update.callback_query.edit_message_text.call_args
         self.assertEqual(args[0], "⚠️ Ссылка устарела.")

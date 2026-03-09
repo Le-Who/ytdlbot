@@ -47,7 +47,7 @@ async def handle_group_message(
     user = update.effective_user
     chat = update.effective_chat
     assert user is not None and chat is not None
-    if not state.limiter.allow_user(user.id) or not state.limiter.allow_chat(chat.id):
+    if not await state.limiter.allow_user(user.id) or not await state.limiter.allow_chat(chat.id):
         return
 
     # Send "Typing..." or "Uploading video..." action
@@ -73,9 +73,7 @@ async def handle_group_message(
 
     if is_tiktok_url:
         try:
-            result = await asyncio.get_event_loop().run_in_executor(
-                state.ytdlp_executor, state.ytdlp.list_formats, url
-            )
+            result = await state.ytdlp.list_formats(url)
             is_slideshow = result.is_slideshow
             tiktok_auth_error = result.tiktok_auth_error
             info_json_path = result.info_json_path
@@ -103,12 +101,12 @@ async def handle_group_message(
 
     if is_slideshow:
         # TikTok slideshow — offer format choice (album vs video)
-        state.link_cache[token] = DownloadContext(
+        await state.link_cache.set(token, DownloadContext(
             page_url=url,
             user_tag=user_tag,
             chat_id=chat.id,
             original_msg_id=update.message.message_id,
-        )
+        ))
 
         kb = InlineKeyboardMarkup(
             [
@@ -207,7 +205,7 @@ async def on_group_slideshow(
         )
         return
 
-    payload = state.link_cache.get(token)
+    payload = await state.link_cache.get(token)
     if not payload:
         try:
             await q.edit_message_text(Texts.SLIDESHOW_ERROR)

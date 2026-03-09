@@ -2,6 +2,15 @@
 
 import asyncio
 import unittest
+
+class AsyncMockCache(dict):
+    async def get(self, key, default=None):
+        return super().get(key, default)
+    async def set(self, key, value):
+        self[key] = value
+    async def delete(self, key):
+        self.pop(key, None)
+
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from app.core import state
@@ -18,13 +27,13 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
     """Test on_message error paths that were previously uncovered."""
 
     async def asyncSetUp(self):
-        state.info_cache = {}
-        state.link_cache = {}
-        state.cancel_cache = {}
+        state.info_cache = AsyncMockCache()
+        state.link_cache = AsyncMockCache()
+        state.cancel_cache = AsyncMockCache()
         state.inflight_parsing = {}
         state.limiter = MagicMock()
-        state.limiter.allow_user.return_value = True
-        state.limiter.allow_chat.return_value = True
+        state.limiter.allow_user = AsyncMock(return_value=True)
+        state.limiter.allow_chat = AsyncMock(return_value=True)
         state.parsing_sem = asyncio.Semaphore(5)
         state.ytdlp = MagicMock()
         state.ytdlp_executor = None
@@ -48,11 +57,8 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         """AccessDeniedError shows access denied text."""
         from app.bot.messages import on_message
 
-        with patch("app.bot.messages.asyncio.get_event_loop") as mock_loop:
-            mock_loop.return_value.run_in_executor = AsyncMock(
-                side_effect=AccessDeniedError("Login required")
-            )
-            await on_message(self.update, self.context)
+        state.ytdlp.list_formats = AsyncMock(side_effect=AccessDeniedError("Login required"))
+        await on_message(self.update, self.context)
 
         self.status_msg.edit_text.assert_awaited_with(Texts.ACCESS_DENIED)
 
@@ -60,11 +66,8 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         """VideoNotFoundError shows not found text."""
         from app.bot.messages import on_message
 
-        with patch("app.bot.messages.asyncio.get_event_loop") as mock_loop:
-            mock_loop.return_value.run_in_executor = AsyncMock(
-                side_effect=VideoNotFoundError("404")
-            )
-            await on_message(self.update, self.context)
+        state.ytdlp.list_formats = AsyncMock(side_effect=VideoNotFoundError("404"))
+        await on_message(self.update, self.context)
 
         self.status_msg.edit_text.assert_awaited_with(Texts.VIDEO_NOT_FOUND)
 
@@ -72,11 +75,8 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         """LiveStreamError shows live not supported text."""
         from app.bot.messages import on_message
 
-        with patch("app.bot.messages.asyncio.get_event_loop") as mock_loop:
-            mock_loop.return_value.run_in_executor = AsyncMock(
-                side_effect=LiveStreamError("Live stream")
-            )
-            await on_message(self.update, self.context)
+        state.ytdlp.list_formats = AsyncMock(side_effect=LiveStreamError("Live stream"))
+        await on_message(self.update, self.context)
 
         self.status_msg.edit_text.assert_awaited_with(Texts.LIVE_NOT_SUPPORTED)
 
@@ -84,11 +84,8 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         """ExtractionError with 'pinterest' shows pinterest error text."""
         from app.bot.messages import on_message
 
-        with patch("app.bot.messages.asyncio.get_event_loop") as mock_loop:
-            mock_loop.return_value.run_in_executor = AsyncMock(
-                side_effect=ExtractionError("pinterest: failed to extract")
-            )
-            await on_message(self.update, self.context)
+        state.ytdlp.list_formats = AsyncMock(side_effect=ExtractionError("pinterest: failed to extract"))
+        await on_message(self.update, self.context)
 
         self.status_msg.edit_text.assert_awaited_with(Texts.PINTEREST_ERROR)
 
@@ -96,11 +93,8 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         """Generic ExtractionError shows the error message."""
         from app.bot.messages import on_message
 
-        with patch("app.bot.messages.asyncio.get_event_loop") as mock_loop:
-            mock_loop.return_value.run_in_executor = AsyncMock(
-                side_effect=ExtractionError("some random error")
-            )
-            await on_message(self.update, self.context)
+        state.ytdlp.list_formats = AsyncMock(side_effect=ExtractionError("some random error"))
+        await on_message(self.update, self.context)
 
         args = self.status_msg.edit_text.call_args[0][0]
         self.assertIn("some random error", args)
@@ -109,11 +103,8 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         """Unknown exception shows generic error with detail."""
         from app.bot.messages import on_message
 
-        with patch("app.bot.messages.asyncio.get_event_loop") as mock_loop:
-            mock_loop.return_value.run_in_executor = AsyncMock(
-                side_effect=RuntimeError("unexpected crash")
-            )
-            await on_message(self.update, self.context)
+        state.ytdlp.list_formats = AsyncMock(side_effect=RuntimeError("unexpected crash"))
+        await on_message(self.update, self.context)
 
         args = self.status_msg.edit_text.call_args[0][0]
         self.assertIn("unexpected crash", args)

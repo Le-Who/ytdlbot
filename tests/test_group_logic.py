@@ -1,7 +1,17 @@
+from unittest.mock import AsyncMock
 """Tests for app.bot.group_logic — handle_group_message + on_group_slideshow."""
 
 import unittest
-from unittest.mock import MagicMock, AsyncMock, patch
+
+class AsyncMockCache(dict):
+    async def get(self, key, default=None):
+        return super().get(key, default)
+    async def set(self, key, value):
+        self[key] = value
+    async def delete(self, key):
+        self.pop(key, None)
+
+from unittest.mock import MagicMock, patch
 
 from app.core import state
 from app.core.texts import Texts
@@ -12,11 +22,11 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         state.limiter = MagicMock()
-        state.limiter.allow_user.return_value = True
-        state.limiter.allow_chat.return_value = True
-        state.link_cache = {}
-        state.file_cache = {}
-        state.cancel_cache = {}
+        state.limiter.allow_user = AsyncMock(return_value=True)
+        state.limiter.allow_chat = AsyncMock(return_value=True)
+        state.link_cache = AsyncMockCache()
+        state.file_cache = AsyncMockCache()
+        state.cancel_cache = AsyncMockCache()
 
         self.context = MagicMock()
         self.context.bot = AsyncMock()
@@ -66,7 +76,7 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
         """Rate-limited user → no reply, no download."""
         from app.bot.group_logic import handle_group_message
 
-        state.limiter.allow_user.return_value = False
+        state.limiter.allow_user = AsyncMock(return_value=False)
         self.update.message.text = "https://youtube.com/watch?v=abc"
         await handle_group_message(self.update, self.context)
         self.update.message.reply_text.assert_not_awaited()
@@ -75,7 +85,7 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
         """Rate-limited chat → no reply, no download."""
         from app.bot.group_logic import handle_group_message
 
-        state.limiter.allow_chat.return_value = False
+        state.limiter.allow_chat = AsyncMock(return_value=False)
         self.update.message.text = "https://youtube.com/watch?v=abc"
         await handle_group_message(self.update, self.context)
         self.update.message.reply_text.assert_not_awaited()
@@ -170,8 +180,8 @@ class TestOnGroupSlideshow(unittest.IsolatedAsyncioTestCase):
     """Test on_group_slideshow callback."""
 
     async def asyncSetUp(self):
-        state.link_cache = {}
-        state.file_cache = {}
+        state.link_cache = AsyncMockCache()
+        state.file_cache = AsyncMockCache()
 
     async def test_no_data_returns(self):
         """No callback data → immediate return."""

@@ -20,6 +20,14 @@ All notable changes to this project will be documented in this file.
 - **Pre-commit hooks**: `.pre-commit-config.yaml` with ruff (lint + format), mypy, file hygiene
 - **File hygiene**: Comprehensive `.gitignore` and `.dockerignore` updates
 
+### Architecture & Stability (Targeted Refactor)
+
+- **Persistent State Backend Protocol**: Replaced brittle `TTLCache` in-memory single-point-of-failures with an asynchronous `StateStorage` protocol.
+- **Redis Integration**: Implemented `RedisStorage` using `msgspec` for blazing-fast JSON serialization to persist app caches across restarts. This enables zero-downtime deployments. Memory-based fallback implemented solely via `MemoryStorage`.
+- **Redis Rate Limiter**: Introduced `RedisTokenBucketLimiter` implementing atomic Lua scripts for accurate, distributed rate limiting, replacing local in-memory token buckets.
+- **Async External Binary Isolation**: Completely removed `ThreadPoolExecutor` from `YtDlpService` and re-engineered `list_formats` and `extract` endpoints to spawn decoupled `yt-dlp` instances via `asyncio.create_subprocess_exec()`. This ensures absolute unblocking of the main Telegram event loop.
+- **Resilient Process Management**: Implemented `run_subprocess` using OS-level process groups (`os.setsid`/`os.killpg` on POSIX, `CREATE_NEW_PROCESS_GROUP` on Windows) to guarantee orphan `ffmpeg` or `yt-dlp` processes are deterministically killed on timeout or client cancellation.
+
 ### Code Quality
 
 - **Mypy strict: 0 errors** in 39 source files (up from 30 errors)

@@ -1,3 +1,4 @@
+from unittest.mock import AsyncMock
 """Tests for _extract_video_meta helper in callbacks.py."""
 
 import json
@@ -5,7 +6,7 @@ import os
 import asyncio
 import tempfile
 import unittest
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch
 
 from app.services.orchestrator import _extract_video_meta
 

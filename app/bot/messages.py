@@ -34,7 +34,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     text = url
 
-    if not state.limiter.allow_user(user.id) or not state.limiter.allow_chat(chat.id):
+    if not await state.limiter.allow_user(user.id) or not await state.limiter.allow_chat(chat.id):
         await msg.reply_text(Texts.RATE_LIMITED)
         return
 
@@ -51,9 +51,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         ]
     )
     status_msg = await msg.reply_text(Texts.SEARCHING, reply_markup=kb_cancel)
-    state.cancel_cache.pop(parse_token, None)
+    await state.cancel_cache.delete(parse_token)
 
-    cached = state.info_cache.get(text)
+    cached = await state.info_cache.get(text)
     if cached:
         logger.info("Cache hit", extra={"url": text})
         result = cached
@@ -74,7 +74,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             except asyncio.TimeoutError:
                 await status_msg.edit_text(Texts.TIMEOUT_RETRY)
                 return
-            cached = state.info_cache.get(text)
+            cached = await state.info_cache.get(text)
             if cached:
                 result = cached
                 title = result.title
@@ -97,9 +97,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                         from app.core.metrics import metrics as _m
 
                         _ext_start = _time.monotonic()
-                        result = await asyncio.get_event_loop().run_in_executor(
-                            state.ytdlp_executor, state.ytdlp.list_formats, text
-                        )
+                        result = await state.ytdlp.list_formats(text)
                         title = result.title
                         formats = result.formats
                         special_format = result.special_format
@@ -120,12 +118,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                         )
 
                 # Check if user cancelled while parsing
-                if state.cancel_cache.get(parse_token):
-                    state.cancel_cache.pop(parse_token, None)
+                if await state.cancel_cache.get(parse_token):
+                    await state.cancel_cache.delete(parse_token)
                     await status_msg.edit_text(Texts.CANCELLED)
                     return
 
-                state.info_cache[text] = result
+                await state.info_cache.set(text, result)
             except asyncio.TimeoutError:
                 await status_msg.edit_text(Texts.TIMEOUT_UNAVAILABLE)
                 return

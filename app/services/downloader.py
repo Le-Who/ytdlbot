@@ -163,11 +163,11 @@ class VideoDownloader:
                 max_download_time = DL_TIMEOUT_TELEGRAM
 
                 # Clear previous cancel state for this token
-                state.cancel_cache.pop(token, None)
+                await state.cancel_cache.delete(token)
 
                 # Drain stdout; check cancel/timeout every 2s
                 while True:
-                    if state.cancel_cache.get(token):
+                    if await state.cancel_cache.get(token):
                         logger.info("Cancelled by user", extra={"token": token})
                         return None, "❌ Загрузка отменена пользователем."
 

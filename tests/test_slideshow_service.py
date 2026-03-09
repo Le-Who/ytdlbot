@@ -1,10 +1,11 @@
+from unittest.mock import AsyncMock
 """Tests for app.services.slideshow — SlideshowPipeline."""
 
 import os
 import tempfile
 import shutil
 import unittest
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
 from app.services.slideshow import SlideshowPipeline
 

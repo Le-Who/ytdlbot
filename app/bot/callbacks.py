@@ -54,13 +54,13 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
         return
 
-    cached = state.info_cache.get(page_url)
+    cached = await state.info_cache.get(page_url)
     if not cached:
         try:
             await q.edit_message_text(Texts.CACHE_REFRESHING)
             async with state.parsing_sem:
-                result = await asyncio.to_thread(state.ytdlp.list_formats, page_url)
-            state.info_cache[page_url] = result
+                result = await state.ytdlp.list_formats(page_url)
+            await state.info_cache.set(page_url, result)
 
             title = result.title
             formats = result.formats
@@ -144,13 +144,13 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     token = uuid.uuid4().hex
-    state.link_cache[token] = DownloadContext(
+    await state.link_cache.set(token, DownloadContext(
         page_url=data["page_url"],
         format_id=format_id,
         height=data["format_map"].get(format_id),
         title=data["title"],
         info_json_path=data.get("info_json_path"),
-    )
+    ))
 
     dl_link = f"{BASE_URL}/dl/{token}"
 
@@ -199,7 +199,7 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         _, token = q.data.split("|", 1)
-        state.cancel_cache[token] = True
+        await state.cancel_cache.set(token, True)
         await q.edit_message_text(Texts.CANCELLED)
     except (ValueError, AttributeError) as e:
         logger.error("Invalid callback data in on_cancel", extra={"error": str(e)})
@@ -216,7 +216,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     except Exception:
         pass
 
-    if not state.limiter.allow_user(user_id) or not state.limiter.allow_chat(
+    if not await state.limiter.allow_user(user_id) or not await state.limiter.allow_chat(
         q.message.chat_id
     ):
         await q.edit_message_text(Texts.TOO_MANY_REQUESTS)
@@ -232,7 +232,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     set_correlation_id(token)
-    payload = state.link_cache.get(token)
+    payload = await state.link_cache.get(token)
     if not payload:
         await q.edit_message_text(Texts.LINK_EXPIRED)
         return
@@ -255,7 +255,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     from typing import Optional
     async def update_progress_ui(text: str, markup: Optional[object] = None) -> None:
         try:
-            await q.edit_message_text(text, reply_markup=markup)
+            await q.edit_message_text(text, reply_markup=markup)  # type: ignore
         except Exception as e:
             logger.warning("UI update failed", extra={"error": str(e)})
 
@@ -362,7 +362,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     except Exception:
         pass
 
-    if not state.limiter.allow_user(user_id) or not state.limiter.allow_chat(
+    if not await state.limiter.allow_user(user_id) or not await state.limiter.allow_chat(
         q.message.chat_id
     ):
         await q.edit_message_text(Texts.TOO_MANY_REQUESTS)

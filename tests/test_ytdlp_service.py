@@ -1,6 +1,6 @@
 import unittest
 import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, AsyncMock
 
 # Mock yt_dlp before importing app
 sys.modules["yt_dlp"] = MagicMock()
@@ -11,11 +11,11 @@ from app.services.ytdlp.models import FormatItem, FormatMetadata
 from app.constants import GIF_FORMAT_ID
 
 
-class TestYtDlpService(unittest.TestCase):
-    def setUp(self):
+class TestYtDlpService(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
         self.service = YtDlpService()
         # Mock PlatformCookiesManager to return a deterministic cookies path
-        self.service.cookies_manager.get_cookies_path = lambda url: "/tmp/cookies.txt"
+        self.service.cookies_manager.get_cookies_path = MagicMock(return_value="/tmp/cookies.txt")
         self.service.cookies_manager._global_cookies_path = "/tmp/cookies.txt"
 
     def test_build_command_video(self):
@@ -65,7 +65,7 @@ class TestYtDlpService(unittest.TestCase):
         )
         self.assertFalse(any("aria2c" in arg for arg in cmd))
 
-    def test_list_formats_passes_is_tiktok(self):
+    async def test_list_formats_passes_is_tiktok(self):
         mock_info = {
             "title": "Test Video",
             "duration": 60,
@@ -81,7 +81,8 @@ class TestYtDlpService(unittest.TestCase):
             ],
         }
 
-        with patch.object(self.service, "extract", return_value=mock_info):
+        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_extract:
+            mock_extract.return_value = mock_info
             with patch(
                 "app.services.ytdlp.service.parse_format_metadata"
             ) as mock_parse:
@@ -103,7 +104,7 @@ class TestYtDlpService(unittest.TestCase):
 
                         # Test YouTube
                         url = "https://youtube.com/watch?v=123"
-                        self.service.list_formats(url)
+                        await self.service.list_formats(url)
 
                         # Verify parse_format_metadata arg
                         args_parse = mock_parse.call_args[0]
@@ -121,7 +122,7 @@ class TestYtDlpService(unittest.TestCase):
 
                         # Test TikTok
                         url_tiktok = "https://tiktok.com/@user/video/123"
-                        self.service.list_formats(url_tiktok)
+                        await self.service.list_formats(url_tiktok)
 
                         # Verify parse_format_metadata arg
                         args_parse = mock_parse.call_args[0]

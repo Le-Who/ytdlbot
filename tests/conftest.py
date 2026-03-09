@@ -1,3 +1,4 @@
+from unittest.mock import AsyncMock
 """
 conftest.py — runs before any test module is collected.
 Mocks FastAPI if not genuinely installed so tests that import app.api.routes
@@ -9,7 +10,7 @@ Also provides shared fixtures to DRY up test setup boilerplate.
 import os
 import sys
 import pytest
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock
 
 # Ensure project root is on sys.path (centralised — no need in individual test files)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -62,14 +63,14 @@ def mock_state():
     """Pre-configure app.core.state with common test mocks."""
     from app.core import state
 
-    state.info_cache = {}
-    state.link_cache = {}
-    state.cancel_cache = {}
+    state.info_cache = AsyncMockCache()
+    state.link_cache = AsyncMockCache()
+    state.cancel_cache = AsyncMockCache()
     state.limiter = MagicMock()
-    state.limiter.allow_user.return_value = True
-    state.limiter.allow_chat.return_value = True
-    state.limiter.allow_ip.return_value = True
-    state.limiter.allow_token.return_value = True
+    state.limiter.allow_user = AsyncMock(return_value=True)
+    state.limiter.allow_chat = AsyncMock(return_value=True)
+    state.limiter.allow_ip = AsyncMock(return_value=True)
+    state.limiter.allow_token = AsyncMock(return_value=True)
     state.parsing_sem = MagicMock()
     state.parsing_sem.__aenter__ = AsyncMock(return_value=None)
     state.parsing_sem.__aexit__ = AsyncMock(return_value=None)

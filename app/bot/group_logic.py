@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import os
-import uuid
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
@@ -25,7 +24,9 @@ GROUP_VIDEO_FORMAT = (
 )
 
 
-async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def handle_group_message(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """
     Passively monitors group messages for supported links.
     """
@@ -45,21 +46,19 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     user = update.effective_user
     chat = update.effective_chat
     assert user is not None and chat is not None
-    if not state.limiter.allow_user(user.id) or not state.limiter.allow_chat(
-        chat.id
-    ):
+    if not state.limiter.allow_user(user.id) or not state.limiter.allow_chat(chat.id):
         return
 
     # Send "Typing..." or "Uploading video..." action
-    await context.bot.send_chat_action(
-        chat_id=chat.id, action=ChatAction.UPLOAD_VIDEO
-    )
+    await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.UPLOAD_VIDEO)
 
     # Initial status message
     status_msg = await update.message.reply_text("🔎")
 
     # Generate token for this operation (used for file cache & callbacks)
-    token = uuid.uuid4().hex
+    import secrets
+
+    token = secrets.token_urlsafe(8)
 
     # Tag user in caption
     if user.username:
@@ -71,7 +70,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     is_tiktok_url = _is_tiktok(url)
     is_slideshow = False
     tiktok_auth_error = False  # age-restricted content needing TikWM fallback
-    info_json_path = None      # cached extraction JSON for --load-info-json reuse
+    info_json_path = None  # cached extraction JSON for --load-info-json reuse
 
     if is_tiktok_url:
         # Fast path: /photo/ URLs are always slideshows (no extraction needed)
@@ -82,8 +81,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                 info = await asyncio.to_thread(state.ytdlp.extract, url, True)
                 raw_formats = info.get("formats", [])
                 has_video = any(
-                    fmt.get("vcodec") not in (None, "none")
-                    for fmt in raw_formats
+                    fmt.get("vcodec") not in (None, "none") for fmt in raw_formats
                 )
                 is_slideshow = not has_video
 
@@ -92,6 +90,7 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
                     import json as _json
                     import uuid as _uuid
                     from app.core.config import TEMP_DIR
+
                     try:
                         info_json_path = os.path.join(
                             TEMP_DIR, f"info_{_uuid.uuid4().hex}.json"
@@ -116,14 +115,23 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     # TikTok auth-restricted video → bypass slideshow UI, go straight to TikWM
     if tiktok_auth_error:
         from app.services.tikwm import TikWMService
+
         await status_msg.edit_text(Texts.GROUP_SENDING)
         tikwm_path, tikwm_err = await TikWMService.download_video(url)
         if tikwm_path:
             caption = f"👤 {user_tag}"
-            gif_token = uuid.uuid4().hex
+            import secrets
+
+            gif_token = secrets.token_urlsafe(8)
             state.file_cache[gif_token] = tikwm_path
             kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{gif_token}")]]
+                [
+                    [
+                        InlineKeyboardButton(
+                            "🎬 Send GIF", callback_data=f"gif|{gif_token}"
+                        )
+                    ]
+                ]
             )
             try:
                 await context.bot.send_chat_action(
@@ -132,9 +140,14 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception:
                 pass
             success = await MediaSender.send_file(
-                context.bot, chat.id, tikwm_path,
-                is_audio=False, is_gif=False,
-                caption=caption, parse_mode="HTML", reply_markup=kb,
+                context.bot,
+                chat.id,
+                tikwm_path,
+                is_audio=False,
+                is_gif=False,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=kb,
             )
             if success:
                 try:
@@ -158,12 +171,18 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             "original_msg_id": update.message.message_id,
         }
 
-        kb = InlineKeyboardMarkup([
+        kb = InlineKeyboardMarkup(
             [
-                InlineKeyboardButton("📸 Альбом", callback_data=f"grpslide|{token}|photo"),
-                InlineKeyboardButton("🎬 Видео", callback_data=f"grpslide|{token}|video"),
+                [
+                    InlineKeyboardButton(
+                        "📸 Альбом", callback_data=f"grpslide|{token}|photo"
+                    ),
+                    InlineKeyboardButton(
+                        "🎬 Видео", callback_data=f"grpslide|{token}|video"
+                    ),
+                ]
             ]
-        ])
+        )
         await status_msg.edit_text(Texts.GROUP_SLIDESHOW_CHOICE, reply_markup=kb)
         return
 
@@ -238,7 +257,9 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
     # File remains in state.file_cache (TTLCache) for GIF conversion reuse
 
 
-async def on_group_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def on_group_slideshow(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Handles group slideshow format choice (album or video) callback."""
     q = update.callback_query
     assert q is not None
@@ -250,7 +271,9 @@ async def on_group_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         _, token, mode = q.data.split("|", 2)
     except (ValueError, AttributeError) as e:
-        logger.error("Invalid callback data in on_group_slideshow", extra={"error": str(e)})
+        logger.error(
+            "Invalid callback data in on_group_slideshow", extra={"error": str(e)}
+        )
         return
 
     payload = state.link_cache.get(token)
@@ -279,6 +302,7 @@ async def on_group_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if error or not result:
         # Slideshow download failed — try TikWM as video fallback
         from app.services.tikwm import TikWMService
+
         logger.info("Slideshow failed in group, trying TikWM fallback: %s", page_url)
         tikwm_path, tikwm_err = await TikWMService.download_video(page_url)
         if tikwm_path:
@@ -292,15 +316,28 @@ async def on_group_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 pass
 
             caption = f"👤 {user_tag}"
-            gif_token = uuid.uuid4().hex
+            import secrets
+
+            gif_token = secrets.token_urlsafe(8)
             state.file_cache[gif_token] = tikwm_path
             kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{gif_token}")]]
+                [
+                    [
+                        InlineKeyboardButton(
+                            "🎬 Send GIF", callback_data=f"gif|{gif_token}"
+                        )
+                    ]
+                ]
             )
             success = await MediaSender.send_file(
-                context.bot, chat_id, tikwm_path,
-                is_audio=False, is_gif=False,
-                caption=caption, parse_mode="HTML", reply_markup=kb,
+                context.bot,
+                chat_id,
+                tikwm_path,
+                is_audio=False,
+                is_gif=False,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=kb,
             )
             if success:
                 try:
@@ -329,8 +366,11 @@ async def on_group_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 pass
 
             success = await MediaSender.send_slideshow_photos(
-                context.bot, chat_id, result.images,
-                caption=caption, parse_mode="HTML",
+                context.bot,
+                chat_id,
+                result.images,
+                caption=caption,
+                parse_mode="HTML",
             )
             if success:
                 try:
@@ -344,9 +384,7 @@ async def on_group_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE)
             # Convert to video
             await q.edit_message_text(Texts.SLIDESHOW_CONVERTING)
 
-            video_path = await MediaSender.images_to_video(
-                result.images, result.audio
-            )
+            video_path = await MediaSender.images_to_video(result.images, result.audio)
             if not video_path:
                 await q.edit_message_text(Texts.SLIDESHOW_ERROR)
                 return
@@ -359,15 +397,28 @@ async def on_group_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE)
             except Exception:
                 pass
 
-            gif_token = uuid.uuid4().hex
+            import secrets
+
+            gif_token = secrets.token_urlsafe(8)
             state.file_cache[gif_token] = video_path
             kb = InlineKeyboardMarkup(
-                [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{gif_token}")]]
+                [
+                    [
+                        InlineKeyboardButton(
+                            "🎬 Send GIF", callback_data=f"gif|{gif_token}"
+                        )
+                    ]
+                ]
             )
             success = await MediaSender.send_file(
-                context.bot, chat_id, video_path,
-                is_audio=False, is_gif=False,
-                caption=caption, parse_mode="HTML", reply_markup=kb,
+                context.bot,
+                chat_id,
+                video_path,
+                is_audio=False,
+                is_gif=False,
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=kb,
             )
             if success:
                 try:

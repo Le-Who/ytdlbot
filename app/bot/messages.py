@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import html
-import uuid
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
@@ -36,19 +35,23 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     text = url
 
-    if not state.limiter.allow_user(user.id) or not state.limiter.allow_chat(
-        chat.id
-    ):
+    if not state.limiter.allow_user(user.id) or not state.limiter.allow_chat(chat.id):
         await msg.reply_text(Texts.RATE_LIMITED)
         return
 
-    await context.bot.send_chat_action(
-        chat_id=chat.id, action=ChatAction.TYPING
-    )
+    await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
 
-    parse_token = uuid.uuid4().hex[:8]
+    import secrets
+
+    parse_token = secrets.token_urlsafe(6)
     kb_cancel = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("❌ Отмена", callback_data=f"cancel_parse|{parse_token}")]]
+        [
+            [
+                InlineKeyboardButton(
+                    "❌ Отмена", callback_data=f"cancel_parse|{parse_token}"
+                )
+            ]
+        ]
     )
     status_msg = await msg.reply_text(Texts.SEARCHING, reply_markup=kb_cancel)
     state.cancel_cache.pop(parse_token, None)
@@ -56,7 +59,15 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     cached = state.info_cache.get(text)
     if cached:
         logger.info("Cache hit", extra={"url": text})
-        title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url = cached
+        (
+            title,
+            formats,
+            special_format,
+            duration,
+            is_slideshow,
+            info_json_path,
+            thumbnail_url,
+        ) = cached
     else:
         if text in state.inflight_parsing:
             logger.info("Waiting for inflight parse", extra={"url": text})
@@ -69,7 +80,15 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 return
             cached = state.info_cache.get(text)
             if cached:
-                title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url = cached
+                (
+                    title,
+                    formats,
+                    special_format,
+                    duration,
+                    is_slideshow,
+                    info_json_path,
+                    thumbnail_url,
+                ) = cached
             else:
                 await status_msg.edit_text(Texts.FETCH_ERROR_RETRY)
                 return
@@ -81,6 +100,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     async with state.parsing_sem:
                         import time as _time
                         from app.core.metrics import metrics as _m
+
                         _ext_start = _time.monotonic()
                         (
                             title,
@@ -94,12 +114,15 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                             state.ytdlp_executor, state.ytdlp.list_formats, text
                         )
                         _platform = (
-                            "youtube" if "youtu" in text
-                            else "tiktok" if "tiktok" in text
+                            "youtube"
+                            if "youtu" in text
+                            else "tiktok"
+                            if "tiktok" in text
                             else "other"
                         )
                         _m.extraction_duration.observe(
-                            _time.monotonic() - _ext_start, platform=_platform,
+                            _time.monotonic() - _ext_start,
+                            platform=_platform,
                         )
 
                 # Check if user cancelled while parsing
@@ -108,12 +131,22 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     await status_msg.edit_text(Texts.CANCELLED)
                     return
 
-                state.info_cache[text] = (title, formats, special_format, duration, is_slideshow, info_json_path, thumbnail_url)
+                state.info_cache[text] = (
+                    title,
+                    formats,
+                    special_format,
+                    duration,
+                    is_slideshow,
+                    info_json_path,
+                    thumbnail_url,
+                )
             except asyncio.TimeoutError:
                 await status_msg.edit_text(Texts.TIMEOUT_UNAVAILABLE)
                 return
             except DirectDownloadReady as dd:
-                await status_msg.edit_text("📦 Загрузка через альтернативный источник...")
+                await status_msg.edit_text(
+                    "📦 Загрузка через альтернативный источник..."
+                )
                 sent = await TelegramSender.send_file(
                     bot=context.bot,
                     chat_id=chat.id,
@@ -125,7 +158,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 if sent:
                     await status_msg.delete()
                 else:
-                    await status_msg.edit_text("❌ Не удалось отправить видео (файл слишком большой?)")
+                    await status_msg.edit_text(
+                        "❌ Не удалось отправить видео (файл слишком большой?)"
+                    )
                 return
             except AccessDeniedError:
                 await status_msg.edit_text(Texts.ACCESS_DENIED)
@@ -145,7 +180,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 return
             except Exception as e:
                 logger.error("Parse error", extra={"error": str(e)}, exc_info=True)
-                await status_msg.edit_text(Texts.GENERIC_ERROR.format(detail=str(e)[:150]))
+                await status_msg.edit_text(
+                    Texts.GENERIC_ERROR.format(detail=str(e)[:150])
+                )
                 return
             finally:
                 event.set()

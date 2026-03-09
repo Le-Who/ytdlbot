@@ -1,6 +1,5 @@
 import json
 import os
-import uuid
 import asyncio
 import logging
 import html
@@ -242,7 +241,9 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _safe_edit_text(q, Texts.DATA_EXPIRED_RESEND)
         return
 
-    token = uuid.uuid4().hex
+    import secrets
+
+    token = secrets.token_urlsafe(8)
     state.link_cache[token] = {
         "page_url": data["page_url"],
         "format_id": format_id,

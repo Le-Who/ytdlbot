@@ -8,6 +8,7 @@ load_dotenv()
 
 # --- КОНФИГУРАЦИЯ ---
 TEMP_DIR = os.getenv("TMPDIR", tempfile.gettempdir())
+os.makedirs(TEMP_DIR, exist_ok=True)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()

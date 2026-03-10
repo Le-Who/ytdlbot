@@ -3,6 +3,7 @@ import uuid
 import asyncio
 import logging
 import html
+from typing import Any
 from telegram import (
     Update,
     Message,
@@ -40,6 +41,22 @@ __all__ = [
 ]
 
 logger = logging.getLogger("app.bot.callbacks")
+
+
+async def _edit_or_reply(
+    q: Any, text: str, reply_markup: Any = None, **kwargs: Any
+) -> None:
+    """Safely edit a message, falling back to reply_text for photo messages."""
+    try:
+        await q.edit_message_text(text, reply_markup=reply_markup, **kwargs)
+    except Exception:
+        # Photo messages can't be edited to text; delete + reply instead
+        try:
+            msg = q.message
+            await msg.delete()
+            await msg.chat.send_message(text, reply_markup=reply_markup, **kwargs)
+        except Exception as e:
+            logger.warning("_edit_or_reply failed completely: %s", e)
 
 
 async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -144,7 +161,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     data = context.user_data
     assert data is not None
     if not data.get("page_url"):
-        await q.edit_message_text(Texts.DATA_EXPIRED_RESEND)
+        await _edit_or_reply(q, Texts.DATA_EXPIRED_RESEND)
         return
 
     token = uuid.uuid4().hex
@@ -186,7 +203,8 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     quality_str = f" ({' • '.join(quality_parts)})" if quality_parts else ""
 
-    await q.edit_message_text(
+    await _edit_or_reply(
+        q,
         Texts.READY_LINK.format(
             quality=quality_str, ttl=LINK_TTL_MINUTES, link=html.escape(dl_link)
         ),
@@ -241,7 +259,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     set_correlation_id(token)
     payload = await state.link_cache.get(token)
     if not payload:
-        await q.edit_message_text(Texts.LINK_EXPIRED)
+        await _edit_or_reply(q, Texts.LINK_EXPIRED)
         return
 
     dl_link = f"{BASE_URL}/dl/{token}"
@@ -394,7 +412,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         payload = await state.link_cache.get(parse_token)
         if not payload or not getattr(payload, "cobalt_json", None):
-            await q.edit_message_text(Texts.LINK_EXPIRED)
+            await _edit_or_reply(q, Texts.LINK_EXPIRED)
             return
 
         from app.services.cobalt import CobaltResult

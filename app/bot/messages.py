@@ -73,6 +73,12 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 formats = []
                 special_format = None
                 duration = "—"
+            else:
+                logger.info(
+                    "Cobalt returned non-success status: %s (%s), falling back to yt-dlp",
+                    cobalt_res.status,
+                    cobalt_res.error_message,
+                )
         except Exception as e:
             logger.warning("Cobalt failed, falling back: %s", e)
 

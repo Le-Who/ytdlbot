@@ -35,6 +35,7 @@ All notable changes to this project will be documented in this file.
   - **Structured Error Mapping**: Implemented `map_ytdlp_error` with regex heuristics to predictably convert brittle string-based `stderr` outputs into structured exception classes (`AccessDeniedError`, `LiveStreamError`, etc.).
   - **Decoupled Orchestration**: Lifted platform-specific fallback routing out of atomic download services (`VideoDownloader`) into the higher-level `DownloadOrchestrator`.
   - **Robust Subprocess Cancellation**: Hardened `run_subprocess` to support clean graceful SIGTERM signals falling back to SIGKILL, handling zombie processes safely across POSIX and Windows endpoints.
+- **Telegram Event Loop**: Bound missing `apislide` regex routing rules to the `main.py` application builder, resolving a bug where TikTok gallery format buttons infinitely hung after clicking.
 - **Persistent State Backend Protocol**: Replaced brittle `TTLCache` in-memory single-point-of-failures with an asynchronous `StateStorage` protocol.
 - **Redis Integration**: Implemented `RedisStorage` using `msgspec` for blazing-fast JSON serialization to persist app caches across restarts. This enables zero-downtime deployments. Memory-based fallback implemented solely via `MemoryStorage`.
 - **Redis Rate Limiter**: Introduced `RedisTokenBucketLimiter` implementing atomic Lua scripts for accurate, distributed rate limiting, replacing local in-memory token buckets.

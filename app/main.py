@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     )
     bot_app.add_handler(
         CallbackQueryHandler(
-            group_logic.on_group_slideshow, pattern=r"^(grpslide|cbgrpslide)\|"
+            group_logic.on_group_slideshow, pattern=r"^(grpslide|cbgrpslide|apigrpslide)\|"
         )
     )
 

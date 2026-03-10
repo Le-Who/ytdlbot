@@ -458,9 +458,10 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if not page_url:
             await _edit_or_reply(q, Texts.DATA_EXPIRED_RESEND)
             return
-
-    is_photo_mode = mode == SLIDESHOW_PHOTO_FORMAT_ID
-
+    if is_api:
+        is_photo_mode = mode == "photo"
+    else:
+        is_photo_mode = mode == SLIDESHOW_PHOTO_FORMAT_ID
     if state.tasks_sem.locked():
         await _edit_or_reply(q, Texts.QUEUE_FULL)
         return

@@ -1,6 +1,5 @@
 import asyncio
 import logging
-import io
 import uuid
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
@@ -73,21 +72,38 @@ async def handle_group_message(
     is_slideshow = False
     tiktok_auth_error = False
     info_json_path = None  # cached extraction JSON for --load-info-json reuse
-    is_cobalt_success = False
-    cobalt_res = None
+    is_tiktok_api_success = False
+    tiktok_api_res = None
+    api_source = None
 
     if is_tiktok_url:
-        from app.services.cobalt import CobaltService
+        from app.services.tikwm import TikWMService
+        from app.core.config import ENABLE_COBALT_TIKTOK
 
         try:
-            cobalt_res = await CobaltService.process(url)
-            if cobalt_res.status in ("tunnel", "redirect", "picker"):
-                is_cobalt_success = True
-                is_slideshow = cobalt_res.is_slideshow
+            tikwm_res = await TikWMService.process(url)
+            if tikwm_res.status in ("video", "picker"):
+                is_tiktok_api_success = True
+                tiktok_api_res = tikwm_res
+                api_source = "tikwm"
+                is_slideshow = tikwm_res.is_slideshow
         except Exception as exc:
-            logger.warning("Cobalt failed in group: %s", exc)
+            logger.warning("TikWM failed in group: %s", exc)
 
-        if not is_cobalt_success:
+        if not is_tiktok_api_success and ENABLE_COBALT_TIKTOK:
+            from app.services.cobalt import CobaltService
+
+            try:
+                cobalt_res = await CobaltService.process(url)
+                if cobalt_res.status in ("tunnel", "redirect", "picker"):
+                    is_tiktok_api_success = True
+                    tiktok_api_res = cobalt_res
+                    api_source = "cobalt"
+                    is_slideshow = cobalt_res.is_slideshow
+            except Exception as exc:
+                logger.warning("Cobalt failed in group: %s", exc)
+
+        if not is_tiktok_api_success:
             try:
                 result = await state.ytdlp.list_formats(url)
                 is_slideshow = result.is_slideshow
@@ -125,13 +141,14 @@ async def handle_group_message(
                 user_tag=user_tag,
                 chat_id=chat.id,
                 original_msg_id=update.message.message_id,
-                cobalt_json=cobalt_res.__dict__
-                if is_cobalt_success and cobalt_res
+                api_source=api_source,
+                api_json=tiktok_api_res.__dict__
+                if is_tiktok_api_success and tiktok_api_res
                 else None,
             ),
         )
 
-        prefix = "cbgrpslide" if is_cobalt_success else "grpslide"
+        prefix = "apigrpslide" if is_tiktok_api_success else "grpslide"
         kb = InlineKeyboardMarkup(
             [
                 [
@@ -165,11 +182,22 @@ async def handle_group_message(
 
     await state.tasks_sem.acquire()
     try:
-        if is_cobalt_success and cobalt_res and not is_slideshow and cobalt_res.url:
-            file_path: str | io.BytesIO | None = await CobaltService.download_file(
-                cobalt_res.url, "mp4"
-            )
-            error = None if file_path else "⚠️ Ошибка загрузки видео из Cobalt."
+        if (
+            is_tiktok_api_success
+            and tiktok_api_res
+            and not is_slideshow
+            and tiktok_api_res.url
+        ):
+            file_path = None
+            if api_source == "tikwm":
+                from app.services.tikwm import TikWMService
+
+                file_path, err = await TikWMService.download_video(url)
+            elif api_source == "cobalt":
+                from app.services.cobalt import CobaltService
+
+                file_path = await CobaltService.download_file(tiktok_api_res.url, "mp4")
+            error = None if file_path else "⚠️ Ошибка загрузки видео."
         else:
             file_path, error = await MediaSender.download_video(
                 page_url=url,
@@ -262,7 +290,7 @@ async def on_group_slideshow(
     chat_id = payload.chat_id
     original_msg_id = payload.original_msg_id
     is_photo_mode = mode == "photo"
-    is_cobalt = prefix == "cbgrpslide"
+    is_api = prefix == "apigrpslide"
 
     try:
         await q.edit_message_reply_markup(None)
@@ -271,18 +299,29 @@ async def on_group_slideshow(
 
     await q.edit_message_text(Texts.SLIDESHOW_DOWNLOADING)
 
-    if is_cobalt and payload.cobalt_json:
-        from app.services.cobalt import CobaltResult, CobaltService
+    if is_api and payload.api_json:
         from app.services.gallery_dl.service import SlideshowResult
 
-        cobalt_res = CobaltResult(**payload.cobalt_json)
-        image_paths, audio_path = await CobaltService.download_slideshow(cobalt_res)
+        image_paths = []
+        audio_path = None
+        error = None
+
+        if payload.api_source == "tikwm":
+            from app.services.tikwm import TikWMResult, TikWMService
+
+            res = TikWMResult(**payload.api_json)
+            image_paths, audio_path = await TikWMService.download_slideshow(res)
+        elif payload.api_source == "cobalt":
+            from app.services.cobalt import CobaltResult, CobaltService
+
+            res = CobaltResult(**payload.api_json)
+            image_paths, audio_path = await CobaltService.download_slideshow(res)
+
         if image_paths:
             result = SlideshowResult(images=image_paths, audio=audio_path)
-            error = None
         else:
             result = None
-            error = "⚠️ Ошибка загрузки слайдшоу из Cobalt."
+            error = "⚠️ Ошибка загрузки слайдшоу из внешнего API."
     else:
         result, error = await MediaSender.download_slideshow(page_url)
 

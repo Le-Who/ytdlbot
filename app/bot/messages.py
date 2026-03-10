@@ -56,33 +56,61 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await state.cancel_cache.delete(parse_token)
 
     is_tiktok_url = "tiktok" in text.lower()
-    is_cobalt_success = False
-    cobalt_res = None
+    is_tiktok_api_success = False
+    is_slideshow = False
+    tiktok_api_res = None
+    title = ""
+    duration = "—"
+    special_format = None
+    formats = []
+    thumbnail_url = None
+    info_json_path = None
+    api_source = None  # 'tikwm' or 'cobalt'
 
     if is_tiktok_url:
-        from app.services.cobalt import CobaltService
+        from app.services.tikwm import TikWMService
+        from app.core.config import ENABLE_COBALT_TIKTOK
 
+        # Try TikWM first
         try:
-            cobalt_res = await CobaltService.process(text)
-            if cobalt_res.status in ("tunnel", "redirect", "picker"):
-                is_cobalt_success = True
-                title = "TikTok"
-                is_slideshow = cobalt_res.is_slideshow
-                info_json_path = None
-                thumbnail_url = None
-                formats = []
-                special_format = None
-                duration = "—"
+            tikwm_res = await TikWMService.process(text)
+            if tikwm_res.status in ("video", "picker"):
+                is_tiktok_api_success = True
+                tiktok_api_res = tikwm_res
+                api_source = "tikwm"
+                title = tikwm_res.title or "TikTok"
+                is_slideshow = tikwm_res.is_slideshow
             else:
                 logger.info(
-                    "Cobalt returned non-success status: %s (%s), falling back to yt-dlp",
-                    cobalt_res.status,
-                    cobalt_res.error_message,
+                    "TikWM returned non-success status: %s (%s), falling back",
+                    tikwm_res.status,
+                    tikwm_res.error_message,
                 )
         except Exception as e:
-            logger.warning("Cobalt failed, falling back: %s", e)
+            logger.warning("TikWM failed, falling back: %s", e)
 
-    if not is_cobalt_success:
+        # Try Cobalt if enabled and TikWM failed
+        if not is_tiktok_api_success and ENABLE_COBALT_TIKTOK:
+            from app.services.cobalt import CobaltService
+
+            try:
+                cobalt_res = await CobaltService.process(text)
+                if cobalt_res.status in ("tunnel", "redirect", "picker"):
+                    is_tiktok_api_success = True
+                    tiktok_api_res = cobalt_res
+                    api_source = "cobalt"
+                    title = "TikTok"
+                    is_slideshow = cobalt_res.is_slideshow
+                else:
+                    logger.info(
+                        "Cobalt returned non-success status: %s (%s), falling back to yt-dlp",
+                        cobalt_res.status,
+                        cobalt_res.error_message,
+                    )
+            except Exception as e:
+                logger.warning("Cobalt failed, falling back: %s", e)
+
+    if not is_tiktok_api_success:
         cached = await state.info_cache.get(text)
         if cached:
             logger.info("Cache hit", extra={"url": text})
@@ -194,8 +222,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     data["thumbnail_url"] = thumbnail_url
 
     if is_slideshow:
-        # Save specific cobalt state for the slideshow
-        if is_cobalt_success:
+        # Save specific api state for the slideshow
+        if is_tiktok_api_success:
             from app.core.models import DownloadContext
 
             await state.link_cache.set(
@@ -205,18 +233,19 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     user_tag=user.username or "",  # using callback logic
                     chat_id=chat.id,
                     original_msg_id=status_msg.message_id,
-                    cobalt_json=cobalt_res.__dict__,  # Will restore this in callbacks.py
+                    api_source=api_source,
+                    api_json=tiktok_api_res.__dict__,  # Will restore this in callbacks.py
                 ),
             )
-            # Override callback_data for Cobalt mode slideshows
+            # Override callback_data for API mode slideshows
             reply_markup = InlineKeyboardMarkup(
                 [
                     [
                         InlineKeyboardButton(
-                            "📸 Альбом", callback_data=f"cbslide|{parse_token}|photo"
+                            "📸 Альбом", callback_data=f"apislide|{parse_token}|photo"
                         ),
                         InlineKeyboardButton(
-                            "🎬 Видео", callback_data=f"cbslide|{parse_token}|video"
+                            "🎬 Видео", callback_data=f"apislide|{parse_token}|video"
                         ),
                     ]
                 ]
@@ -229,21 +258,29 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             reply_markup=reply_markup,
             parse_mode="HTML",
         )
-    elif is_cobalt_success and cobalt_res and cobalt_res.url:
-        # Direct Cobalt video! Download and send immediately
+    elif is_tiktok_api_success and tiktok_api_res and tiktok_api_res.url:
+        # Direct API video! Download and send immediately
         await status_msg.edit_text("⏳ Загрузка видео...")
-        from app.services.cobalt import CobaltService
-        from app.services.sender import TelegramSender
+        file_path = None
+        if api_source == "tikwm":
+            from app.services.tikwm import TikWMService
 
-        file_path = await CobaltService.download_file(cobalt_res.url, "mp4")
+            file_path, err = await TikWMService.download_video(text)
+        elif api_source == "cobalt":
+            from app.services.cobalt import CobaltService
+
+            file_path = await CobaltService.download_file(tiktok_api_res.url, "mp4")
+
         if not file_path:
-            await status_msg.edit_text("⚠️ Ошибка загрузки видео из Cobalt.")
+            await status_msg.edit_text("⚠️ Ошибка загрузки видео.")
             return
 
         kb = InlineKeyboardMarkup(
             [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{parse_token}")]]
         )
         state.file_cache[parse_token] = file_path  # for GIF conversions
+
+        from app.services.sender import TelegramSender
 
         success = await TelegramSender.send_file(
             context.bot,

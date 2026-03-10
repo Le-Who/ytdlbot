@@ -2,7 +2,6 @@
 
 import unittest
 from unittest.mock import patch, MagicMock, AsyncMock
-import os
 
 from app.services.converter import MediaConverter
 

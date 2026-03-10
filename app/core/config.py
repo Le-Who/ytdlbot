@@ -56,6 +56,7 @@ TIKTOK_PROXY: Optional[str] = os.getenv("TIKTOK_PROXY", "").strip() or None
 COBALT_API_URLS = [
     url.strip() for url in os.getenv("COBALT_API_URL", "").split(",") if url.strip()
 ]
+ENABLE_COBALT_TIKTOK = os.getenv("ENABLE_COBALT_TIKTOK", "0").strip() == "1"
 
 COBALT_API_KEY = os.getenv("COBALT_API_KEY", "")
 if not BOT_TOKEN:

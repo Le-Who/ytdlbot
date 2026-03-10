@@ -31,7 +31,7 @@ class TestSafeRemove(unittest.TestCase):
 
     def test_none_noop(self):
         """None path is a noop."""
-        safe_remove(None)  # type: ignore  — Should not raise
+        safe_remove(None)  # type: ignore
 
 
 class TestIsSupportedUrl(unittest.TestCase):

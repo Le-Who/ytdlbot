@@ -168,7 +168,7 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("app.services.cobalt.AsyncSession", return_value=mock_session),
-            patch("app.services.cobalt.open", unittest.mock.mock_open()) as m_open,
+            patch("app.services.cobalt.open", unittest.mock.mock_open()),
         ):
             images, audio = await CobaltService.download_slideshow(res)
 

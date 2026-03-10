@@ -402,22 +402,32 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         logger.error("Invalid callback data in on_slideshow", extra={"error": str(e)})
         return
 
-    is_cobalt = prefix == "cbslide"
+    is_api = prefix == "apislide"
 
-    if is_cobalt:
+    if is_api:
         try:
             parse_token, mode = rest.split("|", 1)
         except ValueError:
             return
 
         payload = await state.link_cache.get(parse_token)
-        if not payload or not getattr(payload, "cobalt_json", None):
+        if not payload or not getattr(payload, "api_json", None):
             await _edit_or_reply(q, Texts.LINK_EXPIRED)
             return
 
-        from app.services.cobalt import CobaltResult
+        api_source = getattr(payload, "api_source", None)
+        if api_source == "tikwm":
+            from app.services.tikwm import TikWMResult
 
-        cobalt_res = CobaltResult(**payload.cobalt_json)
+            api_res = TikWMResult(**payload.api_json)
+        elif api_source == "cobalt":
+            from app.services.cobalt import CobaltResult
+
+            api_res = CobaltResult(**payload.api_json)
+        else:
+            await _edit_or_reply(q, "⚠️ Неизвестный API источник.")
+            return
+
         page_url = payload.page_url
     else:
         mode = rest
@@ -438,17 +448,26 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         await q.edit_message_text(Texts.SLIDESHOW_DOWNLOADING)
 
-        if is_cobalt:
-            from app.services.cobalt import CobaltService
+        if is_api:
             from app.services.gallery_dl.service import SlideshowResult
 
-            image_paths, audio_path = await CobaltService.download_slideshow(cobalt_res)
+            if api_source == "tikwm":
+                from app.services.tikwm import TikWMService
+
+                image_paths, audio_path = await TikWMService.download_slideshow(api_res)
+            elif api_source == "cobalt":
+                from app.services.cobalt import CobaltService
+
+                image_paths, audio_path = await CobaltService.download_slideshow(
+                    api_res
+                )
+
             if image_paths:
                 result = SlideshowResult(images=image_paths, audio=audio_path)
                 error = None
             else:
                 result = None
-                error = "⚠️ Ошибка загрузки слайдшоу из Cobalt."
+                error = "⚠️ Ошибка загрузки слайдшоу из внешнего API."
         else:
             result, error = await MediaSender.download_slideshow(page_url)
 

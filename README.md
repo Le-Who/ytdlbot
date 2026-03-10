@@ -33,7 +33,7 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 ## Architecture
 
 - **Web Layer**: FastAPI serves HTTP endpoints (health checks, Prometheus metrics, and chunked video streams) and handles incoming Telegram Webhooks.
-- **Telegram Logic**: `python-telegram-bot` processes updates. Callback handlers are uniquely "thin", dispatching tasks immediately to the orchestrator.
+- **Telegram Logic**: `python-telegram-bot` processes updates concurrently (`concurrent_updates=True`). The webhook endpoint uses fire-and-forget `asyncio.create_task()` dispatch, returning HTTP 200 immediately to Telegram so update delivery is never blocked by slow handlers.
 - **Orchestration Layer**: `DownloadOrchestrator` centralizes all download lifecycles, safely encapsulating complex rules like concurrency queues (`asyncio.Semaphore`), file-size checks, and fallback mechanisms.
 - **Data Fetchers**: `TikWMService` acts as the primary API for ultra-fast, watermark-free TikTok extraction. `YtDlpService` acts as the primary async CLI wrapper for YouTube and standard sites, while `GalleryDlService` and `CobaltService` (optional) handle deep fallback resolution.
 - **Media Processing**: `FFmpeg` is utilized exclusively for post-processing tasks (GIF conversion, slideshow building).

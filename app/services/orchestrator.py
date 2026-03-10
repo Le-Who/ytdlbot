@@ -110,16 +110,15 @@ class DownloadOrchestrator:
 
         await state.tasks_sem.acquire()
 
-        if not size_allowed(fmt_size, target="telegram"):
-            state.tasks_sem.release()
-            mb = (fmt_size or 0) / (1024 * 1024)
-            await update_ui(
-                Texts.FILE_TOO_BIG.format(size_mb=mb, max_mb=MAX_TG_UPLOAD_MB),
-                kb_error,
-            )
-            return False
-
         try:
+            if not size_allowed(fmt_size, target="telegram"):
+                mb = (fmt_size or 0) / (1024 * 1024)
+                await update_ui(
+                    Texts.FILE_TOO_BIG.format(size_mb=mb, max_mb=MAX_TG_UPLOAD_MB),
+                    kb_error,
+                )
+                return False
+
             await update_ui(Texts.STARTING_DOWNLOAD, None)
             try:
                 await bot.send_chat_action(

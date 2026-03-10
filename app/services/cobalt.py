@@ -10,7 +10,7 @@ from typing import Optional, List, Dict, Any
 
 from curl_cffi.requests import AsyncSession, Response
 
-from app.core.config import COBALT_API_URL, COBALT_API_KEY
+from app.core.config import COBALT_API_URLS, COBALT_API_KEY
 
 __all__ = ["CobaltService", "CobaltResult", "CobaltPickerItem"]
 
@@ -52,24 +52,24 @@ class CobaltService:
     """Interacts with the Cobalt API to resolve media URLs."""
 
     @staticmethod
-    def _get_headers() -> Dict[str, str]:
+    def _get_headers(api_base: str) -> Dict[str, str]:
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
             "User-Agent": "ytdlbot/2.0 (FastAPI)",
         }
-        if COBALT_API_KEY:
+        # Do not send the API key to the public instance
+        if COBALT_API_KEY and "api.cobalt.tools" not in api_base.lower():
             headers["Authorization"] = f"Api-Key {COBALT_API_KEY}"
         return headers
 
     @staticmethod
     async def process(url: str, video_quality: str = "1080") -> CobaltResult:
         """
-        Processes a URL via the Cobalt API.
+        Processes a URL via the Cobalt API using configured instances sequentially.
 
-        Returns a CobaltResult object. If Cobalt fails, returns status='error'.
+        Returns a CobaltResult object. If Cobalt fails across all instances, returns status='error'.
         """
-        api_url = f"{COBALT_API_URL.rstrip('/')}/"
         payload = {
             "url": url,
             "videoQuality": video_quality,
@@ -77,75 +77,89 @@ class CobaltService:
         }
 
         last_error: Optional[str] = None
-        for attempt in range(MAX_RETRIES):
-            try:
-                async with AsyncSession() as session:
-                    resp: Response = await session.post(
-                        api_url,
-                        json=payload,
-                        headers=CobaltService._get_headers(),
-                        timeout=TIMEOUT,
-                    )
 
-                    if resp.status_code >= 500:
-                        raise Exception(f"Server error {resp.status_code}")
+        for api_base in COBALT_API_URLS:
+            api_url = f"{api_base.rstrip('/')}/"
 
-                    data: Dict[str, Any] = resp.json()
-
-                    if "status" not in data:
-                        raise Exception("Invalid response: missing 'status' field")
-
-                    status = data["status"]
-
-                    if status == "error":
-                        # Cobalt returned an explicit error
-                        err_code = data.get("error", {}).get("code", "unknown_error")
-                        return CobaltResult(
-                            status="error", error_message=f"Cobalt error: {err_code}"
+            for attempt in range(MAX_RETRIES):
+                try:
+                    async with AsyncSession() as session:
+                        resp: Response = await session.post(
+                            api_url,
+                            json=payload,
+                            headers=CobaltService._get_headers(api_base),
+                            timeout=TIMEOUT,
                         )
 
-                    if status in ("tunnel", "redirect"):
-                        return CobaltResult(
-                            status=status,
-                            url=data.get("url"),
-                            filename=data.get("filename"),
-                        )
+                        if resp.status_code >= 500:
+                            raise Exception(f"Server error {resp.status_code}")
 
-                    if status == "picker":
-                        items = []
-                        for item in data.get("picker", []):
-                            items.append(
-                                CobaltPickerItem(
-                                    type=item.get("type", "unknown"),
-                                    url=item.get("url", ""),
-                                    thumb=item.get("thumb"),
-                                )
+                        data: Dict[str, Any] = resp.json()
+
+                        if "status" not in data:
+                            raise Exception("Invalid response: missing 'status' field")
+
+                        status = data["status"]
+
+                        if status == "error":
+                            # Cobalt returned an explicit error
+                            err_code = data.get("error", {}).get(
+                                "code", "unknown_error"
                             )
+                            return CobaltResult(
+                                status="error",
+                                error_message=f"Cobalt error: {err_code}",
+                            )
+
+                        if status in ("tunnel", "redirect"):
+                            return CobaltResult(
+                                status=status,
+                                url=data.get("url"),
+                                filename=data.get("filename"),
+                            )
+
+                        if status == "picker":
+                            items = []
+                            for item in data.get("picker", []):
+                                items.append(
+                                    CobaltPickerItem(
+                                        type=item.get("type", "unknown"),
+                                        url=item.get("url", ""),
+                                        thumb=item.get("thumb"),
+                                    )
+                                )
+                            return CobaltResult(
+                                status="picker",
+                                audio=data.get("audio"),
+                                audio_filename=data.get("audioFilename"),
+                                picker=items,
+                            )
+
+                        # local-processing is not supported yet (requires ffmpeg glue logic for Cobalt)
                         return CobaltResult(
-                            status="picker",
-                            audio=data.get("audio"),
-                            audio_filename=data.get("audioFilename"),
-                            picker=items,
+                            status="error",
+                            error_message=f"Unsupported Cobalt status: {status}",
                         )
 
-                    # local-processing is not supported yet (requires ffmpeg glue logic for Cobalt)
-                    return CobaltResult(
-                        status="error",
-                        error_message=f"Unsupported Cobalt status: {status}",
+                except Exception as e:
+                    last_error = str(e)
+                    logger.warning(
+                        "[COBALT] Attempt %d/%d for %s failed: %s",
+                        attempt + 1,
+                        MAX_RETRIES,
+                        api_base,
+                        str(e),
                     )
+                    continue
 
-            except Exception as e:
-                last_error = str(e)
-                logger.warning(
-                    "[COBALT] Attempt %d/%d failed: %s",
-                    attempt + 1,
-                    MAX_RETRIES,
-                    str(e),
-                )
-                continue
+            logger.warning(
+                "[COBALT] All attempts failed for %s, moving to next fallback instance",
+                api_base,
+            )
 
         return CobaltResult(
-            status="error", error_message=last_error or "Max retries exceeded"
+            status="error",
+            error_message=last_error or "Max retries exceeded across all instances",
         )
 
     @staticmethod

@@ -179,7 +179,10 @@ async def telegram_webhook(request: Request) -> dict[str, bool]:
     if state.bot_app:
         try:
             update = Update.de_json(await request.json(), state.bot_app.bot)
-            await state.bot_app.process_update(update)
+            # Fire-and-forget: return 200 to Telegram immediately so it
+            # keeps delivering updates for other users while this one
+            # is being processed in the background.
+            asyncio.create_task(state.bot_app.process_update(update))
         except Exception as e:
             logger.error("Webhook update error", extra={"error": str(e)})
     return {"ok": True}

@@ -30,7 +30,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     stop_event = asyncio.Event()
     janitor_task = asyncio.create_task(janitor_loop(stop_event))
 
-    bot_app = Application.builder().token(config.BOT_TOKEN).build()
+    bot_app = (
+        Application.builder()
+        .token(config.BOT_TOKEN)
+        .concurrent_updates(True)
+        .build()
+    )
     bot_app.add_handler(CommandHandler("start", commands.cmd_start))
     bot_app.add_handler(CommandHandler("help", commands.cmd_help))
     bot_app.add_handler(

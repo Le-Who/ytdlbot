@@ -103,9 +103,7 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
         status_msg = AsyncMock()
         self.update.message.reply_text = AsyncMock(return_value=status_msg)
 
-        mock_sender.download_video = AsyncMock(
-            return_value=(None, "⚠️ Ошибка загрузки")
-        )
+        mock_sender.download_video = AsyncMock(return_value=(None, "⚠️ Ошибка загрузки"))
 
         state.ytdlp = AsyncMock()
         state.ytdlp.tiktok_proxy = None
@@ -149,7 +147,10 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
         self.update.message.delete.assert_awaited_once()
 
     @patch("app.bot.group_logic.MediaSender")
-    async def test_tiktok_photo_url_shows_slideshow_choice(self, mock_sender):
+    @patch("app.services.cobalt.CobaltService.process", new_callable=AsyncMock)
+    async def test_tiktok_photo_url_shows_slideshow_choice(
+        self, mock_cobalt_process, mock_sender
+    ):
         """TikTok /photo/ URL shows slideshow format choice."""
         from app.bot.group_logic import handle_group_message
 
@@ -159,19 +160,14 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
         state.ytdlp.tiktok_proxy = None
         state.ytdlp_executor = None
 
-        from app.services.ytdlp.models import ExtractionResult
+        from app.services.cobalt import CobaltResult, CobaltPickerItem
 
-        mock_result = ExtractionResult(
-            title="Slideshow",
-            formats=[],
-            special_format=MagicMock(),
-            duration_str="—",
-            is_slideshow=True,
-            info_json_path=None,
-            thumbnail_url=None,
-            tiktok_auth_error=False,
+        mock_cobalt_process.return_value = CobaltResult(
+            status="picker",
+            picker=[CobaltPickerItem(type="photo", url="http://example.com")],
         )
-        state.ytdlp.list_formats = MagicMock(return_value=mock_result)
+
+        state.ytdlp.list_formats = MagicMock()
 
         self.update.message.text = "https://tiktok.com/@user/photo/123"
 

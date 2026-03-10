@@ -40,6 +40,7 @@ DL_TIMEOUT_HTTP = int(os.getenv("DL_TIMEOUT_HTTP", "900"))
 # 5 is conservative (yt-dlp default), 8 is optimal for most CDNs.
 # Above 10 risks rate-limiting on YouTube. Configurable for easy tuning.
 CONCURRENT_FRAGMENTS = int(os.getenv("YTDLP_CONCURRENT_FRAGMENTS", "8"))
+YOUTUBE_PIPE_MODE = os.getenv("YOUTUBE_PIPE_MODE", "0").strip() == "1"
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 
@@ -47,6 +48,10 @@ REDIS_URL = os.getenv("REDIS_URL", "").strip()
 # datacenter IP blocks on age-restricted content.
 # Example: socks5://wireguard-proxy:1080
 TIKTOK_PROXY: Optional[str] = os.getenv("TIKTOK_PROXY", "").strip() or None
+
+# Cobalt API (Primary TikTok backend)
+COBALT_API_URL = os.getenv("COBALT_API_URL", "https://api.cobalt.tools")
+COBALT_API_KEY = os.getenv("COBALT_API_KEY", "")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")
 if not BASE_URL:

@@ -1,8 +1,9 @@
 import asyncio
 import json
 import os
+import io
 import logging
-from typing import Optional, Callable, Awaitable
+from typing import Optional, Callable, Awaitable, Union
 
 from telegram.constants import ChatAction
 from telegram import Bot
@@ -22,7 +23,7 @@ logger = logging.getLogger("app.services.orchestrator")
 
 
 async def _extract_video_meta(
-    file_path: str,
+    file_path: str | object,
     info_json_path: Optional[str] = None,
 ) -> dict:
     """Extract duration/width/height for Telegram send_video.
@@ -47,6 +48,9 @@ async def _extract_video_meta(
                 return meta
         except Exception:
             pass
+
+    if not isinstance(file_path, str):
+        return meta
 
     try:
         cmd = [
@@ -124,8 +128,8 @@ class DownloadOrchestrator:
             except Exception:
                 pass
 
-            file_path = None
-            error = None
+            file_path: Union[str, io.BytesIO, None] = None
+            error: Optional[str] = None
 
             # Orchestrate TikTok fallbacks locally to decouple downloader
             if payload.format_id == "tikwm_fallback":

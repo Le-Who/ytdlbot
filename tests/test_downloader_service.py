@@ -4,27 +4,6 @@ import unittest
 from unittest.mock import patch, MagicMock
 import os
 
-from app.services.downloader import _safe_remove_info_json
-
-
-class TestSafeRemoveInfoJson(unittest.TestCase):
-    """Test _safe_remove_info_json helper."""
-
-    def test_none_path_noop(self):
-        _safe_remove_info_json(None)
-
-    def test_empty_path_noop(self):
-        _safe_remove_info_json("")
-
-    @patch("os.remove")
-    def test_removes_existing_file(self, mock_rm):
-        _safe_remove_info_json("/tmp/info.json")
-        mock_rm.assert_called_once_with("/tmp/info.json")
-
-    @patch("os.remove", side_effect=OSError("perm denied"))
-    def test_suppresses_os_error(self, mock_rm):
-        _safe_remove_info_json("/tmp/locked.json")  # Should not raise
-
 
 class TestVideoDownloader(unittest.IsolatedAsyncioTestCase):
     """Test VideoDownloader.download_video."""

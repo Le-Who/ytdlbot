@@ -169,8 +169,9 @@ class GalleryDlService:
                     video_path = os.path.join(root, fname)
                     size_mb = os.path.getsize(video_path) / (1024 * 1024)
                     logger.info(
-                        f"[GALLERY-DL] Video downloaded: {video_path} "
-                        f"({size_mb:.1f} MB)"
+                        "[GALLERY-DL] Video downloaded: %s (%.1f MB)",
+                        video_path,
+                        size_mb,
                     )
                     return video_path, None
 
@@ -222,7 +223,9 @@ class GalleryDlService:
             return None, "⚠️ Не удалось найти фото в слайдшоу."
 
         logger.info(
-            f"[GALLERY-DL] Found {len(images)} images, audio={'yes' if audio else 'no'}"
+            "[GALLERY-DL] Found %d images, audio=%s",
+            len(images),
+            "yes" if audio else "no",
         )
 
         return SlideshowResult(images=images, audio=audio, title=title), None

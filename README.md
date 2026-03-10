@@ -14,15 +14,15 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 
 ## Features
 
-- **Multi-Platform Support**: Extracts video/audio from YouTube, TikTok (watermark-free), Pinterest, VK, Facebook, and RuTube.
+- **Multi-Platform Support**: Extracts video/audio from YouTube, TikTok (watermark-free via Cobalt API), Pinterest, VK, Facebook, and RuTube.
 - **Smart Group Mode**: Automatically selects and downloads the best quality video (<45MB by default) when a link is sent in a group chat.
 - **Interactive Private Mode**: Presents inline keyboard options for users to select specific video qualities or audio-only formats.
-- **TikTok Slideshow Support**: Converts TikTok carousels into either a 📸 Photo Album (media group) or a 🎬 Video Slideshow (MP4 with audio) using `ffmpeg`.
+- **TikTok Slideshow Support**: Converts TikTok carousels natively via Cobalt API into either a 📸 Photo Album (media group) or a 🎬 Video Slideshow (MP4 with audio) using `ffmpeg`.
 - **Strict Format Binding**: Guaranteed zero-mismatch downloads across platforms. Parses formats early to skip FFmpeg muxing (pre-mux priority), conserving resources and preventing Telegram size-limit errors.
+- **Optimized Download Pipeline**: Passes metadata to bypass duplicate `yt-dlp` extraction calls, and supports direct pipe-to-memory streaming for videos <50MB, saving disk I/O.
 - **Zero-Disk Pipeline**: Converts video to GIF natively without saving intermediary files to disk (`yt-dlp` -> `ffmpeg` pipe).
-- **Concurrency & Caching**: Employs completely asynchronous logic, `TTLCache` for format metadata, and `--load-info-json` to bypass duplicate extraction API calls.
 - **Rate Limiting**: Multi-layered token bucket limiter preventing abuse per User, Chat, IP, and Token.
-- **Monitoring**: Built-in Prometheus-compatible metrics endpoint for observability.
+- **Monitoring**: Built-in Prometheus-compatible metrics endpoint (`/metrics`) exposing operational telemetry cleanly via client integration.
 
 ## Non-Goals / Limitations
 
@@ -35,7 +35,7 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 - **Web Layer**: FastAPI serves HTTP endpoints (health checks, Prometheus metrics, and chunked video streams) and handles incoming Telegram Webhooks.
 - **Telegram Logic**: `python-telegram-bot` processes updates. Callback handlers are uniquely "thin", dispatching tasks immediately to the orchestrator.
 - **Orchestration Layer**: `DownloadOrchestrator` centralizes all download lifecycles, safely encapsulating complex rules like concurrency queues (`asyncio.Semaphore`), file-size checks, and fallback mechanisms.
-- **Data Fetchers**: `YtDlpService` acts as a resilient async wrapper with a CLI Builder pattern and structured error mapping, while `GalleryDlService` handles fallback media arrays.
+- **Data Fetchers**: `CobaltService` acts as the primary API for ultra-fast, watermark-free TikTok extraction. `YtDlpService` acts as the primary async CLI wrapper for YouTube and standard sites, while `GalleryDlService` and `TikWMService` handle deep fallback resolution.
 - **Media Processing**: `FFmpeg` is utilized exclusively for post-processing tasks (GIF conversion, slideshow building).
 - **State Management**: In-memory `TTLCache` structures govern rate limiting and URL metadata caching securely using a strongly-typed `DownloadContext` dataclass.
 
@@ -103,14 +103,16 @@ flowchart TD
 
 Selected key variables from `.env.example`:
 
-| Variable                | Required | Default                 | Description                                     | Used In          |
-| ----------------------- | -------- | ----------------------- | ----------------------------------------------- | ---------------- |
-| `BOT_TOKEN`             | **Yes**  | —                       | Telegram Bot Token from @BotFather              | Core Bot Setup   |
-| `BASE_URL`              | No       | `http://localhost:8000` | External endpoint base for generated DL links   | HTTP API         |
-| `WEBHOOK_URL`           | No       | —                       | If set, FastAPI acts as webhook. Else, polling  | Webhook setup    |
-| `MAX_TG_UPLOAD_MB`      | No       | `45`                    | Maximum size for direct Telegram upload         | Download Limiter |
-| `LIMITER_USER_CAPACITY` | No       | `10`                    | Rate limit tokens per user                      | Core Limiter     |
-| `YTDLP_COOKIES_B64`     | No       | —                       | Base64-encoded Netscape cookies for Auth bypass | `yt-dlp` Service |
+| Variable                | Required | Default                    | Description                                     | Used In          |
+| ----------------------- | -------- | -------------------------- | ----------------------------------------------- | ---------------- |
+| `BOT_TOKEN`             | **Yes**  | —                          | Telegram Bot Token from @BotFather              | Core Bot Setup   |
+| `BASE_URL`              | No       | `http://localhost:8000`    | External endpoint base for generated DL links   | HTTP API         |
+| `WEBHOOK_URL`           | No       | —                          | If set, FastAPI acts as webhook. Else, polling  | Webhook setup    |
+| `MAX_TG_UPLOAD_MB`      | No       | `45`                       | Maximum size for direct Telegram upload         | Download Limiter |
+| `LIMITER_USER_CAPACITY` | No       | `10`                       | Rate limit tokens per user                      | Core Limiter     |
+| `COBALT_API_URL`        | No       | `https://api.cobalt.tools` | Endpoint for the Cobalt extraction API          | CobaltService    |
+| `YOUTUBE_PIPE_MODE`     | No       | `false`                    | Opt-in direct piping to TG for YT videos <50MB  | Downloader       |
+| `YTDLP_COOKIES_B64`     | No       | —                          | Base64-encoded Netscape cookies for Auth bypass | `yt-dlp` Service |
 
 ## Run
 
@@ -196,7 +198,6 @@ _Prerequisites: System must have `ffmpeg` and local `python -m pytest` available
 ## Known Documentation Gaps
 
 - **Script naming discrepancy**: Older documentation specifies a `scripts` folder containing CLI scripts, but the repo possesses a single `scripts` flat file containing python code used for debug purposes.
-- **Metrics documentation missing**: Although the bot exposes a standard operational `/metrics` route (Prometheus histograms), this was notably under-documented in prior iterations despite being active in `app.api.routes`.
 - **Property testing details**: The GitHub Actions integration testing workflow actually defaults to `mutmut run` succeeding loosely (`|| true`), indicating mutation metrics are likely informative, not strictly enforcing build failure at this time in the test suite.
 
 ## Contributing

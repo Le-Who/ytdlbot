@@ -73,6 +73,10 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await q.edit_message_text(Texts.CACHE_REFRESH_FAIL)
             return
     else:
+        if isinstance(cached, dict):
+            from app.services.ytdlp.models import ExtractionResult
+
+            cached = ExtractionResult(**cached)
         title = cached.title
         formats = cached.formats
         special_format = cached.special_format
@@ -303,17 +307,16 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             )
         return
 
-    # Check/Add to processing set (Debounce) — atomic under lock
-    async with state.conversion_sem:
-        if token in state.processing_gifs:
-            try:
-                await q.message.reply_text(Texts.GIF_ALREADY_IN_PROGRESS, do_quote=True)
-            except Exception as e:
-                logger.warning(
-                    "Failed to reply about in-progress GIF", extra={"error": str(e)}
-                )
-            return
-        state.processing_gifs.add(token)
+    # Check/Add to processing set (Debounce) — operations on sets are atomic in asyncio
+    if token in state.processing_gifs:
+        try:
+            await q.message.reply_text(Texts.GIF_ALREADY_IN_PROGRESS, do_quote=True)
+        except Exception as e:
+            logger.warning(
+                "Failed to reply about in-progress GIF", extra={"error": str(e)}
+            )
+        return
+    state.processing_gifs.add(token)
 
     try:
         # 2. Convert (Strip Audio)
@@ -376,17 +379,36 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     try:
-        _, mode = q.data.split("|", 1)
+        prefix, rest = q.data.split("|", 1)
     except (ValueError, AttributeError) as e:
         logger.error("Invalid callback data in on_slideshow", extra={"error": str(e)})
         return
 
-    data = context.user_data
-    assert data is not None
-    page_url = data.get("page_url")
-    if not page_url:
-        await q.edit_message_text(Texts.DATA_EXPIRED_RESEND)
-        return
+    is_cobalt = prefix == "cbslide"
+
+    if is_cobalt:
+        try:
+            parse_token, mode = rest.split("|", 1)
+        except ValueError:
+            return
+
+        payload = await state.link_cache.get(parse_token)
+        if not payload or not getattr(payload, "cobalt_json", None):
+            await q.edit_message_text(Texts.LINK_EXPIRED)
+            return
+
+        from app.services.cobalt import CobaltResult
+
+        cobalt_res = CobaltResult(**payload.cobalt_json)
+        page_url = payload.page_url
+    else:
+        mode = rest
+        data = context.user_data
+        assert data is not None
+        page_url = data.get("page_url")
+        if not page_url:
+            await q.edit_message_text(Texts.DATA_EXPIRED_RESEND)
+            return
 
     is_photo_mode = mode == SLIDESHOW_PHOTO_FORMAT_ID
 
@@ -398,7 +420,19 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     try:
         await q.edit_message_text(Texts.SLIDESHOW_DOWNLOADING)
 
-        result, error = await MediaSender.download_slideshow(page_url)
+        if is_cobalt:
+            from app.services.cobalt import CobaltService
+            from app.services.gallery_dl.service import SlideshowResult
+
+            image_paths, audio_path = await CobaltService.download_slideshow(cobalt_res)
+            if image_paths:
+                result = SlideshowResult(images=image_paths, audio=audio_path)
+                error = None
+            else:
+                result = None
+                error = "⚠️ Ошибка загрузки слайдшоу из Cobalt."
+        else:
+            result, error = await MediaSender.download_slideshow(page_url)
 
         if error or not result:
             await q.edit_message_text(error or Texts.SLIDESHOW_ERROR)

@@ -14,3 +14,4 @@ class DownloadContext:
     user_tag: Optional[str] = None
     chat_id: Optional[int] = None
     original_msg_id: Optional[int] = None
+    cobalt_json: Optional[dict] = None

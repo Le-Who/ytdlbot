@@ -35,8 +35,14 @@ def cleanup_temp_dir() -> tuple[int, int]:
                     pass
             continue
 
-        # Clean bot-created files: ytdl_* and concat_*
-        if not (name.startswith("ytdl_") or name.startswith("concat_")):
+        # Clean bot-created files
+        if not (
+            name.startswith("ytdl_")
+            or name.startswith("concat_")
+            or name.startswith("tikwm_")
+            or name.startswith("gdl_video_")
+            or name.startswith("info_")
+        ):
             continue
         if not os.path.isfile(path):
             continue

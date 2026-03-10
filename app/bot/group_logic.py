@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import io
 import uuid
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
@@ -70,22 +71,36 @@ async def handle_group_message(
     # Check if this is a TikTok slideshow
     is_tiktok_url = _is_tiktok(url)
     is_slideshow = False
-    tiktok_auth_error = False  # age-restricted content needing TikWM fallback
+    tiktok_auth_error = False
     info_json_path = None  # cached extraction JSON for --load-info-json reuse
+    is_cobalt_success = False
+    cobalt_res = None
 
     if is_tiktok_url:
+        from app.services.cobalt import CobaltService
+
         try:
-            result = await state.ytdlp.list_formats(url)
-            is_slideshow = result.is_slideshow
-            tiktok_auth_error = result.tiktok_auth_error
-            info_json_path = result.info_json_path
+            cobalt_res = await CobaltService.process(url)
+            if cobalt_res.status in ("tunnel", "redirect", "picker"):
+                is_cobalt_success = True
+                is_slideshow = cobalt_res.is_slideshow
         except Exception as exc:
-            # list_formats already handles TikTok routing and fallbacks,
-            # so if it still throws, we default to slideshow fallback.
-            logger.info(
-                "TikTok list_formats error in group, falling back to slideshow: %s", exc
-            )
-            is_slideshow = True
+            logger.warning("Cobalt failed in group: %s", exc)
+
+        if not is_cobalt_success:
+            try:
+                result = await state.ytdlp.list_formats(url)
+                is_slideshow = result.is_slideshow
+                tiktok_auth_error = result.tiktok_auth_error
+                info_json_path = result.info_json_path
+            except Exception as exc:
+                # list_formats already handles TikTok routing and fallbacks,
+                # so if it still throws, we default to slideshow fallback.
+                logger.info(
+                    "TikTok list_formats error in group, falling back to slideshow: %s",
+                    exc,
+                )
+                is_slideshow = True
 
     # TikTok auth-restricted video (handled via virtual formats)
     if tiktok_auth_error:
@@ -110,17 +125,21 @@ async def handle_group_message(
                 user_tag=user_tag,
                 chat_id=chat.id,
                 original_msg_id=update.message.message_id,
+                cobalt_json=cobalt_res.__dict__
+                if is_cobalt_success and cobalt_res
+                else None,
             ),
         )
 
+        prefix = "cbgrpslide" if is_cobalt_success else "grpslide"
         kb = InlineKeyboardMarkup(
             [
                 [
                     InlineKeyboardButton(
-                        "📸 Альбом", callback_data=f"grpslide|{token}|photo"
+                        "📸 Альбом", callback_data=f"{prefix}|{token}|photo"
                     ),
                     InlineKeyboardButton(
-                        "🎬 Видео", callback_data=f"grpslide|{token}|video"
+                        "🎬 Видео", callback_data=f"{prefix}|{token}|video"
                     ),
                 ]
             ]
@@ -134,50 +153,67 @@ async def handle_group_message(
         try:
             if status_msg:
                 await status_msg.edit_text(text, reply_markup=markup)
-        except Exception as e:
-            logger.debug("Group UI update failed", extra={"error": str(e)})
+        except Exception:
+            return
 
-    file_path, error = await MediaSender.download_video(
-        page_url=url,
-        format_id=video_format,
-        height=None,
-        token=token,
-        info_json_path=info_json_path,
-    )
-
-    if error or not file_path:
+    if state.tasks_sem.locked():
         try:
-            await status_msg.edit_text(error or Texts.GROUP_ERROR)
+            await status_msg.edit_text(Texts.QUEUE_FULL)
         except Exception:
             pass
         return
 
-    caption = f"👤 {user_tag}"
-
-    await status_msg.edit_text(Texts.GROUP_SENDING)
-
+    await state.tasks_sem.acquire()
     try:
-        await context.bot.send_chat_action(
-            chat_id=chat.id, action=ChatAction.UPLOAD_VIDEO
+        if is_cobalt_success and cobalt_res and not is_slideshow and cobalt_res.url:
+            file_path: str | io.BytesIO | None = await CobaltService.download_file(
+                cobalt_res.url, "mp4"
+            )
+            error = None if file_path else "⚠️ Ошибка загрузки видео из Cobalt."
+        else:
+            file_path, error = await MediaSender.download_video(
+                page_url=url,
+                format_id=video_format,
+                height=None,
+                token=token,
+                info_json_path=info_json_path,
+            )
+
+        if error or not file_path:
+            try:
+                await status_msg.edit_text(error or Texts.GROUP_ERROR)
+            except Exception:
+                pass
+            return
+
+        caption = f"👤 {user_tag}"
+
+        await status_msg.edit_text(Texts.GROUP_SENDING)
+
+        try:
+            await context.bot.send_chat_action(
+                chat_id=chat.id, action=ChatAction.UPLOAD_VIDEO
+            )
+        except Exception:
+            pass
+
+        # Create "Send GIF" button
+        kb = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{token}")]]
         )
-    except Exception:
-        pass
 
-    # Create "Send GIF" button
-    kb = InlineKeyboardMarkup(
-        [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{token}")]]
-    )
-
-    success = await MediaSender.send_file(
-        context.bot,
-        chat.id,
-        file_path,
-        is_audio=False,
-        is_gif=False,
-        caption=caption,
-        parse_mode="HTML",
-        reply_markup=kb,
-    )
+        success = await MediaSender.send_file(
+            context.bot,
+            chat.id,
+            file_path,
+            is_audio=False,
+            is_gif=False,
+            caption=caption,
+            parse_mode="HTML",
+            reply_markup=kb,
+        )
+    finally:
+        state.tasks_sem.release()
 
     if success:
         try:
@@ -203,7 +239,7 @@ async def on_group_slideshow(
         return
 
     try:
-        _, token, mode = q.data.split("|", 2)
+        prefix, token, mode = q.data.split("|", 2)
     except (ValueError, AttributeError) as e:
         logger.error(
             "Invalid callback data in on_group_slideshow", extra={"error": str(e)}
@@ -226,6 +262,7 @@ async def on_group_slideshow(
     chat_id = payload.chat_id
     original_msg_id = payload.original_msg_id
     is_photo_mode = mode == "photo"
+    is_cobalt = prefix == "cbgrpslide"
 
     try:
         await q.edit_message_reply_markup(None)
@@ -234,7 +271,20 @@ async def on_group_slideshow(
 
     await q.edit_message_text(Texts.SLIDESHOW_DOWNLOADING)
 
-    result, error = await MediaSender.download_slideshow(page_url)
+    if is_cobalt and payload.cobalt_json:
+        from app.services.cobalt import CobaltResult, CobaltService
+        from app.services.gallery_dl.service import SlideshowResult
+
+        cobalt_res = CobaltResult(**payload.cobalt_json)
+        image_paths, audio_path = await CobaltService.download_slideshow(cobalt_res)
+        if image_paths:
+            result = SlideshowResult(images=image_paths, audio=audio_path)
+            error = None
+        else:
+            result = None
+            error = "⚠️ Ошибка загрузки слайдшоу из Cobalt."
+    else:
+        result, error = await MediaSender.download_slideshow(page_url)
 
     if error or not result:
         # Slideshow download failed — try TikWM as video fallback

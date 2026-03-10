@@ -1,7 +1,9 @@
 """Telegram file/media sending service."""
 
 import logging
-from typing import Any
+import io
+from typing import Any, Union
+from contextlib import contextmanager
 
 from telegram import Bot, InputMediaPhoto
 from telegram.error import NetworkError
@@ -12,6 +14,16 @@ logger = logging.getLogger("app.services.sender")
 MAX_TELEGRAM_ALBUM_SIZE = 10
 
 
+@contextmanager
+def _open_media(file_path_or_buffer: Union[str, io.BytesIO]) -> Any:
+    if isinstance(file_path_or_buffer, str):
+        with open(file_path_or_buffer, "rb") as f:
+            yield f
+    else:
+        # It's a BytesIO, just yield it
+        yield file_path_or_buffer
+
+
 class TelegramSender:
     """Handles sending files and media groups to Telegram."""
 
@@ -19,7 +31,7 @@ class TelegramSender:
     async def send_file(
         bot: Bot,
         chat_id: int,
-        file_path: str,
+        file_path_or_buffer: Union[str, io.BytesIO],
         is_audio: bool = False,
         is_gif: bool = False,
         caption: str = "",
@@ -34,7 +46,7 @@ class TelegramSender:
         from app.core.metrics import metrics as _m
 
         try:
-            with _m.upload_duration.time(), open(file_path, "rb") as f:
+            with _m.upload_duration.time(), _open_media(file_path_or_buffer) as f:
                 if is_gif:
                     await bot.send_animation(
                         chat_id=chat_id,
@@ -73,7 +85,14 @@ class TelegramSender:
             return True
 
         except NetworkError:
-            logger.warning("Network error sending file", extra={"file": file_path})
+            file_name_debug = (
+                file_path_or_buffer
+                if isinstance(file_path_or_buffer, str)
+                else "BytesIO"
+            )
+            logger.warning(
+                "Network error sending file", extra={"file": file_name_debug}
+            )
             return False
         except Exception as e:
             logger.error("Send error", extra={"error": str(e)}, exc_info=True)

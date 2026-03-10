@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 from cachetools import TTLCache
 from app.core.cache import FileTTLCache
@@ -42,10 +41,6 @@ conversion_sem = asyncio.Semaphore(
     3
 )  # Bounded concurrency for CPU-intensive conversions
 
-# Мы убираем ytdlp_executor в следующем шаге (subprocess rework)
-ytdlp_executor = ThreadPoolExecutor(
-    max_workers=10, thread_name_prefix="ytdlp"
-)  # Dedicated pool for yt-dlp
 
 # Глобальный объект приложения Telegram (инициализируется в main.py)
 if TYPE_CHECKING:

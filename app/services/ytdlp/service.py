@@ -3,7 +3,7 @@ import json
 import os
 import sys
 import logging
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 
 __all__ = ["YtDlpService"]
 
@@ -57,23 +57,6 @@ class YtDlpService:
     def cookies_path(self) -> Optional[str]:
         """Backward-compat: return TikTok cookies (used by slideshow etc.)"""
         return self.cookies_manager.tiktok_cookies_path
-
-    async def _extract_youtube_via_subprocess(
-        self, url: str
-    ) -> Optional[Dict[str, Any]]:
-        """Fallback extraction for YouTube when standard fails"""
-        # Kept for backward compat; but new YtDlpCLIBuilder already injects player clients.
-        # We can just return None here for now because the base extract does it via the builder.
-        # But to be safe, we will leave the structure.
-        return None
-
-    async def _attempt_youtube_fallback(
-        self, url: str, used_subprocess: bool
-    ) -> Tuple[Optional[Dict[str, Any]], bool]:
-        """Attempts to fetch info via fallback"""
-        # Since we use the unified builder, this fallback is essentially a no-op
-        # because the original request already tried all clients.
-        return None, used_subprocess
 
     async def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
         """Извлекает метаданные видео через subprocess yt-dlp (async isolation)."""

@@ -181,7 +181,8 @@ class MediaConverter:
 
             if proc.returncode != 0:
                 logger.error(
-                    f"FFmpeg slideshow failed: {stderr.decode('utf-8', errors='ignore')}"
+                    "FFmpeg slideshow failed: %s",
+                    stderr.decode("utf-8", errors="ignore"),
                 )
                 return None
 

@@ -58,7 +58,7 @@ class ProcessHandle:
                     capture_output=True,
                 )
         except Exception as e:
-            logger.warning(f"Error during process cancellation: {e}")
+            logger.warning("Error during process cancellation: %s", e)
 
         try:
             await asyncio.wait_for(self.proc.wait(), timeout=2.0)

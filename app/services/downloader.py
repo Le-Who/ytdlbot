@@ -14,11 +14,17 @@ import uuid
 import time
 import asyncio
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Union
+import io
 
 
 from app.core import state
-from app.core.config import TEMP_DIR, MAX_TG_UPLOAD_MB, DL_TIMEOUT_TELEGRAM
+from app.core.config import (
+    TEMP_DIR,
+    MAX_TG_UPLOAD_MB,
+    DL_TIMEOUT_TELEGRAM,
+    YOUTUBE_PIPE_MODE,
+)
 from app.core.utils import safe_remove
 from app.core.process import run_subprocess
 from app.core.policy import size_allowed
@@ -48,15 +54,6 @@ def _metrics():
     return metrics
 
 
-def _safe_remove_info_json(path):
-    """Remove cached info JSON after download (prevent /tmp fill)."""
-    if path:
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-
-
 class VideoDownloader:
     """Downloads video/audio files via yt-dlp subprocess."""
 
@@ -67,7 +64,7 @@ class VideoDownloader:
         height: Optional[int],
         token: str,
         info_json_path: Optional[str] = None,
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> Tuple[Optional[Union[str, io.BytesIO]], Optional[str]]:
         """
         Downloads a video.
 
@@ -80,9 +77,9 @@ class VideoDownloader:
                 (--load-info-json to skip re-extraction).
 
         Returns:
-            (file_path, error_message)
-            If success: file_path is str, error_message is None.
-            If fail: file_path is None, error_message is str.
+            (file_path_or_buffer, error_message)
+            If success: file_path_or_buffer is str or io.BytesIO, error_message is None.
+            If fail: file_path_or_buffer is None, error_message is str.
         """
 
         tmp_dir = TEMP_DIR
@@ -96,22 +93,26 @@ class VideoDownloader:
         else:
             file_ext = "mp4"
 
+        # Ensure we only use pipe for standard videos, not audio or GIF converting target
+        use_pipe = YOUTUBE_PIPE_MODE and not is_gif and not is_audio
+
         # Check if we already have this file in cache (e.g. for GIF conversion reuse)
         cached_path = state.file_cache.get(token)
-        if cached_path and os.path.exists(cached_path):
+        if cached_path and isinstance(cached_path, str) and os.path.exists(cached_path):
             logger.info("Reusing cached file", extra={"path": cached_path})
             _metrics().cache_hits.inc(cache="file_cache")
             return cached_path, None
 
         tmp_path = os.path.join(tmp_dir, f"ytdl_{uuid.uuid4().hex}.{file_ext}")
+        output_path = "-" if use_pipe else tmp_path
 
         cmd = state.ytdlp.build_command(
             page_url,
             format_id,
             height,
-            output=tmp_path,
+            output=output_path,
             max_filesize=MAX_TG_UPLOAD_MB,
-            use_aria2=True,
+            use_aria2=not use_pipe,  # aria2c doesn't support stdout piping
             info_json_path=info_json_path,
         )
 
@@ -126,8 +127,7 @@ class VideoDownloader:
                 download_start = time.time()
                 max_download_time = DL_TIMEOUT_TELEGRAM
 
-                # Clear previous cancel state for this token
-                await state.cancel_cache.delete(token)
+                buffer = io.BytesIO() if use_pipe else None
 
                 # Drain stdout; check cancel/timeout every 2s
                 while True:
@@ -140,22 +140,29 @@ class VideoDownloader:
                         return None, "⚠️ Время ожидания загрузки истекло."
 
                     try:
-                        line = await asyncio.wait_for(
-                            proc.stdout.readline(), timeout=2.0
-                        )
+                        if use_pipe:
+                            assert buffer is not None
+                            chunk = await asyncio.wait_for(
+                                proc.stdout.read(65536), timeout=2.0
+                            )
+                            if not chunk:
+                                break
+                            buffer.write(chunk)
+                        else:
+                            line = await asyncio.wait_for(
+                                proc.stdout.readline(), timeout=2.0
+                            )
+                            if not line:
+                                break
                     except asyncio.TimeoutError:
                         if proc.returncode is not None:
                             break
                         continue
 
-                    if not line:
-                        break
-
                 await proc.wait()
 
                 if proc.returncode != 0:
                     _metrics().downloads_failed.inc(platform="telegram")
-                    _metrics().active_downloads.dec()
                     err_text = b"".join(stderr).decode("utf-8", errors="ignore")
                     logger.error("yt-dlp download failed", extra={"stderr": err_text})
 
@@ -195,33 +202,50 @@ class VideoDownloader:
                         )
 
             # Verify file
-            try:
-                if not os.path.exists(tmp_path):
-                    return None, "⚠️ Файл не был создан."
-
-                file_size = await asyncio.to_thread(os.path.getsize, tmp_path)
+            if use_pipe:
+                assert buffer is not None
+                buffer.seek(0)
+                file_size = buffer.getbuffer().nbytes
                 if not size_allowed(file_size, target="telegram"):
-                    await asyncio.to_thread(safe_remove, tmp_path)
                     return None, f"⚠️ Файл слишком большой (> {MAX_TG_UPLOAD_MB} МБ)."
-            except OSError:
-                await asyncio.to_thread(safe_remove, tmp_path)
-                return None, "⚠️ Ошибка проверки файла."
+                # For pipes, we don't save to file_cache (no physical path)
+                _metrics().downloads_success.inc(platform="telegram")
+                _metrics().download_duration.observe(
+                    time.time() - _dl_start, platform="telegram"
+                )
+                return buffer, None
+            else:
+                try:
+                    if not os.path.exists(tmp_path):
+                        return None, "⚠️ Файл не был создан."
 
-            # Save to cache
-            state.file_cache[token] = tmp_path
-            _metrics().downloads_success.inc(platform="telegram")
-            _metrics().active_downloads.dec()
-            _metrics().download_duration.observe(
-                time.time() - _dl_start, platform="telegram"
-            )
-            return tmp_path, None
+                    file_size = await asyncio.to_thread(os.path.getsize, tmp_path)
+                    if not size_allowed(file_size, target="telegram"):
+                        await asyncio.to_thread(safe_remove, tmp_path)
+                        return (
+                            None,
+                            f"⚠️ Файл слишком большой (> {MAX_TG_UPLOAD_MB} МБ).",
+                        )
+                except OSError:
+                    await asyncio.to_thread(safe_remove, tmp_path)
+                    return None, "⚠️ Ошибка проверки файла."
+
+                # Save to cache
+                state.file_cache[token] = tmp_path
+                _metrics().downloads_success.inc(platform="telegram")
+                _metrics().download_duration.observe(
+                    time.time() - _dl_start, platform="telegram"
+                )
+                return tmp_path, None
 
         except Exception as e:
             logger.error("Download exception", extra={"error": str(e)}, exc_info=True)
             _metrics().downloads_failed.inc(platform="telegram")
-            _metrics().active_downloads.dec()
             await asyncio.to_thread(safe_remove, tmp_path)
             return None, "⚠️ Внутренняя ошибка при загрузке."
+
+        finally:
+            _metrics().active_downloads.dec()
 
 
 class MediaSender:

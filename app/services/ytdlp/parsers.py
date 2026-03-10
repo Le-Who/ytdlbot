@@ -190,7 +190,7 @@ def deduplicate_formats(
         unique = []
         seen_sizes = set()
         for fmt in formats:
-            key = fmt.filesize or id(fmt)
+            key = fmt.filesize or fmt.format_id
             if key not in seen_sizes:
                 unique.append(fmt)
                 seen_sizes.add(key)

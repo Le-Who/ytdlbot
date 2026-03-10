@@ -14,6 +14,11 @@ class MemoryStorage(StateStorage):
         return self._cache.get(key)
 
     async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+        """
+        Store a value in cache.
+        Note: The `ttl` parameter is ignored. MemoryStorage uses a fixed TTL
+        configured during initialization due to cachetools.TTLCache limitations.
+        """
         self._cache[key] = value
 
     async def delete(self, key: str) -> None:

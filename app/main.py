@@ -60,10 +60,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         CallbackQueryHandler(callbacks.on_convert_to_gif, pattern=r"^gif\|")
     )
     bot_app.add_handler(
-        CallbackQueryHandler(callbacks.on_slideshow, pattern=r"^slideshow\|")
+        CallbackQueryHandler(callbacks.on_slideshow, pattern=r"^(slideshow|cbslide)\|")
     )
     bot_app.add_handler(
-        CallbackQueryHandler(group_logic.on_group_slideshow, pattern=r"^grpslide\|")
+        CallbackQueryHandler(
+            group_logic.on_group_slideshow, pattern=r"^(grpslide|cbgrpslide)\|"
+        )
     )
 
     async def _global_error_handler(update, context):

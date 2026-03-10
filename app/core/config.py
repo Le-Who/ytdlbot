@@ -49,8 +49,15 @@ REDIS_URL = os.getenv("REDIS_URL", "").strip()
 # Example: socks5://wireguard-proxy:1080
 TIKTOK_PROXY: Optional[str] = os.getenv("TIKTOK_PROXY", "").strip() or None
 
-# Cobalt API (Primary TikTok backend)
-COBALT_API_URL = os.getenv("COBALT_API_URL", "https://api.cobalt.tools")
+# Cobalt API (Primary TikTok backend) - Supports multiple comma-separated instances for fallback
+COBALT_API_URLS = [
+    url.strip()
+    for url in os.getenv("COBALT_API_URL", "https://api.cobalt.tools").split(",")
+    if url.strip()
+]
+if not COBALT_API_URLS:
+    COBALT_API_URLS = ["https://api.cobalt.tools"]
+
 COBALT_API_KEY = os.getenv("COBALT_API_KEY", "")
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")

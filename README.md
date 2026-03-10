@@ -103,16 +103,16 @@ flowchart TD
 
 Selected key variables from `.env.example`:
 
-| Variable                | Required | Default                    | Description                                     | Used In          |
-| ----------------------- | -------- | -------------------------- | ----------------------------------------------- | ---------------- |
-| `BOT_TOKEN`             | **Yes**  | —                          | Telegram Bot Token from @BotFather              | Core Bot Setup   |
-| `BASE_URL`              | No       | `http://localhost:8000`    | External endpoint base for generated DL links   | HTTP API         |
-| `WEBHOOK_URL`           | No       | —                          | If set, FastAPI acts as webhook. Else, polling  | Webhook setup    |
-| `MAX_TG_UPLOAD_MB`      | No       | `45`                       | Maximum size for direct Telegram upload         | Download Limiter |
-| `LIMITER_USER_CAPACITY` | No       | `10`                       | Rate limit tokens per user                      | Core Limiter     |
-| `COBALT_API_URL`        | No       | `https://api.cobalt.tools` | Endpoint for the Cobalt extraction API          | CobaltService    |
-| `YOUTUBE_PIPE_MODE`     | No       | `false`                    | Opt-in direct piping to TG for YT videos <50MB  | Downloader       |
-| `YTDLP_COOKIES_B64`     | No       | —                          | Base64-encoded Netscape cookies for Auth bypass | `yt-dlp` Service |
+| Variable                | Required | Default                    | Description                                                                                 | Used In          |
+| ----------------------- | -------- | -------------------------- | ------------------------------------------------------------------------------------------- | ---------------- |
+| `BOT_TOKEN`             | **Yes**  | —                          | Telegram Bot Token from @BotFather                                                          | Core Bot Setup   |
+| `BASE_URL`              | No       | `http://localhost:8000`    | External endpoint base for generated DL links                                               | HTTP API         |
+| `WEBHOOK_URL`           | No       | —                          | If set, FastAPI acts as webhook. Else, polling                                              | Webhook setup    |
+| `MAX_TG_UPLOAD_MB`      | No       | `45`                       | Maximum size for direct Telegram upload                                                     | Download Limiter |
+| `LIMITER_USER_CAPACITY` | No       | `10`                       | Rate limit tokens per user                                                                  | Core Limiter     |
+| `COBALT_API_URL`        | No       | `https://api.cobalt.tools` | Endpoint for the Cobalt extraction API (supports comma-separated list for fallback routing) | CobaltService    |
+| `YOUTUBE_PIPE_MODE`     | No       | `false`                    | Opt-in direct piping to TG for YT videos <50MB                                              | Downloader       |
+| `YTDLP_COOKIES_B64`     | No       | —                          | Base64-encoded Netscape cookies for Auth bypass                                             | `yt-dlp` Service |
 
 ## Run
 

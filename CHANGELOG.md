@@ -22,7 +22,7 @@ All notable changes to this project will be documented in this file.
 
 ### Core Feature Updates
 
-- **TikTok API Extraction (Cobalt)**: Replaced fragile fallback chains with the robust Cobalt API as the primary TikTok fetcher, offering 10x faster execution and watermark-free results natively.
+- **TikTok API Extraction (Cobalt)**: Replaced fragile fallback chains with the robust Cobalt API as the primary TikTok fetcher, offering 10x faster execution and watermark-free results natively. Now supports highly resilient multi-instance fallback capabilities natively by passing comma-separated lists to the `COBALT_API_URL` env variable.
 - **YouTube Pipe Mode (Opt-in)**: Optional `YOUTUBE_PIPE_MODE=true` buffers `yt-dlp` output into `BytesIO` memory for direct Telegram upload on videos <50MB, completely omitting temporary disk writes.
 - **Dynamic Extractor Metadata (`--load-info-json`)**: Bypassed duplicate network parsing calls by passing previously identified JSON metadata downstream into execution contexts, saving ~2-5s off standard YouTube latency.
 

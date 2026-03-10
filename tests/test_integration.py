@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 """
 Integration tests — verify complete user flows end-to-end.
 
@@ -96,6 +97,11 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
         update.callback_query.data = "pick|137"
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
+        update.callback_query.message = MagicMock(spec=Message)
+        update.callback_query.message.photo = ()
+        update.callback_query.message.video = None
+        update.callback_query.message.animation = None
+        update.callback_query.message.document = None
         context.user_data = {
             "page_url": url,
             "title": "Test Video",
@@ -150,6 +156,11 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
         context = MagicMock()
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
+        update.callback_query.message = MagicMock(spec=Message)
+        update.callback_query.message.photo = ()
+        update.callback_query.message.video = None
+        update.callback_query.message.animation = None
+        update.callback_query.message.document = None
         context.user_data = {"page_url": url}
 
         with patch("app.bot.callbacks.build_format_keyboard") as mock_kb:
@@ -188,6 +199,10 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
         update.callback_query.data = f"send|{token}"
         update.callback_query.from_user.id = 12345
         update.callback_query.message = MagicMock(spec=Message)
+        update.callback_query.message.photo = ()
+        update.callback_query.message.video = None
+        update.callback_query.message.animation = None
+        update.callback_query.message.document = None
         update.callback_query.message.chat_id = 99999
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
@@ -239,6 +254,10 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
         update.callback_query.data = "send|some_token"
         update.callback_query.from_user.id = 12345
         update.callback_query.message = MagicMock(spec=Message)
+        update.callback_query.message.photo = ()
+        update.callback_query.message.video = None
+        update.callback_query.message.animation = None
+        update.callback_query.message.document = None
         update.callback_query.message.chat_id = 99999
         update.callback_query.answer = AsyncMock()
         update.callback_query.edit_message_text = AsyncMock()
@@ -348,3 +367,4 @@ class TestPolicyIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

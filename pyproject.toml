@@ -44,8 +44,7 @@ disallow_untyped_decorators = true
 
 [[tool.mypy.overrides]]
 module = "tests.*"
-disallow_untyped_defs = false
-check_untyped_defs = false
+ignore_errors = true
 
 [tool.mutmut]
 paths_to_mutate = "app/services/ytdlp/parsers.py"

@@ -81,7 +81,8 @@ class TikWMService:
                 return TikWMResult(status="error", error_message=f"TikWM: {msg}")
 
             info = data.get("data", {})
-            title = info.get("title", "TikTok Media")
+            raw_title = info.get("title", "TikTok Media")
+            title = raw_title[:45].strip() + ("..." if len(raw_title) > 45 else "")
 
             # Check for slideshow (images)
             images = info.get("images")

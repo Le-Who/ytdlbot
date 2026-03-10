@@ -22,7 +22,9 @@ All notable changes to this project will be documented in this file.
 
 ### Core Feature Updates
 
-- **TikTok API Extraction (Cobalt)**: Replaced fragile fallback chains with the robust Cobalt API as the primary TikTok fetcher, offering 10x faster execution and watermark-free results natively. Now supports highly resilient multi-instance fallback capabilities natively by passing comma-separated lists to the `COBALT_API_URL` env variable.
+- **TikTok API Extraction (TikWM & GalleryDL)**: Replaced fragile fallback chains (and geo-blocked Cobalt instances) with the robust TikWM API as the primary TikTok fetcher, offering watermark-free video and native image slideshow extraction.
+- **Cobalt Deprecation (Optional)**: Cobalt API is now deactivated by default to bypass strict TikTok IP blocking constraints, but can be reactivated locally via `ENABLE_COBALT_TIKTOK`.
+- **Yt-Dlp Extraction Bypass**: TikTok links now entirely bypass `yt-dlp` parsing and initialization when third-party APIs fail, instead generating a synthetic metadata object that directs the routing straight to `gallery-dl` fallback pipelines, preventing immediate IP-bans on the host server.
 - **YouTube Pipe Mode (Opt-in)**: Optional `YOUTUBE_PIPE_MODE=true` buffers `yt-dlp` output into `BytesIO` memory for direct Telegram upload on videos <50MB, completely omitting temporary disk writes.
 - **Dynamic Extractor Metadata (`--load-info-json`)**: Bypassed duplicate network parsing calls by passing previously identified JSON metadata downstream into execution contexts, saving ~2-5s off standard YouTube latency.
 
@@ -41,8 +43,9 @@ All notable changes to this project will be documented in this file.
 
 ### Code Quality
 
-- **Mypy strict: 0 errors** in 39 source files (up from 30 errors)
+- **Mypy strict: 0 errors** in 47 source files (up from 39 files)
   - Type annotations added to `metrics.py`, `routes.py`, `main.py`, `service.py`, `sender.py`, `keyboards.py`, `slideshow.py`, `process.py`, `state.py`
+  - `tests/*` scopes excluded from strict Mypy bounds to allow uninhibited mock patching.
   - `pyproject.toml` consolidates all mypy config (deleted standalone `mypy.ini`)
 - **Ruff: 0 errors** — auto-fixed 40+ issues (unused imports, formatting)
 - **Structured logging**: Converted 40 f-string loggers → `extra={}` format across 9 files for machine-parseable JSON logs

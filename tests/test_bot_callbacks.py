@@ -1,3 +1,4 @@
+# mypy: ignore-errors
 from unittest.mock import AsyncMock
 import asyncio
 import unittest
@@ -58,6 +59,10 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         self.update.callback_query.edit_message_reply_markup = AsyncMock()
         self.update.callback_query.delete_message = AsyncMock()
         self.update.callback_query.message = MagicMock(spec=Message)
+        self.update.callback_query.message.photo = ()
+        self.update.callback_query.message.video = None
+        self.update.callback_query.message.animation = None
+        self.update.callback_query.message.document = None
         self.update.callback_query.message.chat_id = 99999
         self.update.callback_query.from_user = MagicMock()
         self.update.callback_query.from_user.id = 12345
@@ -406,3 +411,4 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

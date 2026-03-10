@@ -46,17 +46,28 @@ logger = logging.getLogger("app.bot.callbacks")
 async def _edit_or_reply(
     q: Any, text: str, reply_markup: Any = None, **kwargs: Any
 ) -> None:
-    """Safely edit a message, falling back to reply_text for photo messages."""
+    """Safely edit a message, using caption for media or text for text messages."""
+    msg = q.message
     try:
-        await q.edit_message_text(text, reply_markup=reply_markup, **kwargs)
-    except Exception:
-        # Photo messages can't be edited to text; delete + reply instead
+        if (
+            getattr(msg, "photo", None)
+            or getattr(msg, "video", None)
+            or getattr(msg, "animation", None)
+            or getattr(msg, "document", None)
+        ):
+            await q.edit_message_caption(
+                caption=text, reply_markup=reply_markup, **kwargs
+            )
+        else:
+            await q.edit_message_text(text, reply_markup=reply_markup, **kwargs)
+    except Exception as e:
+        logger.warning("_edit_or_reply failed (editing caption/text): %s", e)
+        # Ultimate fallback
         try:
-            msg = q.message
             await msg.delete()
             await msg.chat.send_message(text, reply_markup=reply_markup, **kwargs)
-        except Exception as e:
-            logger.warning("_edit_or_reply failed completely: %s", e)
+        except Exception as e2:
+            logger.error("_edit_or_reply ultimate fallback failed: %s", e2)
 
 
 async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -390,7 +401,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not await state.limiter.allow_user(
         user_id
     ) or not await state.limiter.allow_chat(q.message.chat_id):
-        await q.edit_message_text(Texts.TOO_MANY_REQUESTS)
+        await _edit_or_reply(q, Texts.TOO_MANY_REQUESTS)
         return
 
     if not q.data:
@@ -438,18 +449,18 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         assert data is not None
         page_url = data.get("page_url")
         if not page_url:
-            await q.edit_message_text(Texts.DATA_EXPIRED_RESEND)
+            await _edit_or_reply(q, Texts.DATA_EXPIRED_RESEND)
             return
 
     is_photo_mode = mode == SLIDESHOW_PHOTO_FORMAT_ID
 
     if state.tasks_sem.locked():
-        await q.edit_message_text(Texts.QUEUE_FULL)
+        await _edit_or_reply(q, Texts.QUEUE_FULL)
         return
 
     await state.tasks_sem.acquire()
     try:
-        await q.edit_message_text(Texts.SLIDESHOW_DOWNLOADING)
+        await _edit_or_reply(q, Texts.SLIDESHOW_DOWNLOADING)
 
         if is_api:
             from app.services.gallery_dl.service import SlideshowResult
@@ -480,13 +491,13 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             result, error = await MediaSender.download_slideshow(page_url)
 
         if error or not result:
-            await q.edit_message_text(error or Texts.SLIDESHOW_ERROR)
+            await _edit_or_reply(q, error or Texts.SLIDESHOW_ERROR)
             return
 
         try:
             if is_photo_mode:
                 # Send as photo album
-                await q.edit_message_text(Texts.SLIDESHOW_SENDING)
+                await _edit_or_reply(q, Texts.SLIDESHOW_SENDING)
 
                 total = len(result.images)
                 caption = "📸"
@@ -503,20 +514,20 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 if success:
                     await q.delete_message()
                 else:
-                    await q.edit_message_text(Texts.SEND_ERROR)
+                    await _edit_or_reply(q, Texts.SEND_ERROR)
             else:
                 # Convert to video and send
-                await q.edit_message_text(Texts.SLIDESHOW_CONVERTING)
+                await _edit_or_reply(q, Texts.SLIDESHOW_CONVERTING)
 
                 video_path = await MediaSender.images_to_video(
                     result.images, result.audio
                 )
 
                 if not video_path:
-                    await q.edit_message_text(Texts.SLIDESHOW_ERROR)
+                    await _edit_or_reply(q, Texts.SLIDESHOW_ERROR)
                     return
 
-                await q.edit_message_text(Texts.SENDING_TO_TG)
+                await _edit_or_reply(q, Texts.SENDING_TO_TG)
 
                 success = await MediaSender.send_file(
                     context.bot,
@@ -528,7 +539,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 if success:
                     await q.delete_message()
                 else:
-                    await q.edit_message_text(Texts.SEND_ERROR)
+                    await _edit_or_reply(q, Texts.SEND_ERROR)
 
                 # Cleanup video file
                 await asyncio.to_thread(safe_remove, video_path)

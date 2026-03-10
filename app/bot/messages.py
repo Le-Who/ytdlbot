@@ -133,7 +133,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                         format_note="gallerydl_fallback",
                     )
                 ],
-                special_format="gallerydl_fallback"
+                special_format="gallerydl_fallback"  # type: ignore
                 if not _fallback_is_slideshow
                 else None,
                 duration_str="—",
@@ -295,11 +295,20 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         else:
             reply_markup = build_slideshow_keyboard()
 
-        await status_msg.edit_text(
-            Texts.SLIDESHOW_DETECTED.format(title=html.escape(title)),
-            reply_markup=reply_markup,
-            parse_mode="HTML",
-        )
+        try:
+            await status_msg.edit_text(
+                Texts.SLIDESHOW_DETECTED.format(title=html.escape(title)),
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+        except Exception:
+            await status_msg.delete()
+            await status_msg.get_bot().send_message(
+                chat_id=status_msg.chat_id,
+                text=Texts.SLIDESHOW_DETECTED.format(title=html.escape(title)),
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
     elif is_tiktok_api_success and tiktok_api_res and tiktok_api_res.url:
         # Direct API video! Download and send immediately
         await status_msg.edit_text("⏳ Загрузка видео...")

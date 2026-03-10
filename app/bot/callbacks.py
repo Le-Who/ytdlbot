@@ -422,11 +422,18 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
 
         payload = await state.link_cache.get(parse_token)
-        if not payload or not getattr(payload, "api_json", None):
+        if not payload:
             await _edit_or_reply(q, Texts.LINK_EXPIRED)
             return
 
-        api_source = getattr(payload, "api_source", None)
+        if isinstance(payload, dict):
+            payload = DownloadContext(**payload)
+
+        if not payload.api_json:
+            await _edit_or_reply(q, Texts.LINK_EXPIRED)
+            return
+
+        api_source = payload.api_source
         from typing import Any
 
         api_res: Any = None

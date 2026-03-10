@@ -1,0 +1,430 @@
+tests\test_ytdlp_parsers.py:57: error: Item "None" of "FormatMetadata | None" has no attribute "format_id"  [union-attr]
+tests\test_ytdlp_parsers.py:58: error: Item "None" of "FormatMetadata | None" has no attribute "height"  [union-attr]
+tests\test_ytdlp_parsers.py:59: error: Item "None" of "FormatMetadata | None" has no attribute "filesize"  [union-attr]
+tests\test_ytdlp_parsers.py:60: error: Item "None" of "FormatMetadata | None" has no attribute "ext"  [union-attr]
+tests\test_ytdlp_parsers.py:63: error: Argument 1 to "create_format_item" has incompatible type "FormatMetadata | None"; expected "FormatMetadata"  [arg-type]
+tests\test_ytdlp_parsers.py:95: error: Item "None" of "FormatMetadata | None" has no attribute "format_id"  [union-attr]
+tests\test_ytdlp_parsers.py:96: error: Item "None" of "FormatMetadata | None" has no attribute "height"  [union-attr]
+tests\test_ytdlp_parsers.py:98: error: Argument 1 to "create_format_item" has incompatible type "FormatMetadata | None"; expected "FormatMetadata"  [arg-type]
+tests\test_ytdlp_parsers.py:123: error: Item "None" of "FormatMetadata | None" has no attribute "format_id"  [union-attr]
+tests\test_ytdlp_parsers.py:125: error: Argument 1 to "create_format_item" has incompatible type "FormatMetadata | None"; expected "FormatMetadata"  [arg-type]
+tests\test_ytdlp_parsers.py:150: error: Item "None" of "FormatMetadata | None" has no attribute "height"  [union-attr]
+tests\test_ytdlp_parsers.py:152: error: Argument 1 to "create_format_item" has incompatible type "FormatMetadata | None"; expected "FormatMetadata"  [arg-type]
+tests\test_ytdlp_parsers.py:170: error: Item "None" of "FormatMetadata | None" has no attribute "filesize"  [union-attr]
+tests\test_ytdlp_parsers.py:172: error: Argument 1 to "create_format_item" has incompatible type "FormatMetadata | None"; expected "FormatMetadata"  [arg-type]
+tests\test_ytdlp_parsers.py:194: error: Item "None" of "FormatMetadata | None" has no attribute "filesize"  [union-attr]
+tests\test_ytdlp_parsers.py:196: error: Argument 1 to "create_format_item" has incompatible type "FormatMetadata | None"; expected "FormatMetadata"  [arg-type]
+tests\test_ytdlp_parsers.py:209: error: Argument 1 to "create_format_item" has incompatible type "FormatMetadata | None"; expected "FormatMetadata"  [arg-type]
+tests\test_ytdlp_parsers.py:350: error: Argument 1 to "_extract_height" has incompatible type "None"; expected "str"  [arg-type]
+tests\test_ytdlp_parsers.py:371: error: Item "None" of "FormatMetadata | None" has no attribute "height"  [union-attr]
+tests\test_ytdlp_parsers.py:372: error: Item "None" of "FormatMetadata | None" has no attribute "ext"  [union-attr]
+tests\test_ytdlp_parsers.py:373: error: Item "None" of "FormatMetadata | None" has no attribute "filesize"  [union-attr]
+tests\test_ytdlp_parsers.py:375: error: Argument 1 to "create_format_item" has incompatible type "FormatMetadata | None"; expected "FormatMetadata"  [arg-type]
+tests\test_ytdlp_parsers.py:390: error: Item "None" of "FormatMetadata | None" has no attribute "height"  [union-attr]
+tests\test_ytdlp_parsers.py:391: error: Item "None" of "FormatMetadata | None" has no attribute "ext"  [union-attr]
+tests\test_ytdlp_parsers.py:393: error: Argument 1 to "create_format_item" has incompatible type "FormatMetadata | None"; expected "FormatMetadata"  [arg-type]
+tests\test_ytdlp_parsers.py:406: error: Item "None" of "FormatMetadata | None" has no attribute "height"  [union-attr]
+tests\test_ytdlp_parsers.py:407: error: Item "None" of "FormatMetadata | None" has no attribute "height"  [union-attr]
+tests\test_ytdlp_parsers.py:427: error: Argument 1 to "create_format_item" has incompatible type "FormatMetadata | None"; expected "FormatMetadata"  [arg-type]
+tests\test_slideshow_detection.py:12: error: Need type annotation for "info"  [var-annotated]
+tests\test_slideshow_detection.py:18: error: Need type annotation for "info"  [var-annotated]
+tests\test_slideshow_detection.py:69: error: Need type annotation for "info" (hint: "info: dict[<type>, <type>] = ...")  [var-annotated]
+tests\test_slideshow_detection.py:75: error: Need type annotation for "info"  [var-annotated]
+tests\test_parsers_full.py:246: error: Item "None" of "FormatMetadata | None" has no attribute "format_id"  [union-attr]
+tests\test_parsers_full.py:247: error: Item "None" of "FormatMetadata | None" has no attribute "height"  [union-attr]
+tests\test_parsers_full.py:264: error: Item "None" of "FormatMetadata | None" has no attribute "height"  [union-attr]
+tests\test_parsers_full.py:280: error: Item "None" of "FormatMetadata | None" has no attribute "height"  [union-attr]
+tests\test_parsers_full.py:292: error: Item "None" of "FormatMetadata | None" has no attribute "height"  [union-attr]
+tests\test_janitor_service.py:25: error: "object" has no attribute "start"  [attr-defined]
+tests\test_janitor_service.py:29: error: "object" has no attribute "stop"  [attr-defined]
+tests\test_gallery_dl_service.py:70: error: Argument 2 to "assertIn" of "TestCase" has incompatible type "str | None"; expected "Iterable[Any] | Container[Any]"  [arg-type]
+tests\test_gallery_dl_service.py:80: error: Item "None" of "str | None" has no attribute "lower"  [union-attr]
+tests\test_gallery_dl_service.py:92: error: Argument 2 to "assertIn" of "TestCase" has incompatible type "str | None"; expected "Iterable[Any] | Container[Any]"  [arg-type]
+tests\test_gallery_dl_service.py:107: error: Argument 2 to "assertIn" of "TestCase" has incompatible type "str | None"; expected "Iterable[Any] | Container[Any]"  [arg-type]
+tests\test_gallery_dl_service.py:130: error: Item "None" of "SlideshowResult | None" has no attribute "images"  [union-attr]
+tests\test_gallery_dl_service.py:131: error: Item "None" of "SlideshowResult | None" has no attribute "audio"  [union-attr]
+tests\test_gallery_dl_service.py:132: error: Item "None" of "SlideshowResult | None" has no attribute "title"  [union-attr]
+tests\test_gallery_dl_service.py:144: error: Item "None" of "str | None" has no attribute "lower"  [union-attr]
+tests\test_gallery_dl_service.py:156: error: Item "None" of "SlideshowResult | None" has no attribute "images"  [union-attr]
+tests\test_cookies_manager.py:34: error: Argument 1 to "exists" has incompatible type "str | None"; expected "int | str | bytes | PathLike[str] | PathLike[bytes]"  [arg-type]
+tests\test_cache.py:12: error: Need type annotation for "evicted" (hint: "evicted: list[<type>] = ...")  [var-annotated]
+tests\test_cache.py:22: error: Need type annotation for "evicted" (hint: "evicted: list[<type>] = ...")  [var-annotated]
+tests\test_cache.py:32: error: Need type annotation for "evicted" (hint: "evicted: list[<type>] = ...")  [var-annotated]
+tests\test_cache.py:41: error: Need type annotation for "evicted" (hint: "evicted: list[<type>] = ...")  [var-annotated]
+tests\test_core_utils.py:115: error: Item "None" of "str | None" has no attribute "endswith"  [union-attr]
+tests\test_core_utils.py:131: error: Item "None" of "str | None" has no attribute "endswith"  [union-attr]
+tests\test_property_based.py:121: error: Argument 1 to "assertGreaterEqual" of "TestCase" has incompatible type "int | None"; expected "SupportsDunderGE[int]"  [arg-type]
+tests\test_tikwm_service.py:88: error: Argument 2 to "assertIn" of "TestCase" has incompatible type "str | None"; expected "Iterable[Any] | Container[Any]"  [arg-type]
+tests\test_tikwm_service.py:105: error: Argument 2 to "assertIn" of "TestCase" has incompatible type "str | None"; expected "Iterable[Any] | Container[Any]"  [arg-type]
+tests\test_tikwm_service.py:120: error: Item "None" of "str | None" has no attribute "lower"  [union-attr]
+tests\test_tikwm_service.py:175: error: Argument 1 to "exists" has incompatible type "str | None"; expected "int | str | bytes | PathLike[str] | PathLike[bytes]"  [arg-type]
+tests\test_tikwm_service.py:176: error: Argument 1 to "unlink" has incompatible type "str | None"; expected "str | bytes | PathLike[str] | PathLike[bytes]"  [arg-type]
+tests\test_ytdlp_service.py:18: error: Cannot assign to a method  [method-assign]
+tests\test_ytdlp_service.py:107: error: Argument 3 to "FormatItem" has incompatible type "str"; expected "int | None"  [arg-type]
+tests\test_ytdlp_service.py:107: error: Argument 5 to "FormatItem" has incompatible type "int"; expected "bool"  [arg-type]
+tests\test_professional_features.py:15: error: Cannot assign to a method  [method-assign]
+tests\test_logic_stability.py:18: error: Need type annotation for "test_info_cache" (hint: "test_info_cache: dict[<type>, <type>] = ...")  [var-annotated]
+tests\test_injection_prevention.py:24: error: Cannot assign to a method  [method-assign]
+tests\test_injection_prevention.py:26: error: Function is missing a return type annotation  [no-untyped-def]
+tests\test_injection_prevention.py:80: error: Cannot assign to a method  [method-assign]
+tests\test_fixes_verification.py:48: error: Argument 2 to "assertIn" of "TestCase" has incompatible type "str | None"; expected "Iterable[Any] | Container[Any]"  [arg-type]
+tests\conftest.py:69: error: Missing positional arguments "maxsize", "ttl" in call to "MemoryStorage"  [call-arg]
+tests\conftest.py:70: error: Missing positional arguments "maxsize", "ttl" in call to "MemoryStorage"  [call-arg]
+tests\conftest.py:71: error: Missing positional arguments "maxsize", "ttl" in call to "MemoryStorage"  [call-arg]
+tests\test_converter_service.py:12: error: Argument 1 to "convert_to_gif_ffmpeg" of "MediaConverter" has incompatible type "None"; expected "str"  [arg-type]
+tests\test_converter_service.py:40: error: Argument 1 to "images_to_video" of "MediaConverter" has incompatible type "None"; expected "list[str]"  [arg-type]
+tests\test_converter.py:74: error: Unsupported right operand type for in ("str | None")  [operator]
+tests\test_converter.py:99: error: Unsupported right operand type for in ("str | None")  [operator]
+app\bot\messages.py:100: error: Incompatible types in assignment (expression has type "CobaltResult", variable has type "TikWMResult | None")  [assignment]
+tests\test_downloader_service.py:14: error: Incompatible types in assignment (expression has type "dict[Never, Never]", variable has type "FileTTLCache")  [assignment]
+tests\test_downloader_service.py:15: error: Incompatible types in assignment (expression has type "dict[Never, Never]", variable has type "StateStorage")  [assignment]
+tests\test_downloader_service.py:15: note: "dict" is missing following "StateStorage" protocol members:
+tests\test_downloader_service.py:15: note:     delete, set
+tests\test_downloader_service.py:15: note: Following member(s) of "dict[Never, Never]" have conflicts:
+tests\test_downloader_service.py:15: note:     Expected:
+tests\test_downloader_service.py:15: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_downloader_service.py:15: note:     Got:
+tests\test_downloader_service.py:15: note:         def clear(self) -> None
+tests\test_downloader_service.py:15: note:     Expected:
+tests\test_downloader_service.py:15: note:         def get(self, key: str, type_hint: Any = ...) -> Coroutine[Any, Any, Any]
+tests\test_downloader_service.py:15: note:     Got:
+tests\test_downloader_service.py:15: note:         @overload
+tests\test_downloader_service.py:15: note:         def get(self, Never, None = ..., /) -> None
+tests\test_downloader_service.py:15: note:         @overload
+tests\test_downloader_service.py:15: note:         def get(self, Never, Never, /) -> Never
+tests\test_downloader_service.py:15: note:         @overload
+tests\test_downloader_service.py:15: note:         def [_T] get(self, Never, _T, /) -> _T
+tests\test_messages_errors.py:34: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_messages_errors.py:34: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_messages_errors.py:34: note:     Expected:
+tests\test_messages_errors.py:34: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_messages_errors.py:34: note:     Got:
+tests\test_messages_errors.py:34: note:         def clear(self) -> None
+tests\test_messages_errors.py:34: note:     Expected:
+tests\test_messages_errors.py:34: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_messages_errors.py:34: note:     Got:
+tests\test_messages_errors.py:34: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_messages_errors.py:35: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_messages_errors.py:35: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_messages_errors.py:35: note:     Expected:
+tests\test_messages_errors.py:35: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_messages_errors.py:35: note:     Got:
+tests\test_messages_errors.py:35: note:         def clear(self) -> None
+tests\test_messages_errors.py:35: note:     Expected:
+tests\test_messages_errors.py:35: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_messages_errors.py:35: note:     Got:
+tests\test_messages_errors.py:35: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_messages_errors.py:36: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_messages_errors.py:36: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_messages_errors.py:36: note:     Expected:
+tests\test_messages_errors.py:36: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_messages_errors.py:36: note:     Got:
+tests\test_messages_errors.py:36: note:         def clear(self) -> None
+tests\test_messages_errors.py:36: note:     Expected:
+tests\test_messages_errors.py:36: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_messages_errors.py:36: note:     Got:
+tests\test_messages_errors.py:36: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_messages_errors.py:43: error: Module has no attribute "ytdlp_executor"  [attr-defined]
+tests\test_messages_errors.py:64: error: Cannot assign to a method  [method-assign]
+tests\test_messages_errors.py:75: error: Cannot assign to a method  [method-assign]
+tests\test_messages_errors.py:84: error: Cannot assign to a method  [method-assign]
+tests\test_messages_errors.py:93: error: Cannot assign to a method  [method-assign]
+tests\test_messages_errors.py:104: error: Cannot assign to a method  [method-assign]
+tests\test_messages_errors.py:116: error: Cannot assign to a method  [method-assign]
+tests\test_messages_errors.py:157: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_messages_errors.py:189: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_messages_errors.py:226: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_bot_messages.py:30: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_bot_messages.py:30: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_bot_messages.py:30: note:     Expected:
+tests\test_bot_messages.py:30: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_bot_messages.py:30: note:     Got:
+tests\test_bot_messages.py:30: note:         def clear(self) -> None
+tests\test_bot_messages.py:30: note:     Expected:
+tests\test_bot_messages.py:30: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_bot_messages.py:30: note:     Got:
+tests\test_bot_messages.py:30: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_bot_messages.py:31: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_bot_messages.py:31: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_bot_messages.py:31: note:     Expected:
+tests\test_bot_messages.py:31: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_bot_messages.py:31: note:     Got:
+tests\test_bot_messages.py:31: note:         def clear(self) -> None
+tests\test_bot_messages.py:31: note:     Expected:
+tests\test_bot_messages.py:31: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_bot_messages.py:31: note:     Got:
+tests\test_bot_messages.py:31: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_bot_messages.py:32: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_bot_messages.py:32: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_bot_messages.py:32: note:     Expected:
+tests\test_bot_messages.py:32: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_bot_messages.py:32: note:     Got:
+tests\test_bot_messages.py:32: note:         def clear(self) -> None
+tests\test_bot_messages.py:32: note:     Expected:
+tests\test_bot_messages.py:32: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_bot_messages.py:32: note:     Got:
+tests\test_bot_messages.py:32: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_bot_messages.py:75: error: Cannot assign to a method  [method-assign]
+tests\test_bot_messages.py:82: error: Cannot assign to a method  [method-assign]
+tests\test_bot_messages.py:83: error: Cannot assign to a method  [method-assign]
+tests\test_bot_messages.py:102: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_bot_messages.py:104: error: Argument "formats" to "ExtractionResult" has incompatible type "list[MagicMock]"; expected "list[FormatItem]"  [arg-type]
+tests\test_bot_messages.py:104: note: "list" is invariant -- see https://mypy.readthedocs.io/en/stable/common_issues.html#variance
+tests\test_bot_messages.py:104: note: Consider using "Sequence" instead, which is covariant
+app\bot\group_logic.py:100: error: Incompatible types in assignment (expression has type "CobaltResult", variable has type "TikWMResult | None")  [assignment]
+app\bot\group_logic.py:202: error: Incompatible types in assignment (expression has type "str | BytesIO | None", variable has type "str | None")  [assignment]
+app\bot\group_logic.py:305: error: Need type annotation for "image_paths" (hint: "image_paths: list[<type>] = ...")  [var-annotated]
+app\bot\group_logic.py:317: error: Incompatible types in assignment (expression has type "CobaltResult", variable has type "TikWMResult")  [assignment]
+app\bot\group_logic.py:318: error: Incompatible types in assignment (expression has type "list[str] | None", variable has type "list[str]")  [assignment]
+app\bot\group_logic.py:318: error: Argument 1 to "download_slideshow" of "CobaltService" has incompatible type "TikWMResult"; expected "CobaltResult"  [arg-type]
+app\bot\callbacks.py:426: error: Incompatible types in assignment (expression has type "CobaltResult", variable has type "TikWMResult")  [assignment]
+app\bot\callbacks.py:461: error: Incompatible types in assignment (expression has type "list[str] | None", variable has type "list[str]")  [assignment]
+app\bot\callbacks.py:462: error: Argument 1 to "download_slideshow" of "CobaltService" has incompatible type "TikWMResult"; expected "CobaltResult"  [arg-type]
+tests\test_group_logic.py:32: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_group_logic.py:32: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_group_logic.py:32: note:     Expected:
+tests\test_group_logic.py:32: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_group_logic.py:32: note:     Got:
+tests\test_group_logic.py:32: note:         def clear(self) -> None
+tests\test_group_logic.py:32: note:     Expected:
+tests\test_group_logic.py:32: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_group_logic.py:32: note:     Got:
+tests\test_group_logic.py:32: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_group_logic.py:33: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "FileTTLCache")  [assignment]
+tests\test_group_logic.py:34: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_group_logic.py:34: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_group_logic.py:34: note:     Expected:
+tests\test_group_logic.py:34: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_group_logic.py:34: note:     Got:
+tests\test_group_logic.py:34: note:         def clear(self) -> None
+tests\test_group_logic.py:34: note:     Expected:
+tests\test_group_logic.py:34: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_group_logic.py:34: note:     Got:
+tests\test_group_logic.py:34: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_group_logic.py:84: error: Cannot assign to a method  [method-assign]
+tests\test_group_logic.py:93: error: Cannot assign to a method  [method-assign]
+tests\test_group_logic.py:127: error: Module has no attribute "ytdlp_executor"  [attr-defined]
+tests\test_group_logic.py:161: error: Module has no attribute "ytdlp_executor"  [attr-defined]
+tests\test_group_logic.py:186: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_group_logic.py:186: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_group_logic.py:186: note:     Expected:
+tests\test_group_logic.py:186: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_group_logic.py:186: note:     Got:
+tests\test_group_logic.py:186: note:         def clear(self) -> None
+tests\test_group_logic.py:186: note:     Expected:
+tests\test_group_logic.py:186: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_group_logic.py:186: note:     Got:
+tests\test_group_logic.py:186: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_group_logic.py:187: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "FileTTLCache")  [assignment]
+tests\test_group_and_converter_extended.py:38: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_group_and_converter_extended.py:38: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_group_and_converter_extended.py:38: note:     Expected:
+tests\test_group_and_converter_extended.py:38: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_group_and_converter_extended.py:38: note:     Got:
+tests\test_group_and_converter_extended.py:38: note:         def clear(self) -> None
+tests\test_group_and_converter_extended.py:38: note:     Expected:
+tests\test_group_and_converter_extended.py:38: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_group_and_converter_extended.py:38: note:     Got:
+tests\test_group_and_converter_extended.py:38: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_group_and_converter_extended.py:39: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "FileTTLCache")  [assignment]
+tests\test_group_and_converter_extended.py:46: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_group_and_converter_extended.py:80: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_group_and_converter_extended.py:114: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_group_and_converter_extended.py:146: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_group_and_converter_extended.py:179: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_slideshow_callbacks.py:32: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_slideshow_callbacks.py:32: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_slideshow_callbacks.py:32: note:     Expected:
+tests\test_slideshow_callbacks.py:32: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_slideshow_callbacks.py:32: note:     Got:
+tests\test_slideshow_callbacks.py:32: note:         def clear(self) -> None
+tests\test_slideshow_callbacks.py:32: note:     Expected:
+tests\test_slideshow_callbacks.py:32: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_slideshow_callbacks.py:32: note:     Got:
+tests\test_slideshow_callbacks.py:32: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_slideshow_callbacks.py:33: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_slideshow_callbacks.py:33: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_slideshow_callbacks.py:33: note:     Expected:
+tests\test_slideshow_callbacks.py:33: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_slideshow_callbacks.py:33: note:     Got:
+tests\test_slideshow_callbacks.py:33: note:         def clear(self) -> None
+tests\test_slideshow_callbacks.py:33: note:     Expected:
+tests\test_slideshow_callbacks.py:33: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_slideshow_callbacks.py:33: note:     Got:
+tests\test_slideshow_callbacks.py:33: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_slideshow_callbacks.py:34: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_slideshow_callbacks.py:34: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_slideshow_callbacks.py:34: note:     Expected:
+tests\test_slideshow_callbacks.py:34: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_slideshow_callbacks.py:34: note:     Got:
+tests\test_slideshow_callbacks.py:34: note:         def clear(self) -> None
+tests\test_slideshow_callbacks.py:34: note:     Expected:
+tests\test_slideshow_callbacks.py:34: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_slideshow_callbacks.py:34: note:     Got:
+tests\test_slideshow_callbacks.py:34: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_slideshow_callbacks.py:145: error: Cannot assign to a method  [method-assign]
+tests\test_integration.py:45: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_integration.py:45: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_integration.py:45: note:     Expected:
+tests\test_integration.py:45: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_integration.py:45: note:     Got:
+tests\test_integration.py:45: note:         def clear(self) -> None
+tests\test_integration.py:45: note:     Expected:
+tests\test_integration.py:45: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_integration.py:45: note:     Got:
+tests\test_integration.py:45: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_integration.py:46: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_integration.py:46: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_integration.py:46: note:     Expected:
+tests\test_integration.py:46: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_integration.py:46: note:     Got:
+tests\test_integration.py:46: note:         def clear(self) -> None
+tests\test_integration.py:46: note:     Expected:
+tests\test_integration.py:46: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_integration.py:46: note:     Got:
+tests\test_integration.py:46: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_integration.py:47: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_integration.py:47: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_integration.py:47: note:     Expected:
+tests\test_integration.py:47: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_integration.py:47: note:     Got:
+tests\test_integration.py:47: note:         def clear(self) -> None
+tests\test_integration.py:47: note:     Expected:
+tests\test_integration.py:47: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_integration.py:47: note:     Got:
+tests\test_integration.py:47: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_integration.py:84: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_integration.py:110: error: Argument 1 to "len" has incompatible type "StateStorage"; expected "Sized"  [arg-type]
+tests\test_integration.py:111: error: "StateStorage" has no attribute "keys"  [attr-defined]
+tests\test_integration.py:112: error: Value of type "StateStorage" is not indexable  [index]
+tests\test_integration.py:139: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_integration.py:141: error: Argument "formats" to "ExtractionResult" has incompatible type "list[MagicMock]"; expected "list[FormatItem]"  [arg-type]
+tests\test_integration.py:141: note: "list" is invariant -- see https://mypy.readthedocs.io/en/stable/common_issues.html#variance
+tests\test_integration.py:141: note: Consider using "Sequence" instead, which is covariant
+tests\test_integration.py:168: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_integration.py:168: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_integration.py:168: note:     Expected:
+tests\test_integration.py:168: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_integration.py:168: note:     Got:
+tests\test_integration.py:168: note:         def clear(self) -> None
+tests\test_integration.py:168: note:     Expected:
+tests\test_integration.py:168: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_integration.py:168: note:     Got:
+tests\test_integration.py:168: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_integration.py:169: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_integration.py:169: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_integration.py:169: note:     Expected:
+tests\test_integration.py:169: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_integration.py:169: note:     Got:
+tests\test_integration.py:169: note:         def clear(self) -> None
+tests\test_integration.py:169: note:     Expected:
+tests\test_integration.py:169: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_integration.py:169: note:     Got:
+tests\test_integration.py:169: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_integration.py:170: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_integration.py:170: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_integration.py:170: note:     Expected:
+tests\test_integration.py:170: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_integration.py:170: note:     Got:
+tests\test_integration.py:170: note:         def clear(self) -> None
+tests\test_integration.py:170: note:     Expected:
+tests\test_integration.py:170: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_integration.py:170: note:     Got:
+tests\test_integration.py:170: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_integration.py:179: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_integration.py:235: error: Cannot assign to a method  [method-assign]
+tests\test_integration.py:273: error: Argument 2 to "assertIn" of "TestCase" has incompatible type "str | None"; expected "Iterable[Any] | Container[Any]"  [arg-type]
+tests\test_callbacks_exceptions.py:34: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_callbacks_exceptions.py:34: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_callbacks_exceptions.py:34: note:     Expected:
+tests\test_callbacks_exceptions.py:34: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_callbacks_exceptions.py:34: note:     Got:
+tests\test_callbacks_exceptions.py:34: note:         def clear(self) -> None
+tests\test_callbacks_exceptions.py:34: note:     Expected:
+tests\test_callbacks_exceptions.py:34: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_callbacks_exceptions.py:34: note:     Got:
+tests\test_callbacks_exceptions.py:34: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_callbacks_exceptions.py:35: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_callbacks_exceptions.py:35: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_callbacks_exceptions.py:35: note:     Expected:
+tests\test_callbacks_exceptions.py:35: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_callbacks_exceptions.py:35: note:     Got:
+tests\test_callbacks_exceptions.py:35: note:         def clear(self) -> None
+tests\test_callbacks_exceptions.py:35: note:     Expected:
+tests\test_callbacks_exceptions.py:35: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_callbacks_exceptions.py:35: note:     Got:
+tests\test_callbacks_exceptions.py:35: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_callbacks_exceptions.py:36: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_callbacks_exceptions.py:36: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_callbacks_exceptions.py:36: note:     Expected:
+tests\test_callbacks_exceptions.py:36: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_callbacks_exceptions.py:36: note:     Got:
+tests\test_callbacks_exceptions.py:36: note:         def clear(self) -> None
+tests\test_callbacks_exceptions.py:36: note:     Expected:
+tests\test_callbacks_exceptions.py:36: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_callbacks_exceptions.py:36: note:     Got:
+tests\test_callbacks_exceptions.py:36: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_callbacks_exceptions.py:132: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_callbacks_exceptions.py:132: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_callbacks_exceptions.py:132: note:     Expected:
+tests\test_callbacks_exceptions.py:132: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_callbacks_exceptions.py:132: note:     Got:
+tests\test_callbacks_exceptions.py:132: note:         def clear(self) -> None
+tests\test_callbacks_exceptions.py:132: note:     Expected:
+tests\test_callbacks_exceptions.py:132: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_callbacks_exceptions.py:132: note:     Got:
+tests\test_callbacks_exceptions.py:132: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_bot_callbacks.py:31: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_bot_callbacks.py:31: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_bot_callbacks.py:31: note:     Expected:
+tests\test_bot_callbacks.py:31: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_bot_callbacks.py:31: note:     Got:
+tests\test_bot_callbacks.py:31: note:         def clear(self) -> None
+tests\test_bot_callbacks.py:31: note:     Expected:
+tests\test_bot_callbacks.py:31: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_bot_callbacks.py:31: note:     Got:
+tests\test_bot_callbacks.py:31: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_bot_callbacks.py:32: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_bot_callbacks.py:32: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_bot_callbacks.py:32: note:     Expected:
+tests\test_bot_callbacks.py:32: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_bot_callbacks.py:32: note:     Got:
+tests\test_bot_callbacks.py:32: note:         def clear(self) -> None
+tests\test_bot_callbacks.py:32: note:     Expected:
+tests\test_bot_callbacks.py:32: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_bot_callbacks.py:32: note:     Got:
+tests\test_bot_callbacks.py:32: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_bot_callbacks.py:33: error: Incompatible types in assignment (expression has type "AsyncMockCache", variable has type "StateStorage")  [assignment]
+tests\test_bot_callbacks.py:33: note: Following member(s) of "AsyncMockCache" have conflicts:
+tests\test_bot_callbacks.py:33: note:     Expected:
+tests\test_bot_callbacks.py:33: note:         def clear(self) -> Coroutine[Any, Any, None]
+tests\test_bot_callbacks.py:33: note:     Got:
+tests\test_bot_callbacks.py:33: note:         def clear(self) -> None
+tests\test_bot_callbacks.py:33: note:     Expected:
+tests\test_bot_callbacks.py:33: note:         def set(self, key: str, value: Any, ttl: int | None = ...) -> Coroutine[Any, Any, None]
+tests\test_bot_callbacks.py:33: note:     Got:
+tests\test_bot_callbacks.py:33: note:         def set(self, key: Any, value: Any) -> Any
+tests\test_bot_callbacks.py:71: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_bot_callbacks.py:73: error: Argument "formats" to "ExtractionResult" has incompatible type "list[MagicMock]"; expected "list[FormatItem]"  [arg-type]
+tests\test_bot_callbacks.py:73: note: "list" is invariant -- see https://mypy.readthedocs.io/en/stable/common_issues.html#variance
+tests\test_bot_callbacks.py:73: note: Consider using "Sequence" instead, which is covariant
+tests\test_bot_callbacks.py:100: error: "Callable[[str, int], Coroutine[Any, Any, ExtractionResult]]" has no attribute "return_value"  [attr-defined]
+tests\test_bot_callbacks.py:102: error: Argument "formats" to "ExtractionResult" has incompatible type "list[MagicMock]"; expected "list[FormatItem]"  [arg-type]
+tests\test_bot_callbacks.py:102: note: "list" is invariant -- see https://mypy.readthedocs.io/en/stable/common_issues.html#variance
+tests\test_bot_callbacks.py:102: note: Consider using "Sequence" instead, which is covariant
+tests\test_bot_callbacks.py:112: error: "Callable[[str, int], Coroutine[Any, Any, ExtractionResult]]" has no attribute "assert_called_with"  [attr-defined]
+tests\test_bot_callbacks.py:116: error: Argument 2 to "assertIn" of "TestCase" has incompatible type "StateStorage"; expected "Iterable[Any] | Container[Any]"  [arg-type]
+tests\test_bot_callbacks.py:121: error: "Callable[[str, int], Coroutine[Any, Any, ExtractionResult]]" has no attribute "side_effect"  [attr-defined]
+tests\test_bot_callbacks.py:144: error: Argument 1 to "len" has incompatible type "StateStorage"; expected "Sized"  [arg-type]
+tests\test_bot_callbacks.py:145: error: "StateStorage" has no attribute "keys"  [attr-defined]
+tests\test_bot_callbacks.py:146: error: Value of type "StateStorage" is not indexable  [index]
+tests\test_bot_callbacks.py:171: error: Cannot assign to a method  [method-assign]
+tests\test_bot_callbacks.py:179: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_bot_callbacks.py:189: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_bot_callbacks.py:217: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_bot_callbacks.py:245: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_bot_callbacks.py:272: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_bot_callbacks.py:290: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_bot_callbacks.py:305: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+tests\test_bot_callbacks.py:324: error: Unsupported target for indexed assignment ("StateStorage")  [index]
+Found 171 errors in 30 files (checked 96 source files)

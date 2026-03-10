@@ -58,7 +58,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     is_tiktok_url = "tiktok" in text.lower()
     is_tiktok_api_success = False
     is_slideshow = False
-    tiktok_api_res = None
+    from typing import Any
+
+    tiktok_api_res: Any = None
     title = ""
     duration = "—"
     special_format = None

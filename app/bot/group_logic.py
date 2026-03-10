@@ -73,7 +73,9 @@ async def handle_group_message(
     tiktok_auth_error = False
     info_json_path = None  # cached extraction JSON for --load-info-json reuse
     is_tiktok_api_success = False
-    tiktok_api_res = None
+    from typing import Any
+
+    tiktok_api_res: Any = None
     api_source = None
 
     if is_tiktok_url:
@@ -188,7 +190,9 @@ async def handle_group_message(
             and not is_slideshow
             and tiktok_api_res.url
         ):
-            file_path = None
+            from typing import Any
+
+            file_path: Any = None
             if api_source == "tikwm":
                 from app.services.tikwm import TikWMService
 
@@ -196,7 +200,10 @@ async def handle_group_message(
             elif api_source == "cobalt":
                 from app.services.cobalt import CobaltService
 
-                file_path = await CobaltService.download_file(tiktok_api_res.url, "mp4")
+                file_path_raw = await CobaltService.download_file(
+                    tiktok_api_res.url, "mp4"
+                )
+                file_path = str(file_path_raw) if file_path_raw else None
             error = None if file_path else "⚠️ Ошибка загрузки видео."
         else:
             file_path, error = await MediaSender.download_video(
@@ -302,14 +309,16 @@ async def on_group_slideshow(
     if is_api and payload.api_json:
         from app.services.gallery_dl.service import SlideshowResult
 
-        image_paths = []
+        from typing import Any
+
+        image_paths: Any = []
         audio_path = None
         error = None
 
         if payload.api_source == "tikwm":
             from app.services.tikwm import TikWMResult, TikWMService
 
-            res = TikWMResult(**payload.api_json)
+            res: Any = TikWMResult(**payload.api_json)
             image_paths, audio_path = await TikWMService.download_slideshow(res)
         elif payload.api_source == "cobalt":
             from app.services.cobalt import CobaltResult, CobaltService

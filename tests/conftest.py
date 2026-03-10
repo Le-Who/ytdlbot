@@ -66,9 +66,9 @@ def mock_state():
     from app.core.storage.memory import MemoryStorage
 
     # We use MemoryStorage implicitly typed as AsyncMockCache
-    state.info_cache = MemoryStorage()
-    state.link_cache = MemoryStorage()
-    state.cancel_cache = MemoryStorage()
+    state.info_cache = MemoryStorage(maxsize=100, ttl=3600)
+    state.link_cache = MemoryStorage(maxsize=100, ttl=3600)
+    state.cancel_cache = MemoryStorage(maxsize=100, ttl=3600)
     state.limiter = MagicMock()
     state.limiter.allow_user = AsyncMock(return_value=True)
     state.limiter.allow_chat = AsyncMock(return_value=True)

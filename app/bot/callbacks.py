@@ -416,6 +416,9 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
 
         api_source = getattr(payload, "api_source", None)
+        from typing import Any
+
+        api_res: Any = None
         if api_source == "tikwm":
             from app.services.tikwm import TikWMResult
 
@@ -450,6 +453,11 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         if is_api:
             from app.services.gallery_dl.service import SlideshowResult
+
+            from typing import Any
+
+            image_paths: Any = []
+            audio_path: Any = None
 
             if api_source == "tikwm":
                 from app.services.tikwm import TikWMService

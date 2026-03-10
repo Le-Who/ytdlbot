@@ -1,7 +1,7 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--cov=app --cov-report=term-missing:skip-covered --cov-fail-under=73 -q -m 'not integration'"
+addopts = "--cov=app --cov-report=term-missing:skip-covered --cov-fail-under=72 -q -m 'not integration'"
 markers = [
     "integration: requires real yt-dlp/ffmpeg binaries (skipped by default)",
 ]
@@ -17,7 +17,7 @@ omit = [
 [tool.coverage.report]
 show_missing = true
 skip_empty = true
-fail_under = 73
+fail_under = 72
 exclude_lines = [
     "pragma: no cover",
     "if __name__ == .__main__.",

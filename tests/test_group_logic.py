@@ -147,9 +147,9 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
         self.update.message.delete.assert_awaited_once()
 
     @patch("app.bot.group_logic.MediaSender")
-    @patch("app.services.cobalt.CobaltService.process", new_callable=AsyncMock)
+    @patch("app.services.tikwm.TikWMService.process", new_callable=AsyncMock)
     async def test_tiktok_photo_url_shows_slideshow_choice(
-        self, mock_cobalt_process, mock_sender
+        self, mock_tikwm_process, mock_sender
     ):
         """TikTok /photo/ URL shows slideshow format choice."""
         from app.bot.group_logic import handle_group_message
@@ -160,11 +160,13 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
         state.ytdlp.tiktok_proxy = None
         state.ytdlp_executor = None
 
-        from app.services.cobalt import CobaltResult, CobaltPickerItem
+        from app.services.tikwm import TikWMResult
 
-        mock_cobalt_process.return_value = CobaltResult(
+        mock_tikwm_process.return_value = TikWMResult(
             status="picker",
-            picker=[CobaltPickerItem(type="photo", url="http://example.com")],
+            url=None,
+            images=["http://example.com"],
+            audio_url="test",
         )
 
         state.ytdlp.list_formats = MagicMock()

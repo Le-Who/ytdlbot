@@ -105,27 +105,30 @@ async def handle_group_message(
             except Exception as exc:
                 logger.warning("Cobalt failed in group: %s", exc)
 
+        # If TikTok APIs fail, bypass yt-dlp and force a GalleryDL fallback
         if not is_tiktok_api_success:
-            try:
-                result = await state.ytdlp.list_formats(url)
-                is_slideshow = result.is_slideshow
-                tiktok_auth_error = result.tiktok_auth_error
-                info_json_path = result.info_json_path
-            except Exception as exc:
-                # list_formats already handles TikTok routing and fallbacks,
-                # so if it still throws, we default to slideshow fallback.
-                logger.info(
-                    "TikTok list_formats error in group, falling back to slideshow: %s",
-                    exc,
-                )
-                is_slideshow = True
+            if is_tiktok_url:
+                from app.services.ytdlp.parsers import classify_tiktok_content
 
-    # TikTok auth-restricted video (handled via virtual formats)
+                logger.info(
+                    "TikTok APIs failed in group, falling back to gallery-dl directly."
+                )
+                is_slideshow = classify_tiktok_content(url) == "slideshow"
+                tiktok_auth_error = True
+            else:
+                try:
+                    result = await state.ytdlp.list_formats(url)
+                    is_slideshow = result.is_slideshow
+                    tiktok_auth_error = result.tiktok_auth_error
+                    info_json_path = result.info_json_path
+                except Exception as exc:
+                    logger.info("yt-dlp list_formats error in group: %s", exc)
+                    is_slideshow = False
+
+    # Route format processing
     if tiktok_auth_error:
-        if getattr(state.ytdlp, "tiktok_proxy", None):
-            video_format = "gallerydl_fallback"
-        else:
-            video_format = "tikwm_fallback"
+        # We always want GalleryDL now for TikTok since it handles auth restrictions natively
+        video_format = "gallerydl_fallback"
     else:
         # Detect Pinterest to use a simpler format
         is_pinterest = "pinterest" in url or "pin.it" in url

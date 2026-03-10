@@ -112,8 +112,48 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             except Exception as e:
                 logger.warning("Cobalt failed, falling back: %s", e)
 
+    # If TikTok APIs fail, or it's not TikTok, process extraction fallbacks
     if not is_tiktok_api_success:
-        cached = await state.info_cache.get(text)
+        if is_tiktok_url:
+            # Bypass yt-dlp completely for TikTok to prevent proxy blocks.
+            # We assume it's just a fallback video or slideshow for GalleryDL.
+            from app.services.ytdlp.parsers import classify_tiktok_content
+            from app.services.ytdlp.service import ExtractionResult, FormatItem
+
+            _fallback_is_slideshow = classify_tiktok_content(text) == "slideshow"
+            result = ExtractionResult(
+                title="TikTok Content",
+                formats=[
+                    FormatItem(
+                        format_id="gallerydl_fallback",
+                        ext="mp4",
+                        height=None,
+                        filesize=None,
+                        is_tiktok=True,
+                        format_note="gallerydl_fallback",
+                    )
+                ],
+                special_format="gallerydl_fallback"
+                if not _fallback_is_slideshow
+                else None,
+                duration_str="—",
+                is_slideshow=_fallback_is_slideshow,
+                info_json_path=None,
+                thumbnail_url=None,
+            )
+            title = result.title
+            formats = result.formats
+            special_format = result.special_format
+            duration = result.duration_str
+            is_slideshow = result.is_slideshow
+            info_json_path = result.info_json_path
+            thumbnail_url = result.thumbnail_url
+
+            # Cache the synthetic result briefly
+            await state.info_cache.set(text, result, ttl=300)
+
+        else:
+            cached = await state.info_cache.get(text)
         if cached:
             logger.info("Cache hit", extra={"url": text})
             result = cached

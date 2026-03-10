@@ -70,6 +70,11 @@ class CobaltService:
 
         Returns a CobaltResult object. If Cobalt fails across all instances, returns status='error'.
         """
+        if not COBALT_API_URLS:
+            return CobaltResult(
+                status="error", error_message="No Cobalt API URLs configured"
+            )
+
         payload = {
             "url": url,
             "videoQuality": video_quality,

@@ -27,7 +27,10 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.post = AsyncMock(return_value=mock_resp)
 
-        with patch("app.services.cobalt.AsyncSession", return_value=mock_session):
+        with (
+            patch("app.services.cobalt.AsyncSession", return_value=mock_session),
+            patch("app.services.cobalt.COBALT_API_URLS", ["https://mock.cobalt.test"]),
+        ):
             res = await CobaltService.process("https://tiktok.com/@user/video/123")
 
         self.assertEqual(res.status, "tunnel")
@@ -53,7 +56,10 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.post = AsyncMock(return_value=mock_resp)
 
-        with patch("app.services.cobalt.AsyncSession", return_value=mock_session):
+        with (
+            patch("app.services.cobalt.AsyncSession", return_value=mock_session),
+            patch("app.services.cobalt.COBALT_API_URLS", ["https://mock.cobalt.test"]),
+        ):
             res = await CobaltService.process("https://tiktok.com/@user/photo/123")
 
         self.assertEqual(res.status, "picker")
@@ -77,7 +83,10 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.post = AsyncMock(return_value=mock_resp)
 
-        with patch("app.services.cobalt.AsyncSession", return_value=mock_session):
+        with (
+            patch("app.services.cobalt.AsyncSession", return_value=mock_session),
+            patch("app.services.cobalt.COBALT_API_URLS", ["https://mock.cobalt.test"]),
+        ):
             res = await CobaltService.process("https://tiktok.com/@user/video/123")
 
         self.assertEqual(res.status, "error")
@@ -92,7 +101,10 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.post = AsyncMock(side_effect=ConnectionError("timeout"))
 
-        with patch("app.services.cobalt.AsyncSession", return_value=mock_session):
+        with (
+            patch("app.services.cobalt.AsyncSession", return_value=mock_session),
+            patch("app.services.cobalt.COBALT_API_URLS", ["https://mock.cobalt.test"]),
+        ):
             res = await CobaltService.process("https://tiktok.com/@user/video/123")
 
         self.assertEqual(res.status, "error")

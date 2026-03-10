@@ -51,13 +51,11 @@ REDIS_URL = os.getenv("REDIS_URL", "").strip()
 TIKTOK_PROXY: Optional[str] = os.getenv("TIKTOK_PROXY", "").strip() or None
 
 # Cobalt API (Primary TikTok backend) - Supports multiple comma-separated instances for fallback
+# NOTE: The public api.cobalt.tools now requires Turnstile JWT auth and cannot be used by bots.
+# You MUST set your own instance URL. See README.md for deployment instructions.
 COBALT_API_URLS = [
-    url.strip()
-    for url in os.getenv("COBALT_API_URL", "https://api.cobalt.tools").split(",")
-    if url.strip()
+    url.strip() for url in os.getenv("COBALT_API_URL", "").split(",") if url.strip()
 ]
-if not COBALT_API_URLS:
-    COBALT_API_URLS = ["https://api.cobalt.tools"]
 
 COBALT_API_KEY = os.getenv("COBALT_API_KEY", "")
 if not BOT_TOKEN:

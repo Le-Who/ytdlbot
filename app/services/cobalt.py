@@ -4,13 +4,16 @@ Cobalt API service — primary backend for downloading TikTok videos and slidesh
 API Documentation: https://github.com/imputnet/cobalt
 """
 
+import asyncio
 import logging
+import os
+import uuid
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 
 from curl_cffi.requests import AsyncSession, Response
 
-from app.core.config import COBALT_API_URLS, COBALT_API_KEY
+from app.core.config import COBALT_API_URLS, COBALT_API_KEY, TEMP_DIR
 
 __all__ = ["CobaltService", "CobaltResult", "CobaltPickerItem"]
 
@@ -170,10 +173,6 @@ class CobaltService:
     @staticmethod
     async def download_file(url: str, ext: str) -> Optional[str]:
         """Generic binary file downloader (for video, images, audio)."""
-        import os
-        import uuid
-        from app.core.config import TEMP_DIR
-
         output_path = os.path.join(TEMP_DIR, f"cblt_{uuid.uuid4().hex}.{ext}")
         try:
             async with AsyncSession() as session:
@@ -201,11 +200,6 @@ class CobaltService:
         Downloads a slideshow's images and audio to a temp directory.
         Returns: (list_of_image_paths, audio_path) or (None, None) on error.
         """
-        import asyncio
-        import os
-        import uuid
-        from app.core.config import TEMP_DIR
-
         if not result.is_slideshow:
             return None, None
 

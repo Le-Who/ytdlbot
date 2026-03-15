@@ -8,6 +8,7 @@ API: https://tikwm.com/api/?url=<tiktok_url>&hd=1
 Free tier: 5000 requests/day, 1 request/second.
 """
 
+import asyncio
 import logging
 import os
 import uuid
@@ -17,6 +18,7 @@ from urllib.parse import quote
 from curl_cffi.requests import AsyncSession, Response
 
 from app.core.config import TEMP_DIR
+from app.core.utils import safe_remove
 
 __all__ = ["TikWMService"]
 
@@ -112,16 +114,19 @@ class TikWMService:
                     timeout=60,
                 )
 
-                with open(output_path, "wb") as f:
-                    f.write(resp.content)
+                def _write_file(path: str, data: bytes):
+                    with open(path, "wb") as f:
+                        f.write(data)
 
-            size_mb = os.path.getsize(output_path) / (1024 * 1024)
+                await asyncio.to_thread(_write_file, output_path, resp.content)
+
+            file_size = await asyncio.to_thread(os.path.getsize, output_path)
+            size_mb = file_size / (1024 * 1024)
             logger.info("[TIKWM] Downloaded: %s (%.1f MB)", output_path, size_mb)
             return output_path, None
 
         except Exception as e:
             logger.error("[TIKWM] Download failed: %s", e)
             # Clean up partial file
-            if os.path.exists(output_path):
-                os.unlink(output_path)
+            await asyncio.to_thread(safe_remove, output_path)
             return None, f"TikWM download error: {e}"

@@ -183,8 +183,11 @@ class CobaltService:
                     )
                     return None
 
-                with open(output_path, "wb") as f:
-                    f.write(resp.content)
+                def _save():
+                    with open(output_path, "wb") as f:
+                        f.write(resp.content)
+
+                await asyncio.to_thread(_save)
             return output_path
         except Exception as e:
             logger.error("[COBALT] File download error: %s", e)
@@ -215,8 +218,12 @@ class CobaltService:
             async with AsyncSession() as session:
                 resp = await session.get(img_url, impersonate="chrome", timeout=30)
                 path = os.path.join(base_dir, f"{idx:03d}.jpg")
-                with open(path, "wb") as f:
-                    f.write(resp.content)
+
+                def _save():
+                    with open(path, "wb") as f:
+                        f.write(resp.content)
+
+                await asyncio.to_thread(_save)
                 return path
 
         for i, url in enumerate(image_urls):
@@ -236,8 +243,12 @@ class CobaltService:
                         result.audio, impersonate="chrome", timeout=30
                     )
                     audio_path = os.path.join(base_dir, "audio.mp3")
-                    with open(audio_path, "wb") as f:
-                        f.write(resp.content)
+
+                    def _save_audio():
+                        with open(audio_path, "wb") as f:
+                            f.write(resp.content)
+
+                    await asyncio.to_thread(_save_audio)
             except Exception as e:
                 logger.error("[COBALT] Slideshow audio download error: %s", e)
                 # It's okay to proceed without audio

@@ -23,6 +23,21 @@ setup_logging()
 logger = logging.getLogger("app.main")
 
 
+async def _global_error_handler(update, context):
+    logger.error(
+        "Unhandled exception in handler",
+        exc_info=context.error,
+        extra={"op": "error_handler"},
+    )
+    try:
+        if update and update.effective_message:
+            await update.effective_message.reply_text(
+                "⚠️ Произошла внутренняя ошибка. Попробуйте позже."
+            )
+    except Exception:
+        pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting up...")
@@ -72,20 +87,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             group_logic.on_group_slideshow, pattern=r"^(grpslide|cbgrpslide|apigrpslide)\|"
         )
     )
-
-    async def _global_error_handler(update, context):
-        logger.error(
-            "Unhandled exception in handler",
-            exc_info=context.error,
-            extra={"op": "error_handler"},
-        )
-        try:
-            if update and update.effective_message:
-                await update.effective_message.reply_text(
-                    "⚠️ Произошла внутренняя ошибка. Попробуйте позже."
-                )
-        except Exception:
-            pass
 
     bot_app.add_error_handler(_global_error_handler)
 

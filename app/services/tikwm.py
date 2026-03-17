@@ -182,16 +182,20 @@ class TikWMService:
                     impersonate="chrome",
                     timeout=60,
                 )
-                with open(output_path, "wb") as f:
-                    f.write(resp.content)
 
-            size_mb = os.path.getsize(output_path) / (1024 * 1024)
+                def _write_file(path: str, data: bytes):
+                    with open(path, "wb") as f:
+                        f.write(data)
+
+                await asyncio.to_thread(_write_file, output_path, resp.content)
+
+            file_size = await asyncio.to_thread(os.path.getsize, output_path)
+            size_mb = file_size / (1024 * 1024)
             logger.info("[TIKWM] Downloaded audio: %s (%.1f MB)", output_path, size_mb)
             return output_path
         except Exception as e:
             logger.error("[TIKWM] Audio download failed: %s", e)
-            if os.path.exists(output_path):
-                os.unlink(output_path)
+            await asyncio.to_thread(safe_remove, output_path)
             return None
 
     @staticmethod
@@ -207,20 +211,22 @@ class TikWMService:
         image_paths = []
         try:
             async with AsyncSession() as session:
+                def _write_file(path: str, data: bytes):
+                    with open(path, "wb") as f:
+                        f.write(data)
+
                 for idx, img_url in enumerate(res.images):
                     out_path = os.path.join(
                         TEMP_DIR, f"tikwm_slide_{uuid.uuid4().hex}_{idx}.jpg"
                     )
                     resp = await session.get(img_url, impersonate="chrome", timeout=30)
-                    with open(out_path, "wb") as f:
-                        f.write(resp.content)
+                    await asyncio.to_thread(_write_file, out_path, resp.content)
                     image_paths.append(out_path)
         except Exception as e:
             logger.error("TikWM slideshow image download failed: %s", e)
             # Cleanup what we have
             for p in image_paths:
-                if os.path.exists(p):
-                    os.unlink(p)
+                await asyncio.to_thread(safe_remove, p)
             return [], None
 
         audio_path = None

@@ -1,5 +1,6 @@
 """Telegram file/media sending service."""
 
+import asyncio
 import logging
 import io
 from typing import Any, Union
@@ -121,7 +122,7 @@ class TelegramSender:
         try:
             media = []
             for i, img_path in enumerate(photos_to_send):
-                fh = open(img_path, "rb")
+                fh = await asyncio.to_thread(open, img_path, "rb")
                 file_handles.append(fh)
                 media.append(
                     InputMediaPhoto(

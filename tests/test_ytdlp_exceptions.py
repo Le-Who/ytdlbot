@@ -80,13 +80,18 @@ class TestYtDlpExceptions(unittest.TestCase):
         error = map_ytdlp_error(stderr, url)
         self.assertIsInstance(error, ExtractionError)
         expected_detail = "Detailed error message here"
-        self.assertEqual(str(error), Texts.SVC_EXTRACTION_ERROR.format(detail=expected_detail))
+        self.assertEqual(
+            str(error), Texts.SVC_EXTRACTION_ERROR.format(detail=expected_detail)
+        )
 
     def test_empty_stderr(self):
         url = "https://example.com"
         error = map_ytdlp_error("", url)
         self.assertIsInstance(error, ExtractionError)
-        self.assertEqual(str(error), Texts.SVC_EXTRACTION_ERROR.format(detail="Unknown yt-dlp error"))
+        self.assertEqual(
+            str(error), Texts.SVC_EXTRACTION_ERROR.format(detail="Unknown yt-dlp error")
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

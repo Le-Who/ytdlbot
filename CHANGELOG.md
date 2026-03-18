@@ -92,6 +92,8 @@ All notable changes to this project will be documented in this file.
 - **YouTube Extraction Deadlock (`RuntimeError`)**: Fixed a severe coroutine conflict in `YtDlpService` where `communicate()` was called concurrently with background `stderr` readers, causing all YouTube downloads to fail.
 - **Redis Cache Strict Decoding Failure**: Fixed an issue where `RedisStorage` would crash with `msgspec.json.DecodeError` when `type_hint=None` due to expecting a literal `"null"` instead of parsing standard JSON objects. This resolves the downstream UI bug where standard TikTok links wrongly triggered the Slideshow fallback.
 - **Cache unpacking bug** (CRITICAL): UI handlers previously raised exceptions during format unpacking after `list_formats` was extended. Safely isolated this behind `ExtractionResult` properties.
+- **TikWM Rate Limit Exhaustion**: Fixed an issue where `TikWMService.download_video` redundantly called the TikWM API to resolve direct video links when the UI had already queried them. A 1.1s generic `asyncio.Lock()` queue was also added to enforce their 1 request/second API limitation properly, handling concurrent link requests gracefully.
+- **Cross-Platform Test Pathing**: Fixed `gallery_dl` mock assertions arbitrarily failing on Windows environments due to hardcoded `/` posix path separators instead of native `os.path.join()`.
 
 ### Performance & Reliability
 

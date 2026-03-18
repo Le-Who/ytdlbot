@@ -1,6 +1,5 @@
 import unittest
 import os
-import sys
 from unittest.mock import AsyncMock, patch, MagicMock
 
 # Mock config before importing app.main
@@ -8,6 +7,7 @@ os.environ["BOT_TOKEN"] = "test:token"
 os.environ["WEBHOOK_URL"] = ""
 
 from app.main import _global_error_handler
+
 
 class TestGlobalErrorHandler(unittest.IsolatedAsyncioTestCase):
     async def test_global_error_handler_with_message(self):
@@ -50,7 +50,9 @@ class TestGlobalErrorHandler(unittest.IsolatedAsyncioTestCase):
         # Setup mocks where reply_text raises an exception
         update = MagicMock()
         update.effective_message = AsyncMock()
-        update.effective_message.reply_text.side_effect = Exception("Failed to send message")
+        update.effective_message.reply_text.side_effect = Exception(
+            "Failed to send message"
+        )
         context = MagicMock()
         context.error = ValueError("Test error")
 
@@ -64,6 +66,7 @@ class TestGlobalErrorHandler(unittest.IsolatedAsyncioTestCase):
             update.effective_message.reply_text.assert_called_once()
 
             # Should not raise exception out of _global_error_handler
+
 
 if __name__ == "__main__":
     unittest.main()

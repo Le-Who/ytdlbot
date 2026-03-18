@@ -46,10 +46,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     janitor_task = asyncio.create_task(janitor_loop(stop_event))
 
     bot_app = (
-        Application.builder()
-        .token(config.BOT_TOKEN)
-        .concurrent_updates(True)
-        .build()
+        Application.builder().token(config.BOT_TOKEN).concurrent_updates(True).build()
     )
     bot_app.add_handler(CommandHandler("start", commands.cmd_start))
     bot_app.add_handler(CommandHandler("help", commands.cmd_help))
@@ -80,11 +77,14 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         CallbackQueryHandler(callbacks.on_convert_to_gif, pattern=r"^gif\|")
     )
     bot_app.add_handler(
-        CallbackQueryHandler(callbacks.on_slideshow, pattern=r"^(slideshow|cbslide|apislide)\|")
+        CallbackQueryHandler(
+            callbacks.on_slideshow, pattern=r"^(slideshow|cbslide|apislide)\|"
+        )
     )
     bot_app.add_handler(
         CallbackQueryHandler(
-            group_logic.on_group_slideshow, pattern=r"^(grpslide|cbgrpslide|apigrpslide)\|"
+            group_logic.on_group_slideshow,
+            pattern=r"^(grpslide|cbgrpslide|apigrpslide)\|",
         )
     )
 

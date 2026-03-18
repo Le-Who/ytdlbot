@@ -156,10 +156,6 @@ class TestGalleryDlService(unittest.TestCase):
         basenames = [os.path.basename(p) for p in result.images]
         self.assertEqual(basenames, ["001.jpg", "002.jpg", "003.jpg"])
 
-
-
-
-
     def test_collect_files_title_truncation(self):
         """_collect_files should truncate long titles correctly."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -216,22 +212,23 @@ class TestGalleryDlService(unittest.TestCase):
         """Verify download_video success and file finding."""
         mock_run.return_value = MagicMock(returncode=0, stderr="")
 
-        with patch("app.services.gallery_dl.service.os.makedirs") as mock_makedirs, \
-             patch("app.services.gallery_dl.service.os.walk") as mock_walk, \
-             patch("app.services.gallery_dl.service.os.path.getsize") as mock_getsize:
-
+        with (
+            patch("app.services.gallery_dl.service.os.makedirs") as mock_makedirs,
+            patch("app.services.gallery_dl.service.os.walk") as mock_walk,
+            patch("app.services.gallery_dl.service.os.path.getsize") as mock_getsize,
+        ):
             mock_walk.return_value = [("/tmp/fake_dir", [], ["video.mp4"])]
             mock_getsize.return_value = 1048576 * 5  # 5 MB
 
             result, error = GalleryDlService.download_video(
                 "https://tiktok.com/@user/video/123",
                 cookies_path="/tmp/cookies.txt",
-                proxy="http://proxy:8080"
+                proxy="http://proxy:8080",
             )
 
         self.assertIsNotNone(result)
         self.assertIsNone(error)
-        self.assertEqual(result, "/tmp/fake_dir/video.mp4")
+        self.assertEqual(result, os.path.join("/tmp/fake_dir", "video.mp4"))
 
         # Verify command
         cmd = mock_run.call_args[0][0]
@@ -246,9 +243,10 @@ class TestGalleryDlService(unittest.TestCase):
         """Verify download_video handles no video found after success."""
         mock_run.return_value = MagicMock(returncode=0, stderr="")
 
-        with patch("app.services.gallery_dl.service.os.makedirs"), \
-             patch("app.services.gallery_dl.service.os.walk") as mock_walk:
-
+        with (
+            patch("app.services.gallery_dl.service.os.makedirs"),
+            patch("app.services.gallery_dl.service.os.walk") as mock_walk,
+        ):
             mock_walk.return_value = [("/tmp/fake_dir", [], ["image.jpg"])]
 
             result, error = GalleryDlService.download_video(
@@ -261,7 +259,9 @@ class TestGalleryDlService(unittest.TestCase):
     @patch("app.services.gallery_dl.service.subprocess.run")
     def test_download_video_failure(self, mock_run):
         """Verify download_video handles subprocess failure."""
-        mock_run.return_value = MagicMock(returncode=1, stderr="Error: something went wrong")
+        mock_run.return_value = MagicMock(
+            returncode=1, stderr="Error: something went wrong"
+        )
 
         with patch("app.services.gallery_dl.service.os.makedirs"):
             result, error = GalleryDlService.download_video(
@@ -271,7 +271,9 @@ class TestGalleryDlService(unittest.TestCase):
         self.assertIsNone(result)
         self.assertTrue(error.startswith("gallery-dl error:"))
 
-    @patch("app.services.gallery_dl.service.subprocess.run", side_effect=FileNotFoundError)
+    @patch(
+        "app.services.gallery_dl.service.subprocess.run", side_effect=FileNotFoundError
+    )
     def test_download_video_not_installed(self, mock_run):
         """Verify download_video handles missing gallery-dl."""
         with patch("app.services.gallery_dl.service.os.makedirs"):
@@ -286,6 +288,7 @@ class TestGalleryDlService(unittest.TestCase):
     def test_download_video_timeout(self, mock_run):
         """Verify download_video handles subprocess timeout."""
         import subprocess
+
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="gallery-dl", timeout=120)
 
         with patch("app.services.gallery_dl.service.os.makedirs"):
@@ -296,7 +299,10 @@ class TestGalleryDlService(unittest.TestCase):
         self.assertIsNone(result)
         self.assertEqual(error, "gallery-dl timeout")
 
-    @patch("app.services.gallery_dl.service.subprocess.run", side_effect=Exception("Unexpected"))
+    @patch(
+        "app.services.gallery_dl.service.subprocess.run",
+        side_effect=Exception("Unexpected"),
+    )
     def test_download_video_unexpected_error(self, mock_run):
         """Verify download_video handles unexpected exceptions."""
         with patch("app.services.gallery_dl.service.os.makedirs"):
@@ -315,15 +321,17 @@ class TestGalleryDlService(unittest.TestCase):
         with patch.object(GalleryDlService, "_collect_files") as mock_collect:
             mock_collect.return_value = (SlideshowResult(), None)
             GalleryDlService.download_slideshow(
-                "https://tiktok.com/@user/video/123",
-                proxy="http://proxy:8080"
+                "https://tiktok.com/@user/video/123", proxy="http://proxy:8080"
             )
 
         cmd = mock_run.call_args[0][0]
         self.assertIn("--proxy", cmd)
         self.assertIn("http://proxy:8080", cmd)
 
-    @patch("app.services.gallery_dl.service.subprocess.run", side_effect=Exception("Unexpected"))
+    @patch(
+        "app.services.gallery_dl.service.subprocess.run",
+        side_effect=Exception("Unexpected"),
+    )
     def test_download_slideshow_unexpected_error(self, mock_run):
         """Verify download_slideshow handles unexpected exceptions."""
         result, error = GalleryDlService.download_slideshow(
@@ -332,5 +340,7 @@ class TestGalleryDlService(unittest.TestCase):
 
         self.assertIsNone(result)
         self.assertEqual(error, "⚠️ Внутренняя ошибка при загрузке.")
-if __name__ == '__main__':
+
+
+if __name__ == "__main__":
     unittest.main()

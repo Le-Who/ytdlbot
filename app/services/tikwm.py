@@ -11,15 +11,18 @@ Free tier: 5000 requests/day, 1 request/second.
 import asyncio
 import logging
 import os
+import time
 import uuid
 from dataclasses import dataclass
 from typing import Optional, List
 from urllib.parse import quote
 
 from curl_cffi.requests import AsyncSession, Response
-
 from app.core.config import TEMP_DIR
 from app.core.utils import safe_remove
+
+_tikwm_lock = asyncio.Lock()
+_last_request_time = 0.0
 
 __all__ = ["TikWMService"]
 
@@ -56,8 +59,16 @@ class TikWMService:
         """
         api_url = f"{API_BASE}?url={quote(url, safe='')}&hd=1"
         last_error: Optional[str] = None
+        global _last_request_time
 
         for attempt in range(MAX_RETRIES):
+            async with _tikwm_lock:
+                now = time.time()
+                elapsed = now - _last_request_time
+                if elapsed < 1.1:
+                    await asyncio.sleep(1.1 - elapsed)
+                _last_request_time = time.time()
+
             try:
                 async with AsyncSession() as session:
                     resp: Response = await session.get(
@@ -77,6 +88,18 @@ class TikWMService:
                 continue
 
             code = data.get("code")
+            if code == -1:
+                msg = data.get("msg", "unknown error")
+                if "limit" in msg.lower() or "too many" in msg.lower():
+                    logger.warning(
+                        "[TIKWM] Rate limited (code=-1, msg=%s). Retrying...", msg
+                    )
+                    await asyncio.sleep(2)
+                    continue
+                else:
+                    logger.warning("[TIKWM] API returned error code=-1: %s", msg)
+                    return TikWMResult(status="error", error_message=f"TikWM: {msg}")
+
             if code != 0:
                 msg = data.get("msg", "unknown error")
                 logger.warning("[TIKWM] API returned code=%s: %s", code, msg)
@@ -122,19 +145,23 @@ class TikWMService:
         )
 
     @staticmethod
-    async def download_video(url: str) -> tuple[Optional[str], Optional[str]]:
+    async def download_video(
+        url: str, direct_video_url: Optional[str] = None
+    ) -> tuple[Optional[str], Optional[str]]:
         """
-        Fetch video URL via TikWM API, then download the video to a temp file.
+        Fetch video URL via TikWM API (or use direct url), then download to a temp file.
 
         Returns:
             (file_path, None) on success.
             (None, error_message) on failure.
         """
-        res = await TikWMService.process(url)
-        if res.status != "video" or not res.url:
-            return None, res.error_message or "TikWM: Not a video"
-
-        video_url = res.url
+        if not direct_video_url:
+            res = await TikWMService.process(url)
+            if res.status != "video" or not res.url:
+                return None, res.error_message or "TikWM: Not a video"
+            video_url = res.url
+        else:
+            video_url = direct_video_url
 
         # Download the video from CDN
         output_path = os.path.join(TEMP_DIR, f"tikwm_{uuid.uuid4().hex}.mp4")
@@ -211,6 +238,7 @@ class TikWMService:
         image_paths = []
         try:
             async with AsyncSession() as session:
+
                 def _write_file(path: str, data: bytes):
                     with open(path, "wb") as f:
                         f.write(data)

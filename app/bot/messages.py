@@ -316,7 +316,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if api_source == "tikwm":
             from app.services.tikwm import TikWMService
 
-            file_path, err = await TikWMService.download_video(text)
+            file_path, err = await TikWMService.download_video(
+                text, direct_video_url=tiktok_api_res.url
+            )
         elif api_source == "cobalt":
             from app.services.cobalt import CobaltService
 

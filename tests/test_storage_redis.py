@@ -10,7 +10,9 @@ class TestRedisStorage(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.mock_redis = AsyncMock()
         self.default_ttl = 3600
-        self.storage = RedisStorage(redis_client=self.mock_redis, default_ttl=self.default_ttl)
+        self.storage = RedisStorage(
+            redis_client=self.mock_redis, default_ttl=self.default_ttl
+        )
 
     async def test_get_missing_data(self):
         self.mock_redis.get.return_value = None
@@ -55,7 +57,9 @@ class TestRedisStorage(unittest.IsolatedAsyncioTestCase):
         result = await self.storage.get("test_key")
         self.assertIsNone(result)
         mock_logger.error.assert_called_once()
-        self.assertEqual("Redis decode error for key %s: %s", mock_logger.error.call_args[0][0])
+        self.assertEqual(
+            "Redis decode error for key %s: %s", mock_logger.error.call_args[0][0]
+        )
         self.assertEqual("test_key", mock_logger.error.call_args[0][1])
 
     async def test_set_success_default_ttl(self):
@@ -63,9 +67,7 @@ class TestRedisStorage(unittest.IsolatedAsyncioTestCase):
         await self.storage.set("test_key", test_data)
 
         self.mock_redis.set.assert_awaited_once_with(
-            "test_key",
-            msgspec.json.encode(test_data),
-            ex=self.default_ttl
+            "test_key", msgspec.json.encode(test_data), ex=self.default_ttl
         )
 
     async def test_set_success_custom_ttl(self):
@@ -74,9 +76,7 @@ class TestRedisStorage(unittest.IsolatedAsyncioTestCase):
         await self.storage.set("test_key", test_data, ttl=custom_ttl)
 
         self.mock_redis.set.assert_awaited_once_with(
-            "test_key",
-            msgspec.json.encode(test_data),
-            ex=custom_ttl
+            "test_key", msgspec.json.encode(test_data), ex=custom_ttl
         )
 
     @patch("app.core.storage.redis_storage.logger")
@@ -93,7 +93,9 @@ class TestRedisStorage(unittest.IsolatedAsyncioTestCase):
         self.mock_redis.set.assert_not_awaited()
         # Logger should log the error
         mock_logger.error.assert_called_once()
-        self.assertEqual("Redis encode error for key %s: %s", mock_logger.error.call_args[0][0])
+        self.assertEqual(
+            "Redis encode error for key %s: %s", mock_logger.error.call_args[0][0]
+        )
         self.assertEqual("test_key", mock_logger.error.call_args[0][1])
 
     async def test_delete(self):
@@ -103,6 +105,7 @@ class TestRedisStorage(unittest.IsolatedAsyncioTestCase):
     async def test_clear(self):
         await self.storage.clear()
         self.mock_redis.flushdb.assert_awaited_once()
+
 
 if __name__ == "__main__":
     unittest.main()

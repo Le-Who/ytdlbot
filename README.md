@@ -193,7 +193,7 @@ _Prerequisites: System must have `ffmpeg` and local `python -m pytest` available
 
 - **Large file fails to upload**: Verify `MAX_TG_UPLOAD_MB` is not set above Telegram's 50MB hard limit. The bot cleanly aborts uploads larger than this context.
 - **429 Too Many Requests**: You hit the token bucket. Inspect `LIMITER_*` variables in `.env` if developing locally.
-- **TikTok extraction fails**: Usually caused by aggressive datacentre IP blocks. Feed `TIKTOK_COOKIES_B64` or a residential `TIKTOK_PROXY` into the environment.
+- **TikTok extraction fails / TikWM rate limits**: Usually caused by aggressive datacentre IP blocks, or exceeding the TikWM API limits free constraints (1 req/sec, enforced internally via a queue). Feed `TIKTOK_COOKIES_B64` or a residential `TIKTOK_PROXY` into the environment if you wish to fall back to `yt-dlp` extraction routes.
 
 ## Known Documentation Gaps
 

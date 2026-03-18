@@ -350,7 +350,9 @@ async def on_group_slideshow(
             # Slideshow download failed — try TikWM as video fallback
             from app.services.tikwm import TikWMService
 
-            logger.info("Slideshow failed in group, trying TikWM fallback: %s", page_url)
+            logger.info(
+                "Slideshow failed in group, trying TikWM fallback: %s", page_url
+            )
             tikwm_path, tikwm_err = await TikWMService.download_video(page_url)
             if tikwm_path:
                 # Got video via TikWM — send as video
@@ -429,7 +431,9 @@ async def on_group_slideshow(
                 # Convert to video
                 await q.edit_message_text(Texts.SLIDESHOW_CONVERTING)
 
-                video_path = await MediaSender.images_to_video(result.images, result.audio)
+                video_path = await MediaSender.images_to_video(
+                    result.images, result.audio
+                )
                 if not video_path:
                     await q.edit_message_text(Texts.SLIDESHOW_ERROR)
                     return

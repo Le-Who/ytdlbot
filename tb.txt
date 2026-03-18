@@ -1,0 +1,100 @@
+F......FF...............F....
+ERROR: Coverage failure: total of 9 is less than fail-under=72
+                                                                         [100%]
+================================== FAILURES ===================================
+_____________ TestTikWMProcess.test_api_error_code_returns_error ______________
+tests\test_tikwm_service.py:88: in test_api_error_code_returns_error
+    self.assertIn("video not found", res.error_message)
+E   AssertionError: 'video not found' not found in 'TikWM: max retries exceeded'
+------------------------------ Captured log call ------------------------------
+WARNING  app.services.tikwm:tikwm.py:94 [TIKWM] Rate limited (code=-1, msg=video not found). Retrying...
+WARNING  app.services.tikwm:tikwm.py:94 [TIKWM] Rate limited (code=-1, msg=video not found). Retrying...
+WARNING  app.services.tikwm:tikwm.py:94 [TIKWM] Rate limited (code=-1, msg=video not found). Retrying...
+_____ TestTikWMDownloadVideoOptimized.test_download_failure_cleanup_async _____
+tests\test_tikwm_optimized.py:66: in test_download_failure_cleanup_async
+    with patch.object(TikWMService, "fetch_video", new_callable=AsyncMock,
+C:\Python314\Lib\unittest\mock.py:1503: in __enter__
+    original, local = self.get_original()
+                      ^^^^^^^^^^^^^^^^^^^
+C:\Python314\Lib\unittest\mock.py:1473: in get_original
+    raise AttributeError(
+E   AttributeError: <class 'app.services.tikwm.TikWMService'> does not have the attribute 'fetch_video'
+___ TestTikWMDownloadVideoOptimized.test_download_success_writes_file_async ___
+tests\test_tikwm_optimized.py:37: in test_download_success_writes_file_async
+    with patch.object(TikWMService, "fetch_video", new_callable=AsyncMock,
+C:\Python314\Lib\unittest\mock.py:1503: in __enter__
+    original, local = self.get_original()
+                      ^^^^^^^^^^^^^^^^^^^
+C:\Python314\Lib\unittest\mock.py:1473: in get_original
+    raise AttributeError(
+E   AttributeError: <class 'app.services.tikwm.TikWMService'> does not have the attribute 'fetch_video'
+______________ TestGalleryDlService.test_download_video_success _______________
+tests\test_gallery_dl_service.py:234: in test_download_video_success
+    self.assertEqual(result, "/tmp/fake_dir/video.mp4")
+E   AssertionError: '/tmp/fake_dir\\video.mp4' != '/tmp/fake_dir/video.mp4'
+E   - /tmp/fake_dir\video.mp4
+E   ?              ^
+E   + /tmp/fake_dir/video.mp4
+E   ?              ^
+============================== warnings summary ===============================
+C:\Users\user\AppData\Roaming\Python\Python314\site-packages\_pytest\cacheprovider.py:475
+  C:\Users\user\AppData\Roaming\Python\Python314\site-packages\_pytest\cacheprovider.py:475: PytestCacheWarning: could not create cache path D:\ytdlbot-1\.pytest_cache\v\cache\nodeids: [WinError 183] Cannot create a file when that file already exists: 'D:\\ytdlbot-1\\.pytest_cache\\v\\cache'
+    config.cache.set("cache/nodeids", sorted(self.cached_nodeids))
+
+C:\Users\user\AppData\Roaming\Python\Python314\site-packages\_pytest\cacheprovider.py:429
+  C:\Users\user\AppData\Roaming\Python\Python314\site-packages\_pytest\cacheprovider.py:429: PytestCacheWarning: could not create cache path D:\ytdlbot-1\.pytest_cache\v\cache\lastfailed: [WinError 183] Cannot create a file when that file already exists: 'D:\\ytdlbot-1\\.pytest_cache\\v\\cache'
+    config.cache.set("cache/lastfailed", self.lastfailed)
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+=============================== tests coverage ================================
+_______________ coverage: platform win32, python 3.14.3-final-0 _______________
+
+Name                                Stmts   Miss  Cover   Missing
+-----------------------------------------------------------------
+app\api\routes.py                     111    111     0%   1-188
+app\bot\callbacks.py                  324    324     0%   1-558
+app\bot\commands.py                    12     12     0%   1-20
+app\bot\format_formatter.py            30     30     0%   1-49
+app\bot\group_logic.py                262    262     0%   1-480
+app\bot\keyboards.py                   17     17     0%   1-50
+app\bot\messages.py                   219    219     0%   1-388
+app\core\cache.py                      20     20     0%   1-25
+app\core\config.py                     40      1    98%   63
+app\core\limiter.py                    71     71     0%   1-156
+app\core\logging.py                    23     23     0%   1-46
+app\core\metrics.py                   127    127     0%   6-260
+app\core\models.py                     13     13     0%   1-18
+app\core\policy.py                      8      8     0%   1-18
+app\core\process.py                    84     84     0%   1-132
+app\core\state.py                      42     42     0%   1-98
+app\core\storage\__init__.py            4      4     0%   1-5
+app\core\storage\base.py                7      7     0%   1-10
+app\core\storage\memory.py             15     15     0%   1-28
+app\core\storage\redis_storage.py      31     31     0%   1-39
+app\core\texts.py                      59     59     0%   8-114
+app\core\utils.py                      29     20    31%   13-24, 28-32, 36-40
+app\services\cobalt.py                125    125     0%   7-256
+app\services\converter.py              82     82     0%   3-200
+app\services\downloader.py            126    126     0%   12-271
+app\services\orchestrator.py          100    100     0%   1-194
+app\services\sender.py                 59     59     0%   3-153
+app\services\slideshow.py              26     26     0%   3-53
+app\services\tikwm.py                 143     48    66%   99-101, 157, 182-186, 194-219, 228-256
+app\services\ytdlp\builders.py         44     44     0%   1-137
+app\services\ytdlp\cookies.py          87     87     0%   1-183
+app\services\ytdlp\exceptions.py       31     31     0%   1-94
+app\services\ytdlp\models.py           14     14     0%   1-40
+app\services\ytdlp\parsers.py         151    151     0%   1-273
+app\services\ytdlp\service.py         118    118     0%   1-277
+app\tasks\janitor.py                   55     55     0%   1-81
+-----------------------------------------------------------------
+TOTAL                                2830   2566     9%
+
+9 files skipped due to complete coverage.
+FAIL Required test coverage of 72% not reached. Total coverage: 9.33%
+=========================== short test summary info ===========================
+FAILED tests/test_tikwm_service.py::TestTikWMProcess::test_api_error_code_returns_error
+FAILED tests/test_tikwm_optimized.py::TestTikWMDownloadVideoOptimized::test_download_failure_cleanup_async
+FAILED tests/test_tikwm_optimized.py::TestTikWMDownloadVideoOptimized::test_download_success_writes_file_async
+FAILED tests/test_gallery_dl_service.py::TestGalleryDlService::test_download_video_success
+4 failed, 25 passed, 2 warnings in 11.20s

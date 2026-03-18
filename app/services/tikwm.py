@@ -57,6 +57,25 @@ class TikWMService:
         Fetch TikTok media info via TikWM API.
         Returns unified TikWMResult for Video or Picker (Slideshow).
         """
+        # Unshorten vm.tiktok.com or vt.tiktok.com links before passing to TikWM
+        if "vm.tiktok.com/" in url or "vt.tiktok.com/" in url:
+            try:
+                async with AsyncSession() as session:
+                    head_resp = await session.head(
+                        url, impersonate="chrome", timeout=10, allow_redirects=True
+                    )
+                    unshortened_url = str(head_resp.url)
+                    # Often the unshortened URL has tracking query params.
+                    # We can strip them to produce a cleaner URL for TikWM parsing.
+                    if "?" in unshortened_url:
+                        unshortened_url = unshortened_url.split("?")[0]
+                    logger.info(
+                        "[TIKWM] Unshortened URL %s -> %s", url, unshortened_url
+                    )
+                    url = unshortened_url
+            except Exception as e:
+                logger.warning("[TIKWM] Failed to unshorten URL %s: %s", url, e)
+
         api_url = f"{API_BASE}?url={quote(url, safe='')}&hd=1"
         last_error: Optional[str] = None
         global _last_request_time

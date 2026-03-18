@@ -26,6 +26,7 @@ venv/
 skills/
 .gemini/
 .agents/
+.Jules/
 
 # OS
 Thumbs.db
@@ -44,3 +45,4 @@ htmlcov/
 # Temp
 *.tmp
 *.log
+tb.txt

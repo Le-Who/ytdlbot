@@ -38,5 +38,6 @@ __pycache__
 *.pyc
 *.tmp
 *.log
+tb.txt
 Thumbs.db
 .DS_Store

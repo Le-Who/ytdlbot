@@ -208,6 +208,19 @@ async def handle_group_message(
                 )
                 file_path = str(file_path_raw) if file_path_raw else None
             error = None if file_path else "⚠️ Ошибка загрузки видео."
+            if file_path:
+                state.file_cache[token] = file_path
+        elif video_format == "gallerydl_fallback":
+            from app.services.gallery_dl.service import GalleryDlService
+
+            file_path, error = await asyncio.to_thread(
+                GalleryDlService.download_video,
+                url,
+                state.ytdlp.cookies_path,
+                state.ytdlp.tiktok_proxy,
+            )
+            if file_path:
+                state.file_cache[token] = file_path
         else:
             file_path, error = await MediaSender.download_video(
                 page_url=url,

@@ -380,12 +380,20 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 await status_msg.delete()
             except Exception:
                 pass
-            await msg.reply_photo(
-                photo=thumbnail_url,
-                caption=caption,
-                reply_markup=reply_markup,
-                parse_mode="HTML",
-            )
+            try:
+                await msg.reply_photo(
+                    photo=thumbnail_url,
+                    caption=caption,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML",
+                )
+            except Exception as e:
+                logger.warning("Failed to send thumbnail, falling back to text: %s", e)
+                await msg.reply_text(
+                    text=caption,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML",
+                )
         else:
             await status_msg.edit_text(
                 caption,

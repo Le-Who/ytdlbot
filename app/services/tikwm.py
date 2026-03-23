@@ -194,7 +194,7 @@ class TikWMService:
                     timeout=60,
                 )
 
-                def _write_file(path: str, data: bytes):
+                def _write_file(path: str, data: bytes) -> None:
                     with open(path, "wb") as f:
                         f.write(data)
 
@@ -229,7 +229,7 @@ class TikWMService:
                     timeout=60,
                 )
 
-                def _write_file(path: str, data: bytes):
+                def _write_file(path: str, data: bytes) -> None:
                     with open(path, "wb") as f:
                         f.write(data)
 
@@ -258,7 +258,7 @@ class TikWMService:
         try:
             async with AsyncSession() as session:
 
-                def _write_file(path: str, data: bytes):
+                def _write_file(path: str, data: bytes) -> None:
                     with open(path, "wb") as f:
                         f.write(data)
 

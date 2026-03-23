@@ -25,6 +25,7 @@ class ExtractionResult:
     info_json_path: Optional[str]
     thumbnail_url: Optional[str]
     tiktok_auth_error: bool = False
+    youtube_fallback: bool = False
 
 
 @dataclass(slots=True)

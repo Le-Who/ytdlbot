@@ -193,6 +193,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             height=data["format_map"].get(format_id),
             title=data["title"],
             info_json_path=data.get("info_json_path"),
+            youtube_fallback=data.get("youtube_fallback", False),
         ),
     )
 

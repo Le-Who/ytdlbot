@@ -375,6 +375,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 "format_map": format_map,
                 "size_map": size_map,
                 "fmt_index_map": fmt_index_map,
+                "youtube_fallback": result.youtube_fallback,
             }
         )
 

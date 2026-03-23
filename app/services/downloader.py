@@ -64,6 +64,7 @@ class VideoDownloader:
         height: Optional[int],
         token: str,
         info_json_path: Optional[str] = None,
+        fallback_clients: bool = False,
     ) -> Tuple[Optional[Union[str, io.BytesIO]], Optional[str]]:
         """
         Downloads a video.
@@ -114,6 +115,7 @@ class VideoDownloader:
             max_filesize=MAX_TG_UPLOAD_MB,
             use_aria2=not use_pipe,  # aria2c doesn't support stdout piping
             info_json_path=info_json_path,
+            fallback_clients=fallback_clients,
         )
 
         _dl_start = time.time()

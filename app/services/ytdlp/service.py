@@ -18,6 +18,7 @@ from .parsers import (
     _format_duration,
     get_special_format,
     _is_tiktok,
+    _is_youtube,
     detect_tiktok_slideshow,
     classify_tiktok_content,
     classify_tiktok_error,
@@ -44,9 +45,8 @@ class YtDlpService:
         self.tiktok_proxy = TIKTOK_PROXY
         self.has_aria2 = bool(shutil.which("aria2c"))
 
-        # Determine player clients
-        youtube_clients = ["ios", "android", "web"]
-        self.builder = YtDlpCLIBuilder(youtube_player_clients=youtube_clients)
+        # Initialize builder without hardcoded youtube clients
+        self.builder = YtDlpCLIBuilder()
 
         if self.has_aria2:
             logger.info("✅ aria2c found — multi-connection downloads enabled")
@@ -58,7 +58,9 @@ class YtDlpService:
         """Backward-compat: return TikTok cookies (used by slideshow etc.)"""
         return self.cookies_manager.tiktok_cookies_path
 
-    async def extract(self, url: str, for_list_formats: bool = False) -> Dict[str, Any]:
+    async def extract(
+        self, url: str, for_list_formats: bool = False, fallback_clients: bool = False
+    ) -> Dict[str, Any]:
         """Извлекает метаданные видео через subprocess yt-dlp (async isolation)."""
         from app.core.process import run_subprocess
 
@@ -70,6 +72,7 @@ class YtDlpService:
             cookies_path=cookies,
             proxy=proxy,
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+            fallback_clients=fallback_clients,
         )
         # Ensure we use the current python executable for stability
         cmd[0] = sys.executable
@@ -119,11 +122,20 @@ class YtDlpService:
                     thumbnail_url=None,
                 )
 
+        youtube_fallback = False
+
         try:
             info = await self.extract(url, for_list_formats=True)
+        except AccessDeniedError as e:
+            if _is_youtube(url):
+                logger.warning("YouTube extraction failed with 403. Retrying with ios,android fallback clients: %s", url)
+                info = await self.extract(url, for_list_formats=True, fallback_clients=True)
+                youtube_fallback = True
+            else:
+                raise e
         except Exception as e:
             # Re-raise known API exceptions that should trigger orchestration fallback
-            if isinstance(e, (AccessDeniedError, VideoNotFoundError, LiveStreamError)):
+            if isinstance(e, (VideoNotFoundError, LiveStreamError)):
                 raise e
 
             error_msg = str(e).lower()
@@ -167,6 +179,7 @@ class YtDlpService:
                         info_json_path=None,
                         thumbnail_url=None,
                         tiktok_auth_error=True,
+                        youtube_fallback=False,
                     )
                 elif (
                     error_class == TikTokError.SLIDESHOW
@@ -180,6 +193,7 @@ class YtDlpService:
                         is_slideshow=True,
                         info_json_path=None,
                         thumbnail_url=None,
+                        youtube_fallback=False,
                     )
 
             logger.error("YtDlp Extraction Error: %s", e, exc_info=True)
@@ -242,6 +256,7 @@ class YtDlpService:
             is_slideshow=is_slideshow,
             info_json_path=info_json_path,
             thumbnail_url=thumbnail_url,
+            youtube_fallback=youtube_fallback,
         )
 
     def build_command(
@@ -253,6 +268,7 @@ class YtDlpService:
         max_filesize: Optional[int] = None,
         use_aria2: bool = False,
         info_json_path: Optional[str] = None,
+        fallback_clients: bool = False,
     ) -> List[str]:
         """Proxy to new CLI builder"""
         cookies = self.cookies_manager.get_cookies_path(page_url)
@@ -268,6 +284,7 @@ class YtDlpService:
             max_filesize_mb=max_filesize,
             use_aria2=use_aria2 and self.has_aria2,
             info_json_path=info_json_path,
+            fallback_clients=fallback_clients,
         )
 
         # Always use exact python executable to avoid environment path issues

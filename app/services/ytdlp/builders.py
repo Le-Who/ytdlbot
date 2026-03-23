@@ -7,7 +7,7 @@ class YtDlpCLIBuilder:
     """Consolidated builder for yt-dlp CLI arguments.
     Handles generic extraction, fallback extraction, and direct downloading."""
 
-    def __init__(self, youtube_player_clients: Optional[List[str]] = None):
+    def __init__(self):
         self._base_args = [
             "yt-dlp",
             "--force-ipv4",
@@ -15,7 +15,6 @@ class YtDlpCLIBuilder:
             "--ignore-config",
             "--no-warnings",
         ]
-        self.youtube_player_clients = youtube_player_clients
 
     def build_extraction_cmd(
         self,
@@ -24,6 +23,7 @@ class YtDlpCLIBuilder:
         proxy: Optional[str] = None,
         user_agent: Optional[str] = None,
         timeout: int = 120,
+        fallback_clients: bool = False,
     ) -> List[str]:
         """Build args for dumping JSON info"""
         cmd = self._base_args.copy()
@@ -40,9 +40,8 @@ class YtDlpCLIBuilder:
         # TikTok specific edge case applied generically for strict JSON extraction
         cmd.extend(["--extractor-args", "tiktok:app_info="])
 
-        if self.youtube_player_clients:
-            clients_str = ",".join(self.youtube_player_clients)
-            cmd.extend(["--extractor-args", f"youtube:player_client={clients_str}"])
+        if fallback_clients and ("youtube.com" in url or "youtu.be" in url):
+            cmd.extend(["--extractor-args", "youtube:player_client=ios,android"])
 
         self._append_network_opts(cmd, cookies_path, proxy, user_agent)
         cmd.extend(["--", url])
@@ -59,6 +58,7 @@ class YtDlpCLIBuilder:
         max_filesize_mb: Optional[int] = None,
         use_aria2: bool = False,
         info_json_path: Optional[str] = None,
+        fallback_clients: bool = False,
     ) -> List[str]:
         """Build args for downloading media"""
         cmd = self._base_args.copy()
@@ -75,6 +75,9 @@ class YtDlpCLIBuilder:
                 f"bestvideo[height<={height_cap}]+bestaudio/bestvideo+bestaudio/best"
             )
             final_fmt = f"{format_id}/{fallback}"
+
+        if fallback_clients and ("youtube.com" in url or "youtu.be" in url):
+            cmd.extend(["--extractor-args", "youtube:player_client=ios,android"])
 
         cmd.extend(
             [

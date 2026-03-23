@@ -213,7 +213,7 @@ class TestGalleryDlService(unittest.TestCase):
         mock_run.return_value = MagicMock(returncode=0, stderr="")
 
         with (
-            patch("app.services.gallery_dl.service.os.makedirs") as mock_makedirs,
+            patch("app.services.gallery_dl.service.os.makedirs"),
             patch("app.services.gallery_dl.service.os.walk") as mock_walk,
             patch("app.services.gallery_dl.service.os.path.getsize") as mock_getsize,
         ):

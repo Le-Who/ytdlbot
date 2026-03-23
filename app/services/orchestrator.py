@@ -151,6 +151,7 @@ class DownloadOrchestrator:
                     payload.height,
                     token,
                     info_json_path=payload.info_json_path,
+                    fallback_clients=payload.youtube_fallback,
                 )
 
             if error or not file_path:

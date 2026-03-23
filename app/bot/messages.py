@@ -365,10 +365,16 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         else:
             size_map = {f.format_id: f.filesize for f in formats}
 
+        indexed_formats = formats[:8]
+        fmt_index_map = {str(i): f.format_id for i, f in enumerate(indexed_formats)}
+        if special_format:
+            fmt_index_map[str(len(indexed_formats))] = special_format.format_id
+
         data.update(
             {
                 "format_map": format_map,
                 "size_map": size_map,
+                "fmt_index_map": fmt_index_map,
             }
         )
 

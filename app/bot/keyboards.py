@@ -13,7 +13,7 @@ from typing import Any
 
 
 def build_format_keyboard(
-    formats: list[Any], special_format: Any
+    formats: list[Any], special_format: Any, special_index: int | None = None
 ) -> InlineKeyboardMarkup:
     """Helper to build format selection buttons in 2 columns."""
     buttons = []
@@ -22,26 +22,28 @@ def build_format_keyboard(
         row = [
             InlineKeyboardButton(
                 format_label(formats_slice[i]),
-                callback_data=f"pick|{formats_slice[i].format_id}",
+                callback_data=f"pick|{i}",
             )
         ]
         if i + 1 < len(formats_slice):
             row.append(
                 InlineKeyboardButton(
                     format_label(formats_slice[i + 1]),
-                    callback_data=f"pick|{formats_slice[i + 1].format_id}",
+                    callback_data=f"pick|{i + 1}",
                 )
             )
         buttons.append(row)
 
-    buttons.append(
-        [
-            InlineKeyboardButton(
-                format_label(special_format),
-                callback_data=f"pick|{special_format.format_id}",
-            )
-        ]
-    )
+    if special_format is not None:
+        idx = special_index if special_index is not None else len(formats_slice)
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    format_label(special_format),
+                    callback_data=f"pick|{idx}",
+                )
+            ]
+        )
     return InlineKeyboardMarkup(buttons)
 
 

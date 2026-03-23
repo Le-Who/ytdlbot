@@ -122,6 +122,12 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             parse_mode="HTML",
         )
     else:
+        indexed_formats = formats[:8]
+        fmt_index_map = {str(i): f.format_id for i, f in enumerate(indexed_formats)}
+        if special_format:
+            fmt_index_map[str(len(indexed_formats))] = special_format.format_id
+        data["fmt_index_map"] = fmt_index_map
+
         reply_markup = build_format_keyboard(formats, special_format)
         caption = f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}"
 
@@ -164,7 +170,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     try:
-        _, format_id = q.data.split("|", 1)
+        _, pick_key = q.data.split("|", 1)
     except (ValueError, AttributeError) as e:
         logger.error("Invalid callback data in on_pick", extra={"error": str(e)})
         return
@@ -174,6 +180,9 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not data.get("page_url"):
         await _edit_or_reply(q, Texts.DATA_EXPIRED_RESEND)
         return
+
+    fmt_index_map = data.get("fmt_index_map", {})
+    format_id = fmt_index_map.get(pick_key, pick_key)
 
     token = uuid.uuid4().hex
     await state.link_cache.set(

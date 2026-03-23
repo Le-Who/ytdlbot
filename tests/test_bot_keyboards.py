@@ -30,7 +30,7 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         self.assertEqual(len(buttons), 1)  # One row (audio)
         self.assertEqual(len(buttons[0]), 1)
         self.assertEqual(buttons[0][0].text, "Audio Only")
-        self.assertEqual(buttons[0][0].callback_data, "pick|audio_id")
+        self.assertEqual(buttons[0][0].callback_data, "pick|0")
 
     def test_single_format(self):
         formats = [self._make_format("720p", "fmt_1")]
@@ -88,8 +88,9 @@ class TestBuildFormatKeyboard(unittest.TestCase):
 
         # Verify 9th item (id_8) was NOT added
         all_data = [btn.callback_data for row in buttons for btn in row]
-        self.assertIn("pick|id_7", all_data)
-        self.assertNotIn("pick|id_8", all_data)
+        self.assertIn("pick|7", all_data)
+        self.assertNotIn("pick|8", all_data[:-1])  # Audio append at the very end will be pick|8
+        self.assertEqual(all_data[-1], "pick|8")  # Audio is index 8
 
     def test_callback_data_structure(self):
         formats = [self._make_format("Label", "MY_FORMAT_ID")]
@@ -98,8 +99,8 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         buttons = markup.inline_keyboard
 
         all_data = [btn.callback_data for row in buttons for btn in row]
-        self.assertIn("pick|MY_FORMAT_ID", all_data)
-        self.assertIn("pick|MY_AUDIO_ID", all_data)
+        self.assertIn("pick|0", all_data)
+        self.assertIn("pick|1", all_data)
 
 
 if __name__ == "__main__":

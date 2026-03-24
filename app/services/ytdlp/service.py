@@ -26,6 +26,7 @@ from .parsers import (
 )
 from .exceptions import (
     AccessDeniedError,
+    VideoNotFoundError,
     LiveStreamError,
     ExtractionError,
     map_ytdlp_error,
@@ -174,6 +175,8 @@ class YtDlpService:
                 youtube_fallback = True
             else:
                 raise e
+        except VideoNotFoundError:
+            raise
         except Exception as e:
             # Re-raise known API exceptions that should trigger orchestration fallback
             logger.error("YtDlp Extraction Error: %s", e, exc_info=True)

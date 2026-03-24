@@ -98,29 +98,16 @@ class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Some random error", str(cm.exception))
 
     async def test_tiktok_is_passed_to_parsers(self):
-        """Test that TikTok URLs trigger correct flags in parsers."""
+        """Test that TikTok video URLs bypass yt-dlp and return tikwm_fallback."""
         url = "https://tiktok.com/@user/video/123"
-        mock_info = {
-            "title": "TikTok Video",
-            "duration": 15,
-            "formats": [
-                {"format_id": "tt", "ext": "mp4", "height": 720, "filesize": 10000}
-            ],
-        }
 
-        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
-            mock_ext.return_value = mock_info
-            with patch(
-                "app.services.ytdlp.service.parse_format_metadata"
-            ) as mock_parse:
-                mock_parse.return_value = MagicMock(
-                    height=720, filesize=10000, format_id="tt", ext="mp4"
-                )
+        # No need to mock extract — it should never be called
+        result = await self.service.list_formats(url)
 
-                await self.service.list_formats(url)
-
-                args = mock_parse.call_args[0]
-                self.assertTrue(args[2], "is_tiktok should be True for TikTok URL")
+        self.assertEqual(result.title, "TikTok Video")
+        self.assertFalse(result.is_slideshow)
+        self.assertEqual(len(result.formats), 1)
+        self.assertEqual(result.formats[0].format_id, "tikwm_fallback")
 
     async def test_max_items_limit(self):
         """Test that the number of returned formats respects max_items."""
@@ -248,28 +235,26 @@ class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(formats[0].format_id, "tikwm_fallback")
 
     async def test_tiktok_auth_error_with_proxy_returns_gallerydl_fallback(self):
-        """When proxy configured, auth error returns both gallerydl_fallback and tikwm_fallback."""
+        """TikTok video URLs bypass yt-dlp and return tikwm_fallback regardless of proxy."""
         url = "https://tiktok.com/@user/video/789"
-        error_msg = "This post may not be comfortable. Log in for access"
-        self.service.tiktok_proxy = "socks5://proxy:1080"  # enable gallery-dl path
-        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
-            mock_ext.side_effect = Exception(error_msg)
-            result = await self.service.list_formats(url)
-            formats = result.formats
-            self.assertEqual(len(formats), 2)
-            format_ids = [f.format_id for f in formats]
-            self.assertIn("gallerydl_fallback", format_ids)
-            self.assertIn("tikwm_fallback", format_ids)
+        self.service.tiktok_proxy = "socks5://proxy:1080"
+
+        # extract() should never be called — TikTok is fully bypassed
+        result = await self.service.list_formats(url)
+        self.assertEqual(result.title, "TikTok Video")
+        self.assertFalse(result.is_slideshow)
+        self.assertEqual(len(result.formats), 1)
+        self.assertEqual(result.formats[0].format_id, "tikwm_fallback")
         self.service.tiktok_proxy = None  # reset
 
     async def test_tiktok_unknown_error_falls_back_to_slideshow(self):
-        """TikTok unknown errors (not auth, not unsupported) still try slideshow."""
-        url = "https://tiktok.com/@user/video/789"
-        with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
-            mock_ext.side_effect = Exception("Some weird TikTok error")
-            result = await self.service.list_formats(url)
-            is_slideshow = result.is_slideshow
-            self.assertTrue(is_slideshow)
+        """TikTok /photo/ URLs bypass yt-dlp and return is_slideshow=True."""
+        url = "https://tiktok.com/@user/photo/789"
+
+        result = await self.service.list_formats(url)
+        self.assertTrue(result.is_slideshow)
+        self.assertEqual(result.title, "TikTok Slideshow")
+        self.assertEqual(result.formats, [])
 
 
 if __name__ == "__main__":

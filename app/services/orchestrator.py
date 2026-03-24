@@ -90,9 +90,11 @@ async def _extract_video_meta(
             if stream.get("height"):
                 meta["height"] = int(stream["height"])
             if stream.get("codec_name"):
-                meta["vcodec"] = stream["codec_name"]
-    except Exception:
-        pass
+                meta["vcodec"] = stream["codec_name"].lower()
+            if stream.get("pix_fmt"):
+                meta["pix_fmt"] = stream["pix_fmt"].lower()
+    except Exception as e:
+        logger.warning("ffprobe meta extraction failed for %s: %s", file_path, e)
 
     return meta
 
@@ -110,13 +112,20 @@ async def _ensure_telegram_compatible(file_path: str) -> str:
     """
     meta = await _extract_video_meta(file_path)
     vcodec = meta.get("vcodec")
+    pix_fmt = meta.get("pix_fmt")
 
-    if not vcodec or vcodec in _TG_SAFE_CODECS:
+    # If ffprobe failed completely (vcodec=None), it might be a broken container.
+    # We should attempt re-encoding rather than passing it raw to Telegram.
+    is_safe_codec = (vcodec is not None) and (vcodec in _TG_SAFE_CODECS)
+    # Telegram cannot natively play 10-bit H.264 (yuv420p10le).
+    is_safe_pix_fmt = not pix_fmt or "10" not in pix_fmt
+
+    if is_safe_codec and is_safe_pix_fmt:
         return file_path  # already compatible — no re-encode
 
     logger.warning(
-        "Video codec '%s' is not Telegram-compatible, re-encoding to H.264",
-        vcodec,
+        "Video codec '%s' (pix_fmt: '%s') is not Telegram-compatible, re-encoding to H.264",
+        vcodec, pix_fmt,
     )
 
     re_encoded = file_path.rsplit(".", 1)[0] + "_h264.mp4"

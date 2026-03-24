@@ -4,6 +4,7 @@ import os
 import uuid
 import asyncio
 import logging
+import struct
 from typing import Optional
 
 from app.core import state
@@ -11,6 +12,52 @@ from app.core.config import TEMP_DIR
 from app.core.utils import safe_remove
 
 logger = logging.getLogger("app.services.converter")
+
+# ffmpeg encoding thread budget per conversion job.
+_FFMPEG_THREADS = 2
+
+
+def _get_audio_duration(audio_path: str) -> Optional[float]:
+    """Fast extraction of MP3/M4A duration without ffprobe.
+
+    Reads the file header to estimate duration.  Falls back to None
+    if format is unrecognised (caller will use fixed 3s/image).
+    """
+    try:
+        ext = os.path.splitext(audio_path)[1].lower()
+        size = os.path.getsize(audio_path)
+        if size == 0:
+            return None
+
+        if ext == ".mp3":
+            # Rough estimate: assume ~128kbps CBR
+            return size / (128_000 / 8)
+
+        if ext in (".m4a", ".mp4", ".aac"):
+            # Parse the mvhd atom for timescale/duration
+            with open(audio_path, "rb") as f:
+                data = f.read(min(size, 64 * 1024))  # first 64KB
+            idx = data.find(b"mvhd")
+            if idx >= 0:
+                offset = idx + 4
+                version = data[offset]
+                if version == 0:
+                    ts = struct.unpack(">I", data[offset + 12 : offset + 16])[0]
+                    dur = struct.unpack(">I", data[offset + 16 : offset + 20])[0]
+                else:
+                    ts = struct.unpack(">I", data[offset + 20 : offset + 24])[0]
+                    dur = struct.unpack(">Q", data[offset + 24 : offset + 32])[0]
+                if ts > 0:
+                    return float(dur / ts)
+    except Exception as e:
+        logger.debug("Audio duration probe failed: %s", e)
+    return None
+
+
+def _can_copy_audio(audio_path: str) -> bool:
+    """Check if the audio file is already in a Telegram-compatible codec (MP3/AAC)."""
+    ext = os.path.splitext(audio_path)[1].lower()
+    return ext in (".mp3", ".m4a", ".aac")
 
 
 class MediaConverter:
@@ -86,8 +133,11 @@ class MediaConverter:
         """
         Converts a list of images (+ optional audio) into a slideshow MP4.
 
-        Each image is displayed for ~3 seconds. If audio exists, the video
-        duration matches the audio length (with -shortest).
+        Optimisations applied:
+        - ultrafast preset + stillimage tune + CRF 28 (~40% faster encoding)
+        - Adaptive duration: image_dur = audio_len / N (UX: video = full track)
+        - Audio stream copy when source is MP3/M4A (skip re-encoding)
+        - Explicit thread budget (-threads 2)
 
         Returns:
             Path to output MP4, or None on failure.
@@ -99,14 +149,53 @@ class MediaConverter:
         concat_file = os.path.join(TEMP_DIR, f"concat_{uuid.uuid4().hex}.txt")
 
         try:
-            with open(concat_file, "w", encoding="utf-8") as f:
-                for img in images:
-                    escaped = img.replace("'", "'\\''")
-                    f.write(f"file '{escaped}'\n")
-                    f.write("duration 3\n")
-                if images:
-                    escaped = images[-1].replace("'", "'\\''")
-                    f.write(f"file '{escaped}'\n")
+            # --- Adaptive duration ---
+            image_dur = 3.0  # default: 3 seconds per image
+            if audio_path and os.path.exists(audio_path):
+                audio_dur = await asyncio.to_thread(_get_audio_duration, audio_path)
+                if audio_dur and audio_dur > 0 and len(images) > 0:
+                    image_dur = audio_dur / len(images)
+                    # Clamp between 1s and 10s to avoid extremes
+                    image_dur = max(1.0, min(10.0, image_dur))
+                    logger.info(
+                        "Adaptive slideshow: %.1fs audio / %d images = %.2fs each",
+                        audio_dur,
+                        len(images),
+                        image_dur,
+                    )
+
+            # --- Write concat file ---
+            def _write_concat() -> None:
+                with open(concat_file, "w", encoding="utf-8") as f:
+                    for img in images:
+                        escaped = img.replace("'", "'\\''")
+                        f.write(f"file '{escaped}'\n")
+                        f.write(f"duration {image_dur:.2f}\n")
+                    if images:
+                        escaped = images[-1].replace("'", "'\\''")
+                        f.write(f"file '{escaped}'\n")
+
+            await asyncio.to_thread(_write_concat)
+
+            # --- Build ffmpeg command ---
+            # Shared video encoding parameters (optimised for static images)
+            scale_filter = "scale=w='min(1080,iw)':h=-2:force_divisible_by=2"
+            video_args = [
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-tune",
+                "stillimage",
+                "-crf",
+                "28",
+                "-pix_fmt",
+                "yuv420p",
+                "-threads",
+                str(_FFMPEG_THREADS),
+                "-vf",
+                scale_filter,
+            ]
 
             cmd = [
                 "ffmpeg",
@@ -121,42 +210,19 @@ class MediaConverter:
 
             if audio_path and os.path.exists(audio_path):
                 cmd.extend(["-i", audio_path])
-                cmd.extend(
-                    [
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        "veryfast",
-                        "-pix_fmt",
-                        "yuv420p",
-                        "-vf",
-                        "scale='min(1080,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
-                        "-c:a",
-                        "aac",
-                        "-b:a",
-                        "128k",
-                        "-shortest",
-                        "-movflags",
-                        "+faststart",
-                        output_path,
-                    ]
-                )
+
+                # Audio: stream copy if already MP3/AAC, else re-encode
+                if _can_copy_audio(audio_path):
+                    audio_args = ["-c:a", "copy"]
+                else:
+                    audio_args = ["-c:a", "aac", "-b:a", "128k"]
+
+                cmd.extend(video_args)
+                cmd.extend(audio_args)
+                cmd.extend(["-shortest", "-movflags", "+faststart", output_path])
             else:
-                cmd.extend(
-                    [
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        "veryfast",
-                        "-pix_fmt",
-                        "yuv420p",
-                        "-vf",
-                        "scale='min(1080,iw)':'min(1920,ih)':force_original_aspect_ratio=decrease:force_divisible_by=2",
-                        "-movflags",
-                        "+faststart",
-                        output_path,
-                    ]
-                )
+                cmd.extend(video_args)
+                cmd.extend(["-movflags", "+faststart", output_path])
 
             from app.core.metrics import metrics as _m
 

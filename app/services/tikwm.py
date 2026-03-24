@@ -176,7 +176,7 @@ class TikWMService:
                         expire_ts = int(qs["expire"][0])
                         remaining = expire_ts - time.time()
                         if remaining > 0:
-                            ttl = remaining * 0.8
+                            ttl = int(remaining * 0.8)
                 except Exception as e:
                     logger.debug("[TIKWM] URL expiration parse error: %s", e)
 
@@ -283,68 +283,87 @@ class TikWMService:
         if not res.images:
             return [], None
 
-        image_paths = []
-        try:
-            async with AsyncSession() as session:
+        images = res.images  # bind to local for type narrowing
+        image_paths: List[Optional[str]] = [None] * len(images)
+        _dl_sem = asyncio.Semaphore(3)  # max 3 concurrent CDN fetches
 
-                def _write_file(path: str, data: bytes) -> None:
-                    with open(path, "wb") as f:
-                        f.write(data)
-
-                for idx, img_url in enumerate(res.images):
-                    out_path = os.path.join(
-                        TEMP_DIR, f"tikwm_slide_{uuid.uuid4().hex}_{idx}.jpg"
-                    )
-                    resp = await session.get(img_url, impersonate="chrome", timeout=30)
+        async def _download_one(idx: int, img_url: str) -> None:
+            async with _dl_sem:
+                out_path = os.path.join(
+                    TEMP_DIR, f"tikwm_slide_{uuid.uuid4().hex}_{idx}.jpg"
+                )
+                try:
+                    async with AsyncSession() as session:
+                        resp = await session.get(
+                            img_url, impersonate="chrome", timeout=30
+                        )
 
                     # Validate HTTP response
                     if resp.status_code != 200:
                         logger.warning(
                             "[TIKWM] Image %d/%d returned HTTP %d: %s",
                             idx + 1,
-                            len(res.images),
+                            len(images),
                             resp.status_code,
                             img_url[:120],
                         )
-                        continue
+                        return
 
                     content = resp.content
                     if not content or len(content) < 100:
                         logger.warning(
                             "[TIKWM] Image %d/%d is too small (%d bytes), skipping",
                             idx + 1,
-                            len(res.images),
+                            len(images),
                             len(content) if content else 0,
                         )
-                        continue
+                        return
 
-                    # Log content-type for diagnostics
                     ct = resp.headers.get("content-type", "unknown")
                     logger.debug(
                         "[TIKWM] Image %d/%d: %d bytes, content-type=%s",
                         idx + 1,
-                        len(res.images),
+                        len(images),
                         len(content),
                         ct,
                     )
 
+                    def _write_file(path: str, data: bytes) -> None:
+                        with open(path, "wb") as f:
+                            f.write(data)
+
                     await asyncio.to_thread(_write_file, out_path, content)
-                    image_paths.append(out_path)
+                    image_paths[idx] = out_path
+                except Exception as e:
+                    logger.error(
+                        "[TIKWM] Image %d/%d download error: %s",
+                        idx + 1,
+                        len(images),
+                        e,
+                    )
+
+        try:
+            await asyncio.gather(
+                *[_download_one(i, url) for i, url in enumerate(images)]
+            )
+
+            # Filter out failed downloads (None), preserving order
+            valid_paths = [p for p in image_paths if p is not None]
 
             logger.info(
                 "[TIKWM] Downloaded %d/%d slideshow images",
-                len(image_paths),
-                len(res.images),
+                len(valid_paths),
+                len(images),
             )
         except Exception as e:
             logger.error("TikWM slideshow image download failed: %s", e, exc_info=True)
-            # Cleanup what we have
             for p in image_paths:
-                await asyncio.to_thread(safe_remove, p)
+                if p:
+                    await asyncio.to_thread(safe_remove, p)
             return [], None
 
         audio_path = None
         if res.audio_url:
             audio_path = await TikWMService.download_audio(res.audio_url)
 
-        return image_paths, audio_path
+        return valid_paths, audio_path

@@ -6,13 +6,14 @@ from unittest.mock import AsyncMock
 
 from app.services.sender import TelegramSender
 
+
 async def run_benchmark():
     # Create temp images
     images = []
     for i in range(10):
         fd, path = tempfile.mkstemp(suffix=".jpg")
-        with os.fdopen(fd, 'wb') as f:
-            f.write(os.urandom(1024 * 1024)) # 1MB fake images
+        with os.fdopen(fd, "wb") as f:
+            f.write(os.urandom(1024 * 1024))  # 1MB fake images
         images.append(path)
 
     bot = AsyncMock()
@@ -26,6 +27,7 @@ async def run_benchmark():
 
     for img in images:
         os.remove(img)
+
 
 if __name__ == "__main__":
     asyncio.run(run_benchmark())

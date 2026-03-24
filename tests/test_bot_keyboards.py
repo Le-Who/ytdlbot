@@ -89,7 +89,9 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         # Verify 9th item (id_8) was NOT added
         all_data = [btn.callback_data for row in buttons for btn in row]
         self.assertIn("pick|7", all_data)
-        self.assertNotIn("pick|8", all_data[:-1])  # Audio append at the very end will be pick|8
+        self.assertNotIn(
+            "pick|8", all_data[:-1]
+        )  # Audio append at the very end will be pick|8
         self.assertEqual(all_data[-1], "pick|8")  # Audio is index 8
 
     def test_callback_data_structure(self):

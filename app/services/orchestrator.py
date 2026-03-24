@@ -224,6 +224,32 @@ class DownloadOrchestrator:
             # Orchestrate TikTok fallbacks locally to decouple downloader
             if payload.format_id == "tikwm_fallback":
                 file_path, error = await TikWMService.download_video(payload.page_url)
+                
+                # Smart BVC2/HEVC Fallback:
+                # If TikWM gives us an incompatible proprietary byte stream (like BVC2),
+                # ffmpeg cannot decode it, creating scrambled video. Instead of transcoding,
+                # we immediately fallback to yt-dlp to fetch TikTok's native H.264 alternate stream.
+                if file_path and not error:
+                    meta = await _extract_video_meta(file_path)
+                    vcodec = meta.get("vcodec")
+                    pix_fmt = meta.get("pix_fmt")
+                    
+                    is_safe_codec = (vcodec is not None) and (vcodec in _TG_SAFE_CODECS)
+                    is_safe_pix_fmt = not pix_fmt or "10" not in pix_fmt
+                    
+                    if not (is_safe_codec and is_safe_pix_fmt):
+                        logger.warning(
+                            "TikWM returned incompatible format (%s/%s). Falling back to yt-dlp H.264 stream...",
+                            vcodec, pix_fmt
+                        )
+                        safe_remove(file_path)
+                        file_path, error = await MediaSender.download_video(
+                            payload.page_url,
+                            "bestvideo[vcodec^=avc]+bestaudio/best",
+                            payload.height,
+                            token + "_yt",
+                        )
+
                 if file_path and not error:
                     state.file_cache[token] = file_path
             elif payload.format_id == "gallerydl_fallback":

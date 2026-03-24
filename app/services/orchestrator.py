@@ -22,17 +22,21 @@ from app.services.pinterest import PinterestNativeService
 
 logger = logging.getLogger("app.services.orchestrator")
 
+# Telegram-compatible video codecs — anything else needs re-encoding
+_TG_SAFE_CODECS = {"h264", "mpeg4"}
+
 
 async def _extract_video_meta(
     file_path: str | object,
     info_json_path: Optional[str] = None,
 ) -> dict:
-    """Extract duration/width/height for Telegram send_video.
+    """Extract duration/width/height/vcodec for Telegram send_video.
 
     Strategy: try info JSON first (zero-cost), fall back to ffprobe.
-    Returns dict with keys: duration, width, height (all Optional[int]).
+    Returns dict with keys: duration, width, height (all Optional[int]),
+    vcodec (Optional[str]).
     """
-    meta: dict = {"duration": None, "width": None, "height": None}
+    meta: dict = {"duration": None, "width": None, "height": None, "vcodec": None}
 
     if info_json_path and os.path.exists(info_json_path):
         try:
@@ -45,6 +49,7 @@ async def _extract_video_meta(
                 meta["width"] = int(info["width"])
             if info.get("height"):
                 meta["height"] = int(info["height"])
+            meta["vcodec"] = info.get("vcodec")
             if meta["duration"]:
                 return meta
         except Exception:
@@ -84,10 +89,86 @@ async def _extract_video_meta(
                 meta["width"] = int(stream["width"])
             if stream.get("height"):
                 meta["height"] = int(stream["height"])
+            if stream.get("codec_name"):
+                meta["vcodec"] = stream["codec_name"]
     except Exception:
         pass
 
     return meta
+
+
+async def _ensure_telegram_compatible(file_path: str) -> str:
+    """Re-encode video to H.264/AAC if its codec is not Telegram-compatible.
+
+    TikTok CDN often serves HEVC (H.265) videos which Telegram clients
+    cannot play inline.  This function detects incompatible codecs via
+    ffprobe and re-encodes with libx264 ultrafast.  H.264 videos pass
+    through untouched (zero-cost happy path).
+
+    Returns:
+        Original path if already compatible, or path to re-encoded file.
+    """
+    meta = await _extract_video_meta(file_path)
+    vcodec = meta.get("vcodec")
+
+    if not vcodec or vcodec in _TG_SAFE_CODECS:
+        return file_path  # already compatible — no re-encode
+
+    logger.warning(
+        "Video codec '%s' is not Telegram-compatible, re-encoding to H.264",
+        vcodec,
+    )
+
+    re_encoded = file_path.rsplit(".", 1)[0] + "_h264.mp4"
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i", file_path,
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac",
+        "-b:a", "128k",
+        "-movflags", "+faststart",
+        re_encoded,
+    ]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
+
+        if proc.returncode != 0:
+            logger.error(
+                "H.264 re-encode failed: %s",
+                stderr.decode("utf-8", errors="ignore")[-500:],
+            )
+            safe_remove(re_encoded)
+            return file_path  # fall back to original
+
+        if not os.path.exists(re_encoded) or os.path.getsize(re_encoded) == 0:
+            safe_remove(re_encoded)
+            return file_path
+
+        logger.info(
+            "Re-encoded %s -> %s (codec %s -> h264)",
+            file_path, re_encoded, vcodec,
+        )
+        safe_remove(file_path)  # clean up the original
+        return re_encoded
+
+    except asyncio.TimeoutError:
+        logger.error("H.264 re-encode timed out")
+        safe_remove(re_encoded)
+        return file_path
+    except Exception as e:
+        logger.error("H.264 re-encode exception: %s", e)
+        safe_remove(re_encoded)
+        return file_path
 
 
 class DownloadOrchestrator:
@@ -169,6 +250,15 @@ class DownloadOrchestrator:
 
             is_gif = payload.format_id == GIF_FORMAT_ID
             is_audio = payload.format_id == AUDIO_FORMAT_ID
+
+            # Re-encode non-H.264 videos for Telegram compatibility
+            # (TikTok CDN often serves HEVC which Telegram can't play)
+            if (
+                isinstance(file_path, str)
+                and not is_gif
+                and not is_audio
+            ):
+                file_path = await _ensure_telegram_compatible(file_path)
 
             # Extract video metadata for faster Telegram delivery + preview
             video_meta = await _extract_video_meta(

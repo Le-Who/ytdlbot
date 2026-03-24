@@ -116,6 +116,7 @@ class VideoDownloader:
             use_aria2=not use_pipe,  # aria2c doesn't support stdout piping
             info_json_path=info_json_path,
             fallback_clients=fallback_clients,
+            pipe_mode=use_pipe,
         )
 
         _dl_start = time.time()

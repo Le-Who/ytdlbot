@@ -252,6 +252,7 @@ class YtDlpService:
         use_aria2: bool = False,
         info_json_path: Optional[str] = None,
         fallback_clients: bool = False,
+        pipe_mode: bool = False,
     ) -> List[str]:
         """Proxy to new CLI builder"""
         cookies = self.cookies_manager.get_cookies_path(page_url)
@@ -268,6 +269,7 @@ class YtDlpService:
             use_aria2=use_aria2 and self.has_aria2,
             info_json_path=info_json_path,
             fallback_clients=fallback_clients,
+            pipe_mode=pipe_mode,
         )
 
         # Always use exact python executable to avoid environment path issues

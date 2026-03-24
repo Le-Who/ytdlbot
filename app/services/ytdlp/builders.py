@@ -59,6 +59,7 @@ class YtDlpCLIBuilder:
         use_aria2: bool = False,
         info_json_path: Optional[str] = None,
         fallback_clients: bool = False,
+        pipe_mode: bool = False,
     ) -> List[str]:
         """Build args for downloading media"""
         cmd = self._base_args.copy()
@@ -71,7 +72,9 @@ class YtDlpCLIBuilder:
             final_fmt = "bestaudio/best" if format_id == "audio" else format_id
         else:
             height_cap = height or 1080
+            # Prefer H.264 (avc1) for Telegram compatibility; fallback to any
             fallback = (
+                f"bestvideo[height<={height_cap}][vcodec^=avc]+bestaudio[acodec^=mp4a]/"
                 f"bestvideo[height<={height_cap}]+bestaudio/bestvideo+bestaudio/best"
             )
             final_fmt = f"{format_id}/{fallback}"
@@ -98,10 +101,24 @@ class YtDlpCLIBuilder:
                 "linear=1::2",
                 "--concurrent-fragments",
                 str(CONCURRENT_FRAGMENTS),
-                "--postprocessor-args",
-                "Merger+ffmpeg:-movflags frag_keyframe+empty_moov",
             ]
         )
+
+        # Fragmented MP4 for pipe mode (streaming), faststart for file downloads
+        if pipe_mode:
+            cmd.extend(
+                [
+                    "--postprocessor-args",
+                    "Merger+ffmpeg:-movflags frag_keyframe+empty_moov",
+                ]
+            )
+        else:
+            cmd.extend(
+                [
+                    "--postprocessor-args",
+                    "Merger+ffmpeg:-movflags +faststart",
+                ]
+            )
 
         if output_path != "-" and use_aria2:
             cmd.extend(

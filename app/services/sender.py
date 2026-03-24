@@ -168,6 +168,8 @@ class TelegramSender:
                 chat_id=chat_id,
                 media=media,
                 reply_to_message_id=reply_to_message_id,
+                write_timeout=30,
+                read_timeout=30,
             )
             return True
 

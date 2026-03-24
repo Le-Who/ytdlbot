@@ -296,10 +296,48 @@ class TikWMService:
                         TEMP_DIR, f"tikwm_slide_{uuid.uuid4().hex}_{idx}.jpg"
                     )
                     resp = await session.get(img_url, impersonate="chrome", timeout=30)
-                    await asyncio.to_thread(_write_file, out_path, resp.content)
+
+                    # Validate HTTP response
+                    if resp.status_code != 200:
+                        logger.warning(
+                            "[TIKWM] Image %d/%d returned HTTP %d: %s",
+                            idx + 1,
+                            len(res.images),
+                            resp.status_code,
+                            img_url[:120],
+                        )
+                        continue
+
+                    content = resp.content
+                    if not content or len(content) < 100:
+                        logger.warning(
+                            "[TIKWM] Image %d/%d is too small (%d bytes), skipping",
+                            idx + 1,
+                            len(res.images),
+                            len(content) if content else 0,
+                        )
+                        continue
+
+                    # Log content-type for diagnostics
+                    ct = resp.headers.get("content-type", "unknown")
+                    logger.debug(
+                        "[TIKWM] Image %d/%d: %d bytes, content-type=%s",
+                        idx + 1,
+                        len(res.images),
+                        len(content),
+                        ct,
+                    )
+
+                    await asyncio.to_thread(_write_file, out_path, content)
                     image_paths.append(out_path)
+
+            logger.info(
+                "[TIKWM] Downloaded %d/%d slideshow images",
+                len(image_paths),
+                len(res.images),
+            )
         except Exception as e:
-            logger.error("TikWM slideshow image download failed: %s", e)
+            logger.error("TikWM slideshow image download failed: %s", e, exc_info=True)
             # Cleanup what we have
             for p in image_paths:
                 await asyncio.to_thread(safe_remove, p)

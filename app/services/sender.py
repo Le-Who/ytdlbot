@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import io
+import os
 from typing import Any, Union
 from contextlib import contextmanager
 
@@ -116,12 +117,43 @@ class TelegramSender:
         if not images:
             return False
 
-        photos_to_send = images[:MAX_TELEGRAM_ALBUM_SIZE]
+        # Filter out missing or empty files
+        valid_images: list[str] = []
+        for img in images[:MAX_TELEGRAM_ALBUM_SIZE]:
+            try:
+                size = await asyncio.to_thread(os.path.getsize, img)
+                if size > 0:
+                    valid_images.append(img)
+                else:
+                    logger.warning("Skipping empty image file: %s", img)
+            except OSError:
+                logger.warning("Skipping missing image file: %s", img)
+
+        if not valid_images:
+            logger.error("No valid images to send")
+            return False
+
+        # Telegram sendMediaGroup requires 2-10 items;
+        # fall back to sendPhoto for a single image.
+        if len(valid_images) == 1:
+            try:
+                with open(valid_images[0], "rb") as fh:
+                    await bot.send_photo(
+                        chat_id=chat_id,
+                        photo=fh,
+                        caption=caption,
+                        parse_mode=parse_mode,
+                        reply_to_message_id=reply_to_message_id,
+                    )
+                return True
+            except Exception as e:
+                logger.error("Single photo send error: %s", e, exc_info=True)
+                return False
 
         file_handles = []
         try:
             media = []
-            for i, img_path in enumerate(photos_to_send):
+            for i, img_path in enumerate(valid_images):
                 fh = await asyncio.to_thread(open, img_path, "rb")
                 file_handles.append(fh)
                 media.append(
@@ -139,11 +171,11 @@ class TelegramSender:
             )
             return True
 
-        except NetworkError:
-            logger.warning("Network error sending slideshow photos")
+        except NetworkError as e:
+            logger.warning("Network error sending slideshow photos: %s", e)
             return False
         except Exception as e:
-            logger.error("Slideshow send error", extra={"error": str(e)}, exc_info=True)
+            logger.error("Slideshow send error: %s", e, exc_info=True)
             return False
         finally:
             for fh in file_handles:

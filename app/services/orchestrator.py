@@ -127,21 +127,30 @@ async def _ensure_telegram_compatible(file_path: str) -> str:
 
     logger.warning(
         "Video codec '%s' (pix_fmt: '%s') is not Telegram-compatible, re-encoding to H.264",
-        vcodec, pix_fmt,
+        vcodec,
+        pix_fmt,
     )
 
     re_encoded = file_path.rsplit(".", 1)[0] + "_h264.mp4"
     cmd = [
         "ffmpeg",
         "-y",
-        "-i", file_path,
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-crf", "23",
-        "-pix_fmt", "yuv420p",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-movflags", "+faststart",
+        "-i",
+        file_path,
+        "-c:v",
+        "libx264",
+        "-preset",
+        "veryfast",
+        "-crf",
+        "23",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "128k",
+        "-movflags",
+        "+faststart",
         re_encoded,
     ]
 
@@ -167,7 +176,9 @@ async def _ensure_telegram_compatible(file_path: str) -> str:
 
         logger.info(
             "Re-encoded %s -> %s (codec %s -> h264)",
-            file_path, re_encoded, vcodec,
+            file_path,
+            re_encoded,
+            vcodec,
         )
         safe_remove(file_path)  # clean up the original
         return re_encoded
@@ -226,7 +237,7 @@ class DownloadOrchestrator:
             # Orchestrate TikTok fallbacks locally to decouple downloader
             if payload.format_id == "tikwm_fallback":
                 file_path, error = await TikWMService.download_video(payload.page_url)
-                
+
                 # Smart BVC2/HEVC Fallback:
                 # If TikWM gives us an incompatible proprietary byte stream (like BVC2),
                 # ffmpeg cannot decode it, creating scrambled video. Instead of transcoding,
@@ -236,15 +247,17 @@ class DownloadOrchestrator:
                     vcodec = meta.get("vcodec")
                     pix_fmt = meta.get("pix_fmt")
                     codec_tag = meta.get("codec_tag", "")
-                    
+
                     is_safe_codec = (vcodec is not None) and (vcodec in _TG_SAFE_CODECS)
                     is_safe_pix_fmt = not pix_fmt or "10" not in pix_fmt
                     is_safe_tag = "bvc" not in codec_tag and "hvc" not in codec_tag
-                    
+
                     if not (is_safe_codec and is_safe_pix_fmt and is_safe_tag):
                         logger.warning(
                             "TikWM returned incompatible format (codec:%s, pix_fmt:%s, tag:%s). Falling back to yt-dlp H.264 stream...",
-                            vcodec, pix_fmt, codec_tag
+                            vcodec,
+                            pix_fmt,
+                            codec_tag,
                         )
                         safe_remove(file_path)
                         file_path, error = await MediaSender.download_video(
@@ -292,11 +305,7 @@ class DownloadOrchestrator:
 
             # Re-encode non-H.264 videos for Telegram compatibility
             # (TikTok CDN often serves HEVC which Telegram can't play)
-            if (
-                isinstance(file_path, str)
-                and not is_gif
-                and not is_audio
-            ):
+            if isinstance(file_path, str) and not is_gif and not is_audio:
                 file_path = await _ensure_telegram_compatible(file_path)
 
             # Extract video metadata for faster Telegram delivery + preview

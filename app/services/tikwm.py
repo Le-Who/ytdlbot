@@ -160,17 +160,18 @@ class TikWMService:
             # Check for standard video
             hdplay = info.get("hdplay")
             play = info.get("play")
-            
+
             # Smart BVC2/HEVC Detection Heuristic:
             # BVC2/HEVC compresses significantly better than standard H.264.
             # If the "HD" stream is smaller than the "SD" stream, it is guaranteed to be a proprietary codec.
             size = info.get("size", 0)
             hd_size = info.get("hd_size", 0)
-            
+
             if hdplay and play and hd_size > 0 and size > 0 and hd_size < size:
                 logger.info(
                     "[TIKWM] Detecting HEVC/BVC2 because HD is smaller than SD (%.1fMB vs %.1fMB). Dropping to 'play' url (H.264).",
-                    hd_size / 1048576, size / 1048576
+                    hd_size / 1048576,
+                    size / 1048576,
                 )
                 video_url = play
             else:

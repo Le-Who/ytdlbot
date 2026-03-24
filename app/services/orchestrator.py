@@ -93,6 +93,8 @@ async def _extract_video_meta(
                 meta["vcodec"] = stream["codec_name"].lower()
             if stream.get("pix_fmt"):
                 meta["pix_fmt"] = stream["pix_fmt"].lower()
+            if stream.get("codec_tag_string"):
+                meta["codec_tag"] = stream["codec_tag_string"].lower()
     except Exception as e:
         logger.warning("ffprobe meta extraction failed for %s: %s", file_path, e)
 
@@ -233,14 +235,16 @@ class DownloadOrchestrator:
                     meta = await _extract_video_meta(file_path)
                     vcodec = meta.get("vcodec")
                     pix_fmt = meta.get("pix_fmt")
+                    codec_tag = meta.get("codec_tag", "")
                     
                     is_safe_codec = (vcodec is not None) and (vcodec in _TG_SAFE_CODECS)
                     is_safe_pix_fmt = not pix_fmt or "10" not in pix_fmt
+                    is_safe_tag = "bvc" not in codec_tag and "hvc" not in codec_tag
                     
-                    if not (is_safe_codec and is_safe_pix_fmt):
+                    if not (is_safe_codec and is_safe_pix_fmt and is_safe_tag):
                         logger.warning(
-                            "TikWM returned incompatible format (%s/%s). Falling back to yt-dlp H.264 stream...",
-                            vcodec, pix_fmt
+                            "TikWM returned incompatible format (codec:%s, pix_fmt:%s, tag:%s). Falling back to yt-dlp H.264 stream...",
+                            vcodec, pix_fmt, codec_tag
                         )
                         safe_remove(file_path)
                         file_path, error = await MediaSender.download_video(

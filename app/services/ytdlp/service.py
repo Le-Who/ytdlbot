@@ -19,15 +19,13 @@ from .parsers import (
     get_special_format,
     _is_tiktok,
     _is_youtube,
+    _is_pinterest,
     detect_tiktok_slideshow,
     classify_tiktok_content,
-    classify_tiktok_error,
-    TikTokError,
     BITRATE_COEFFICIENT,
 )
 from .exceptions import (
     AccessDeniedError,
-    VideoNotFoundError,
     LiveStreamError,
     ExtractionError,
     map_ytdlp_error,
@@ -109,18 +107,56 @@ class YtDlpService:
 
         # TikTok pre-routing: detect slideshows by URL pattern BEFORE extraction
         if _is_tiktok(url):
+            logger.info("TikTok URL detected, bypassing yt-dlp: %s", url)
             content_type = classify_tiktok_content(url)
-            if content_type == "slideshow":
-                logger.info("TikTok /photo/ URL, routing to slideshow: %s", url)
-                return ExtractionResult(
-                    title="TikTok Slideshow",
-                    formats=[],
-                    special_format=get_special_format(url),
-                    duration_str="—",
-                    is_slideshow=True,
-                    info_json_path=None,
-                    thumbnail_url=None,
+            is_slideshow = content_type == "slideshow"
+            title = "TikTok Slideshow" if is_slideshow else "TikTok Video"
+            formats = []
+            if not is_slideshow:
+                formats.append(
+                    FormatItem(
+                        format_id="tikwm_fallback",
+                        ext="mp4",
+                        height=None,
+                        filesize=None,
+                        is_tiktok=True,
+                        format_note="optimal",
+                    )
                 )
+            return ExtractionResult(
+                title=title,
+                formats=formats,
+                special_format=get_special_format(url),
+                duration_str="—",
+                is_slideshow=is_slideshow,
+                info_json_path=None,
+                thumbnail_url=None,
+                youtube_fallback=False,
+                tiktok_auth_error=False,
+            )
+
+        if _is_pinterest(url):
+            logger.info("Pinterest URL detected, bypassing yt-dlp: %s", url)
+            formats = [
+                FormatItem(
+                    format_id="pinterest_native",
+                    ext="mp4",
+                    height=None,
+                    filesize=None,
+                    is_tiktok=False,
+                    format_note="native",
+                )
+            ]
+            return ExtractionResult(
+                title="Pinterest Media",
+                formats=formats,
+                special_format=get_special_format(url),
+                duration_str="—",
+                is_slideshow=False,
+                info_json_path=None,
+                thumbnail_url=None,
+                youtube_fallback=False,
+            )
 
         youtube_fallback = False
 
@@ -128,74 +164,18 @@ class YtDlpService:
             info = await self.extract(url, for_list_formats=True)
         except AccessDeniedError as e:
             if _is_youtube(url):
-                logger.warning("YouTube extraction failed with 403. Retrying with ios,android fallback clients: %s", url)
-                info = await self.extract(url, for_list_formats=True, fallback_clients=True)
+                logger.warning(
+                    "YouTube extraction failed with 403. Retrying with ios,android fallback clients: %s",
+                    url,
+                )
+                info = await self.extract(
+                    url, for_list_formats=True, fallback_clients=True
+                )
                 youtube_fallback = True
             else:
                 raise e
         except Exception as e:
             # Re-raise known API exceptions that should trigger orchestration fallback
-            if isinstance(e, (VideoNotFoundError, LiveStreamError)):
-                raise e
-
-            error_msg = str(e).lower()
-            if _is_tiktok(url):
-                error_class = classify_tiktok_error(error_msg)
-
-                # TEMPORARY: Retain TikTok proxy routing inside Service until Orchestrator is built
-                if error_class == TikTokError.AUTH_REQUIRED:
-                    logger.info(
-                        "TikTok auth required, returning proxy fallback formats: %s",
-                        url,
-                    )
-                    formats = []
-                    if self.tiktok_proxy:
-                        formats.append(
-                            FormatItem(
-                                format_id="gallerydl_fallback",
-                                ext="mp4",
-                                height=None,
-                                filesize=None,
-                                is_tiktok=True,
-                                format_note="proxy_fallback",
-                            )
-                        )
-                    formats.append(
-                        FormatItem(
-                            format_id="tikwm_fallback",
-                            ext="mp4",
-                            height=None,
-                            filesize=None,
-                            is_tiktok=True,
-                            format_note="alt_fallback",
-                        )
-                    )
-                    return ExtractionResult(
-                        title="TikTok Video",
-                        formats=formats,
-                        special_format=get_special_format(url),
-                        duration_str="—",
-                        is_slideshow=False,
-                        info_json_path=None,
-                        thumbnail_url=None,
-                        tiktok_auth_error=True,
-                        youtube_fallback=False,
-                    )
-                elif (
-                    error_class == TikTokError.SLIDESHOW
-                    or error_class == TikTokError.GENERIC
-                ):
-                    return ExtractionResult(
-                        title="TikTok Slideshow",
-                        formats=[],
-                        special_format=get_special_format(url),
-                        duration_str="—",
-                        is_slideshow=True,
-                        info_json_path=None,
-                        thumbnail_url=None,
-                        youtube_fallback=False,
-                    )
-
             logger.error("YtDlp Extraction Error: %s", e, exc_info=True)
             raise ExtractionError(
                 Texts.SVC_EXTRACTION_ERROR.format(detail=str(e)[:300])

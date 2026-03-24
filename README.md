@@ -75,7 +75,7 @@ flowchart TD
 | Bot Framework   | python-telegram-bot | Telegram API interface and callback routing          |
 | Extraction Core | yt-dlp / gallery-dl | Resolving platform links to raw media URLs           |
 | Media Engine    | FFmpeg              | Media manipulation, GIF conversion, merging          |
-| Fingerprinting  | curl_cffi           | TLS impersonation (used for TikWM fallback handling) |
+| Fingerprinting  | curl_cffi           | TLS impersonation (used for TikWM & Pinterest paths) |
 
 ## Setup
 

@@ -7,7 +7,6 @@ sys.modules["yt_dlp"] = MagicMock()
 
 # Add repo root to path so we can import app
 from app.services.ytdlp.service import YtDlpService
-from app.services.ytdlp.models import FormatItem, FormatMetadata
 from app.constants import GIF_FORMAT_ID
 
 
@@ -68,80 +67,23 @@ class TestYtDlpService(unittest.IsolatedAsyncioTestCase):
         )
         self.assertFalse(any("aria2c" in arg for arg in cmd))
 
-    async def test_list_formats_passes_is_tiktok(self):
-        mock_info = {
-            "title": "Test Video",
-            "duration": 60,
-            "formats": [
-                {
-                    "format_id": "1",
-                    "ext": "mp4",
-                    "height": 720,
-                    "filesize": 1000,
-                    "protocol": "https",
-                    "vcodec": "h264",
-                }
-            ],
-        }
-
+    async def test_list_formats_bypasses_extractor(self):
         with patch.object(
             self.service, "extract", new_callable=AsyncMock
         ) as mock_extract:
-            mock_extract.return_value = mock_info
-            with patch(
-                "app.services.ytdlp.service.parse_format_metadata"
-            ) as mock_parse:
-                mock_parse.return_value = FormatMetadata("1", "mp4", 720, 1000, "https")
+            # Test TikTok
+            url_tiktok = "https://tiktok.com/@user/video/123"
+            res_tiktok = await self.service.list_formats(url_tiktok)
+            mock_extract.assert_not_called()
+            self.assertEqual(len(res_tiktok.formats), 1)
+            self.assertEqual(res_tiktok.formats[0].format_id, "tikwm_fallback")
 
-                with patch(
-                    "app.services.ytdlp.service.deduplicate_formats"
-                ) as mock_dedup:
-                    mock_dedup.return_value = [
-                        FormatMetadata("1", "mp4", 720, 1000, "https")
-                    ]
-
-                    with patch(
-                        "app.services.ytdlp.service.create_format_item"
-                    ) as mock_create:
-                        mock_create.return_value = FormatItem(
-                            "1", "Label", "mp4", 720, 1000
-                        )
-
-                        # Test YouTube
-                        url = "https://youtube.com/watch?v=123"
-                        await self.service.list_formats(url)
-
-                        # Verify parse_format_metadata arg
-                        args_parse = mock_parse.call_args[0]
-                        self.assertFalse(
-                            args_parse[2],
-                            "parse_format: is_tiktok should be False for YouTube",
-                        )
-
-                        # Verify deduplicate_formats arg
-                        args_dedup = mock_dedup.call_args[0]
-                        self.assertFalse(
-                            args_dedup[1],
-                            "deduplicate_formats: is_tiktok should be False for YouTube",
-                        )
-
-                        # Test TikTok
-                        url_tiktok = "https://tiktok.com/@user/video/123"
-                        await self.service.list_formats(url_tiktok)
-
-                        # Verify parse_format_metadata arg
-                        args_parse = mock_parse.call_args[0]
-                        self.assertTrue(
-                            args_parse[2],
-                            "parse_format: is_tiktok should be True for TikTok",
-                        )
-
-                        # Verify deduplicate_formats arg
-                        args_dedup = mock_dedup.call_args[0]
-                        self.assertTrue(
-                            args_dedup[1],
-                            "deduplicate_formats: is_tiktok should be True for TikTok",
-                        )
+            # Test Pinterest
+            url_pin = "https://pinterest.com/pin/123"
+            res_pin = await self.service.list_formats(url_pin)
+            mock_extract.assert_not_called()
+            self.assertEqual(len(res_pin.formats), 1)
+            self.assertEqual(res_pin.formats[0].format_id, "pinterest_native")
 
 
 if __name__ == "__main__":

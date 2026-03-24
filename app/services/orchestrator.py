@@ -18,6 +18,7 @@ from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 from app.services.downloader import MediaSender
 from app.services.tikwm import TikWMService
 from app.services.gallery_dl.service import GalleryDlService
+from app.services.pinterest import PinterestNativeService
 
 logger = logging.getLogger("app.services.orchestrator")
 
@@ -141,6 +142,12 @@ class DownloadOrchestrator:
                     payload.page_url,
                     state.ytdlp.cookies_path,
                     state.ytdlp.tiktok_proxy,
+                )
+                if file_path and not error:
+                    state.file_cache[token] = file_path
+            elif payload.format_id == "pinterest_native":
+                file_path, error = await PinterestNativeService.download_video(
+                    payload.page_url
                 )
                 if file_path and not error:
                     state.file_cache[token] = file_path

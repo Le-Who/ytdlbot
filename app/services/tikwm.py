@@ -16,6 +16,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Optional, List
 from urllib.parse import quote
+import urllib.parse
 
 from curl_cffi.requests import AsyncSession, Response
 from app.core.config import TEMP_DIR
@@ -23,6 +24,7 @@ from app.core.utils import safe_remove
 
 _tikwm_lock = asyncio.Lock()
 _last_request_time = 0.0
+_tikwm_cache: dict[str, tuple["TikWMResult", float]] = {}
 
 __all__ = ["TikWMService"]
 
@@ -79,6 +81,17 @@ class TikWMService:
         api_url = f"{API_BASE}?url={quote(url, safe='')}&hd=1"
         last_error: Optional[str] = None
         global _last_request_time
+
+        now_ts = time.time()
+        if url in _tikwm_cache:
+            res, exp = _tikwm_cache[url]
+            if now_ts < exp:
+                logger.info(
+                    "[TIKWM] CACHE HIT for %s (expires in %ds)", url, int(exp - now_ts)
+                )
+                return res
+            else:
+                del _tikwm_cache[url]
 
         for attempt in range(MAX_RETRIES):
             async with _tikwm_lock:
@@ -152,7 +165,23 @@ class TikWMService:
                     info.get("duration", "?"),
                     title[:60],
                 )
-                return TikWMResult(status="video", title=title, url=video_url)
+                res = TikWMResult(status="video", title=title, url=video_url)
+
+                # Apply 80% dynamic TTL cache based on `expire=` parameter
+                ttl = 7200  # 2 hours default
+                try:
+                    parsed = urllib.parse.urlparse(video_url)
+                    qs = urllib.parse.parse_qs(parsed.query)
+                    if "expire" in qs:
+                        expire_ts = int(qs["expire"][0])
+                        remaining = expire_ts - time.time()
+                        if remaining > 0:
+                            ttl = remaining * 0.8
+                except Exception as e:
+                    logger.debug("[TIKWM] URL expiration parse error: %s", e)
+
+                _tikwm_cache[url] = (res, time.time() + ttl)
+                return res
 
             logger.warning("[TIKWM] Unrecognized response format (no video or images)")
             return TikWMResult(

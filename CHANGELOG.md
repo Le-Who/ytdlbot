@@ -22,6 +22,9 @@ All notable changes to this project will be documented in this file.
 
 ### Core Feature Updates
 
+- **TikTok Instant Bypass**: TikTok links are now fully intercepted before `yt-dlp` extraction to eliminate blocking delays. The response is routed directly to `TikWMService` or `gallery_dl`.
+- **Dynamic TikTok Caching**: `TikWMService` now parses the internal `expire=` Unix timestamp from delivered TikTok CDN URLs, caching them in-memory for 80% of their actual lifespan to solve strict 1.1s API rate limits on viral videos.
+- **Pinterest Native Extraction**: Implemented a blazing-fast (200ms) native open-graph regex parser (`PinterestNativeService`) via `curl_cffi` to extract `og:video` tags, fully bypassing `yt-dlp` Cloudflare 403 Forbidden scenarios. Falls back to Cobalt for photo carousels.
 - **TikTok API Extraction (TikWM & GalleryDL)**: Replaced fragile fallback chains (and geo-blocked Cobalt instances) with the robust TikWM API as the primary TikTok fetcher, offering watermark-free video and native image slideshow extraction.
 - **Cobalt Deprecation (Optional)**: Cobalt API is now deactivated by default to bypass strict TikTok IP blocking constraints, but can be reactivated locally via `ENABLE_COBALT_TIKTOK`.
 - **Yt-Dlp Extraction Bypass**: TikTok links now entirely bypass `yt-dlp` parsing and initialization when third-party APIs fail, instead generating a synthetic metadata object that directs the routing straight to `gallery-dl` fallback pipelines, preventing immediate IP-bans on the host server.

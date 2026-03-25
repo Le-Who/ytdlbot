@@ -43,6 +43,15 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.TYPING)
 
     parse_token = uuid.uuid4().hex[:8]
+
+    # ── Instagram Early Intercept ────────────────────────────────────────
+    from app.services.instagram import is_instagram_url
+
+    if is_instagram_url(text):
+        await _handle_instagram(update, context, text, parse_token)
+        return
+    # ── End Instagram Intercept ──────────────────────────────────────────
+
     kb_cancel = InlineKeyboardMarkup(
         [
             [
@@ -407,3 +416,199 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 reply_markup=reply_markup,
                 parse_mode="HTML",
             )
+
+
+# ── Instagram Handler ────────────────────────────────────────────────────────
+
+
+async def _handle_instagram(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url: str,
+    parse_token: str,
+) -> None:
+    """Handle Instagram URLs with rich selection UX."""
+    from app.services.instagram import (
+        InstagramService,
+        parse_instagram_url,
+    )
+
+    msg = update.message
+    user = update.effective_user
+    chat = update.effective_chat
+    assert msg is not None and user is not None and chat is not None
+
+    url_type, target, item_id = parse_instagram_url(url)
+
+    # ── Direct post/reel: download immediately via Cobalt ────────
+    if url_type == "post" and target:
+        status_msg = await msg.reply_text("⏳ Скачиваю пост из Instagram...")
+        file_path, error = await InstagramService.download_post(url)
+        if error or not file_path:
+            await status_msg.edit_text(error or Texts.IG_DOWNLOAD_ERROR)
+            return
+
+        from app.services.sender import TelegramSender
+
+        success = await TelegramSender.send_file(
+            context.bot,
+            chat.id,
+            file_path,
+            is_audio=False,
+            is_gif=False,
+            caption=f"📷 Instagram • {user.mention_html()}",
+            parse_mode="HTML",
+        )
+        if success:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+        else:
+            await status_msg.edit_text(Texts.IG_DOWNLOAD_ERROR)
+        return
+
+    # ── Direct story link with specific item_id ──────────────────
+    if url_type == "stories" and target and item_id:
+        status_msg = await msg.reply_text(
+            Texts.IG_DOWNLOADING.format(type="историю")
+        )
+
+        profile_media = await InstagramService.get_profile_media(target)
+        if profile_media.error:
+            await status_msg.edit_text(profile_media.error)
+            return
+
+        story = next(
+            (s for s in profile_media.stories if s.mediaid == item_id), None
+        )
+        if not story:
+            await status_msg.edit_text("⚠️ История не найдена или уже истекла.")
+            return
+
+        file_path, error = await InstagramService.download_story_item(story)
+        if error or not file_path:
+            await status_msg.edit_text(error or Texts.IG_DOWNLOAD_ERROR)
+            return
+
+        from app.services.sender import TelegramSender
+
+        success = await TelegramSender.send_file(
+            context.bot,
+            chat.id,
+            file_path,
+            is_audio=False,
+            is_gif=False,
+            caption=f"📷 @{target} • {story.label}",
+        )
+        if success:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+        else:
+            await status_msg.edit_text(Texts.IG_DOWNLOAD_ERROR)
+        return
+
+    # ── Profile or stories link (no specific item) → Rich Selection UI ──
+    if url_type in ("profile", "stories") and target:
+        status_msg = await msg.reply_text(
+            Texts.IG_LOADING_PROFILE.format(username=target),
+            parse_mode="HTML",
+        )
+
+        profile_media = await InstagramService.get_profile_media(target)
+        if profile_media.error:
+            await status_msg.edit_text(profile_media.error)
+            return
+
+        if not profile_media.stories and not profile_media.highlights:
+            await status_msg.edit_text(
+                Texts.IG_NO_CONTENT.format(username=target)
+            )
+            return
+
+        # Cache stories and highlights for callback retrieval
+        from app.core.models import DownloadContext
+
+        ig_cache_data = {
+            "stories": [
+                {
+                    "mediaid": s.mediaid,
+                    "is_video": s.is_video,
+                    "url": s.url,
+                    "thumbnail_url": s.thumbnail_url,
+                    "timestamp": s.timestamp.isoformat(),
+                    "duration": s.duration,
+                    "typename": s.typename,
+                }
+                for s in profile_media.stories
+            ],
+            "highlights": [
+                {
+                    "highlight_id": h.highlight_id,
+                    "title": h.title,
+                    "cover_url": h.cover_url,
+                    "item_count": h.item_count,
+                }
+                for h in profile_media.highlights
+            ],
+        }
+
+        await state.link_cache.set(
+            parse_token,
+            DownloadContext(
+                page_url=url,
+                user_tag=user.username or "",
+                chat_id=chat.id,
+                original_msg_id=status_msg.message_id,
+                api_source="instagram",
+                api_json=ig_cache_data,
+            ),
+        )
+
+        # Build the menu keyboard
+        buttons = []
+        if profile_media.stories:
+            buttons.append(
+                InlineKeyboardButton(
+                    f"📸 Истории ({len(profile_media.stories)})",
+                    callback_data=f"ig_stories|{parse_token}",
+                )
+            )
+        if profile_media.highlights:
+            buttons.append(
+                InlineKeyboardButton(
+                    f"📁 Хайлайты ({len(profile_media.highlights)})",
+                    callback_data=f"ig_highlights|{parse_token}",
+                )
+            )
+
+        rows = []
+        for i in range(0, len(buttons), 2):
+            rows.append(buttons[i : i + 2])
+
+        if profile_media.stories:
+            rows.append(
+                [
+                    InlineKeyboardButton(
+                        "📥 Скачать все истории",
+                        callback_data=f"ig_dl_all|{parse_token}",
+                    )
+                ]
+            )
+
+        reply_markup = InlineKeyboardMarkup(rows)
+        await status_msg.edit_text(
+            Texts.IG_MENU.format(username=target),
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
+        return
+
+    # ── Unknown Instagram URL format ─────────────────────────────
+    await msg.reply_text(
+        "⚠️ Не удалось распознать ссылку Instagram. "
+        "Поддерживаются: профили, истории, хайлайты и посты/рилсы."
+    )
+

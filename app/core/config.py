@@ -59,6 +59,11 @@ COBALT_API_URLS = [
 ENABLE_COBALT_TIKTOK = os.getenv("ENABLE_COBALT_TIKTOK", "0").strip() == "1"
 
 COBALT_API_KEY = os.getenv("COBALT_API_KEY", "")
+
+# Instagram session (base64-encoded Instaloader session file) for stories/highlights
+IG_SESSION_B64: Optional[str] = os.getenv("IG_SESSION_B64", "").strip() or None
+IG_SESSION_USER: Optional[str] = os.getenv("IG_SESSION_USER", "").strip() or None
+
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")
 if not BASE_URL:

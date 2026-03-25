@@ -18,7 +18,8 @@ class Texts:
         "• VK / VK Video\n"
         "• RuTube (включая Shorts)\n"
         "• Facebook\n"
-        "• Pinterest\n\n"
+        "• Pinterest\n"
+        "• Instagram (истории, хайлайты, посты)\n\n"
         "<i>Я найду доступные форматы и отправлю видео прямо сюда.</i>"
     )
 
@@ -114,3 +115,30 @@ class Texts:
     )
     SVC_EXTRACTION_ERROR = "Ошибка извлечения: {detail}"
     SVC_DEFAULT_TITLE = "Видео"
+
+    # ── Instagram ─────────────────────────────────────────────────
+    IG_LOADING_PROFILE = "🔎 Загружаю профиль @{username}..."
+    IG_NO_STORIES = "📭 У @{username} сейчас нет активных историй."
+    IG_NO_CONTENT = "📭 У @{username} нет доступных историй или хайлайтов."
+    IG_STORIES_HEADER = (
+        "📸 <b>Истории @{username}</b>\n"
+        "Выберите историю для скачивания:"
+    )
+    IG_HIGHLIGHTS_HEADER = (
+        "📁 <b>Хайлайты @{username}</b>\n"
+        "Выберите хайлайт для просмотра:"
+    )
+    IG_HIGHLIGHT_ITEMS_HEADER = (
+        "📁 <b>{title}</b>\n"
+        "Выберите элемент для скачивания:"
+    )
+    IG_DOWNLOADING = "⏳ Скачиваю {type}..."
+    IG_DOWNLOAD_ERROR = "⚠️ Ошибка загрузки из Instagram."
+    IG_SESSION_EXPIRED = (
+        "⚠️ Сессия Instagram истекла. Обратитесь к администратору."
+    )
+    IG_MENU = (
+        "📷 <b>Instagram — @{username}</b>\n"
+        "Выберите раздел:"
+    )
+

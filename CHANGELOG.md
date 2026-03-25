@@ -4,6 +4,21 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Instagram Stories & Highlights**: Download Instagram stories and highlights with an interactive rich selection UX. Users send a profile link and get a menu with `[📸 Stories] [📁 Highlights] [📥 Download All]`. Each story shows date, time, and duration. Requires `IG_SESSION_B64` and `IG_SESSION_USER` environment variables for authenticated access. Posts and reels download directly via Cobalt fallback.
+  - New files: `app/services/instagram.py`, `app/bot/ig_callbacks.py`
+  - 8 new callback handlers registered in `main.py`
+  - 39 new tests in `test_instagram_service.py` and `test_pinterest_service.py`
+
+### Changed
+
+- **Pinterest Streaming Rewrite**: Replaced full-buffer `resp.content` with chunked async streaming (`aiter_content()`) in `pinterest.py`, eliminating RAM exhaustion on large files. Added `og:image` extraction for static image pins and proper Cobalt `picker` response handling for carousels.
+
+### Dependencies
+
+- **`instaloader`**: Added `>=4.13.0` for Instagram stories/highlights extraction
+
 ### Quality & Testing
 
 - **Test suite expanded**: 257 → 440+ tests (76% coverage, threshold 75%)

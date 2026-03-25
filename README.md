@@ -14,7 +14,7 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 
 ## Features
 
-- **Multi-Platform Support**: Extracts video/audio from YouTube, TikTok (watermark-free via TikWM API with zero-latency BVC2 codec interception), Pinterest (native 200ms open-graph parsing), VK, Facebook, and RuTube.
+- **Multi-Platform Support**: Extracts video/audio from YouTube, TikTok (watermark-free via TikWM API with zero-latency BVC2 codec interception), Pinterest (native 200ms open-graph parsing), Instagram (stories, highlights, posts/reels with rich selection UX), VK, Facebook, and RuTube.
 - **Smart Group Mode**: Automatically selects and downloads the best quality video (<45MB by default) when a link is sent in a group chat.
 - **Interactive Private Mode**: Presents inline keyboard options for users to select specific video qualities or audio-only formats.
 - **TikTok Slideshow Support**: Converts TikTok carousels natively via TikWM API into either a 📸 Photo Album (media group) or a 🎬 Video Slideshow (MP4 with audio) using `ffmpeg`.
@@ -75,7 +75,7 @@ flowchart TD
 | Bot Framework   | python-telegram-bot | Telegram API interface and callback routing          |
 | Extraction Core | yt-dlp / gallery-dl | Resolving platform links to raw media URLs           |
 | Media Engine    | FFmpeg              | Media manipulation, GIF conversion, merging          |
-| Fingerprinting  | curl_cffi           | TLS impersonation (used for TikWM & Pinterest paths) |
+| Fingerprinting  | curl_cffi           | TLS impersonation (TikWM, Pinterest, Instagram paths) |
 
 ## Setup
 
@@ -113,6 +113,8 @@ Selected key variables from `.env.example`:
 | `COBALT_API_URL`        | No       | `https://api.cobalt.tools` | Endpoint for the Cobalt extraction API (supports comma-separated list for fallback routing) | CobaltService    |
 | `YOUTUBE_PIPE_MODE`     | No       | `false`                    | Opt-in direct piping to TG for YT videos <50MB                                              | Downloader       |
 | `YTDLP_COOKIES_B64`     | No       | —                          | Base64-encoded Netscape cookies for Auth bypass                                             | `yt-dlp` Service |
+| `IG_SESSION_B64`        | No       | —                          | Base64-encoded Instaloader session file for Instagram stories/highlights                    | Instagram        |
+| `IG_SESSION_USER`       | No       | —                          | Instagram username associated with the session file                                         | Instagram        |
 
 ## Run
 

@@ -88,6 +88,34 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
     )
 
+    # ── Instagram callback handlers ──────────────────────────────────
+    from app.bot import ig_callbacks
+
+    bot_app.add_handler(
+        CallbackQueryHandler(ig_callbacks.on_ig_stories, pattern=r"^ig_stories\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(ig_callbacks.on_ig_highlights, pattern=r"^ig_highlights\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(ig_callbacks.on_ig_highlight_items, pattern=r"^ig_hl_items\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(ig_callbacks.on_ig_download, pattern=r"^ig_dl\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(ig_callbacks.on_ig_download_all, pattern=r"^ig_dl_all\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(ig_callbacks.on_ig_hl_download, pattern=r"^ig_hl_dl\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(ig_callbacks.on_ig_hl_download_all, pattern=r"^ig_hl_dl_all\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(ig_callbacks.on_ig_menu, pattern=r"^ig_menu\|")
+    )
+
     bot_app.add_error_handler(_global_error_handler)
 
     await bot_app.initialize()

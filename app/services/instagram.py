@@ -253,7 +253,7 @@ class InstagramService:
             if cls._ig_cookies:
                 async with AsyncSession(
                     impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies
-                ) as auth_session:  # type: ignore
+                ) as auth_session:
                     stories = await cls._fetch_reels_media(auth_session, [uid])
                     result.stories = stories.get(uid, [])
 

@@ -538,8 +538,6 @@ async def _handle_instagram(
 
         text_content = "\n".join(lines)
 
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
         btn_rows = []
         row_buf = []
         for i, item in enumerate(items):

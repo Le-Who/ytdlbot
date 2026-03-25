@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import uuid
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Message
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 
@@ -68,7 +68,13 @@ async def handle_group_message(
     from app.services.instagram import is_instagram_url
 
     if is_instagram_url(url):
-        await _handle_group_instagram(update, context, url, status_msg, user_tag)
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        from app.bot.messages import _handle_instagram
+
+        await _handle_instagram(update, context, url, uuid.uuid4().hex[:8])
         return
 
     # Generate token for this operation (used for file cache & callbacks)
@@ -502,204 +508,3 @@ async def on_group_slideshow(
             await asyncio.to_thread(MediaSender.cleanup_slideshow, result)
     finally:
         state.tasks_sem.release()
-
-
-# ... existing code ...
-
-
-async def _handle_group_instagram(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE,
-    url: str,
-    status_msg: Message,
-    user_tag: str,
-) -> None:
-    """Handle Instagram links in group chats.
-
-    - Profile links: auto-download all current stories
-    - Story/highlight direct links: download that specific item
-    - Post/reel links: download via Cobalt/yt-dlp fallback
-    """
-    from app.services.instagram import (
-        InstagramService,
-        parse_instagram_url,
-    )
-    from app.core.utils import safe_remove
-
-    chat = update.effective_chat
-    assert chat is not None and update.message is not None
-
-    url_type, identifier, item_id = parse_instagram_url(url)
-
-    # ── Posts / Reels → Cobalt fallback ───────────────────────────────
-    if url_type == "post":
-        if state.tasks_sem.locked():
-            try:
-                await status_msg.edit_text(Texts.QUEUE_FULL)
-            except Exception:
-                pass
-            return
-
-        await state.tasks_sem.acquire()
-        try:
-            await status_msg.edit_text("⏳ Загружаю пост…")
-            file_path, error = await InstagramService.download_post(url)
-            if file_path:
-                from app.services.sender import TelegramSender
-
-                try:
-                    success = await TelegramSender.send_file(
-                        context.bot,
-                        chat.id,
-                        file_path,
-                        is_audio=False,
-                        is_gif=False,
-                        caption=user_tag,
-                        parse_mode="HTML",
-                    )
-                    if success:
-                        try:
-                            await update.message.delete()
-                        except Exception:
-                            pass
-                        try:
-                            await status_msg.delete()
-                        except Exception:
-                            pass
-                    else:
-                        await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
-                finally:
-                    await asyncio.to_thread(safe_remove, file_path)
-            else:
-                await status_msg.edit_text(error or "⚠️ Не удалось загрузить пост.")
-        except Exception as e:
-            logger.error("[INSTAGRAM-GROUP] Post download error: %s", e)
-            try:
-                await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
-            except Exception:
-                pass
-        finally:
-            state.tasks_sem.release()
-        return
-
-    # ── Direct highlight link → download all items ─────────────────
-    if url_type == "highlight" and identifier:
-        if state.tasks_sem.locked():
-            try:
-                await status_msg.edit_text(Texts.QUEUE_FULL)
-            except Exception:
-                pass
-            return
-
-        await state.tasks_sem.acquire()
-        try:
-            await status_msg.edit_text("⏳ Загружаю хайлайт…")
-            items, error = await InstagramService.get_highlight_items(identifier)
-            if error or not items:
-                await status_msg.edit_text(error or "⚠️ Хайлайт пуст или не найден.")
-                return
-
-            downloaded = 0
-            from app.services.sender import TelegramSender
-
-            for item in items:
-                file_path, dl_error = await InstagramService.download_story_item(item)
-                if file_path:
-                    try:
-                        await TelegramSender.send_file(
-                            context.bot,
-                            chat.id,
-                            file_path,
-                            is_audio=False,
-                            is_gif=False,
-                            caption=f"{item.label} | {user_tag}",
-                            parse_mode="HTML",
-                        )
-                        downloaded += 1
-                    except Exception as e:
-                        logger.warning("[INSTAGRAM-GROUP] Send error: %s", e)
-                    finally:
-                        await asyncio.to_thread(safe_remove, file_path)
-
-            if downloaded > 0:
-                try:
-                    await status_msg.delete()
-                except Exception:
-                    pass
-            else:
-                await status_msg.edit_text("⚠️ Не удалось загрузить хайлайт.")
-        except Exception as e:
-            logger.error("[INSTAGRAM-GROUP] Highlight error: %s", e)
-            try:
-                await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
-            except Exception:
-                pass
-        finally:
-            state.tasks_sem.release()
-        return
-
-    # ── Profile / Stories → InstagramService ──────────────────────────
-    if url_type in ("profile", "stories") and identifier:
-        if state.tasks_sem.locked():
-            try:
-                await status_msg.edit_text(Texts.QUEUE_FULL)
-            except Exception:
-                pass
-            return
-
-        await state.tasks_sem.acquire()
-        try:
-            await status_msg.edit_text("⏳ Загружаю истории…")
-            profile_data = await InstagramService.get_profile_media(identifier)
-
-            if profile_data.error:
-                await status_msg.edit_text(profile_data.error)
-                return
-
-            stories = profile_data.stories
-            if not stories:
-                await status_msg.edit_text(f"📭 У @{identifier} нет активных историй.")
-                return
-
-            # Download + send each story item
-            downloaded = 0
-            from app.services.sender import TelegramSender
-
-            for item in stories:
-                file_path, error = await InstagramService.download_story_item(item)
-                if file_path:
-                    try:
-                        await TelegramSender.send_file(
-                            context.bot,
-                            chat.id,
-                            file_path,
-                            is_audio=False,
-                            is_gif=False,
-                            caption=f"{item.label} | {user_tag}",
-                            parse_mode="HTML",
-                        )
-                        downloaded += 1
-                    except Exception as e:
-                        logger.warning("[INSTAGRAM-GROUP] Send error: %s", e)
-                    finally:
-                        await asyncio.to_thread(safe_remove, file_path)
-
-            if downloaded > 0:
-                try:
-                    await status_msg.delete()
-                except Exception:
-                    pass
-            else:
-                await status_msg.edit_text("⚠️ Не удалось загрузить истории.")
-        except Exception as e:
-            logger.error("[INSTAGRAM-GROUP] Stories error: %s", e)
-            try:
-                await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
-            except Exception:
-                pass
-        finally:
-            state.tasks_sem.release()
-        return
-
-    # ── Unknown IG URL type → generic error ──────────────────────────
-    await status_msg.edit_text("⚠️ Неподдерживаемый тип ссылки Instagram.")

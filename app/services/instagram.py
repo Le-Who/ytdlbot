@@ -253,6 +253,15 @@ class InstagramService:
         return -2, None
 
     @classmethod
+    def _auth_headers(cls, cookies: Dict[str, str]) -> Dict[str, str]:
+        """Build unified authenticated request headers with CSRF token from cookie pool."""
+        return {
+            "User-Agent": cls.IG_USER_AGENT,
+            "X-IG-App-ID": cls.IG_APP_ID,
+            "X-CSRFToken": cookies.get("csrftoken", ""),
+        }
+
+    @classmethod
     async def get_profile_media(cls, username: str) -> IGProfileMedia:
         """Fetch basic profile + highlights + stories anonymously."""
         cls._init_pool()
@@ -323,7 +332,7 @@ class InstagramService:
                     # Mobile fetch 1: UID
                     mobile_doc = await auth_session.get(
                         f"https://i.instagram.com/api/v1/users/{username}/usernameinfo/",
-                        headers={"User-Agent": cls.IG_USER_AGENT},
+                        headers=cls._auth_headers(cookies_to_use),
                     )
                     if mobile_doc.status_code == 200:
                         try:
@@ -337,11 +346,10 @@ class InstagramService:
                                 e,
                             )
 
-                    # Mobile fetch 2: Highlights Tray
                     if uid:
                         tray_doc = await auth_session.get(
                             f"https://i.instagram.com/api/v1/highlights/{uid}/highlights_tray/",
-                            headers={"User-Agent": cls.IG_USER_AGENT},
+                            headers=cls._auth_headers(cookies_to_use),
                         )
                         if tray_doc.status_code == 200:
                             try:
@@ -450,6 +458,9 @@ class InstagramService:
                 headers={
                     "X-IG-App-ID": cls.IG_APP_ID,
                     "User-Agent": cls.IG_USER_AGENT,
+                    "X-CSRFToken": session.cookies.get("csrftoken", "")
+                    if hasattr(session, "cookies") and session.cookies
+                    else "",
                 },
             )
             if resp.status_code != 200:
@@ -579,7 +590,7 @@ class InstagramService:
         # 2. Native Fallback if Cobalt failed or returned empty URL
         if not video_url:
             logger.info(
-                "[INSTAGRAM] Cobalt failed/empty for %s, triggering Native Web Fallback",
+                "[INSTAGRAM] Cobalt failed/empty for %s, triggering Mobile API Fallback",
                 url,
             )
             cls._init_pool()
@@ -609,11 +620,39 @@ class InstagramService:
                 ) as session:
                     doc = await session.get(
                         target_url,
-                        headers={
-                            "User-Agent": cls.IG_USER_AGENT,
-                            "X-IG-App-ID": cls.IG_APP_ID,
-                        },
+                        headers=cls._auth_headers(cookies_to_use),
                     )
+
+                    # Lazy CSRF retry: if 400, refresh csrftoken via lightweight GET and retry once
+                    if doc.status_code == 400:
+                        logger.info(
+                            "[INSTAGRAM] Mobile API returned 400 for %s, attempting CSRF refresh retry",
+                            url,
+                        )
+                        try:
+                            preflight = await session.get(
+                                "https://i.instagram.com/api/v1/public/landing_info/",
+                                headers={"User-Agent": cls.IG_USER_AGENT},
+                            )
+                            # Extract fresh csrftoken from Set-Cookie response
+                            fresh_csrf = ""
+                            for cookie_name, cookie_val in session.cookies.items():
+                                if cookie_name == "csrftoken":
+                                    fresh_csrf = cookie_val
+                                    break
+                            if not fresh_csrf and preflight.cookies:
+                                fresh_csrf = preflight.cookies.get("csrftoken", "")
+
+                            if fresh_csrf:
+                                retry_headers = cls._auth_headers(cookies_to_use)
+                                retry_headers["X-CSRFToken"] = fresh_csrf
+                                doc = await session.get(
+                                    target_url, headers=retry_headers
+                                )
+                        except Exception as retry_err:
+                            logger.warning(
+                                "[INSTAGRAM] CSRF refresh retry failed: %s", retry_err
+                            )
 
                     if doc.status_code == 200:
                         data = doc.json()
@@ -640,7 +679,7 @@ class InstagramService:
 
                     if not video_url:
                         logger.warning(
-                            "[INSTAGRAM] Web JSON fallback failed for %s. HTTP: %s",
+                            "[INSTAGRAM] Mobile API fallback failed for %s. HTTP: %s",
                             url,
                             doc.status_code,
                         )
@@ -650,7 +689,7 @@ class InstagramService:
                         )
             except Exception as e:
                 logger.error(
-                    "[INSTAGRAM] Web JSON fallback exception for %s: %s", url, e
+                    "[INSTAGRAM] Mobile API fallback exception for %s: %s", url, e
                 )
                 return None, "⚠️ Внутренняя ошибка нативного парсера."
 

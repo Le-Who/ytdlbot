@@ -193,30 +193,20 @@ class TestIGHighlight(unittest.TestCase):
 
 
 class TestInstagramServiceGetProfile(unittest.IsolatedAsyncioTestCase):
-    """Test InstagramService.get_profile_media with mocked instaloader."""
-
-    async def test_returns_error_when_no_session(self):
-        from app.services.instagram import InstagramService
-
-        with patch("app.services.instagram._get_loader", return_value=None):
-            result = await InstagramService.get_profile_media("testuser")
-
-        self.assertIsNotNone(result.error)
-        self.assertIn("сессия", result.error.lower())
+    """Test InstagramService.get_profile_media with mocked curl_cffi."""
 
     async def test_returns_error_for_nonexistent_profile(self):
-        import instaloader
         from app.services.instagram import InstagramService
 
-        mock_loader = MagicMock()
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
 
-        with (
-            patch("app.services.instagram._get_loader", return_value=mock_loader),
-            patch(
-                "app.services.instagram.instaloader.Profile.from_username",
-                side_effect=instaloader.exceptions.ProfileNotExistsException("not found"),
-            ),
-        ):
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.get = AsyncMock(return_value=mock_resp)
+
+        with patch("app.services.instagram.AsyncSession", return_value=mock_session):
             result = await InstagramService.get_profile_media("nonexistent_user_xyz")
 
         self.assertIsNotNone(result.error)
@@ -248,11 +238,11 @@ class TestInstagramServiceDownloadStoryItem(unittest.IsolatedAsyncioTestCase):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
 
-        async def _aiter():
+        def _iter():
             for c in chunks:
                 yield c
 
-        mock_resp.aiter_content = _aiter
+        mock_resp.iter_content = _iter
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -261,10 +251,7 @@ class TestInstagramServiceDownloadStoryItem(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("app.services.instagram.TEMP_DIR", tmpdir),
-            patch(
-                "curl_cffi.requests.AsyncSession",
-                return_value=mock_session,
-            ),
+            patch("app.services.instagram.AsyncSession", return_value=mock_session),
         ):
             path, error = await InstagramService.download_story_item(item)
 
@@ -298,10 +285,7 @@ class TestInstagramServiceDownloadStoryItem(unittest.IsolatedAsyncioTestCase):
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = AsyncMock(return_value=mock_resp)
 
-        with patch(
-            "curl_cffi.requests.AsyncSession",
-            return_value=mock_session,
-        ):
+        with patch("app.services.instagram.AsyncSession", return_value=mock_session):
             path, error = await InstagramService.download_story_item(item)
 
         self.assertIsNone(path)

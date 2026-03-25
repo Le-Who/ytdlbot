@@ -1,39 +1,28 @@
 """
 Instagram Service — Stories & Highlights with Rich Selection UX
 
-Wraps `instaloader` to fetch story/highlight metadata and download media.
-All instaloader calls are wrapped in `asyncio.to_thread` since instaloader
-is entirely synchronous.
-
-Session Management:
-  - Requires IG_SESSION_B64 (base64-encoded instaloader session file)
-    and IG_SESSION_USER (Instagram username the session belongs to).
-  - Session file is decoded at startup and written to a temp path.
-  - If session expires, the service logs a clear error and returns gracefully.
+Implemented via Tier 1 Anonymous Mobile API Forgery (GraphQL Bypass).
+Uses `curl_cffi` to bypass datacenter TLS fingerprints.
 """
 
 import asyncio
-import base64
 import logging
 import os
 import re
-import tempfile
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import List, Optional, Tuple
+from datetime import datetime, timezone
+from typing import List, Optional, Tuple, Dict
 
-import instaloader
-
-from app.core.config import IG_SESSION_B64, IG_SESSION_USER, TEMP_DIR
+from curl_cffi.requests import AsyncSession
+from app.core.config import TEMP_DIR
 from app.core.utils import safe_remove
 
-__all__ = ["InstagramService", "IGStoryItem", "IGHighlight"]
+__all__ = ["InstagramService", "IGStoryItem", "IGHighlight", "parse_instagram_url"]
 
 logger = logging.getLogger("app.services.instagram")
 
 # ── Data Models ──────────────────────────────────────────────────────────────
-
 
 @dataclass
 class IGStoryItem:
@@ -44,8 +33,8 @@ class IGStoryItem:
     url: str  # direct media URL
     thumbnail_url: str  # thumbnail for preview
     timestamp: datetime
-    duration: Optional[float] = None  # seconds, for videos
-    typename: str = ""  # "GraphStoryImage" or "GraphStoryVideo"
+    duration: Optional[float] = None
+    typename: str = ""
 
     @property
     def type_emoji(self) -> str:
@@ -73,7 +62,6 @@ class IGStoryItem:
             parts.append(self.duration_str)
         return " ".join(parts)
 
-
 @dataclass
 class IGHighlight:
     """A highlight reel with metadata."""
@@ -87,7 +75,6 @@ class IGHighlight:
     def label(self) -> str:
         return f"📁 {self.title} ({self.item_count})"
 
-
 @dataclass
 class IGProfileMedia:
     """Aggregated stories + highlights for a user profile."""
@@ -97,36 +84,14 @@ class IGProfileMedia:
     highlights: List[IGHighlight] = field(default_factory=list)
     error: Optional[str] = None
 
-
 # ── URL Parsing ──────────────────────────────────────────────────────────────
 
-_IG_PROFILE_RE = re.compile(
-    r"instagram\.com/(?:@)?([A-Za-z0-9_.]+)/?(?:\?.*)?$"
-)
-_IG_STORIES_RE = re.compile(
-    r"instagram\.com/stories/([A-Za-z0-9_.]+)(?:/(\d+))?/?(?:\?.*)?$"
-)
-_IG_HIGHLIGHT_RE = re.compile(
-    r"instagram\.com/stories/highlights/(\d+)"
-)
-_IG_POST_RE = re.compile(
-    r"instagram\.com/(?:p|reel|reels)/([A-Za-z0-9_-]+)"
-)
-
+_IG_PROFILE_RE = re.compile(r"(?:instagram\.com|instagr\.am)/(?:@)?([A-Za-z0-9_.]+)/?(?:\?.*)?$")
+_IG_STORIES_RE = re.compile(r"(?:instagram\.com|instagr\.am)/stories/([A-Za-z0-9_.]+)(?:/(\d+))?/?(?:\?.*)?$")
+_IG_HIGHLIGHT_RE = re.compile(r"(?:instagram\.com|instagr\.am)/stories/highlights/(\d+)")
+_IG_POST_RE = re.compile(r"(?:instagram\.com|instagr\.am)/(?:p|reel|reels)/([A-Za-z0-9_-]+)")
 
 def parse_instagram_url(url: str) -> Tuple[str, Optional[str], Optional[str]]:
-    """Parse an Instagram URL into (type, username_or_shortcode, optional_item_id).
-
-    Returns:
-        ("stories", username, story_id_or_None)
-        ("highlight", highlight_id, None)
-        ("profile", username, None)
-        ("post", shortcode, None)
-        ("unknown", None, None)
-    """
-    # Highlight URLs MUST be checked before stories regex
-    # because stories/highlights/<id> would match stories regex
-    # with "highlights" captured as the username
     m = _IG_HIGHLIGHT_RE.search(url)
     if m:
         return "highlight", m.group(1), None
@@ -142,196 +107,110 @@ def parse_instagram_url(url: str) -> Tuple[str, Optional[str], Optional[str]]:
     m = _IG_PROFILE_RE.search(url)
     if m:
         username = m.group(1)
-        # Filter out known IG paths that aren't profiles
-        if username in (
-            "stories", "p", "reel", "reels", "explore", "accounts",
-            "direct", "tv", "about", "developer", "legal",
-        ):
+        if username in ("stories", "p", "reel", "reels", "explore", "accounts", "direct", "tv", "about", "developer", "legal"):
             return "unknown", None, None
         return "profile", username, None
 
     return "unknown", None, None
 
-
-# ── Session Management ───────────────────────────────────────────────────────
-
-_loader: Optional[instaloader.Instaloader] = None
-_session_path: Optional[str] = None
-
-
-def _get_loader() -> Optional[instaloader.Instaloader]:
-    """Lazily initialize and return a configured Instaloader instance."""
-    global _loader, _session_path
-
-    if _loader is not None:
-        return _loader
-
-    if not IG_SESSION_B64 or not IG_SESSION_USER:
-        logger.warning(
-            "[INSTAGRAM] IG_SESSION_B64 or IG_SESSION_USER not set. "
-            "Instagram stories/highlights will not work."
-        )
-        return None
-
-    try:
-        # Decode session file from base64
-        session_bytes = base64.b64decode(IG_SESSION_B64)
-        _session_path = os.path.join(
-            tempfile.gettempdir(), f"ig_session_{uuid.uuid4().hex}"
-        )
-        with open(_session_path, "wb") as f:
-            f.write(session_bytes)
-
-        L = instaloader.Instaloader(
-            download_video_thumbnails=False,
-            download_geotags=False,
-            download_comments=False,
-            save_metadata=False,
-            compress_json=False,
-            quiet=True,
-        )
-        L.load_session_from_file(IG_SESSION_USER, _session_path)
-        L.context.quiet = True
-
-        logger.info("[INSTAGRAM] Session loaded for user: %s", IG_SESSION_USER)
-        _loader = L
-        return L
-
-    except Exception as e:
-        logger.error("[INSTAGRAM] Failed to load session: %s", e)
-        if _session_path and os.path.exists(_session_path):
-            os.unlink(_session_path)
-        return None
-
+def is_instagram_url(url: str) -> bool:
+    return bool(parse_instagram_url(url)[0] != "unknown")
 
 # ── Core Service ─────────────────────────────────────────────────────────────
 
-
 class InstagramService:
-    """Fetches Instagram stories, highlights, and posts via Instaloader."""
+    """Fetches Instagram media using anonymous mobile endpoint forgery via curl_cffi."""
 
-    @staticmethod
-    async def get_profile_media(username: str) -> IGProfileMedia:
-        """Fetch stories and highlights metadata for a user.
-        Returns IGProfileMedia with lists of stories and highlights.
-        All instaloader calls run in a thread to avoid blocking asyncio.
-        """
+    IG_APP_ID = "936619743392459"
+    IMPERSONATE = "chrome110"
+
+    @classmethod
+    async def get_profile_media(cls, username: str) -> IGProfileMedia:
+        """Fetch basic profile + highlights + stories anonymously."""
         result = IGProfileMedia(username=username)
 
-        def _fetch() -> IGProfileMedia:
-            L = _get_loader()
-            if not L:
-                result.error = (
-                    "⚠️ Instagram сессия не настроена. "
-                    "Установите IG_SESSION_B64 и IG_SESSION_USER."
+        try:
+            async with AsyncSession(impersonate=cls.IMPERSONATE) as session:  # type: ignore
+                doc = await session.get(
+                    f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}",
+                    headers={"X-IG-App-ID": cls.IG_APP_ID}
                 )
-                return result
+                if doc.status_code == 404:
+                    result.error = f"⚠️ Профиль @{username} не найден."
+                    return result
+                
+                try:
+                    data = doc.json()
+                    user_data = data["data"]["user"]
+                    uid = user_data["id"]
+                except Exception:
+                    logger.warning("[INSTAGRAM] Failed to parse web_profile_info for %s: %s", username, doc.status_code)
+                    result.error = f"⚠️ Профиль @{username} недоступен (IP Block)."
+                    return result
 
-            try:
-                profile = instaloader.Profile.from_username(
-                    L.context, username
-                )
-            except instaloader.exceptions.ProfileNotExistsException as e:
-                logger.warning(
-                    "[INSTAGRAM] ProfileNotExists for %s: %s", username, repr(e)
-                )
-                result.error = f"⚠️ Профиль @{username} не найден."
-                return result
-            except instaloader.exceptions.LoginRequiredException:
-                result.error = (
-                    "⚠️ Сессия Instagram истекла. "
-                    "Обновите IG_SESSION_B64."
-                )
-                return result
-            except Exception as e:
-                logger.error("[INSTAGRAM] Profile fetch error: %s", e)
-                result.error = f"⚠️ Ошибка загрузки профиля: {str(e)[:100]}"
-                return result
-
-            # Fetch stories
-            try:
-                for story in L.get_stories(userids=[profile.userid]):
-                    for item in story.get_items():
-                        ig_item = IGStoryItem(
-                            mediaid=str(item.mediaid),
-                            is_video=item.is_video,
-                            url=item.video_url if item.is_video else item.url,
-                            thumbnail_url=item.url,  # always image URL for thumb
-                            timestamp=item.date_utc,
-                            duration=getattr(item, "video_duration", None),
-                            typename=item.typename or "",
+                # Parse highlights if available
+                if user_data.get("highlight_reel_count", 0) > 0:
+                    highlights_edges = user_data.get("edge_highlight_reels", {}).get("edges", [])
+                    for edge in highlights_edges:
+                        node = edge["node"]
+                        result.highlights.append(
+                            IGHighlight(
+                                highlight_id=node["id"],
+                                title=node["title"],
+                                cover_url=node["cover_media_cropped_thumbnail"]["url"],
+                                item_count=1 # Approximate since edge_highlight_reels doesn't always give item count cleanly
+                            )
                         )
-                        result.stories.append(ig_item)
-            except instaloader.exceptions.LoginRequiredException:
-                result.error = "⚠️ Сессия Instagram истекла для историй."
+
+                # Fetch stories (via reels_media anonymous block if allowed)
+                stories = await cls._fetch_reels_media(session, [uid])
+                result.stories = stories.get(uid, [])
+
                 return result
-            except Exception as e:
-                logger.warning("[INSTAGRAM] Stories fetch error: %s", e)
-                # Continue to highlights even if stories fail
 
-            # Fetch highlights
-            try:
-                for highlight in L.get_highlights(profile):
-                    items_count = 0
-                    cover = ""
-                    try:
-                        # Count items and get cover
-                        cover = highlight.cover_url or ""
-                        for _ in highlight.get_items():
-                            items_count += 1
-                    except Exception:
-                        pass
-
-                    result.highlights.append(
-                        IGHighlight(
-                            highlight_id=str(highlight.unique_id),
-                            title=highlight.title or "Highlight",
-                            cover_url=cover,
-                            item_count=items_count,
-                        )
-                    )
-            except instaloader.exceptions.LoginRequiredException:
-                if not result.error:
-                    result.error = "⚠️ Сессия Instagram истекла для хайлайтов."
-            except Exception as e:
-                logger.warning("[INSTAGRAM] Highlights fetch error: %s", e)
-
+        except Exception as e:
+            logger.error("[INSTAGRAM] Profile fetch error: %s", e)
+            result.error = f"⚠️ Ошибка загрузки профиля: {str(e)[:100]}"
             return result
 
-        return await asyncio.to_thread(_fetch)
+    @classmethod
+    async def get_highlight_items(cls, highlight_id: str) -> Tuple[List[IGStoryItem], Optional[str]]:
+        """Fetch items in a specific highlight anonymously."""
+        try:
+            async with AsyncSession(impersonate=cls.IMPERSONATE) as session:  # type: ignore
+                hid = f"highlight:{highlight_id}"
+                items = await cls._fetch_reels_media(session, [hid])
+                return items.get(hid, []), None
+        except Exception as e:
+            logger.error("[INSTAGRAM] Highlight items error: %s", e)
+            return [], f"⚠️ Ошибка загрузки хайлайта: {str(e)[:100]}"
 
-    @staticmethod
-    async def get_highlight_items(
-        highlight_id: str,
-    ) -> Tuple[List[IGStoryItem], Optional[str]]:
-        """Fetch all items in a specific highlight.
-        Returns (items, error_message).
-        """
+    @classmethod
+    async def _fetch_reels_media(cls, session: AsyncSession, ids: List[str]) -> Dict[str, List[IGStoryItem]]:
+        """Hits the iPhone reels_media endpoint using curl_cffi."""
+        try:
+            ids_param = "&".join(f"reel_ids={x}" for x in ids)
+            resp = await session.get(
+                f"https://i.instagram.com/api/v1/feed/reels_media/?{ids_param}",
+                headers={"X-IG-App-ID": cls.IG_APP_ID, "User-Agent": "Instagram 219.0.0.12.117 Android"}
+            )
+            if resp.status_code != 200:
+                logger.warning("[INSTAGRAM] reels_media failed with %s", resp.status_code)
+                return {}
 
-        def _fetch() -> Tuple[List[IGStoryItem], Optional[str]]:
-            L = _get_loader()
-            if not L:
-                return [], "⚠️ Instagram сессия не настроена."
-
-            try:
-                # Custom fetch to bypass broken GraphQL query (400 Bad Request)
-                hilite_id = f"highlight:{highlight_id}"
-                data = L.context.get_iphone_json(
-                    path=f"api/v1/feed/reels_media/?reel_ids={hilite_id}",
-                    params={}
-                )
-                reels = data.get("reels", {})
-                hilite_data = reels.get(hilite_id, {})
-                items_data = hilite_data.get("items", [])
-
-                items: List[IGStoryItem] = []
-                from datetime import datetime, timezone
+            reels = resp.json().get("reels", {})
+            out = {}
+            for reel_id, reel_data in reels.items():
+                items_data = reel_data.get("items", [])
+                parsed: List[IGStoryItem] = []
                 for item in items_data:
                     is_video = item.get("media_type") == 2
                     duration = float(item.get("video_duration", 0.0))
                     timestamp_val = item.get("taken_at", 0)
                     dt = datetime.fromtimestamp(timestamp_val, tz=timezone.utc)
 
+                    url = ""
+                    thumb = ""
                     if is_video and "video_versions" in item and item["video_versions"]:
                         url = item["video_versions"][0]["url"]
                     elif "image_versions2" in item and "candidates" in item["image_versions2"] and item["image_versions2"]["candidates"]:
@@ -344,121 +223,90 @@ class InstagramService:
                     else:
                         thumb = url
 
-                    items.append(
-                        IGStoryItem(
-                            mediaid=str(item.get("pk", item.get("id"))),
-                            is_video=is_video,
-                            url=url,
-                            thumbnail_url=thumb,
-                            timestamp=dt,
-                            duration=duration if duration > 0 else None,
-                            typename="GraphStoryVideo" if is_video else "GraphStoryImage",
-                        )
-                    )
-                return items, None
-            except Exception as e:
-                logger.error("[INSTAGRAM] Highlight fetch error: %s", e)
-                return [], f"⚠️ Ошибка загрузки хайлайта: {str(e)[:100]}"
+                    parsed.append(IGStoryItem(
+                        mediaid=str(item.get("pk", item.get("id"))),
+                        is_video=is_video,
+                        url=url,
+                        thumbnail_url=thumb,
+                        timestamp=dt,
+                        duration=duration if duration > 0 else None,
+                        typename="GraphStoryVideo" if is_video else "GraphStoryImage",
+                    ))
+                out[reel_id] = parsed
+            return out
+        except Exception as e:
+            logger.error("[INSTAGRAM] _fetch_reels_media error: %s", e)
+            return {}
 
-        return await asyncio.to_thread(_fetch)
+    @classmethod
+    async def download_story_item(cls, item: IGStoryItem) -> Tuple[Optional[str], Optional[str]]:
+        """Download high-res video/image from IG URL -> local temp file via chunked stream."""
+        from urllib.parse import urlparse
+        if not item.url:
+            return None, "⚠️ Пустой URL медиа."
 
-    @staticmethod
-    async def download_story_item(
-        item: IGStoryItem,
-    ) -> Tuple[Optional[str], Optional[str]]:
-        """Download a single story/highlight item to disk.
-        Returns (file_path, error_message).
-        """
-        from curl_cffi.requests import AsyncSession as CurlSession
+        parsed = urlparse(item.url)
+        ext = ".mp4" if item.is_video else ".jpg"
+        if parsed.path:
+            possible_ext = os.path.splitext(parsed.path)[1]
+            if possible_ext in (".mp4", ".jpg", ".jpeg", ".webp"):
+                ext = possible_ext
 
-        ext = "mp4" if item.is_video else "jpg"
-        out_path = os.path.join(TEMP_DIR, f"ig_{uuid.uuid4().hex}.{ext}")
+        out_path = os.path.join(TEMP_DIR, f"ig_{uuid.uuid4().hex}{ext}")
 
         try:
-            async with CurlSession() as session:
-                resp = await session.get(
-                    item.url, impersonate="chrome", timeout=60, stream=True
-                )
-                if resp.status_code >= 400:
-                    return None, f"HTTP {resp.status_code}"
+            async with AsyncSession(impersonate=cls.IMPERSONATE) as session:  # type: ignore
+                resp = await session.get(item.url, stream=True)
+                if resp.status_code != 200:
+                    return None, f"⚠️ Ошибка CDN Instagram: {resp.status_code}"
 
-                total = 0
+                def _write():
+                    with open(out_path, "wb") as f:
+                        for chunk in resp.iter_content():
+                            f.write(chunk)
 
-                def _write(path: str, data: bytes) -> None:
-                    mode = "ab" if os.path.exists(path) else "wb"
-                    with open(path, mode) as f:
-                        f.write(data)
-
-                async for chunk in resp.aiter_content():
-                    if chunk:
-                        await asyncio.to_thread(_write, out_path, chunk)
-                        total += len(chunk)
-
-            if total == 0:
-                await asyncio.to_thread(safe_remove, out_path)
-                return None, "Empty response"
-
-            logger.info(
-                "[INSTAGRAM] Downloaded %s (%.1f MB)",
-                out_path,
-                total / (1024 * 1024),
-            )
-            return out_path, None
+                await asyncio.to_thread(_write)
+                return out_path, None
 
         except Exception as e:
             logger.error("[INSTAGRAM] Download error: %s", e)
-            if os.path.exists(out_path):
-                await asyncio.to_thread(safe_remove, out_path)
-            return None, str(e)
+            safe_remove(out_path)
+            return None, "⚠️ Внутренняя ошибка загрузки."
 
     @staticmethod
     async def download_post(url: str) -> Tuple[Optional[str], Optional[str]]:
-        """Download an Instagram post/reel via yt-dlp fallback.
-        Returns (file_path, error_message).
-        """
-        # For posts/reels, delegate to yt-dlp which handles public IG posts
-        from app.services.cobalt import CobaltService
+        """Fallback to Cobalt for direct post formats."""
+        try:
+            from app.services.cobalt import CobaltService
+            
+            c_res = await CobaltService.process(url)
+            if not c_res:
+                return None, "⚠️ Cobalt не вернул данные."
 
-        logger.info("[INSTAGRAM] Attempting post download via Cobalt: %s", url)
-        c_res = await CobaltService.process(url)
+            if getattr(c_res, "status", None) == "picker":
+                return None, "⚠️ Multi-photo карусели скачивайте через основное меню (пока не поддерживаются в этом обработчике)."
 
-        if c_res.status in ("tunnel", "redirect") and c_res.url:
-            from curl_cffi.requests import AsyncSession as CurlSession
+            if not c_res.url:
+                return None, "⚠️ Cobalt вернул пустой URL."
 
-            out_path = os.path.join(TEMP_DIR, f"ig_post_{uuid.uuid4().hex}.mp4")
-            try:
-                async with CurlSession() as session:
-                    resp = await session.get(
-                        c_res.url, impersonate="chrome", timeout=60, stream=True
-                    )
-                    if resp.status_code >= 400:
-                        return None, f"HTTP {resp.status_code}"
+            out_path = os.path.join(TEMP_DIR, f"ig_fallback_{uuid.uuid4().hex}.mp4")
+            
+            async with AsyncSession(impersonate="chrome110") as session:
+                resp = await session.get(c_res.url, stream=True)
+                if resp.status_code != 200:
+                    return None, f"Cobalt CDN error: {resp.status_code}"
+                
+                def _write():
+                    with open(out_path, "wb") as f:
+                        for chunk in resp.iter_content():
+                            f.write(chunk)
 
-                    total = 0
-
-                    def _write(path: str, data: bytes) -> None:
-                        mode = "ab" if os.path.exists(path) else "wb"
-                        with open(path, mode) as f:
-                            f.write(data)
-
-                    async for chunk in resp.aiter_content():
-                        if chunk:
-                            await asyncio.to_thread(_write, out_path, chunk)
-                            total += len(chunk)
-
-                if total == 0:
-                    await asyncio.to_thread(safe_remove, out_path)
-                    return None, "Empty response"
-
+                await asyncio.to_thread(_write)
                 return out_path, None
-            except Exception as e:
-                if os.path.exists(out_path):
-                    await asyncio.to_thread(safe_remove, out_path)
-                return None, str(e)
 
-        return None, c_res.error_message or "Cobalt не смог обработать пост"
-
-
-def is_instagram_url(url: str) -> bool:
-    """Check if a URL is an Instagram URL."""
-    return "instagram.com" in url or "instagr.am" in url
+        except Exception as e:
+            from app.core.utils import safe_remove
+            logger.error("[INSTAGRAM] Post download fallback error: %s", e)
+            if 'out_path' in locals():
+                safe_remove(out_path)
+            return None, "⚠️ Ошибка резервного канала (Cobalt)."

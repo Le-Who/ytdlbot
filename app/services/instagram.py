@@ -367,12 +367,9 @@ class InstagramService:
                 if resp.status_code != 200:
                     return None, f"⚠️ Ошибка CDN Instagram: {resp.status_code}"
 
-                def _write():
-                    with open(out_path, "wb") as f:
-                        for chunk in resp.iter_content():
-                            f.write(chunk)
-
-                await asyncio.to_thread(_write)
+                with open(out_path, "wb") as f:
+                    async for chunk in resp.aiter_content():
+                        f.write(chunk)
                 return out_path, None
 
         except Exception as e:
@@ -406,12 +403,10 @@ class InstagramService:
                 if resp.status_code != 200:
                     return None, f"Cobalt CDN error: {resp.status_code}"
 
-                def _write():
-                    with open(out_path, "wb") as f:
-                        for chunk in resp.iter_content():
-                            f.write(chunk)
+                with open(out_path, "wb") as f:
+                    async for chunk in resp.aiter_content():
+                        f.write(chunk)
 
-                await asyncio.to_thread(_write)
                 return out_path, None
 
         except Exception as e:

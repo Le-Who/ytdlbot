@@ -514,32 +514,58 @@ async def _handle_instagram(
             await status_msg.edit_text(error or "⚠️ Хайлайт пуст или не найден.")
             return
 
-        from app.services.sender import TelegramSender
+        hl_cache_key = f"{parse_token}_hl_{target}"
+        hl_items_data = [
+            {
+                "mediaid": item.mediaid,
+                "is_video": item.is_video,
+                "url": item.url,
+                "thumbnail_url": item.thumbnail_url,
+                "timestamp": item.timestamp.isoformat(),
+                "duration": item.duration,
+                "typename": item.typename,
+            }
+            for item in items
+        ]
+        await state.link_cache.set(hl_cache_key, hl_items_data)
 
-        downloaded = 0
-        for item in items:
-            file_path, dl_error = await InstagramService.download_story_item(item)
-            if file_path:
-                await TelegramSender.send_file(
-                    context.bot,
-                    chat.id,
-                    file_path,
-                    is_audio=False,
-                    is_gif=False,
-                    caption=f"📁 Highlight • {item.label}",
+        lines = [f"📁 <b>{target}</b>\n"]
+        for i, item in enumerate(items, 1):
+            emoji = "🎬" if item.is_video else "📸"
+            ts = item.timestamp.strftime("%d.%m %H:%M")
+            dur = f" ({int(item.duration)}с)" if item.duration else ""
+            lines.append(f"{i}. {emoji} {ts}{dur}")
+
+        text_content = "\n".join(lines)
+
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        btn_rows = []
+        row_buf = []
+        for i, item in enumerate(items):
+            row_buf.append(
+                InlineKeyboardButton(
+                    str(i + 1),
+                    callback_data=f"ig_hl_dl|{hl_cache_key}|{item.mediaid}",
                 )
-                downloaded += 1
-                from app.core.utils import safe_remove
+            )
+            if len(row_buf) >= 5:
+                btn_rows.append(row_buf)
+                row_buf = []
+        if row_buf:
+            btn_rows.append(row_buf)
 
-                await asyncio.to_thread(safe_remove, file_path)
+        btn_rows.append(
+            [
+                InlineKeyboardButton(
+                    "📥 Скачать все", callback_data=f"ig_hl_dl_all|{hl_cache_key}"
+                )
+            ]
+        )
 
-        if downloaded > 0:
-            try:
-                await status_msg.delete()
-            except Exception:
-                pass
-        else:
-            await status_msg.edit_text(Texts.IG_DOWNLOAD_ERROR)
+        await status_msg.edit_text(
+            text_content, reply_markup=InlineKeyboardMarkup(btn_rows), parse_mode="HTML"
+        )
         return
 
     # ── Profile or stories link (no specific item) → Rich Selection UI ──

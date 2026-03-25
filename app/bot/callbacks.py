@@ -104,7 +104,7 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if isinstance(cached, dict):
             from app.services.ytdlp.models import ExtractionResult
 
-            cached = ExtractionResult(**cached)
+            cached = ExtractionResult.from_dict(cached)
         title = cached.title
         formats = cached.formats
         special_format = cached.special_format

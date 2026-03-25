@@ -165,7 +165,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             cached = await state.info_cache.get(text)
         if cached:
             logger.info("Cache hit", extra={"url": text})
-            result = cached
+            if isinstance(cached, dict):
+                from app.services.ytdlp.models import ExtractionResult
+                result = ExtractionResult.from_dict(cached)
+            else:
+                result = cached
             title = result.title
             formats = result.formats
             special_format = result.special_format
@@ -185,7 +189,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     return
                 cached = await state.info_cache.get(text)
                 if cached:
-                    result = cached
+                    if isinstance(cached, dict):
+                        from app.services.ytdlp.models import ExtractionResult
+                        result = ExtractionResult.from_dict(cached)
+                    else:
+                        result = cached
                     title = result.title
                     formats = result.formats
                     special_format = result.special_format

@@ -19,13 +19,28 @@ class FormatItem:
 class ExtractionResult:
     title: str
     formats: List[FormatItem]
-    special_format: FormatItem
+    special_format: Optional[FormatItem]
     duration_str: str
     is_slideshow: bool
     info_json_path: Optional[str]
     thumbnail_url: Optional[str]
     tiktok_auth_error: bool = False
     youtube_fallback: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ExtractionResult":
+        formats = [
+            FormatItem(**f) if isinstance(f, dict) else f
+            for f in data.get("formats", [])
+        ]
+        sf = data.get("special_format")
+        if sf and isinstance(sf, dict):
+            sf = FormatItem(**sf)
+        
+        d = dict(data)
+        d["formats"] = formats
+        d["special_format"] = sf
+        return cls(**d)
 
 
 @dataclass(slots=True)

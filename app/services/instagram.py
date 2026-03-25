@@ -612,49 +612,39 @@ class InstagramService:
                 return None, "⚠️ Ошибка парсинга короткой ссылки поста."
 
             media_pk = _shortcode_to_media_pk(shortcode)
-            target_url = f"https://i.instagram.com/api/v1/media/{media_pk}/info/"
+
+            # Try both web and mobile endpoints — web is more stable with desktop cookies
+            endpoints = [
+                f"https://www.instagram.com/api/v1/media/{media_pk}/info/",
+                f"https://i.instagram.com/api/v1/media/{media_pk}/info/",
+            ]
 
             try:
                 async with AsyncSession(
                     impersonate=cls.IMPERSONATE, cookies=cookies_to_use
                 ) as session:
-                    doc = await session.get(
-                        target_url,
-                        headers=cls._auth_headers(cookies_to_use),
-                    )
-
-                    # Lazy CSRF retry: if 400, refresh csrftoken via lightweight GET and retry once
-                    if doc.status_code == 400:
-                        logger.info(
-                            "[INSTAGRAM] Mobile API returned 400 for %s, attempting CSRF refresh retry",
-                            url,
+                    doc = None
+                    for endpoint_url in endpoints:
+                        doc = await session.get(
+                            endpoint_url,
+                            headers=cls._auth_headers(cookies_to_use),
                         )
+                        if doc.status_code == 200:
+                            break
+
+                        # Diagnostic: log the rejection body to understand the exact reason
                         try:
-                            preflight = await session.get(
-                                "https://i.instagram.com/api/v1/public/landing_info/",
-                                headers={"User-Agent": cls.IG_USER_AGENT},
-                            )
-                            # Extract fresh csrftoken from Set-Cookie response
-                            fresh_csrf = ""
-                            for cookie_name, cookie_val in session.cookies.items():
-                                if cookie_name == "csrftoken":
-                                    fresh_csrf = cookie_val
-                                    break
-                            if not fresh_csrf and preflight.cookies:
-                                fresh_csrf = preflight.cookies.get("csrftoken", "")
+                            body_preview = doc.text[:300] if doc.text else "(empty)"
+                        except Exception:
+                            body_preview = "(unreadable)"
+                        logger.warning(
+                            "[INSTAGRAM] Endpoint %s returned %s. Body: %s",
+                            endpoint_url,
+                            doc.status_code,
+                            body_preview,
+                        )
 
-                            if fresh_csrf:
-                                retry_headers = cls._auth_headers(cookies_to_use)
-                                retry_headers["X-CSRFToken"] = fresh_csrf
-                                doc = await session.get(
-                                    target_url, headers=retry_headers
-                                )
-                        except Exception as retry_err:
-                            logger.warning(
-                                "[INSTAGRAM] CSRF refresh retry failed: %s", retry_err
-                            )
-
-                    if doc.status_code == 200:
+                    if doc and doc.status_code == 200:
                         data = doc.json()
                         items = data.get("items", [])
 

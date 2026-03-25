@@ -510,6 +510,41 @@ async def _handle_instagram(
             await status_msg.edit_text(Texts.IG_DOWNLOAD_ERROR)
         return
 
+    # ── Direct highlight link ─────────────────────────────────────
+    if url_type == "highlight" and target:
+        status_msg = await msg.reply_text("⏳ Загружаю хайлайт…")
+        items, error = await InstagramService.get_highlight_items(target)
+        if error or not items:
+            await status_msg.edit_text(error or "⚠️ Хайлайт пуст или не найден.")
+            return
+
+        from app.services.sender import TelegramSender
+
+        downloaded = 0
+        for item in items:
+            file_path, dl_error = await InstagramService.download_story_item(item)
+            if file_path:
+                await TelegramSender.send_file(
+                    context.bot,
+                    chat.id,
+                    file_path,
+                    is_audio=False,
+                    is_gif=False,
+                    caption=f"📁 Highlight • {item.label}",
+                )
+                downloaded += 1
+                from app.core.utils import safe_remove
+                await asyncio.to_thread(safe_remove, file_path)
+
+        if downloaded > 0:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+        else:
+            await status_msg.edit_text(Texts.IG_DOWNLOAD_ERROR)
+        return
+
     # ── Profile or stories link (no specific item) → Rich Selection UI ──
     if url_type in ("profile", "stories") and target:
         status_msg = await msg.reply_text(

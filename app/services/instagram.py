@@ -106,6 +106,9 @@ _IG_PROFILE_RE = re.compile(
 _IG_STORIES_RE = re.compile(
     r"instagram\.com/stories/([A-Za-z0-9_.]+)(?:/(\d+))?/?(?:\?.*)?$"
 )
+_IG_HIGHLIGHT_RE = re.compile(
+    r"instagram\.com/stories/highlights/(\d+)"
+)
 _IG_POST_RE = re.compile(
     r"instagram\.com/(?:p|reel|reels)/([A-Za-z0-9_-]+)"
 )
@@ -116,10 +119,18 @@ def parse_instagram_url(url: str) -> Tuple[str, Optional[str], Optional[str]]:
 
     Returns:
         ("stories", username, story_id_or_None)
+        ("highlight", highlight_id, None)
         ("profile", username, None)
         ("post", shortcode, None)
         ("unknown", None, None)
     """
+    # Highlight URLs MUST be checked before stories regex
+    # because stories/highlights/<id> would match stories regex
+    # with "highlights" captured as the username
+    m = _IG_HIGHLIGHT_RE.search(url)
+    if m:
+        return "highlight", m.group(1), None
+
     m = _IG_STORIES_RE.search(url)
     if m:
         return "stories", m.group(1), m.group(2)
@@ -220,7 +231,10 @@ class InstagramService:
                 profile = instaloader.Profile.from_username(
                     L.context, username
                 )
-            except instaloader.exceptions.ProfileNotExistsException:
+            except instaloader.exceptions.ProfileNotExistsException as e:
+                logger.warning(
+                    "[INSTAGRAM] ProfileNotExists for %s: %s", username, repr(e)
+                )
                 result.error = f"⚠️ Профиль @{username} не найден."
                 return result
             except instaloader.exceptions.LoginRequiredException:
@@ -302,7 +316,7 @@ class InstagramService:
             try:
                 # Instaloader's highlight API
                 node = {"id": highlight_id}
-                highlight = instaloader.Highlight(L.context, node)  # type: ignore[arg-type]
+                highlight = instaloader.Highlight(L.context, node)
                 items: List[IGStoryItem] = []
                 for item in highlight.get_items():
                     items.append(

@@ -144,6 +144,27 @@ def is_instagram_url(url: str) -> bool:
     return bool(parse_instagram_url(url)[0] != "unknown")
 
 
+# ── Shortcode ↔ Media PK Conversion ─────────────────────────────────────────
+
+_IG_SHORTCODE_ALPHABET = (
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+)
+
+
+def _extract_shortcode(url: str) -> Optional[str]:
+    """Extract the shortcode from an Instagram /p/, /reel/, or /reels/ URL."""
+    m = _IG_POST_RE.search(url)
+    return m.group(1) if m else None
+
+
+def _shortcode_to_media_pk(shortcode: str) -> str:
+    """Convert an Instagram shortcode to numeric media PK (deterministic base64)."""
+    media_pk = 0
+    for char in shortcode:
+        media_pk = media_pk * 64 + _IG_SHORTCODE_ALPHABET.index(char)
+    return str(media_pk)
+
+
 # ── Core Service ─────────────────────────────────────────────────────────────
 
 
@@ -500,10 +521,10 @@ class InstagramService:
         except Exception as e:
             logger.warning("[INSTAGRAM] Cobalt attempt failed for post %s: %s", url, e)
 
-        # 2. Native Fallback if Cobalt failed or returned empty URL
+        # 2. Native Fallback via Mobile API if Cobalt failed
         if not video_url:
             logger.info(
-                "[INSTAGRAM] Cobalt failed/empty for %s, triggering Native Fallback",
+                "[INSTAGRAM] Cobalt failed/empty for %s, triggering Mobile API Fallback",
                 url,
             )
             cls._init_session()
@@ -513,18 +534,23 @@ class InstagramService:
                     "⚠️ Cobalt временно недоступен, а авторизация для нативной загрузки не настроена (нет IG_SESSION_B64).",
                 )
 
-            # Clean URL and append internal JSON payload request flags
-            target_url = url.split("?")[0].rstrip("/") + "/?__a=1&__d=dis"
+            # Extract shortcode from URL (/p/CODE/ or /reel/CODE/ or /reels/CODE/)
+            shortcode = _extract_shortcode(url)
+            if not shortcode:
+                return None, "⚠️ Не удалось извлечь shortcode из ссылки."
+
+            # Convert shortcode → numeric media_pk (deterministic base64 algorithm)
+            media_pk = _shortcode_to_media_pk(shortcode)
 
             try:
                 async with AsyncSession(
                     impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies
                 ) as session:
                     doc = await session.get(
-                        target_url,
+                        f"https://i.instagram.com/api/v1/media/{media_pk}/info/",
                         headers={
+                            "User-Agent": "Instagram 219.0.0.12.117 Android",
                             "X-IG-App-ID": cls.IG_APP_ID,
-                            "X-Requested-With": "XMLHttpRequest",
                         },
                     )
 
@@ -539,27 +565,32 @@ class InstagramService:
                             elif "carousel_media" in item:
                                 return (
                                     None,
-                                    "⚠️ Multi-photo карусели скачивайте через основное меню (событие карусели).",
+                                    "⚠️ Multi-photo карусели скачивайте через основное меню.",
                                 )
-                        else:
-                            # Fallback pattern for GraphQL shortcode_media
-                            graphql = data.get("graphql", {}).get("shortcode_media", {})
-                            if graphql.get("is_video"):
-                                video_url = graphql.get("video_url")
+                            elif (
+                                "image_versions2" in item
+                                and "candidates" in item["image_versions2"]
+                                and item["image_versions2"]["candidates"]
+                            ):
+                                # It's a photo post, not a video
+                                video_url = item["image_versions2"]["candidates"][0][
+                                    "url"
+                                ]
+                                out_path = out_path.replace(".mp4", ".jpg")
 
                     if not video_url:
                         logger.warning(
-                            "[INSTAGRAM] Native fallback failed to extract video URL for %s. HTTP: %s",
+                            "[INSTAGRAM] Mobile API fallback failed for %s. HTTP: %s",
                             url,
                             doc.status_code,
                         )
                         return (
                             None,
-                            "⚠️ Ошибка нативного запасного канала (Reels). Вероятно, пост недоступен.",
+                            "⚠️ Ошибка нативного запасного канала. Вероятно, пост недоступен.",
                         )
             except Exception as e:
                 logger.error(
-                    "[INSTAGRAM] Native fallback parsing exception for %s: %s", url, e
+                    "[INSTAGRAM] Mobile API fallback exception for %s: %s", url, e
                 )
                 return None, "⚠️ Внутренняя ошибка нативного парсера."
 

@@ -504,11 +504,15 @@ async def on_group_slideshow(
         state.tasks_sem.release()
 
 
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Message
+
+# ... existing code ...
+
 async def _handle_group_instagram(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
     url: str,
-    status_msg,
+    status_msg: Message,
     user_tag: str,
 ) -> None:
     """Handle Instagram links in group chats.
@@ -542,11 +546,14 @@ async def _handle_group_instagram(
             await status_msg.edit_text("⏳ Загружаю пост…")
             file_path, error = await InstagramService.download_post(url)
             if file_path:
+                from app.services.sender import TelegramSender
                 try:
-                    success = await MediaSender.send_video_file(
+                    success = await TelegramSender.send_file(
                         context.bot,
                         chat.id,
                         file_path,
+                        is_audio=False,
+                        is_gif=False,
                         caption=user_tag,
                         parse_mode="HTML",
                     )
@@ -570,14 +577,71 @@ async def _handle_group_instagram(
         except Exception as e:
             logger.error("[INSTAGRAM-GROUP] Post download error: %s", e)
             try:
-                await status_msg.edit_text(Texts.DOWNLOAD_ERROR)
+                await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
             except Exception:
                 pass
         finally:
             state.tasks_sem.release()
         return
 
-    # ── Profile / Stories / Highlights → InstagramService ─────────────
+    # ── Direct highlight link → download all items ─────────────────
+    if url_type == "highlight" and identifier:
+        if state.tasks_sem.locked():
+            try:
+                await status_msg.edit_text(Texts.QUEUE_FULL)
+            except Exception:
+                pass
+            return
+
+        await state.tasks_sem.acquire()
+        try:
+            await status_msg.edit_text("⏳ Загружаю хайлайт…")
+            items, error = await InstagramService.get_highlight_items(identifier)
+            if error or not items:
+                await status_msg.edit_text(
+                    error or "⚠️ Хайлайт пуст или не найден."
+                )
+                return
+
+            downloaded = 0
+            from app.services.sender import TelegramSender
+            for item in items:
+                file_path, dl_error = await InstagramService.download_story_item(item)
+                if file_path:
+                    try:
+                        await TelegramSender.send_file(
+                            context.bot,
+                            chat.id,
+                            file_path,
+                            is_audio=False,
+                            is_gif=False,
+                            caption=f"{item.label} | {user_tag}",
+                            parse_mode="HTML",
+                        )
+                        downloaded += 1
+                    except Exception as e:
+                        logger.warning("[INSTAGRAM-GROUP] Send error: %s", e)
+                    finally:
+                        await asyncio.to_thread(safe_remove, file_path)
+
+            if downloaded > 0:
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+            else:
+                await status_msg.edit_text("⚠️ Не удалось загрузить хайлайт.")
+        except Exception as e:
+            logger.error("[INSTAGRAM-GROUP] Highlight error: %s", e)
+            try:
+                await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
+            except Exception:
+                pass
+        finally:
+            state.tasks_sem.release()
+        return
+
+    # ── Profile / Stories → InstagramService ──────────────────────────
     if url_type in ("profile", "stories") and identifier:
         if state.tasks_sem.locked():
             try:
@@ -604,14 +668,17 @@ async def _handle_group_instagram(
 
             # Download + send each story item
             downloaded = 0
+            from app.services.sender import TelegramSender
             for item in stories:
                 file_path, error = await InstagramService.download_story_item(item)
                 if file_path:
                     try:
-                        await MediaSender.send_video_file(
+                        await TelegramSender.send_file(
                             context.bot,
                             chat.id,
                             file_path,
+                            is_audio=False,
+                            is_gif=False,
                             caption=f"{item.label} | {user_tag}",
                             parse_mode="HTML",
                         )
@@ -631,7 +698,7 @@ async def _handle_group_instagram(
         except Exception as e:
             logger.error("[INSTAGRAM-GROUP] Stories error: %s", e)
             try:
-                await status_msg.edit_text(Texts.DOWNLOAD_ERROR)
+                await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
             except Exception:
                 pass
         finally:

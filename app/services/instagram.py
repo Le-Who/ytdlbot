@@ -147,15 +147,21 @@ class InstagramService:
             data = base64.b64decode(IG_SESSION_B64)
             cookies = pickle.loads(data)
             
-            # Instaloader saves as RequestsCookieJar
-            # Support both directly reading from jar and fallback
-            for cookie in cookies:
-                if cookie.name == "sessionid":
-                    cls._ig_cookies = {"sessionid": cookie.value}
-                    logger.info("[INSTAGRAM] Successfully restored sessionid from IG_SESSION_B64")
+            # Instaloader saves either as RequestsCookieJar or dict
+            if isinstance(cookies, dict):
+                sessionid = cookies.get("sessionid")
+                if sessionid:
+                    cls._ig_cookies = {"sessionid": sessionid}
+                    logger.info("[INSTAGRAM] Successfully restored sessionid from IG_SESSION_B64 dict.")
                     return
+            else:
+                for cookie in cookies:
+                    if hasattr(cookie, "name") and cookie.name == "sessionid":
+                        cls._ig_cookies = {"sessionid": cookie.value}
+                        logger.info("[INSTAGRAM] Successfully restored sessionid from IG_SESSION_B64 cookie jar.")
+                        return
         except Exception as e:
-            logger.error("[INSTAGRAM] Failed to parse IG_SESSION_B64: %s", e)
+            logger.error("[INSTAGRAM] Failed to parse IG_SESSION_B64: %s", type(e).__name__)
 
     @classmethod
     async def get_profile_media(cls, username: str) -> IGProfileMedia:

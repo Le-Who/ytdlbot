@@ -131,11 +131,13 @@ class LimiterRegistry:
         chat: AsyncLimiter,
         ip: AsyncLimiter,
         token: AsyncLimiter,
+        ig_fallback: AsyncLimiter,
     ):
         self.user = user
         self.chat = chat
         self.ip = ip
         self.token = token
+        self.ig_fallback = ig_fallback
 
     async def allow_user(self, user_id: int | None) -> bool:
         if user_id is None:
@@ -152,3 +154,6 @@ class LimiterRegistry:
 
     async def allow_token(self, token: str) -> bool:
         return await self.token.allow(f"t:{token}")
+
+    async def allow_ig_fallback(self, session_index: int) -> bool:
+        return await self.ig_fallback.allow(f"ig_sess_{session_index}")

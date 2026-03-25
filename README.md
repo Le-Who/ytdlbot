@@ -113,7 +113,8 @@ Selected key variables from `.env.example`:
 | `COBALT_API_URL`        | No       | `https://api.cobalt.tools` | Endpoint for the Cobalt extraction API (supports comma-separated list for fallback routing) | CobaltService    |
 | `YOUTUBE_PIPE_MODE`     | No       | `false`                    | Opt-in direct piping to TG for YT videos <50MB                                              | Downloader       |
 | `YTDLP_COOKIES_B64`     | No       | —                          | Base64-encoded Netscape cookies for Auth bypass                                             | `yt-dlp` Service |
-| `IG_SESSION_B64`        | No       | —                          | Base64-encoded Instagram session cookies for stories/highlights/reels native download       | Instagram Service |
+| `IG_SESSIONS_B64`       | No       | —                          | Comma-separated Base64-encoded Instagram sessions for anti-ban rotation pool                | Instagram Service |
+| `LIMITER_IG_CAPACITY`   | No       | `15`                       | Max hourly requests per Instagram session                                                   | Config Limiter   |
 
 ## Run
 

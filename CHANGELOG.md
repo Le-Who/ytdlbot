@@ -12,6 +12,9 @@ All notable changes to this project will be documented in this file.
   - 39 new tests in `test_instagram_service.py` and `test_pinterest_service.py`
 - **Instagram Resilient Profile Fetch (Hybrid Fallback)**: Profile metadata is now fetched via a two-tier strategy. The bot first attempts the anonymous `web_profile_info` API (zero session risk). If blocked by Instagram's datacenter IP filter (401), it seamlessly falls back to authenticated Mobile API endpoints (`usernameinfo` + `highlights_tray`) via `curl_cffi`. This eliminates "IP Block" errors without risking session cookies on web endpoints.
 - **Instagram Reels/Posts Native Download (Mobile API Fallback)**: When Cobalt public instances return 503 errors, the bot now falls back to a native download pipeline using `i.instagram.com/api/v1/media/{pk}/info/`. Shortcodes are converted to numeric media PKs via a deterministic base64 algorithm (`_shortcode_to_media_pk`). Supports video reels, single photo posts, and carousel detection. Cobalt remains the primary attempt to conserve session trust score.
+- **Instagram Anti-Ban Rotation Pool**: The brittle `IG_SESSION_B64` variable has been replaced with `IG_SESSIONS_B64`, supporting a comma-separated list of burner cookies. A round-robin allocator (`_get_available_session`) automatically cycles between accounts.
+- **Instagram Hard Rate-Limiting**: Every session inside the new pool is individually monitored by the atomic Lua `RedisTokenBucketLimiter` (`ig_fallback`). This proactively enforces a hard hourly ceiling (15 requests/hr per account) to guarantee accounts are never flagged for bot-like activity.
+- **Instagram Unified Fingerprints**: Legacy `Android` endpoints used for fallback auth requests now use standard `Chrome 110` desktop payload headers to match the cookie generator TLS fingerprint, eliminating a mismatch that triggered account freezes.
 
 ### Performance & Optimization (Redis)
 

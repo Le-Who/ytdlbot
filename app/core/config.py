@@ -60,9 +60,14 @@ ENABLE_COBALT_TIKTOK = os.getenv("ENABLE_COBALT_TIKTOK", "0").strip() == "1"
 
 COBALT_API_KEY = os.getenv("COBALT_API_KEY", "")
 
-# Instagram is now fully anonymous via curl_cffi and mobile API forgery
-# However, IG_SESSION_B64 can optionally be provided to restore stories/highlights access.
-IG_SESSION_B64 = os.getenv("IG_SESSION_B64", "")
+LIMITER_IG_CAPACITY = float(os.getenv("LIMITER_IG_CAPACITY", "15"))
+LIMITER_IG_REFILL_PER_SEC = float(os.getenv("LIMITER_IG_REFILL_PER_SEC", str(15 / 3600)))
+
+# Instagram session rotation pool. Comma-separated Base64 encoded cookies.
+# Fallback to IG_SESSION_B64 for backward compatibility.
+IG_SESSIONS_B64 = [
+    s.strip() for s in os.getenv("IG_SESSIONS_B64", os.getenv("IG_SESSION_B64", "")).split(",") if s.strip()
+]
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")

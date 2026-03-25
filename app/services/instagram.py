@@ -16,8 +16,9 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Literal
 
 from curl_cffi.requests import AsyncSession
-from app.core.config import TEMP_DIR, IG_SESSION_B64
+from app.core.config import TEMP_DIR, IG_SESSIONS_B64
 from app.core.utils import safe_remove
+from app.core import state
 
 __all__ = ["InstagramService", "IGStoryItem", "IGHighlight", "parse_instagram_url"]
 
@@ -173,58 +174,88 @@ class InstagramService:
 
     IG_APP_ID = "936619743392459"
     IMPERSONATE: Literal["chrome110"] = "chrome110"
+    IG_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
 
-    _ig_cookies: Optional[Dict[str, str]] = None
-    _session_initialized: bool = False
+    _ig_cookie_pool: List[Dict[str, str]] = []
+    _pool_initialized: bool = False
+    _current_pool_index: int = 0
 
     @classmethod
-    def _init_session(cls) -> None:
-        """Parses the legacy instaloader session to extract the sessionid cookie."""
-        if cls._session_initialized:
+    def _init_pool(cls) -> None:
+        """Parses the comma-separated IG_SESSIONS_B64 environment into a robust rotation pool."""
+        if cls._pool_initialized:
             return
 
-        cls._session_initialized = True
-        if not IG_SESSION_B64:
+        cls._pool_initialized = True
+        cls._ig_cookie_pool = []
+
+        if not IG_SESSIONS_B64:
             return
 
-        try:
-            data = base64.b64decode(IG_SESSION_B64)
-            cookies = pickle.loads(data)
+        for idx, session_b64 in enumerate(IG_SESSIONS_B64):
+            try:
+                data = base64.b64decode(session_b64)
+                cookies = pickle.loads(data)
 
-            # Instaloader saves either as RequestsCookieJar or dict
-            result_cookies = {}
-            if isinstance(cookies, dict):
-                for k, v in cookies.items():
-                    if isinstance(v, str) and v:
-                        result_cookies[k] = v
-            else:
-                for cookie in cookies:
-                    if (
-                        hasattr(cookie, "name")
-                        and hasattr(cookie, "value")
-                        and cookie.value
-                    ):
-                        result_cookies[cookie.name] = cookie.value
+                result_cookies = {}
+                if isinstance(cookies, dict):
+                    for k, v in cookies.items():
+                        if isinstance(v, str) and v:
+                            result_cookies[k] = v
+                else:
+                    for cookie in cookies:
+                        if (
+                            hasattr(cookie, "name")
+                            and hasattr(cookie, "value")
+                            and cookie.value
+                        ):
+                            result_cookies[cookie.name] = cookie.value
 
-            if "sessionid" in result_cookies:
-                cls._ig_cookies = result_cookies
-                logger.info(
-                    "[INSTAGRAM] Successfully restored full cookie suite from IG_SESSION_B64."
+                if "sessionid" in result_cookies:
+                    cls._ig_cookie_pool.append(result_cookies)
+                else:
+                    logger.warning(
+                        "[INSTAGRAM] Session index %d parsed but no sessionid found (expired?).",
+                        idx,
+                    )
+
+            except Exception as e:
+                logger.error(
+                    "[INSTAGRAM] Failed to parse IG_SESSIONS_B64 index %d: %s",
+                    idx,
+                    type(e).__name__,
                 )
-            else:
-                logger.warning(
-                    "[INSTAGRAM] IG_SESSION_B64 parsed successfully, but no sessionid found (session expired?)."
-                )
 
-        except Exception as e:
-            logger.error(
-                "[INSTAGRAM] Failed to parse IG_SESSION_B64: %s", type(e).__name__
+        if cls._ig_cookie_pool:
+            logger.info(
+                "[INSTAGRAM] Successfully loaded %d sessions into rotation pool.",
+                len(cls._ig_cookie_pool),
             )
+
+    @classmethod
+    async def _get_available_session(
+        cls,
+    ) -> Tuple[Optional[int], Optional[Dict[str, str]]]:
+        """Round-robin iterates over the session pool and claims the first allowed token from Redis limiter."""
+        cls._init_pool()
+        pool_size = len(cls._ig_cookie_pool)
+        if pool_size == 0:
+            return -1, None
+
+        for _ in range(pool_size):
+            idx = cls._current_pool_index
+            cls._current_pool_index = (cls._current_pool_index + 1) % pool_size
+
+            # Atomic global limit check via RedisTokenBucketLimiter
+            if await state.limiter.allow_ig_fallback(idx):
+                return idx, cls._ig_cookie_pool[idx]
+
+        return -2, None
 
     @classmethod
     async def get_profile_media(cls, username: str) -> IGProfileMedia:
         """Fetch basic profile + highlights + stories anonymously."""
-        cls._init_session()
+        cls._init_pool()
         result = IGProfileMedia(username=username)
 
         try:
@@ -274,19 +305,25 @@ class InstagramService:
                         )
 
             # 2. Fallback to Authenticated Mobile API if Anonymous Web API was blocked (401/302/JSON parse error)
-            if not uid and cls._ig_cookies:
+            if not uid and cls._ig_cookie_pool:
                 logger.info(
                     "[INSTAGRAM] Anonymous Web API blocked/failed (status %s). Falling back to Mobile API for %s",
                     doc.status_code,
                     username,
                 )
+
+                sess_idx, cookies_to_use = await cls._get_available_session()
+                if not cookies_to_use:
+                    result.error = "⏳ Инстаграм на паузе. Лимит профилей исчерпан для предотвращения бана."
+                    return result
+
                 async with AsyncSession(
-                    impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies
+                    impersonate=cls.IMPERSONATE, cookies=cookies_to_use
                 ) as auth_session:
                     # Mobile fetch 1: UID
                     mobile_doc = await auth_session.get(
                         f"https://i.instagram.com/api/v1/users/{username}/usernameinfo/",
-                        headers={"User-Agent": "Instagram 219.0.0.12.117 Android"},
+                        headers={"User-Agent": cls.IG_USER_AGENT},
                     )
                     if mobile_doc.status_code == 200:
                         try:
@@ -304,7 +341,7 @@ class InstagramService:
                     if uid:
                         tray_doc = await auth_session.get(
                             f"https://i.instagram.com/api/v1/highlights/{uid}/highlights_tray/",
-                            headers={"User-Agent": "Instagram 219.0.0.12.117 Android"},
+                            headers={"User-Agent": cls.IG_USER_AGENT},
                         )
                         if tray_doc.status_code == 200:
                             try:
@@ -355,13 +392,15 @@ class InstagramService:
                 result.error = f"⚠️ Профиль @{username} недоступен (IP Block / Скрыт)."
                 return result
 
-            # 2. Fetch stories AUTHENTICATED (because anonymous request will always fail)
-            if cls._ig_cookies:
-                async with AsyncSession(
-                    impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies
-                ) as auth_session:
-                    stories = await cls._fetch_reels_media(auth_session, [uid])
-                    result.stories = stories.get(uid, [])
+            # 3. Fetch stories AUTHENTICATED (because anonymous request will always fail)
+            if cls._ig_cookie_pool:
+                sess_idx, cookies_to_use = await cls._get_available_session()
+                if cookies_to_use:
+                    async with AsyncSession(
+                        impersonate=cls.IMPERSONATE, cookies=cookies_to_use
+                    ) as auth_session:
+                        stories = await cls._fetch_reels_media(auth_session, [uid])
+                        result.stories = stories.get(uid, [])
 
             return result
 
@@ -375,10 +414,22 @@ class InstagramService:
         cls, highlight_id: str
     ) -> Tuple[List[IGStoryItem], Optional[str]]:
         """Fetch items in a specific highlight securely, authenticating if possible."""
-        cls._init_session()
+        cls._init_pool()
         try:
+            sess_idx, cookies_to_use = await cls._get_available_session()
+            if sess_idx == -2:
+                return (
+                    [],
+                    "⏳ Инстаграм на паузе. Лимит скачиваний хайлайтов временно исчерпан.",
+                )
+            if not cookies_to_use:
+                return (
+                    [],
+                    "⚠️ Скачивание хайлайтов требует настройки пула аккаунтов IG_SESSIONS_B64.",
+                )
+
             async with AsyncSession(
-                impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies
+                impersonate=cls.IMPERSONATE, cookies=cookies_to_use
             ) as session:
                 hid = f"highlight:{highlight_id}"
                 items = await cls._fetch_reels_media(session, [hid])
@@ -398,7 +449,7 @@ class InstagramService:
                 f"https://i.instagram.com/api/v1/feed/reels_media/?{ids_param}",
                 headers={
                     "X-IG-App-ID": cls.IG_APP_ID,
-                    "User-Agent": "Instagram 219.0.0.12.117 Android",
+                    "User-Agent": cls.IG_USER_AGENT,
                 },
             )
             if resp.status_code != 200:
@@ -479,9 +530,13 @@ class InstagramService:
         out_path = os.path.join(TEMP_DIR, f"ig_{uuid.uuid4().hex}{ext}")
 
         try:
-            cls._init_session()
+            cls._init_pool()
+            sess_idx, cookies_to_use = await cls._get_available_session()
+            if sess_idx == -2:
+                return None, "⏳ Инстаграм на паузе. Лимит загрузок истощен. Отдыхаем."
+
             async with AsyncSession(
-                impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies
+                impersonate=cls.IMPERSONATE, cookies=cookies_to_use
             ) as session:
                 resp = await session.get(item.url, stream=True)
                 if resp.status_code != 200:
@@ -527,11 +582,18 @@ class InstagramService:
                 "[INSTAGRAM] Cobalt failed/empty for %s, triggering Native Web Fallback",
                 url,
             )
-            cls._init_session()
-            if not cls._ig_cookies:
+            cls._init_pool()
+            if not cls._ig_cookie_pool:
                 return (
                     None,
-                    "⚠️ Cobalt временно недоступен, а авторизация для нативной загрузки не настроена (нет IG_SESSION_B64).",
+                    "⚠️ Cobalt временно недоступен, а авторизация для нативной загрузки не настроена (нет IG_SESSIONS_B64).",
+                )
+
+            sess_idx, cookies_to_use = await cls._get_available_session()
+            if not cookies_to_use:
+                return (
+                    None,
+                    "⏳ Инстаграм на паузе. Лимит загрузок исчерпан на всех аккаунтах для защиты от бана. Используйте Cobalt (по умолчанию) или подождите.",
                 )
 
             # Clean URL and append internal JSON payload request flags
@@ -539,12 +601,12 @@ class InstagramService:
 
             try:
                 async with AsyncSession(
-                    impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies
+                    impersonate=cls.IMPERSONATE, cookies=cookies_to_use
                 ) as session:
                     doc = await session.get(
                         target_url,
                         headers={
-                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
+                            "User-Agent": cls.IG_USER_AGENT,
                             "X-IG-App-ID": cls.IG_APP_ID,
                             "X-Requested-With": "XMLHttpRequest",
                         },
@@ -568,7 +630,9 @@ class InstagramService:
                                 and "candidates" in item["image_versions2"]
                                 and item["image_versions2"]["candidates"]
                             ):
-                                video_url = item["image_versions2"]["candidates"][0]["url"]
+                                video_url = item["image_versions2"]["candidates"][0][
+                                    "url"
+                                ]
                                 out_path = out_path.replace(".mp4", ".jpg")
                         else:
                             # Fallback pattern for GraphQL shortcode_media

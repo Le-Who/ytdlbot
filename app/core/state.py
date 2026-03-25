@@ -16,6 +16,8 @@ from app.core.config import (
     LIMITER_IP_REFILL_PER_SEC,
     LIMITER_TOKEN_CAPACITY,
     LIMITER_TOKEN_REFILL_PER_SEC,
+    LIMITER_IG_CAPACITY,
+    LIMITER_IG_REFILL_PER_SEC,
     REDIS_URL,
 )
 from app.core.limiter import LimiterRegistry
@@ -100,6 +102,9 @@ if redis_client:
         token=RedisTokenBucketLimiter(
             redis_client, LIMITER_TOKEN_CAPACITY, LIMITER_TOKEN_REFILL_PER_SEC
         ),
+        ig_fallback=RedisTokenBucketLimiter(
+            redis_client, LIMITER_IG_CAPACITY, LIMITER_IG_REFILL_PER_SEC
+        ),
     )
 else:
     from app.core.limiter import TokenBucketLimiter
@@ -109,4 +114,5 @@ else:
         chat=TokenBucketLimiter(LIMITER_CHAT_CAPACITY, LIMITER_CHAT_REFILL_PER_SEC),
         ip=TokenBucketLimiter(LIMITER_IP_CAPACITY, LIMITER_IP_REFILL_PER_SEC),
         token=TokenBucketLimiter(LIMITER_TOKEN_CAPACITY, LIMITER_TOKEN_REFILL_PER_SEC),
+        ig_fallback=TokenBucketLimiter(LIMITER_IG_CAPACITY, LIMITER_IG_REFILL_PER_SEC),
     )

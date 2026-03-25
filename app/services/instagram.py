@@ -241,9 +241,13 @@ class InstagramService:
                             )
                         )
 
-                result.stories = stories.get(uid, [])
+            # 2. Fetch stories AUTHENTICATED (because anonymous request will always fail)
+            if cls._ig_cookies:
+                async with AsyncSession(impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies) as auth_session:  # type: ignore
+                    stories = await cls._fetch_reels_media(auth_session, [uid])
+                    result.stories = stories.get(uid, [])
 
-                return result
+            return result
 
         except Exception as e:
             logger.error("[INSTAGRAM] Profile fetch error: %s", e)

@@ -10,12 +10,18 @@ import logging
 import os
 import re
 import uuid
+import json
+import base64
+import pickle
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import List, Optional, Tuple, Dict
+from typing import Dict, List, Optional, Tuple, Any
+
+from bs4 import BeautifulSoup
+from anyio import Path as AsyncPath
 
 from curl_cffi.requests import AsyncSession
-from app.core.config import TEMP_DIR
+from app.core.config import TEMP_DIR, IG_SESSION_B64
 from app.core.utils import safe_remove
 
 __all__ = ["InstagramService", "IGStoryItem", "IGHighlight", "parse_instagram_url"]
@@ -123,14 +129,42 @@ class InstagramService:
 
     IG_APP_ID = "936619743392459"
     IMPERSONATE = "chrome110"
+    
+    _ig_cookies: Optional[Dict[str, str]] = None
+    _session_initialized: bool = False
+
+    @classmethod
+    def _init_session(cls) -> None:
+        """Parses the legacy instaloader session to extract the sessionid cookie."""
+        if cls._session_initialized:
+            return
+            
+        cls._session_initialized = True
+        if not IG_SESSION_B64:
+            return
+            
+        try:
+            data = base64.b64decode(IG_SESSION_B64)
+            cookies = pickle.loads(data)
+            
+            # Instaloader saves as RequestsCookieJar
+            # Support both directly reading from jar and fallback
+            for cookie in cookies:
+                if cookie.name == "sessionid":
+                    cls._ig_cookies = {"sessionid": cookie.value}
+                    logger.info("[INSTAGRAM] Successfully restored sessionid from IG_SESSION_B64")
+                    return
+        except Exception as e:
+            logger.error("[INSTAGRAM] Failed to parse IG_SESSION_B64: %s", e)
 
     @classmethod
     async def get_profile_media(cls, username: str) -> IGProfileMedia:
         """Fetch basic profile + highlights + stories anonymously."""
+        cls._init_session()
         result = IGProfileMedia(username=username)
 
         try:
-            async with AsyncSession(impersonate=cls.IMPERSONATE) as session:  # type: ignore
+            async with AsyncSession(impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies) as session:  # type: ignore
                 doc = await session.get(
                     f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}",
                     headers={"X-IG-App-ID": cls.IG_APP_ID}
@@ -175,9 +209,10 @@ class InstagramService:
 
     @classmethod
     async def get_highlight_items(cls, highlight_id: str) -> Tuple[List[IGStoryItem], Optional[str]]:
-        """Fetch items in a specific highlight anonymously."""
+        """Fetch items in a specific highlight securely, authenticating if possible."""
+        cls._init_session()
         try:
-            async with AsyncSession(impersonate=cls.IMPERSONATE) as session:  # type: ignore
+            async with AsyncSession(impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies) as session:  # type: ignore
                 hid = f"highlight:{highlight_id}"
                 items = await cls._fetch_reels_media(session, [hid])
                 return items.get(hid, []), None
@@ -255,7 +290,8 @@ class InstagramService:
         out_path = os.path.join(TEMP_DIR, f"ig_{uuid.uuid4().hex}{ext}")
 
         try:
-            async with AsyncSession(impersonate=cls.IMPERSONATE) as session:  # type: ignore
+            cls._init_session()
+            async with AsyncSession(impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies) as session:  # type: ignore
                 resp = await session.get(item.url, stream=True)
                 if resp.status_code != 200:
                     return None, f"⚠️ Ошибка CDN Instagram: {resp.status_code}"

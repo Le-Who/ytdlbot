@@ -123,9 +123,7 @@ class TestRedisStorageCompression(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         self.mock_redis = AsyncMock()
-        self.storage = RedisStorage(
-            redis_client=self.mock_redis, default_ttl=600
-        )
+        self.storage = RedisStorage(redis_client=self.mock_redis, default_ttl=600)
 
     async def test_small_payload_not_compressed(self):
         """Payloads smaller than threshold should NOT be zlib-compressed."""
@@ -199,9 +197,7 @@ class TestRedisStorageNamespacing(unittest.IsolatedAsyncioTestCase):
         self.mock_redis.delete.assert_awaited_once_with("can:tok")
 
     async def test_no_prefix_when_empty(self):
-        storage = RedisStorage(
-            redis_client=self.mock_redis, default_ttl=600, prefix=""
-        )
+        storage = RedisStorage(redis_client=self.mock_redis, default_ttl=600, prefix="")
         self.mock_redis.get.return_value = None
         await storage.get("raw_key")
         self.mock_redis.get.assert_awaited_once_with("raw_key")

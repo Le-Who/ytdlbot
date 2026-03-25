@@ -67,7 +67,9 @@ info_cache: StateStorage
 cancel_cache: StateStorage
 
 if redis_client:
-    link_cache = RedisStorage(redis_client, default_ttl=LINK_TTL_MINUTES * 60, prefix="lnk")
+    link_cache = RedisStorage(
+        redis_client, default_ttl=LINK_TTL_MINUTES * 60, prefix="lnk"
+    )
     info_cache = RedisStorage(redis_client, default_ttl=600, prefix="inf")
     cancel_cache = RedisStorage(redis_client, default_ttl=3600, prefix="can")
 else:

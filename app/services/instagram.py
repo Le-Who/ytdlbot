@@ -314,20 +314,45 @@ class InstagramService:
                 return [], "⚠️ Instagram сессия не настроена."
 
             try:
-                # Instaloader's highlight API
-                node = {"id": highlight_id}
-                highlight = instaloader.Highlight(L.context, node)
+                # Custom fetch to bypass broken GraphQL query (400 Bad Request)
+                hilite_id = f"highlight:{highlight_id}"
+                data = L.context.get_iphone_json(
+                    path=f"api/v1/feed/reels_media/?reel_ids={hilite_id}",
+                    params={}
+                )
+                reels = data.get("reels", {})
+                hilite_data = reels.get(hilite_id, {})
+                items_data = hilite_data.get("items", [])
+
                 items: List[IGStoryItem] = []
-                for item in highlight.get_items():
+                from datetime import datetime, timezone
+                for item in items_data:
+                    is_video = item.get("media_type") == 2
+                    duration = float(item.get("video_duration", 0.0))
+                    timestamp_val = item.get("taken_at", 0)
+                    dt = datetime.fromtimestamp(timestamp_val, tz=timezone.utc)
+
+                    if is_video and "video_versions" in item and item["video_versions"]:
+                        url = item["video_versions"][0]["url"]
+                    elif "image_versions2" in item and "candidates" in item["image_versions2"] and item["image_versions2"]["candidates"]:
+                        url = item["image_versions2"]["candidates"][0]["url"]
+                    else:
+                        continue
+
+                    if "image_versions2" in item and "candidates" in item["image_versions2"] and item["image_versions2"]["candidates"]:
+                        thumb = item["image_versions2"]["candidates"][0]["url"]
+                    else:
+                        thumb = url
+
                     items.append(
                         IGStoryItem(
-                            mediaid=str(item.mediaid),
-                            is_video=item.is_video,
-                            url=(item.video_url or item.url) if item.is_video else item.url,
-                            thumbnail_url=item.url,
-                            timestamp=item.date_utc,
-                            duration=getattr(item, "video_duration", None),
-                            typename=item.typename or "",
+                            mediaid=str(item.get("pk", item.get("id"))),
+                            is_video=is_video,
+                            url=url,
+                            thumbnail_url=thumb,
+                            timestamp=dt,
+                            duration=duration if duration > 0 else None,
+                            typename="GraphStoryVideo" if is_video else "GraphStoryImage",
                         )
                     )
                 return items, None

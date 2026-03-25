@@ -17,7 +17,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple, Any
 
-from bs4 import BeautifulSoup
 from anyio import Path as AsyncPath
 
 from curl_cffi.requests import AsyncSession

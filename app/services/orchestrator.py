@@ -300,7 +300,9 @@ class DownloadOrchestrator:
 
             await update_ui(Texts.SENDING_TO_TG, None)
 
-            is_gif = payload.format_id == GIF_FORMAT_ID
+            is_gif = payload.format_id == GIF_FORMAT_ID or (
+                isinstance(file_path, str) and file_path.lower().endswith(".gif")
+            )
             is_audio = payload.format_id == AUDIO_FORMAT_ID
 
             # Re-encode non-H.264 videos for Telegram compatibility

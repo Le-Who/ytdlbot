@@ -15,6 +15,10 @@ All notable changes to this project will be documented in this file.
 - **Instagram Anti-Ban Rotation Pool**: The brittle `IG_SESSION_B64` variable has been replaced with `IG_SESSIONS_B64`, supporting a comma-separated list of burner cookies. A round-robin allocator (`_get_available_session`) automatically cycles between accounts.
 - **Instagram Hard Rate-Limiting**: Every session inside the new pool is individually monitored by the atomic Lua `RedisTokenBucketLimiter` (`ig_fallback`). This proactively enforces a hard hourly ceiling (15 requests/hr per account) to guarantee accounts are never flagged for bot-like activity.
 - **Instagram Unified Fingerprints**: Legacy `Android` endpoints used for fallback auth requests now use standard `Chrome 110` desktop payload headers to match the cookie generator TLS fingerprint, eliminating a mismatch that triggered account freezes.
+- **Instagram Session Eviction & CSRF**: Automatic dead session eviction on checkpoint/suspension. Added `X-CSRFToken` header to all authenticated requests with automatic retry on HTTP 400.
+- **Instagram Dual-Endpoint Fallback**: Added diagnostic logging on HTTP 400 with a new dual-endpoint fallback strategy (web + mobile API) to maximize extraction success.
+- **End-to-End Orchestration**: Implemented new bot callback handlers for format selection, download, and Telegram delivery. Uses a new media conversion service.
+- **Observability**: Added fully structured JSON logging and a lightweight internal metrics system across the pipeline.
 
 ### Performance & Optimization (Redis)
 

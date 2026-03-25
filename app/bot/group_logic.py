@@ -146,7 +146,7 @@ async def handle_group_message(
         # Detect Pinterest to use a simpler format
         is_pinterest = "pinterest" in url or "pin.it" in url
         if is_pinterest:
-            video_format = "best[ext=mp4]/best"
+            video_format = "pinterest_native"
         else:
             video_format = GROUP_VIDEO_FORMAT
 
@@ -234,6 +234,12 @@ async def handle_group_message(
             )
             if file_path:
                 state.file_cache[token] = file_path
+        elif video_format == "pinterest_native":
+            from app.services.pinterest import PinterestNativeService
+
+            file_path, error = await PinterestNativeService.download_video(url)
+            if file_path:
+                state.file_cache[token] = file_path
         else:
             file_path, error = await MediaSender.download_video(
                 page_url=url,
@@ -266,12 +272,14 @@ async def handle_group_message(
             [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{token}")]]
         )
 
+        is_gif = isinstance(file_path, str) and file_path.lower().endswith(".gif")
+
         success = await MediaSender.send_file(
             context.bot,
             chat.id,
             file_path,
             is_audio=False,
-            is_gif=False,
+            is_gif=is_gif,
             caption=caption,
             parse_mode="HTML",
             reply_markup=kb,

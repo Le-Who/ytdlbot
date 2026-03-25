@@ -32,10 +32,14 @@ async def _probe_video_codec(video_path: str) -> Optional[str]:
     """
     cmd = [
         "ffprobe",
-        "-v", "quiet",
-        "-select_streams", "v:0",
-        "-show_entries", "stream=codec_name",
-        "-print_format", "default=noprint_wrappers=1:nokey=1",
+        "-v",
+        "quiet",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name",
+        "-print_format",
+        "default=noprint_wrappers=1:nokey=1",
         video_path,
     ]
     try:
@@ -113,17 +117,25 @@ class MediaConverter:
             codec_args = ["-c:v", "copy"]
         else:
             codec_args = [
-                "-c:v", "libx264",
-                "-preset", "ultrafast",
-                "-crf", "23",
-                "-pix_fmt", "yuv420p",
-                "-threads", str(_FFMPEG_THREADS),
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-crf",
+                "23",
+                "-pix_fmt",
+                "yuv420p",
+                "-threads",
+                str(_FFMPEG_THREADS),
             ]
 
         cmd = [
-            "ffmpeg", "-y",
-            "-t", "60",
-            "-i", video_path,
+            "ffmpeg",
+            "-y",
+            "-t",
+            "60",
+            "-i",
+            video_path,
             *codec_args,
             "-an",
             gif_path,
@@ -136,7 +148,8 @@ class MediaConverter:
         )
         try:
             _, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=_FFMPEG_TIMEOUT,
+                proc.communicate(),
+                timeout=_FFMPEG_TIMEOUT,
             )
         except asyncio.TimeoutError:
             try:
@@ -171,13 +184,16 @@ class MediaConverter:
             if codec:
                 logger.info(
                     "GIF conversion: detected codec=%s, copy=%s",
-                    codec, use_copy,
+                    codec,
+                    use_copy,
                 )
 
             async with state.conversion_sem:
                 with _m.conversion_duration.time(type="gif"):
                     rc, stderr_text = await MediaConverter._run_gif_ffmpeg(
-                        video_path, gif_path, use_copy=use_copy,
+                        video_path,
+                        gif_path,
+                        use_copy=use_copy,
                     )
 
                     # Fallback: stream-copy failed → retry with transcode
@@ -189,7 +205,9 @@ class MediaConverter:
                         )
                         safe_remove(gif_path)
                         rc, stderr_text = await MediaConverter._run_gif_ffmpeg(
-                            video_path, gif_path, use_copy=False,
+                            video_path,
+                            gif_path,
+                            use_copy=False,
                         )
 
             if rc != 0:

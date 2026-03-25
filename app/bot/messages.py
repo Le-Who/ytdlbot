@@ -167,6 +167,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             logger.info("Cache hit", extra={"url": text})
             if isinstance(cached, dict):
                 from app.services.ytdlp.models import ExtractionResult
+
                 result = ExtractionResult.from_dict(cached)
             else:
                 result = cached
@@ -191,6 +192,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 if cached:
                     if isinstance(cached, dict):
                         from app.services.ytdlp.models import ExtractionResult
+
                         result = ExtractionResult.from_dict(cached)
                     else:
                         result = cached

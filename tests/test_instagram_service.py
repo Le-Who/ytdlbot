@@ -254,7 +254,10 @@ class TestInstagramServiceDownloadStoryItem(unittest.IsolatedAsyncioTestCase):
         with (
             patch("app.services.instagram.TEMP_DIR", tmpdir),
             patch("app.services.instagram.AsyncSession", return_value=mock_session),
-            patch("app.services.instagram.InstagramService._get_available_session", AsyncMock(return_value=(-1, None)))
+            patch(
+                "app.services.instagram.InstagramService._get_available_session",
+                AsyncMock(return_value=(-1, None)),
+            ),
         ):
             path, error = await InstagramService.download_story_item(item)
 
@@ -290,7 +293,10 @@ class TestInstagramServiceDownloadStoryItem(unittest.IsolatedAsyncioTestCase):
 
         with (
             patch("app.services.instagram.AsyncSession", return_value=mock_session),
-            patch("app.services.instagram.InstagramService._get_available_session", AsyncMock(return_value=(-1, None)))
+            patch(
+                "app.services.instagram.InstagramService._get_available_session",
+                AsyncMock(return_value=(-1, None)),
+            ),
         ):
             path, error = await InstagramService.download_story_item(item)
 

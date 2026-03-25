@@ -87,7 +87,12 @@ class PinterestNativeService:
 
         # Tier 2: Single image download
         if image_url:
-            result = await _stream_download(image_url, "pin_img_", "jpg")
+            ext = "jpg"
+            if ".gif" in image_url.lower():
+                ext = "gif"
+            elif ".png" in image_url.lower():
+                ext = "png"
+            result = await _stream_download(image_url, "pin_img_", ext)
             if result:
                 return result, None
 

@@ -36,7 +36,7 @@ class ExtractionResult:
         sf = data.get("special_format")
         if sf and isinstance(sf, dict):
             sf = FormatItem(**sf)
-        
+
         d = dict(data)
         d["formats"] = formats
         d["special_format"] = sf

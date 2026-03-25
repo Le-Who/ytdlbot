@@ -14,7 +14,7 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 
 ## Features
 
-- **Multi-Platform Support**: Extracts video/audio from YouTube, TikTok (watermark-free via TikWM API with zero-latency BVC2 codec interception), Pinterest (native 200ms open-graph parsing), Instagram (stories, highlights, posts/reels with resilient hybrid Mobile API fallback), VK, Facebook, and RuTube.
+- **Multi-Platform Support**: Extracts video/audio from YouTube, TikTok (watermark-free via TikWM API with zero-latency BVC2 codec interception), Pinterest (native 200ms open-graph parsing), Instagram (stories, highlights, posts/reels with resilient hybrid Mobile API fallback, automatic session eviction, and CSRF retry), VK, Facebook, and RuTube.
 - **Smart Group Mode**: Automatically selects and downloads the best quality video (<45MB by default) when a link is sent in a group chat.
 - **Interactive Private Mode**: Presents inline keyboard options for users to select specific video qualities or audio-only formats.
 - **TikTok Slideshow Support**: Converts TikTok carousels natively via TikWM API into either a 📸 Photo Album (media group) or a 🎬 Video Slideshow (MP4 with audio) using `ffmpeg`.
@@ -22,7 +22,7 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 - **Optimized Download Pipeline**: Passes metadata to bypass duplicate `yt-dlp` extraction calls, and supports direct pipe-to-memory streaming for videos <50MB, saving disk I/O.
 - **Zero-Disk Pipeline**: Converts video to GIF natively without saving intermediary files to disk (`yt-dlp` -> `ffmpeg` pipe).
 - **Rate Limiting**: Multi-layered token bucket limiter preventing abuse per User, Chat, IP, and Token.
-- **Monitoring**: Built-in Prometheus-compatible metrics endpoint (`/metrics`) exposing operational telemetry cleanly via client integration.
+- **Monitoring & Logging**: Built-in Prometheus-compatible metrics endpoint (`/metrics`) exposing operational telemetry cleanly via client integration. Fully structured logging across the pipeline.
 
 ## Non-Goals / Limitations
 

@@ -230,28 +230,42 @@ class InstagramService:
                             uid = str(user_data["id"])
                             # Parse highlights if available
                             if user_data.get("highlight_reel_count", 0) > 0:
-                                highlights_edges = user_data.get("edge_highlight_reels", {}).get("edges", [])
+                                highlights_edges = user_data.get(
+                                    "edge_highlight_reels", {}
+                                ).get("edges", [])
                                 for edge in highlights_edges:
                                     node = edge["node"]
                                     result.highlights.append(
                                         IGHighlight(
                                             highlight_id=node["id"],
                                             title=node["title"],
-                                            cover_url=node["cover_media_cropped_thumbnail"]["url"],
+                                            cover_url=node[
+                                                "cover_media_cropped_thumbnail"
+                                            ]["url"],
                                             item_count=1,  # Approximate
                                         )
                                     )
                     except Exception as e:
-                        logger.warning("[INSTAGRAM] Failed to parse web_profile_info for %s: %s", username, type(e).__name__)
+                        logger.warning(
+                            "[INSTAGRAM] Failed to parse web_profile_info for %s: %s",
+                            username,
+                            type(e).__name__,
+                        )
 
             # 2. Fallback to Authenticated Mobile API if Anonymous Web API was blocked (401/302/JSON parse error)
             if not uid and cls._ig_cookies:
-                logger.info("[INSTAGRAM] Anonymous Web API blocked/failed (status %s). Falling back to Mobile API for %s", doc.status_code, username)
-                async with AsyncSession(impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies) as auth_session:
+                logger.info(
+                    "[INSTAGRAM] Anonymous Web API blocked/failed (status %s). Falling back to Mobile API for %s",
+                    doc.status_code,
+                    username,
+                )
+                async with AsyncSession(
+                    impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies
+                ) as auth_session:
                     # Mobile fetch 1: UID
                     mobile_doc = await auth_session.get(
                         f"https://i.instagram.com/api/v1/users/{username}/usernameinfo/",
-                        headers={"User-Agent": "Instagram 219.0.0.12.117 Android"}
+                        headers={"User-Agent": "Instagram 219.0.0.12.117 Android"},
                     )
                     if mobile_doc.status_code == 200:
                         try:
@@ -259,48 +273,64 @@ class InstagramService:
                             if "user" in m_data and "pk" in m_data["user"]:
                                 uid = str(m_data["user"]["pk"])
                         except Exception as e:
-                            logger.warning("[INSTAGRAM] Failed to parse usernameinfo for %s: %s", username, e)
+                            logger.warning(
+                                "[INSTAGRAM] Failed to parse usernameinfo for %s: %s",
+                                username,
+                                e,
+                            )
 
                     # Mobile fetch 2: Highlights Tray
                     if uid:
                         tray_doc = await auth_session.get(
                             f"https://i.instagram.com/api/v1/highlights/{uid}/highlights_tray/",
-                            headers={"User-Agent": "Instagram 219.0.0.12.117 Android"}
+                            headers={"User-Agent": "Instagram 219.0.0.12.117 Android"},
                         )
                         if tray_doc.status_code == 200:
                             try:
                                 tray_data = tray_doc.json()
                                 for edge in tray_data.get("tray", []):
                                     raw_id = str(edge.get("id", ""))
-                                    hid = raw_id.replace("highlight:", "") if "highlight:" in raw_id else raw_id
-                                    
+                                    hid = (
+                                        raw_id.replace("highlight:", "")
+                                        if "highlight:" in raw_id
+                                        else raw_id
+                                    )
+
                                     title = edge.get("title", "")
                                     cover_url = ""
-                                    
+
                                     cover_media = edge.get("cover_media", {})
                                     if isinstance(cover_media, dict):
-                                        cropped = cover_media.get("cropped_image_version", {})
+                                        cropped = cover_media.get(
+                                            "cropped_image_version", {}
+                                        )
                                         if isinstance(cropped, dict):
                                             cover_url = cropped.get("url", "")
-                                    
+
                                     if not cover_url:
                                         # Default empty fallback to prevent pydantic/dataclass constraint errors
                                         cover_url = "https://scontent.cdninstagram.com/v/t51.2885-15/e35/c0.0.1080.1080a/s150x150/1_1_2.jpg"
-                                        
+
                                     if hid:
                                         result.highlights.append(
                                             IGHighlight(
                                                 highlight_id=hid,
                                                 title=title,
                                                 cover_url=cover_url,
-                                                item_count=edge.get("media_count", 1)
+                                                item_count=edge.get("media_count", 1),
                                             )
                                         )
                             except Exception as e:
-                                logger.warning("[INSTAGRAM] Failed to parse highlights_tray for %s: %s", username, e)
+                                logger.warning(
+                                    "[INSTAGRAM] Failed to parse highlights_tray for %s: %s",
+                                    username,
+                                    e,
+                                )
 
             if not uid:
-                logger.warning("[INSTAGRAM] Exhausted all fetch strategies for %s", username)
+                logger.warning(
+                    "[INSTAGRAM] Exhausted all fetch strategies for %s", username
+                )
                 result.error = f"⚠️ Профиль @{username} недоступен (IP Block / Скрыт)."
                 return result
 
@@ -446,42 +476,111 @@ class InstagramService:
             safe_remove(out_path)
             return None, "⚠️ Внутренняя ошибка загрузки."
 
-    @staticmethod
-    async def download_post(url: str) -> Tuple[Optional[str], Optional[str]]:
-        """Fallback to Cobalt for direct post formats."""
+    @classmethod
+    async def download_post(cls, url: str) -> Tuple[Optional[str], Optional[str]]:
+        """Download post/reel via Cobalt with native authenticated fallback."""
+        import os
+        import uuid
+        from curl_cffi.requests import AsyncSession
+        from app.core.config import TEMP_DIR
+        from app.core.utils import safe_remove
+
+        out_path = os.path.join(TEMP_DIR, f"ig_fallback_{uuid.uuid4().hex}.mp4")
+        video_url = None
+
+        # 1. Try public Cobalt infrastructure first (saves session bans & parses fast)
         try:
             from app.services.cobalt import CobaltService
 
             c_res = await CobaltService.process(url)
-            if not c_res:
-                return None, "⚠️ Cobalt не вернул данные."
+            if c_res and getattr(c_res, "status", None) != "picker" and c_res.url:
+                video_url = c_res.url
+            elif c_res and getattr(c_res, "status", None) == "picker":
+                return None, "⚠️ Multi-photo карусели скачивайте через основное меню."
+        except Exception as e:
+            logger.warning("[INSTAGRAM] Cobalt attempt failed for post %s: %s", url, e)
 
-            if getattr(c_res, "status", None) == "picker":
+        # 2. Native Fallback if Cobalt failed or returned empty URL
+        if not video_url:
+            logger.info(
+                "[INSTAGRAM] Cobalt failed/empty for %s, triggering Native Fallback",
+                url,
+            )
+            cls._init_session()
+            if not cls._ig_cookies:
                 return (
                     None,
-                    "⚠️ Multi-photo карусели скачивайте через основное меню (пока не поддерживаются в этом обработчике).",
+                    "⚠️ Cobalt временно недоступен, а авторизация для нативной загрузки не настроена (нет IG_SESSION_B64).",
                 )
 
-            if not c_res.url:
-                return None, "⚠️ Cobalt вернул пустой URL."
+            # Clean URL and append internal JSON payload request flags
+            target_url = url.split("?")[0].rstrip("/") + "/?__a=1&__d=dis"
 
-            out_path = os.path.join(TEMP_DIR, f"ig_fallback_{uuid.uuid4().hex}.mp4")
+            try:
+                async with AsyncSession(
+                    impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies
+                ) as session:
+                    doc = await session.get(
+                        target_url,
+                        headers={
+                            "X-IG-App-ID": cls.IG_APP_ID,
+                            "X-Requested-With": "XMLHttpRequest",
+                        },
+                    )
 
-            async with AsyncSession(impersonate="chrome110") as session:
-                resp = await session.get(c_res.url, stream=True)
+                    if doc.status_code == 200:
+                        data = doc.json()
+                        items = data.get("items", [])
+
+                        if items:
+                            item = items[0]
+                            if "video_versions" in item and item["video_versions"]:
+                                video_url = item["video_versions"][0]["url"]
+                            elif "carousel_media" in item:
+                                return (
+                                    None,
+                                    "⚠️ Multi-photo карусели скачивайте через основное меню (событие карусели).",
+                                )
+                        else:
+                            # Fallback pattern for GraphQL shortcode_media
+                            graphql = data.get("graphql", {}).get("shortcode_media", {})
+                            if graphql.get("is_video"):
+                                video_url = graphql.get("video_url")
+
+                    if not video_url:
+                        logger.warning(
+                            "[INSTAGRAM] Native fallback failed to extract video URL for %s. HTTP: %s",
+                            url,
+                            doc.status_code,
+                        )
+                        return (
+                            None,
+                            "⚠️ Ошибка нативного запасного канала (Reels). Вероятно, пост недоступен.",
+                        )
+            except Exception as e:
+                logger.error(
+                    "[INSTAGRAM] Native fallback parsing exception for %s: %s", url, e
+                )
+                return None, "⚠️ Внутренняя ошибка нативного парсера."
+
+        # 3. Download the actual video buffer (for both Cobalt link and Native link)
+        try:
+            # Re-init impersonate session without cookies for pure CDN download to avoid tracking
+            async with AsyncSession(impersonate=cls.IMPERSONATE) as session:
+                resp = await session.get(video_url, stream=True)
                 if resp.status_code != 200:
-                    return None, f"Cobalt CDN error: {resp.status_code}"
+                    return (
+                        None,
+                        f"⚠️ Ошибка сети при скачивании медиа (CDN: {resp.status_code})",
+                    )
 
                 with open(out_path, "wb") as f:
                     async for chunk in resp.aiter_content():
                         f.write(chunk)
 
-                return out_path, None
+            return out_path, None
 
         except Exception as e:
-            from app.core.utils import safe_remove
-
-            logger.error("[INSTAGRAM] Post download fallback error: %s", e)
-            if "out_path" in locals():
-                safe_remove(out_path)
-            return None, "⚠️ Ошибка резервного канала (Cobalt)."
+            logger.error("[INSTAGRAM] Post video pipe error: %s", e)
+            safe_remove(out_path)
+            return None, "⚠️ Ошибка скачивания видео потока."

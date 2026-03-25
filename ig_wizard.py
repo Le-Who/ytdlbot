@@ -5,13 +5,19 @@ print("===========================================")
 print("Инструмент создания сессии для Instagram")
 print("===========================================\n")
 print("Откройте Instagram в браузере на ПК, нажмите F12 (Инструменты разработчика)")
-print("Перейдите во вкладку Application (Приложение) -> Cookies -> https://www.instagram.com\n")
+print(
+    "Перейдите во вкладку Application (Приложение) -> Cookies -> https://www.instagram.com\n"
+)
 
 sessionid = input("1. Введите значение куки 'sessionid': ").strip()
 csrftoken = input("2. Введите значение куки 'csrftoken': ").strip()
 ds_user_id = input("3. Введите значение куки 'ds_user_id': ").strip()
-mid = input("4. Введите значение куки 'mid' (можно пропустить, нажмите Enter): ").strip()
-ig_did = input("5. Введите значение куки 'ig_did' (можно пропустить, нажмите Enter): ").strip()
+mid = input(
+    "4. Введите значение куки 'mid' (можно пропустить, нажмите Enter): "
+).strip()
+ig_did = input(
+    "5. Введите значение куки 'ig_did' (можно пропустить, нажмите Enter): "
+).strip()
 
 if not sessionid or not csrftoken or not ds_user_id:
     print("\n[ОШИБКА] sessionid, csrftoken и ds_user_id обязательны для обхода защиты!")

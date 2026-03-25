@@ -596,8 +596,12 @@ class InstagramService:
                     "⏳ Инстаграм на паузе. Лимит загрузок исчерпан на всех аккаунтах для защиты от бана. Используйте Cobalt (по умолчанию) или подождите.",
                 )
 
-            # Clean URL and append internal JSON payload request flags
-            target_url = url.split("?")[0].rstrip("/") + "/?__a=1&__d=dis"
+            shortcode = _extract_shortcode(url)
+            if not shortcode:
+                return None, "⚠️ Ошибка парсинга короткой ссылки поста."
+
+            media_pk = _shortcode_to_media_pk(shortcode)
+            target_url = f"https://i.instagram.com/api/v1/media/{media_pk}/info/"
 
             try:
                 async with AsyncSession(
@@ -608,7 +612,6 @@ class InstagramService:
                         headers={
                             "User-Agent": cls.IG_USER_AGENT,
                             "X-IG-App-ID": cls.IG_APP_ID,
-                            "X-Requested-With": "XMLHttpRequest",
                         },
                     )
 
@@ -633,14 +636,6 @@ class InstagramService:
                                 video_url = item["image_versions2"]["candidates"][0][
                                     "url"
                                 ]
-                                out_path = out_path.replace(".mp4", ".jpg")
-                        else:
-                            # Fallback pattern for GraphQL shortcode_media
-                            graphql = data.get("graphql", {}).get("shortcode_media", {})
-                            if graphql.get("is_video"):
-                                video_url = graphql.get("video_url")
-                            elif graphql.get("display_url"):
-                                video_url = graphql.get("display_url")
                                 out_path = out_path.replace(".mp4", ".jpg")
 
                     if not video_url:

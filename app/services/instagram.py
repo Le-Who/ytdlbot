@@ -521,10 +521,10 @@ class InstagramService:
         except Exception as e:
             logger.warning("[INSTAGRAM] Cobalt attempt failed for post %s: %s", url, e)
 
-        # 2. Native Fallback via Mobile API if Cobalt failed
+        # 2. Native Fallback if Cobalt failed or returned empty URL
         if not video_url:
             logger.info(
-                "[INSTAGRAM] Cobalt failed/empty for %s, triggering Mobile API Fallback",
+                "[INSTAGRAM] Cobalt failed/empty for %s, triggering Native Web Fallback",
                 url,
             )
             cls._init_session()
@@ -534,23 +534,19 @@ class InstagramService:
                     "⚠️ Cobalt временно недоступен, а авторизация для нативной загрузки не настроена (нет IG_SESSION_B64).",
                 )
 
-            # Extract shortcode from URL (/p/CODE/ or /reel/CODE/ or /reels/CODE/)
-            shortcode = _extract_shortcode(url)
-            if not shortcode:
-                return None, "⚠️ Не удалось извлечь shortcode из ссылки."
-
-            # Convert shortcode → numeric media_pk (deterministic base64 algorithm)
-            media_pk = _shortcode_to_media_pk(shortcode)
+            # Clean URL and append internal JSON payload request flags
+            target_url = url.split("?")[0].rstrip("/") + "/?__a=1&__d=dis"
 
             try:
                 async with AsyncSession(
                     impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies
                 ) as session:
                     doc = await session.get(
-                        f"https://i.instagram.com/api/v1/media/{media_pk}/info/",
+                        target_url,
                         headers={
-                            "User-Agent": "Instagram 219.0.0.12.117 Android",
+                            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36",
                             "X-IG-App-ID": cls.IG_APP_ID,
+                            "X-Requested-With": "XMLHttpRequest",
                         },
                     )
 
@@ -572,15 +568,20 @@ class InstagramService:
                                 and "candidates" in item["image_versions2"]
                                 and item["image_versions2"]["candidates"]
                             ):
-                                # It's a photo post, not a video
-                                video_url = item["image_versions2"]["candidates"][0][
-                                    "url"
-                                ]
+                                video_url = item["image_versions2"]["candidates"][0]["url"]
+                                out_path = out_path.replace(".mp4", ".jpg")
+                        else:
+                            # Fallback pattern for GraphQL shortcode_media
+                            graphql = data.get("graphql", {}).get("shortcode_media", {})
+                            if graphql.get("is_video"):
+                                video_url = graphql.get("video_url")
+                            elif graphql.get("display_url"):
+                                video_url = graphql.get("display_url")
                                 out_path = out_path.replace(".mp4", ".jpg")
 
                     if not video_url:
                         logger.warning(
-                            "[INSTAGRAM] Mobile API fallback failed for %s. HTTP: %s",
+                            "[INSTAGRAM] Web JSON fallback failed for %s. HTTP: %s",
                             url,
                             doc.status_code,
                         )
@@ -590,7 +591,7 @@ class InstagramService:
                         )
             except Exception as e:
                 logger.error(
-                    "[INSTAGRAM] Mobile API fallback exception for %s: %s", url, e
+                    "[INSTAGRAM] Web JSON fallback exception for %s: %s", url, e
                 )
                 return None, "⚠️ Внутренняя ошибка нативного парсера."
 

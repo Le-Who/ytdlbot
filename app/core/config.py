@@ -63,7 +63,6 @@ COBALT_API_KEY = os.getenv("COBALT_API_KEY", "")
 # Instagram is now fully anonymous via curl_cffi and mobile API forgery
 # However, IG_SESSION_B64 can optionally be provided to restore stories/highlights access.
 IG_SESSION_B64 = os.getenv("IG_SESSION_B64", "")
-IG_PROXY: Optional[str] = os.getenv("IG_PROXY", "").strip() or None
 
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")

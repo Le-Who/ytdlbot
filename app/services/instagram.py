@@ -179,6 +179,7 @@ class InstagramService:
     _ig_cookie_pool: List[Dict[str, str]] = []
     _pool_initialized: bool = False
     _current_pool_index: int = 0
+    _dead_sessions: set = set()  # Indices of suspended/checkpointed accounts
 
     @classmethod
     def _init_pool(cls) -> None:
@@ -246,11 +247,41 @@ class InstagramService:
             idx = cls._current_pool_index
             cls._current_pool_index = (cls._current_pool_index + 1) % pool_size
 
+            # Skip sessions marked as dead (suspended/checkpointed)
+            if idx in cls._dead_sessions:
+                continue
+
             # Atomic global limit check via RedisTokenBucketLimiter
             if await state.limiter.allow_ig_fallback(idx):
                 return idx, cls._ig_cookie_pool[idx]
 
         return -2, None
+
+    @classmethod
+    def _check_response_health(
+        cls, resp_status: int, resp_text: str, session_idx: int
+    ) -> bool:
+        """Check if an API response indicates a dead session. Returns True if session is dead."""
+        if resp_status in (400, 401, 403):
+            text_lower = resp_text[:500].lower() if resp_text else ""
+            death_signals = (
+                "checkpoint_required",
+                "login_required",
+                "accounts/suspended",
+                "challenge_required",
+                "consent_required",
+            )
+            if any(sig in text_lower for sig in death_signals):
+                cls._dead_sessions.add(session_idx)
+                alive = len(cls._ig_cookie_pool) - len(cls._dead_sessions)
+                logger.warning(
+                    "[INSTAGRAM] Session #%d evicted (checkpoint/suspended). %d/%d sessions alive.",
+                    session_idx,
+                    alive,
+                    len(cls._ig_cookie_pool),
+                )
+                return True
+        return False
 
     @classmethod
     def _auth_headers(cls, cookies: Dict[str, str]) -> Dict[str, str]:
@@ -334,6 +365,15 @@ class InstagramService:
                         f"https://i.instagram.com/api/v1/users/{username}/usernameinfo/",
                         headers=cls._auth_headers(cookies_to_use),
                     )
+                    # Check session health on non-200
+                    if mobile_doc.status_code != 200 and sess_idx is not None:
+                        try:
+                            body = mobile_doc.text[:500] if mobile_doc.text else ""
+                        except Exception:
+                            body = ""
+                        cls._check_response_health(
+                            mobile_doc.status_code, body, sess_idx
+                        )
                     if mobile_doc.status_code == 200:
                         try:
                             m_data = mobile_doc.json()
@@ -600,13 +640,6 @@ class InstagramService:
                     "⚠️ Cobalt временно недоступен, а авторизация для нативной загрузки не настроена (нет IG_SESSIONS_B64).",
                 )
 
-            sess_idx, cookies_to_use = await cls._get_available_session()
-            if not cookies_to_use:
-                return (
-                    None,
-                    "⏳ Инстаграм на паузе. Лимит загрузок исчерпан на всех аккаунтах для защиты от бана. Используйте Cobalt (по умолчанию) или подождите.",
-                )
-
             shortcode = _extract_shortcode(url)
             if not shortcode:
                 return None, "⚠️ Ошибка парсинга короткой ссылки поста."
@@ -619,69 +652,96 @@ class InstagramService:
                 f"https://i.instagram.com/api/v1/media/{media_pk}/info/",
             ]
 
-            try:
-                async with AsyncSession(
-                    impersonate=cls.IMPERSONATE, cookies=cookies_to_use
-                ) as session:
-                    doc = None
-                    for endpoint_url in endpoints:
-                        doc = await session.get(
-                            endpoint_url,
-                            headers=cls._auth_headers(cookies_to_use),
-                        )
-                        if doc.status_code == 200:
-                            break
+            # Retry loop: if current session is dead, evict it and try the next one
+            max_retries = len(cls._ig_cookie_pool)
+            for _attempt in range(max_retries):
+                sess_idx, cookies_to_use = await cls._get_available_session()
+                if not cookies_to_use:
+                    return (
+                        None,
+                        "⏳ Все аккаунты-доноры заблокированы или исчерпали лимит. Замените сессии в IG_SESSIONS_B64."
+                        if sess_idx == -2 and cls._dead_sessions
+                        else "⏳ Инстаграм на паузе. Лимит загрузок исчерпан на всех аккаунтах для защиты от бана.",
+                    )
 
-                        # Diagnostic: log the rejection body to understand the exact reason
-                        try:
-                            body_preview = doc.text[:300] if doc.text else "(empty)"
-                        except Exception:
-                            body_preview = "(unreadable)"
-                        logger.warning(
-                            "[INSTAGRAM] Endpoint %s returned %s. Body: %s",
-                            endpoint_url,
-                            doc.status_code,
-                            body_preview,
-                        )
+                try:
+                    async with AsyncSession(
+                        impersonate=cls.IMPERSONATE, cookies=cookies_to_use
+                    ) as session:
+                        doc = None
+                        session_is_dead = False
+                        for endpoint_url in endpoints:
+                            doc = await session.get(
+                                endpoint_url,
+                                headers=cls._auth_headers(cookies_to_use),
+                            )
+                            if doc.status_code == 200:
+                                break
 
-                    if doc and doc.status_code == 200:
-                        data = doc.json()
-                        items = data.get("items", [])
+                            # Check if this session is dead (suspended/checkpointed)
+                            try:
+                                body_text = doc.text[:500] if doc.text else ""
+                            except Exception:
+                                body_text = ""
 
-                        if items:
-                            item = items[0]
-                            if "video_versions" in item and item["video_versions"]:
-                                video_url = item["video_versions"][0]["url"]
-                            elif "carousel_media" in item:
-                                return (
-                                    None,
-                                    "⚠️ Multi-photo карусели скачивайте через основное меню.",
-                                )
-                            elif (
-                                "image_versions2" in item
-                                and "candidates" in item["image_versions2"]
-                                and item["image_versions2"]["candidates"]
+                            if sess_idx is not None and cls._check_response_health(
+                                doc.status_code, body_text, sess_idx
                             ):
-                                video_url = item["image_versions2"]["candidates"][0][
-                                    "url"
-                                ]
-                                out_path = out_path.replace(".mp4", ".jpg")
+                                session_is_dead = True
+                                break
 
-                    if not video_url:
-                        logger.warning(
-                            "[INSTAGRAM] Mobile API fallback failed for %s. HTTP: %s",
-                            url,
-                            doc.status_code,
-                        )
-                        return (
-                            None,
-                            "⚠️ Ошибка нативного запасного канала. Вероятно, пост недоступен.",
-                        )
-            except Exception as e:
-                logger.error(
-                    "[INSTAGRAM] Mobile API fallback exception for %s: %s", url, e
-                )
-                return None, "⚠️ Внутренняя ошибка нативного парсера."
+                            # Diagnostic: log non-checkpoint errors
+                            logger.warning(
+                                "[INSTAGRAM] Endpoint %s returned %s. Body: %s",
+                                endpoint_url,
+                                doc.status_code,
+                                body_text[:300] if body_text else "(empty)",
+                            )
+
+                        # If session was evicted, retry with the next available one
+                        if session_is_dead:
+                            continue
+
+                        if doc and doc.status_code == 200:
+                            data = doc.json()
+                            items = data.get("items", [])
+
+                            if items:
+                                item = items[0]
+                                if "video_versions" in item and item["video_versions"]:
+                                    video_url = item["video_versions"][0]["url"]
+                                elif "carousel_media" in item:
+                                    return (
+                                        None,
+                                        "⚠️ Multi-photo карусели скачивайте через основное меню.",
+                                    )
+                                elif (
+                                    "image_versions2" in item
+                                    and "candidates" in item["image_versions2"]
+                                    and item["image_versions2"]["candidates"]
+                                ):
+                                    video_url = item["image_versions2"]["candidates"][
+                                        0
+                                    ]["url"]
+                                    out_path = out_path.replace(".mp4", ".jpg")
+
+                        if not video_url:
+                            logger.warning(
+                                "[INSTAGRAM] Mobile API fallback failed for %s. HTTP: %s",
+                                url,
+                                doc.status_code if doc else "N/A",
+                            )
+                            return (
+                                None,
+                                "⚠️ Ошибка нативного запасного канала. Вероятно, пост недоступен.",
+                            )
+                        # Success — break out of retry loop
+                        break
+                except Exception as e:
+                    logger.error(
+                        "[INSTAGRAM] Mobile API fallback exception for %s: %s", url, e
+                    )
+                    return None, "⚠️ Внутренняя ошибка нативного парсера."
 
         # 3. Download the actual video buffer (for both Cobalt link and Native link)
         try:

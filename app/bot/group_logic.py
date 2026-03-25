@@ -58,14 +58,21 @@ async def handle_group_message(
     # Initial status message
     status_msg = await update.message.reply_text("🔎")
 
-    # Generate token for this operation (used for file cache & callbacks)
-    token = uuid.uuid4().hex
-
     # Tag user in caption
     if user.username:
         user_tag = f"@{user.username}"
     else:
         user_tag = user.mention_html()
+
+    # ── Instagram Early Intercept ────────────────────────────────────────
+    from app.services.instagram import is_instagram_url
+
+    if is_instagram_url(url):
+        await _handle_group_instagram(update, context, url, status_msg, user_tag)
+        return
+
+    # Generate token for this operation (used for file cache & callbacks)
+    token = uuid.uuid4().hex
 
     # Check if this is a TikTok slideshow
     is_tiktok_url = _is_tiktok(url)
@@ -495,3 +502,142 @@ async def on_group_slideshow(
             await asyncio.to_thread(MediaSender.cleanup_slideshow, result)
     finally:
         state.tasks_sem.release()
+
+
+async def _handle_group_instagram(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url: str,
+    status_msg,
+    user_tag: str,
+) -> None:
+    """Handle Instagram links in group chats.
+
+    - Profile links: auto-download all current stories
+    - Story/highlight direct links: download that specific item
+    - Post/reel links: download via Cobalt/yt-dlp fallback
+    """
+    from app.services.instagram import (
+        InstagramService,
+        parse_instagram_url,
+    )
+    from app.core.utils import safe_remove
+
+    chat = update.effective_chat
+    assert chat is not None and update.message is not None
+
+    url_type, identifier, item_id = parse_instagram_url(url)
+
+    # ── Posts / Reels → Cobalt fallback ───────────────────────────────
+    if url_type == "post":
+        if state.tasks_sem.locked():
+            try:
+                await status_msg.edit_text(Texts.QUEUE_FULL)
+            except Exception:
+                pass
+            return
+
+        await state.tasks_sem.acquire()
+        try:
+            await status_msg.edit_text("⏳ Загружаю пост…")
+            file_path, error = await InstagramService.download_post(url)
+            if file_path:
+                try:
+                    success = await MediaSender.send_video_file(
+                        context.bot,
+                        chat.id,
+                        file_path,
+                        caption=user_tag,
+                        parse_mode="HTML",
+                    )
+                    if success:
+                        try:
+                            await update.message.delete()
+                        except Exception:
+                            pass
+                        try:
+                            await status_msg.delete()
+                        except Exception:
+                            pass
+                    else:
+                        await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
+                finally:
+                    await asyncio.to_thread(safe_remove, file_path)
+            else:
+                await status_msg.edit_text(
+                    error or "⚠️ Не удалось загрузить пост."
+                )
+        except Exception as e:
+            logger.error("[INSTAGRAM-GROUP] Post download error: %s", e)
+            try:
+                await status_msg.edit_text(Texts.DOWNLOAD_ERROR)
+            except Exception:
+                pass
+        finally:
+            state.tasks_sem.release()
+        return
+
+    # ── Profile / Stories / Highlights → InstagramService ─────────────
+    if url_type in ("profile", "stories") and identifier:
+        if state.tasks_sem.locked():
+            try:
+                await status_msg.edit_text(Texts.QUEUE_FULL)
+            except Exception:
+                pass
+            return
+
+        await state.tasks_sem.acquire()
+        try:
+            await status_msg.edit_text("⏳ Загружаю истории…")
+            profile_data = await InstagramService.get_profile_media(identifier)
+
+            if profile_data.error:
+                await status_msg.edit_text(profile_data.error)
+                return
+
+            stories = profile_data.stories
+            if not stories:
+                await status_msg.edit_text(
+                    f"📭 У @{identifier} нет активных историй."
+                )
+                return
+
+            # Download + send each story item
+            downloaded = 0
+            for item in stories:
+                file_path, error = await InstagramService.download_story_item(item)
+                if file_path:
+                    try:
+                        await MediaSender.send_video_file(
+                            context.bot,
+                            chat.id,
+                            file_path,
+                            caption=f"{item.label} | {user_tag}",
+                            parse_mode="HTML",
+                        )
+                        downloaded += 1
+                    except Exception as e:
+                        logger.warning("[INSTAGRAM-GROUP] Send error: %s", e)
+                    finally:
+                        await asyncio.to_thread(safe_remove, file_path)
+
+            if downloaded > 0:
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+            else:
+                await status_msg.edit_text("⚠️ Не удалось загрузить истории.")
+        except Exception as e:
+            logger.error("[INSTAGRAM-GROUP] Stories error: %s", e)
+            try:
+                await status_msg.edit_text(Texts.DOWNLOAD_ERROR)
+            except Exception:
+                pass
+        finally:
+            state.tasks_sem.release()
+        return
+
+    # ── Unknown IG URL type → generic error ──────────────────────────
+    await status_msg.edit_text("⚠️ Неподдерживаемый тип ссылки Instagram.")
+

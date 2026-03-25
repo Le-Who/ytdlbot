@@ -3,6 +3,7 @@
 import unittest
 from unittest.mock import patch, MagicMock, AsyncMock
 
+
 from app.services.converter import MediaConverter
 
 
@@ -17,38 +18,112 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
         state.conversion_sem.__aenter__ = AsyncMock()
         state.conversion_sem.__aexit__ = AsyncMock()
 
+    # ── Helper to build subprocess mocks ──────────────────────────────
+
+    @staticmethod
+    def _make_proc(returncode=0, stdout=b"", stderr=b""):
+        proc = AsyncMock()
+        proc.returncode = returncode
+        proc.communicate = AsyncMock(return_value=(stdout, stderr))
+        return proc
+
+    # ── convert_to_gif_ffmpeg ─────────────────────────────────────────
+
     @patch("app.services.converter.os.path.exists", return_value=True)
     @patch("app.services.converter.os.path.getsize", return_value=1024)
     @patch("app.services.converter.asyncio.create_subprocess_exec")
-    async def test_convert_to_gif_ffmpeg_success(
-        self, mock_exec, mock_size, mock_exists
+    @patch("app.services.converter._probe_video_codec", new_callable=AsyncMock)
+    async def test_convert_to_gif_h264_uses_copy(
+        self, mock_probe, mock_exec, mock_size, mock_exists
     ):
-        """Test successful conversion to GIF returns the path."""
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(return_value=(b"stdout", b"stderr"))
-        mock_exec.return_value = mock_proc
+        """h264 file → stream-copy (no re-encoding)."""
+        mock_probe.return_value = "h264"
+        mock_exec.return_value = self._make_proc(0, stderr=b"")
+
+        result = await MediaConverter.convert_to_gif_ffmpeg("/tmp/video.mp4")
+
+        self.assertEqual(result, "/tmp/video_gif.mp4")
+        # ffmpeg should have been called once (copy mode)
+        mock_exec.assert_called_once()
+        cmd_args = mock_exec.call_args[0]
+        self.assertIn("-c:v", cmd_args)
+        self.assertIn("copy", cmd_args)
+
+    @patch("app.services.converter.os.path.exists", return_value=True)
+    @patch("app.services.converter.os.path.getsize", return_value=1024)
+    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter._probe_video_codec", new_callable=AsyncMock)
+    async def test_convert_to_gif_vp9_uses_libx264(
+        self, mock_probe, mock_exec, mock_size, mock_exists
+    ):
+        """vp9 file → transcode with libx264."""
+        mock_probe.return_value = "vp9"
+        mock_exec.return_value = self._make_proc(0, stderr=b"")
+
+        result = await MediaConverter.convert_to_gif_ffmpeg("/tmp/video.webm")
+
+        self.assertEqual(result, "/tmp/video_gif.mp4")
+        mock_exec.assert_called_once()
+        cmd_args = mock_exec.call_args[0]
+        self.assertIn("libx264", cmd_args)
+
+    @patch("app.services.converter.os.path.exists", return_value=True)
+    @patch("app.services.converter.os.path.getsize", return_value=1024)
+    @patch("app.services.converter.safe_remove")
+    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter._probe_video_codec", new_callable=AsyncMock)
+    async def test_convert_to_gif_copy_fails_fallback_to_transcode(
+        self, mock_probe, mock_exec, mock_safe_remove, mock_size, mock_exists
+    ):
+        """Stream-copy fail → auto-fallback to libx264 transcode."""
+        mock_probe.return_value = "h264"
+        # First call (copy) fails, second call (transcode) succeeds
+        mock_exec.side_effect = [
+            self._make_proc(1, stderr=b"copy error"),
+            self._make_proc(0, stderr=b""),
+        ]
+
+        result = await MediaConverter.convert_to_gif_ffmpeg("/tmp/video.mp4")
+
+        self.assertEqual(result, "/tmp/video_gif.mp4")
+        self.assertEqual(mock_exec.call_count, 2)
+        # Second call should use libx264
+        second_call_args = mock_exec.call_args_list[1][0]
+        self.assertIn("libx264", second_call_args)
+
+    @patch("app.services.converter.os.path.exists", side_effect=[True, False])
+    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter._probe_video_codec", new_callable=AsyncMock)
+    async def test_convert_to_gif_ffmpeg_failure(
+        self, mock_probe, mock_exec, mock_exists
+    ):
+        """Both attempts fail → returns None."""
+        mock_probe.return_value = "vp9"
+        mock_exec.return_value = self._make_proc(1, stderr=b"error details here")
+
+        result = await MediaConverter.convert_to_gif_ffmpeg("/tmp/video.mp4")
+
+        self.assertIsNone(result)
+
+    @patch("app.services.converter.os.path.exists", return_value=True)
+    @patch("app.services.converter.os.path.getsize", return_value=1024)
+    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter._probe_video_codec", new_callable=AsyncMock)
+    async def test_convert_to_gif_probe_fails_falls_back_to_transcode(
+        self, mock_probe, mock_exec, mock_size, mock_exists
+    ):
+        """Probe fails (returns None) → uses transcode (safe default)."""
+        mock_probe.return_value = None
+        mock_exec.return_value = self._make_proc(0, stderr=b"")
 
         result = await MediaConverter.convert_to_gif_ffmpeg("/tmp/video.mp4")
 
         self.assertEqual(result, "/tmp/video_gif.mp4")
         mock_exec.assert_called_once()
-        self.assertIn("ffmpeg", mock_exec.call_args[0])
+        cmd_args = mock_exec.call_args[0]
+        self.assertIn("libx264", cmd_args)
 
-    @patch(
-        "app.services.converter.os.path.exists", side_effect=[True, False]
-    )  # First for video exists, second for gif
-    @patch("app.services.converter.asyncio.create_subprocess_exec")
-    async def test_convert_to_gif_ffmpeg_failure(self, mock_exec, mock_exists):
-        """Test failed conversion returns None."""
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 1
-        mock_proc.communicate = AsyncMock(return_value=(b"", b"error"))
-        mock_exec.return_value = mock_proc
-
-        result = await MediaConverter.convert_to_gif_ffmpeg("/tmp/video.mp4")
-
-        self.assertIsNone(result)
+    # ── images_to_video ───────────────────────────────────────────────
 
     @patch("app.services.converter.os.path.exists", return_value=True)
     @patch("app.services.converter.os.path.getsize", return_value=1024)

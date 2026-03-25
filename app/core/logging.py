@@ -25,6 +25,11 @@ class JsonFormatter(logging.Formatter):
             "chat_id",
             "user_id",
             "url_host",
+            "stderr",
+            "returncode",
+            "error",
+            "path",
+            "metrics",
         ):
             if hasattr(record, key):
                 payload[key] = getattr(record, key)

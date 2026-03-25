@@ -135,6 +135,10 @@ class MetricsCollector:
             "ytdlbot_parse_cancellations_total",
             "User-initiated parse cancellations",
         )
+        self.conversion_failures = _Counter(
+            "ytdlbot_conversion_failures_total",
+            "Failed ffmpeg conversions",
+        )
 
         # Gauges
         self.active_downloads = _Gauge(
@@ -179,6 +183,7 @@ class MetricsCollector:
             self.rate_limit_rejections,
             self.parse_requests,
             self.parse_cancellations,
+            self.conversion_failures,
             self.active_downloads,
         ]
         for metric in counter_and_gauge_metrics:

@@ -16,6 +16,41 @@ logger = logging.getLogger("app.services.converter")
 # ffmpeg encoding thread budget per conversion job.
 _FFMPEG_THREADS = 2
 
+# Codecs that can be stream-copied into an MP4 container without re-encoding.
+_MP4_SAFE_CODECS = frozenset({"h264", "hevc", "h265", "mpeg4", "avc"})
+
+# Timeout for ffprobe / ffmpeg subprocesses (seconds).
+_FFPROBE_TIMEOUT = 10.0
+_FFMPEG_TIMEOUT = 300.0
+
+
+async def _probe_video_codec(video_path: str) -> Optional[str]:
+    """Detect the video codec of a file via ffprobe.
+
+    Returns the lowercase codec name (e.g. ``"h264"``, ``"vp9"``) or
+    ``None`` if probing fails.  Runs in ~100–200 ms.
+    """
+    cmd = [
+        "ffprobe",
+        "-v", "quiet",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name",
+        "-print_format", "default=noprint_wrappers=1:nokey=1",
+        video_path,
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_FFPROBE_TIMEOUT)
+        if proc.returncode == 0 and stdout:
+            return stdout.decode().strip().lower()
+    except Exception as exc:
+        logger.debug("ffprobe failed: %s", exc)
+    return None
+
 
 def _get_audio_duration(audio_path: str) -> Optional[float]:
     """Fast extraction of MP3/M4A duration without ffprobe.
@@ -64,56 +99,110 @@ class MediaConverter:
     """Handles ffmpeg-based media conversions."""
 
     @staticmethod
-    async def convert_to_gif_ffmpeg(video_path: str) -> Optional[str]:
-        """
-        Converts a video to a mute MP4 (Telegram treats as GIF).
+    async def _run_gif_ffmpeg(
+        video_path: str,
+        gif_path: str,
+        *,
+        use_copy: bool,
+    ) -> tuple[int, str]:
+        """Run a single ffmpeg GIF-strip pass.
 
-        Uses stream copy (no re-encoding) — instant, IO-bound only.
+        Returns ``(returncode, stderr_text)``.
+        """
+        if use_copy:
+            codec_args = ["-c:v", "copy"]
+        else:
+            codec_args = [
+                "-c:v", "libx264",
+                "-preset", "ultrafast",
+                "-crf", "23",
+                "-pix_fmt", "yuv420p",
+                "-threads", str(_FFMPEG_THREADS),
+            ]
+
+        cmd = [
+            "ffmpeg", "-y",
+            "-t", "60",
+            "-i", video_path,
+            *codec_args,
+            "-an",
+            gif_path,
+        ]
+
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=_FFMPEG_TIMEOUT,
+            )
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return -1, "timeout"
+
+        return proc.returncode, stderr.decode("utf-8", errors="ignore")
+
+    @staticmethod
+    async def convert_to_gif_ffmpeg(video_path: str) -> Optional[str]:
+        """Convert a video to a mute MP4 (Telegram treats as GIF).
+
+        Strategy:
+        1. Probe the video codec via ffprobe.
+        2. If codec is MP4-safe (h264/hevc) → stream-copy (instant).
+        3. Otherwise → transcode via libx264 (fast, universal).
+        4. If stream-copy fails → auto-fallback to transcode.
         """
         if not video_path or not os.path.exists(video_path):
             return None
 
         gif_path = video_path.rsplit(".", 1)[0] + "_gif.mp4"
 
-        cmd = [
-            "ffmpeg",
-            "-y",
-            "-t",
-            "60",
-            "-i",
-            video_path,
-            "-c:v",
-            "copy",
-            "-an",
-            gif_path,
-        ]
-
         try:
-            # Limit concurrency for CPU-intensive conversions
             from app.core.metrics import metrics as _m
+
+            # Probe codec to decide copy vs transcode
+            codec = await _probe_video_codec(video_path)
+            use_copy = codec in _MP4_SAFE_CODECS if codec else False
+            if codec:
+                logger.info(
+                    "GIF conversion: detected codec=%s, copy=%s",
+                    codec, use_copy,
+                )
 
             async with state.conversion_sem:
                 with _m.conversion_duration.time(type="gif"):
-                    proc = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.PIPE,
+                    rc, stderr_text = await MediaConverter._run_gif_ffmpeg(
+                        video_path, gif_path, use_copy=use_copy,
                     )
-                    try:
-                        _, stderr = await asyncio.wait_for(
-                            proc.communicate(), timeout=300.0
-                        )
-                    except asyncio.TimeoutError:
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-                        logger.error("FFmpeg conversion timed out")
-                        return None
 
-            if proc.returncode != 0:
+                    # Fallback: stream-copy failed → retry with transcode
+                    if rc != 0 and use_copy:
+                        logger.warning(
+                            "Stream-copy failed (rc=%d), falling back to transcode",
+                            rc,
+                            extra={"stderr": stderr_text[:2000], "returncode": rc},
+                        )
+                        safe_remove(gif_path)
+                        rc, stderr_text = await MediaConverter._run_gif_ffmpeg(
+                            video_path, gif_path, use_copy=False,
+                        )
+
+            if rc != 0:
+                _m.conversion_failures.inc(type="gif")
                 logger.error(
-                    "FFmpeg conversion failed", extra={"stderr": stderr.decode()}
+                    "FFmpeg conversion failed (rc=%d): %s",
+                    rc,
+                    stderr_text[:500],
+                    extra={
+                        "stderr": stderr_text[:2000],
+                        "returncode": rc,
+                        "path": video_path,
+                    },
                 )
                 return None
 

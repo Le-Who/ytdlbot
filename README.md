@@ -9,12 +9,12 @@ YTDL Bot solves the problem of friction in downloading and sharing media from so
 ## Current Status
 
 **Production-ish / API-Stabilized**
-The project is well-structured and highly tested (>430 tests, CI/CD pipeline). However, since it relies heavily on third-party extraction tools (`yt-dlp`, `gallery-dl`) and platform algorithms, it is inherently subject to platform-side changes (e.g., rate limits, blockages).
+The project is well-structured and highly tested (>510 tests, CI/CD pipeline). However, since it relies heavily on third-party extraction tools (`yt-dlp`, `gallery-dl`) and platform algorithms, it is inherently subject to platform-side changes (e.g., rate limits, blockages).
 Recent systemic fixes have stabilized asynchronous subprocess extraction and decoupled Redis caching dependencies, making the pipeline heavily resilient to coroutine clashes. Some advanced evasion techniques (proxies, cookies) are configured but require manual upkeep by the admin.
 
 ## Features
 
-- **Multi-Platform Support**: Extracts video/audio from YouTube, TikTok (watermark-free via TikWM API with zero-latency BVC2 codec interception), Pinterest (native 200ms open-graph parsing), Instagram (stories, highlights, posts/reels with rich selection UX), VK, Facebook, and RuTube.
+- **Multi-Platform Support**: Extracts video/audio from YouTube, TikTok (watermark-free via TikWM API with zero-latency BVC2 codec interception), Pinterest (native 200ms open-graph parsing), Instagram (stories, highlights, posts/reels with resilient hybrid Mobile API fallback), VK, Facebook, and RuTube.
 - **Smart Group Mode**: Automatically selects and downloads the best quality video (<45MB by default) when a link is sent in a group chat.
 - **Interactive Private Mode**: Presents inline keyboard options for users to select specific video qualities or audio-only formats.
 - **TikTok Slideshow Support**: Converts TikTok carousels natively via TikWM API into either a 📸 Photo Album (media group) or a 🎬 Video Slideshow (MP4 with audio) using `ffmpeg`.
@@ -63,7 +63,7 @@ flowchart TD
 | `app/core/`     | Global config, rate limiter logic, caching, and state structures.          |
 | `app/services/` | Wrappers for `yt-dlp`, `gallery-dl`, `ffmpeg` conversion, and downloading. |
 | `app/tasks/`    | Background periodic tasks (e.g., `janitor.py` for temp cleanup).           |
-| `tests/`        | 420+ Pytest tests covering unit, integration, and security.                |
+| `tests/`        | 510+ Pytest tests covering unit, integration, and security.                |
 | `Dockerfile`    | Multi-stage build definition for containerized deployment.                 |
 | `scripts`       | Python standalone script for local debugging of `yt-dlp` extraction.       |
 
@@ -113,6 +113,7 @@ Selected key variables from `.env.example`:
 | `COBALT_API_URL`        | No       | `https://api.cobalt.tools` | Endpoint for the Cobalt extraction API (supports comma-separated list for fallback routing) | CobaltService    |
 | `YOUTUBE_PIPE_MODE`     | No       | `false`                    | Opt-in direct piping to TG for YT videos <50MB                                              | Downloader       |
 | `YTDLP_COOKIES_B64`     | No       | —                          | Base64-encoded Netscape cookies for Auth bypass                                             | `yt-dlp` Service |
+| `IG_SESSION_B64`        | No       | —                          | Base64-encoded Instagram session cookies for stories/highlights/reels native download       | Instagram Service |
 
 ## Run
 

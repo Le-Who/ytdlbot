@@ -6,10 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
-- **Instagram Stories & Highlights**: Download Instagram stories and highlights with an interactive rich selection UX. Users send a profile link and get a menu with `[📸 Stories] [📁 Highlights] [📥 Download All]`. Each story shows date, time, and duration. Requires `IG_SESSION_B64` and `IG_SESSION_USER` environment variables for authenticated access. Posts and reels download directly via Cobalt fallback.
+- **Instagram Stories & Highlights**: Download Instagram stories and highlights with an interactive rich selection UX. Users send a profile link and get a menu with `[📸 Stories] [📁 Highlights] [📥 Download All]`. Each story shows date, time, and duration. Requires `IG_SESSION_B64` environment variable for authenticated access.
   - New files: `app/services/instagram.py`, `app/bot/ig_callbacks.py`
   - 8 new callback handlers registered in `main.py`
   - 39 new tests in `test_instagram_service.py` and `test_pinterest_service.py`
+- **Instagram Resilient Profile Fetch (Hybrid Fallback)**: Profile metadata is now fetched via a two-tier strategy. The bot first attempts the anonymous `web_profile_info` API (zero session risk). If blocked by Instagram's datacenter IP filter (401), it seamlessly falls back to authenticated Mobile API endpoints (`usernameinfo` + `highlights_tray`) via `curl_cffi`. This eliminates "IP Block" errors without risking session cookies on web endpoints.
+- **Instagram Reels/Posts Native Download (Mobile API Fallback)**: When Cobalt public instances return 503 errors, the bot now falls back to a native download pipeline using `i.instagram.com/api/v1/media/{pk}/info/`. Shortcodes are converted to numeric media PKs via a deterministic base64 algorithm (`_shortcode_to_media_pk`). Supports video reels, single photo posts, and carousel detection. Cobalt remains the primary attempt to conserve session trust score.
 
 ### Changed
 

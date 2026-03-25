@@ -504,9 +504,10 @@ async def on_group_slideshow(
         state.tasks_sem.release()
 
 
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Message
+from telegram import Update, Message
 
 # ... existing code ...
+
 
 async def _handle_group_instagram(
     update: Update,
@@ -547,6 +548,7 @@ async def _handle_group_instagram(
             file_path, error = await InstagramService.download_post(url)
             if file_path:
                 from app.services.sender import TelegramSender
+
                 try:
                     success = await TelegramSender.send_file(
                         context.bot,
@@ -571,9 +573,7 @@ async def _handle_group_instagram(
                 finally:
                     await asyncio.to_thread(safe_remove, file_path)
             else:
-                await status_msg.edit_text(
-                    error or "⚠️ Не удалось загрузить пост."
-                )
+                await status_msg.edit_text(error or "⚠️ Не удалось загрузить пост.")
         except Exception as e:
             logger.error("[INSTAGRAM-GROUP] Post download error: %s", e)
             try:
@@ -598,13 +598,12 @@ async def _handle_group_instagram(
             await status_msg.edit_text("⏳ Загружаю хайлайт…")
             items, error = await InstagramService.get_highlight_items(identifier)
             if error or not items:
-                await status_msg.edit_text(
-                    error or "⚠️ Хайлайт пуст или не найден."
-                )
+                await status_msg.edit_text(error or "⚠️ Хайлайт пуст или не найден.")
                 return
 
             downloaded = 0
             from app.services.sender import TelegramSender
+
             for item in items:
                 file_path, dl_error = await InstagramService.download_story_item(item)
                 if file_path:
@@ -661,14 +660,13 @@ async def _handle_group_instagram(
 
             stories = profile_data.stories
             if not stories:
-                await status_msg.edit_text(
-                    f"📭 У @{identifier} нет активных историй."
-                )
+                await status_msg.edit_text(f"📭 У @{identifier} нет активных историй.")
                 return
 
             # Download + send each story item
             downloaded = 0
             from app.services.sender import TelegramSender
+
             for item in stories:
                 file_path, error = await InstagramService.download_story_item(item)
                 if file_path:
@@ -707,4 +705,3 @@ async def _handle_group_instagram(
 
     # ── Unknown IG URL type → generic error ──────────────────────────
     await status_msg.edit_text("⚠️ Неподдерживаемый тип ссылки Instagram.")
-

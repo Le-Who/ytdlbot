@@ -178,9 +178,7 @@ def _extract_og_image(html: str) -> Optional[str]:
     return None
 
 
-async def _stream_download(
-    direct_url: str, prefix: str, ext: str
-) -> Optional[str]:
+async def _stream_download(direct_url: str, prefix: str, ext: str) -> Optional[str]:
     """Download a file using chunked async streaming (low memory usage)."""
     out_p = os.path.join(TEMP_DIR, f"{prefix}{uuid.uuid4().hex}.{ext}")
     try:

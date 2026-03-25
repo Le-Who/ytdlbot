@@ -30,9 +30,7 @@ from app.services.sender import TelegramSender
 logger = logging.getLogger("app.bot.ig_callbacks")
 
 
-async def on_ig_stories(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def on_ig_stories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show story thumbnails as a media group with an inline keyboard."""
     q = update.callback_query
     assert q is not None and isinstance(q.message, Message) and q.data
@@ -97,18 +95,10 @@ async def on_ig_stories(
 
     # Add "Download All" and "Back" buttons
     btn_rows.append(
-        [
-            InlineKeyboardButton(
-                "📥 Скачать все", callback_data=f"ig_dl_all|{token}"
-            )
-        ]
+        [InlineKeyboardButton("📥 Скачать все", callback_data=f"ig_dl_all|{token}")]
     )
     btn_rows.append(
-        [
-            InlineKeyboardButton(
-                "🔙 Назад", callback_data=f"ig_menu|{token}"
-            )
-        ]
+        [InlineKeyboardButton("🔙 Назад", callback_data=f"ig_menu|{token}")]
     )
 
     try:
@@ -121,9 +111,7 @@ async def on_ig_stories(
         logger.warning("Failed to show stories: %s", e)
 
 
-async def on_ig_highlights(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def on_ig_highlights(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show highlights as inline buttons."""
     q = update.callback_query
     assert q is not None and isinstance(q.message, Message) and q.data
@@ -164,11 +152,7 @@ async def on_ig_highlights(
         )
 
     btn_rows.append(
-        [
-            InlineKeyboardButton(
-                "🔙 Назад", callback_data=f"ig_menu|{token}"
-            )
-        ]
+        [InlineKeyboardButton("🔙 Назад", callback_data=f"ig_menu|{token}")]
     )
 
     await q.edit_message_text(
@@ -211,9 +195,7 @@ async def on_ig_highlight_items(
             hl_title = hl.get("title", "Highlight")
             break
 
-    await q.edit_message_text(
-        Texts.IG_DOWNLOADING.format(type=f"хайлайт «{hl_title}»")
-    )
+    await q.edit_message_text(Texts.IG_DOWNLOADING.format(type=f"хайлайт «{hl_title}»"))
 
     from app.services.instagram import InstagramService
 
@@ -285,9 +267,7 @@ async def on_ig_highlight_items(
     )
 
 
-async def on_ig_download(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def on_ig_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Download a single story item by mediaid."""
     q = update.callback_query
     assert q is not None and isinstance(q.message, Message) and q.data
@@ -343,7 +323,10 @@ async def on_ig_download(
 
     try:
         await context.bot.send_chat_action(
-            chat_id=q.message.chat_id, action=ChatAction.UPLOAD_VIDEO if story.is_video else ChatAction.UPLOAD_PHOTO
+            chat_id=q.message.chat_id,
+            action=ChatAction.UPLOAD_VIDEO
+            if story.is_video
+            else ChatAction.UPLOAD_PHOTO,
         )
     except Exception:
         pass
@@ -424,7 +407,9 @@ async def on_ig_download_all(
         try:
             await context.bot.send_chat_action(
                 chat_id=q.message.chat_id,
-                action=ChatAction.UPLOAD_VIDEO if item.is_video else ChatAction.UPLOAD_PHOTO,
+                action=ChatAction.UPLOAD_VIDEO
+                if item.is_video
+                else ChatAction.UPLOAD_PHOTO,
             )
         except Exception:
             pass
@@ -447,9 +432,7 @@ async def on_ig_download_all(
         pass
 
 
-async def on_ig_hl_download(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def on_ig_hl_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Download a single highlight item."""
     q = update.callback_query
     assert q is not None and isinstance(q.message, Message) and q.data
@@ -566,9 +549,7 @@ async def on_ig_hl_download_all(
         pass
 
 
-async def on_ig_menu(
-    update: Update, context: ContextTypes.DEFAULT_TYPE
-) -> None:
+async def on_ig_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Return to the main Instagram profile menu."""
     q = update.callback_query
     assert q is not None and isinstance(q.message, Message) and q.data

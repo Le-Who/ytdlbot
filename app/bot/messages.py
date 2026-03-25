@@ -470,18 +470,14 @@ async def _handle_instagram(
 
     # ── Direct story link with specific item_id ──────────────────
     if url_type == "stories" and target and item_id:
-        status_msg = await msg.reply_text(
-            Texts.IG_DOWNLOADING.format(type="историю")
-        )
+        status_msg = await msg.reply_text(Texts.IG_DOWNLOADING.format(type="историю"))
 
         profile_media = await InstagramService.get_profile_media(target)
         if profile_media.error:
             await status_msg.edit_text(profile_media.error)
             return
 
-        story = next(
-            (s for s in profile_media.stories if s.mediaid == item_id), None
-        )
+        story = next((s for s in profile_media.stories if s.mediaid == item_id), None)
         if not story:
             await status_msg.edit_text("⚠️ История не найдена или уже истекла.")
             return
@@ -534,6 +530,7 @@ async def _handle_instagram(
                 )
                 downloaded += 1
                 from app.core.utils import safe_remove
+
                 await asyncio.to_thread(safe_remove, file_path)
 
         if downloaded > 0:
@@ -558,9 +555,7 @@ async def _handle_instagram(
             return
 
         if not profile_media.stories and not profile_media.highlights:
-            await status_msg.edit_text(
-                Texts.IG_NO_CONTENT.format(username=target)
-            )
+            await status_msg.edit_text(Texts.IG_NO_CONTENT.format(username=target))
             return
 
         # Cache stories and highlights for callback retrieval
@@ -646,4 +641,3 @@ async def _handle_instagram(
         "⚠️ Не удалось распознать ссылку Instagram. "
         "Поддерживаются: профили, истории, хайлайты и посты/рилсы."
     )
-

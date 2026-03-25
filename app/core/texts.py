@@ -121,24 +121,13 @@ class Texts:
     IG_NO_STORIES = "📭 У @{username} сейчас нет активных историй."
     IG_NO_CONTENT = "📭 У @{username} нет доступных историй или хайлайтов."
     IG_STORIES_HEADER = (
-        "📸 <b>Истории @{username}</b>\n"
-        "Выберите историю для скачивания:"
+        "📸 <b>Истории @{username}</b>\nВыберите историю для скачивания:"
     )
     IG_HIGHLIGHTS_HEADER = (
-        "📁 <b>Хайлайты @{username}</b>\n"
-        "Выберите хайлайт для просмотра:"
+        "📁 <b>Хайлайты @{username}</b>\nВыберите хайлайт для просмотра:"
     )
-    IG_HIGHLIGHT_ITEMS_HEADER = (
-        "📁 <b>{title}</b>\n"
-        "Выберите элемент для скачивания:"
-    )
+    IG_HIGHLIGHT_ITEMS_HEADER = "📁 <b>{title}</b>\nВыберите элемент для скачивания:"
     IG_DOWNLOADING = "⏳ Скачиваю {type}..."
     IG_DOWNLOAD_ERROR = "⚠️ Ошибка загрузки из Instagram."
-    IG_SESSION_EXPIRED = (
-        "⚠️ Сессия Instagram истекла. Обратитесь к администратору."
-    )
-    IG_MENU = (
-        "📷 <b>Instagram — @{username}</b>\n"
-        "Выберите раздел:"
-    )
-
+    IG_SESSION_EXPIRED = "⚠️ Сессия Instagram истекла. Обратитесь к администратору."
+    IG_MENU = "📷 <b>Instagram — @{username}</b>\nВыберите раздел:"

@@ -21,9 +21,9 @@ class TestPinterestExtractMediaUrl(unittest.IsolatedAsyncioTestCase):
         from app.services.pinterest import PinterestNativeService
 
         html = (
-            '<html><head>'
+            "<html><head>"
             '<meta property="og:video" content="https://v1.pinimg.com/videos/mc/720p/ab/cd.mp4">'
-            '</head></html>'
+            "</head></html>"
         )
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -45,9 +45,9 @@ class TestPinterestExtractMediaUrl(unittest.IsolatedAsyncioTestCase):
         from app.services.pinterest import PinterestNativeService
 
         html = (
-            '<html><head>'
+            "<html><head>"
             '<meta property="og:image" content="https://i.pinimg.com/originals/ab/cd/ef.jpg">'
-            '</head></html>'
+            "</head></html>"
         )
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -109,7 +109,9 @@ class TestPinterestOgParsers(unittest.TestCase):
     def test_extract_og_video_standard(self):
         from app.services.pinterest import _extract_og_video
 
-        html = '<meta property="og:video:secure_url" content="https://v.pinimg.com/v.mp4">'
+        html = (
+            '<meta property="og:video:secure_url" content="https://v.pinimg.com/v.mp4">'
+        )
         self.assertEqual(_extract_og_video(html), "https://v.pinimg.com/v.mp4")
 
     def test_extract_og_video_reversed_attrs(self):

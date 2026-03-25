@@ -50,9 +50,7 @@ class TestInstagramUrlParsing(unittest.TestCase):
     def test_stories_url_without_id(self):
         from app.services.instagram import parse_instagram_url
 
-        t, user, item = parse_instagram_url(
-            "https://www.instagram.com/stories/natgeo/"
-        )
+        t, user, item = parse_instagram_url("https://www.instagram.com/stories/natgeo/")
         self.assertEqual(t, "stories")
         self.assertEqual(user, "natgeo")
         self.assertIsNone(item)
@@ -99,9 +97,7 @@ class TestInstagramUrlParsing(unittest.TestCase):
     def test_profile_with_query_params(self):
         from app.services.instagram import parse_instagram_url
 
-        t, user, _ = parse_instagram_url(
-            "https://instagram.com/user123?igsh=abc123"
-        )
+        t, user, _ = parse_instagram_url("https://instagram.com/user123?igsh=abc123")
         self.assertEqual(t, "profile")
         self.assertEqual(user, "user123")
 
@@ -169,11 +165,17 @@ class TestIGStoryItem(unittest.TestCase):
         from app.services.instagram import IGStoryItem
 
         v = IGStoryItem(
-            mediaid="1", is_video=True, url="", thumbnail_url="",
+            mediaid="1",
+            is_video=True,
+            url="",
+            thumbnail_url="",
             timestamp=datetime.now(timezone.utc),
         )
         p = IGStoryItem(
-            mediaid="2", is_video=False, url="", thumbnail_url="",
+            mediaid="2",
+            is_video=False,
+            url="",
+            thumbnail_url="",
             timestamp=datetime.now(timezone.utc),
         )
         self.assertEqual(v.type_emoji, "🎬")

@@ -37,7 +37,7 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 - **Orchestration Layer**: `DownloadOrchestrator` centralizes all download lifecycles, safely encapsulating complex rules like concurrency queues (`asyncio.Semaphore`), file-size checks, and fallback mechanisms.
 - **Data Fetchers**: `TikWMService` acts as the primary API for ultra-fast, watermark-free TikTok extraction. `YtDlpService` acts as the primary async CLI wrapper for YouTube and standard sites, while `GalleryDlService` and `CobaltService` (optional) handle deep fallback resolution.
 - **Media Processing**: `FFmpeg` is utilized exclusively for post-processing tasks (GIF conversion, slideshow building).
-- **State Management**: In-memory `TTLCache` structures govern rate limiting and URL metadata caching securely using a strongly-typed `DownloadContext` dataclass.
+- **State Management**: `RedisStorage` manages caching using blazing-fast `msgpack` serialization with `zlib` compression to minimize RAM overhead. `RedisTokenBucketLimiter` implements atomic Lua scripts for accurate, distributed rate limiting.
 
 ```mermaid
 flowchart TD

@@ -91,5 +91,46 @@ class TestTokenBucketLimiter(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("stale_key", limiter._buckets)
 
 
+class TestRedisTokenBucketLimiter(unittest.IsolatedAsyncioTestCase):
+    """Test RedisTokenBucketLimiter via mocked Redis client."""
+
+    def setUp(self):
+        from app.core.limiter import RedisTokenBucketLimiter
+
+        self.mock_redis = unittest.mock.MagicMock()
+        self.mock_script = unittest.mock.AsyncMock()
+        self.mock_redis.register_script = unittest.mock.MagicMock(
+            return_value=self.mock_script
+        )
+        self.limiter = RedisTokenBucketLimiter(
+            self.mock_redis, capacity=10, refill_rate=1.0
+        )
+
+    async def test_allow_returns_true_when_script_returns_1(self):
+        self.mock_script.return_value = 1
+        result = await self.limiter.allow("test_key")
+        self.assertTrue(result)
+        self.mock_script.assert_awaited_once()
+        # Verify the key was namespaced
+        call_kwargs = self.mock_script.call_args
+        self.assertEqual(call_kwargs.kwargs["keys"], ["ratelimit:test_key"])
+
+    async def test_allow_returns_false_when_script_returns_0(self):
+        self.mock_script.return_value = 0
+        result = await self.limiter.allow("test_key")
+        self.assertFalse(result)
+
+    async def test_allow_returns_true_on_redis_error(self):
+        """If Redis is unreachable, limiter should fail-open."""
+        self.mock_script.side_effect = ConnectionError("Redis down")
+        result = await self.limiter.allow("test_key")
+        self.assertTrue(result)
+
+    async def test_register_script_called_once(self):
+        """Script should be registered at construction time via EVALSHA."""
+        self.mock_redis.register_script.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()
+

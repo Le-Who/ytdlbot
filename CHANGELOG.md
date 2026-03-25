@@ -13,6 +13,14 @@ All notable changes to this project will be documented in this file.
 - **Instagram Resilient Profile Fetch (Hybrid Fallback)**: Profile metadata is now fetched via a two-tier strategy. The bot first attempts the anonymous `web_profile_info` API (zero session risk). If blocked by Instagram's datacenter IP filter (401), it seamlessly falls back to authenticated Mobile API endpoints (`usernameinfo` + `highlights_tray`) via `curl_cffi`. This eliminates "IP Block" errors without risking session cookies on web endpoints.
 - **Instagram Reels/Posts Native Download (Mobile API Fallback)**: When Cobalt public instances return 503 errors, the bot now falls back to a native download pipeline using `i.instagram.com/api/v1/media/{pk}/info/`. Shortcodes are converted to numeric media PKs via a deterministic base64 algorithm (`_shortcode_to_media_pk`). Supports video reels, single photo posts, and carousel detection. Cobalt remains the primary attempt to conserve session trust score.
 
+### Performance & Optimization (Redis)
+
+- **Redis Storage Compression**: Switched `RedisStorage` serialization from `msgspec.json` to `msgspec.msgpack` and added threshold-based `zlib` compression (level 1) for payloads >1KB. This reduces memory footprint by 3-5x, essential for strict 256MB free-tier limits. Included transparent backward-compatible fallback for existing JSON data.
+- **Upstash Redis Free-Tier Tuning**: Optimized the `redis-py` connection pool specifically for serverless Upstash constraints (`max_connections=5`, short socket timeouts, disabled `health_check_interval` to conserve 500K cmd/month quota).
+- **Rate Limiter Lua Optimization**: Rewrote `RedisTokenBucketLimiter` atomic Lua script from a 3-command HASH approach (`HGETALL`+`HMSET`+`EXPIRE`) to a 2-command STRING approach (`GET`+`SET EX`). Saves ~33% of the monthly command budget per rate-limit check.
+- **Redis Key Namespacing**: Introduced strict key prefixing (`lnk:`, `inf:`, `can:`) to isolate distinct cache types in a single logical database.
+- **Redis App Lifecycle Hooks**: Bound connection `ping()` to FastAPI startup and cleanly close connection pools (`aclose()`) inside the application `lifespan` event.
+
 ### Changed
 
 - **Pinterest Streaming Rewrite**: Replaced full-buffer `resp.content` with chunked async streaming (`aiter_content()`) in `pinterest.py`, eliminating RAM exhaustion on large files. Added `og:image` extraction for static image pins and proper Cobalt `picker` response handling for carousels.

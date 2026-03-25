@@ -42,6 +42,12 @@ async def _global_error_handler(update, context):
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting up...")
     logger.info("aria2c: %s", "enabled ✅" if state.ytdlp.has_aria2 else "not found ❌")
+
+    # Redis lifecycle: verify connectivity at startup
+    if state.redis_client:
+        await state.redis_client.ping()
+        logger.info("Redis connected ✅")
+
     stop_event = asyncio.Event()
     janitor_task = asyncio.create_task(janitor_loop(stop_event))
 
@@ -152,6 +158,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await bot_app.stop()
     await bot_app.shutdown()
+
+    # Redis lifecycle: clean close connection pool
+    if state.redis_client:
+        await state.redis_client.aclose()
+        logger.info("Redis connection closed ✅")
 
 
 api = FastAPI(lifespan=lifespan)

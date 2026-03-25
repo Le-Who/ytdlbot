@@ -60,7 +60,10 @@ class TokenBucketLimiter(AsyncLimiter):
 
 
 class RedisTokenBucketLimiter(AsyncLimiter):
-    # Lua script for atomic token bucket evaluation
+    # Lua script for atomic token bucket evaluation.
+    # Uses a STRING value "tokens:updated_at" instead of a HASH.
+    # This reduces command count from 3 (HGETALL+HMSET+EXPIRE) to 2 (GET+SET EX),
+    # which is critical on Upstash Free (500K commands/month).
     LUA_SCRIPT = """
 local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
@@ -69,18 +72,15 @@ local cost = tonumber(ARGV[3])
 local now = tonumber(ARGV[4])
 local ttl = math.ceil(capacity / refill_rate) * 2
 
-local current = redis.call('HGETALL', key)
+local raw = redis.call('GET', key)
 local tokens = capacity
 local updated_at = now
 
-if #current > 0 then
-    local data = {}
-    for i = 1, #current, 2 do
-        data[current[i]] = tonumber(current[i+1])
-    end
-    tokens = data["tokens"]
-    updated_at = data["updated_at"]
-    
+if raw then
+    local sep = string.find(raw, ':')
+    tokens = tonumber(string.sub(raw, 1, sep - 1))
+    updated_at = tonumber(string.sub(raw, sep + 1))
+
     local elapsed = now - updated_at
     if elapsed > 0 then
         tokens = math.min(capacity, tokens + elapsed * refill_rate)
@@ -88,16 +88,14 @@ if #current > 0 then
     end
 end
 
+local allowed = 0
 if tokens >= cost then
     tokens = tokens - cost
-    redis.call('HMSET', key, 'tokens', tokens, 'updated_at', updated_at)
-    redis.call('EXPIRE', key, ttl)
-    return 1
-else
-    redis.call('HMSET', key, 'tokens', tokens, 'updated_at', updated_at)
-    redis.call('EXPIRE', key, ttl)
-    return 0
+    allowed = 1
 end
+
+redis.call('SET', key, tokens .. ':' .. updated_at, 'EX', ttl)
+return allowed
 """
 
     def __init__(

@@ -50,7 +50,14 @@ bot_app: Application | None = None
 if REDIS_URL:
     import redis.asyncio as redis
 
-    redis_client: Any = redis.from_url(REDIS_URL, decode_responses=False)
+    redis_client: Any = redis.from_url(
+        REDIS_URL,
+        decode_responses=False,
+        max_connections=5,
+        socket_timeout=5,
+        socket_connect_timeout=5,
+        retry_on_timeout=True,
+    )
 else:
     redis_client = None
 
@@ -60,9 +67,9 @@ info_cache: StateStorage
 cancel_cache: StateStorage
 
 if redis_client:
-    link_cache = RedisStorage(redis_client, default_ttl=LINK_TTL_MINUTES * 60)
-    info_cache = RedisStorage(redis_client, default_ttl=600)
-    cancel_cache = RedisStorage(redis_client, default_ttl=3600)
+    link_cache = RedisStorage(redis_client, default_ttl=LINK_TTL_MINUTES * 60, prefix="lnk")
+    info_cache = RedisStorage(redis_client, default_ttl=600, prefix="inf")
+    cancel_cache = RedisStorage(redis_client, default_ttl=3600, prefix="can")
 else:
     link_cache = MemoryStorage(maxsize=500, ttl=LINK_TTL_MINUTES * 60)
     info_cache = MemoryStorage(maxsize=200, ttl=600)

@@ -147,18 +147,22 @@ class InstagramService:
             cookies = pickle.loads(data)
             
             # Instaloader saves either as RequestsCookieJar or dict
+            result_cookies = {}
             if isinstance(cookies, dict):
-                sessionid = cookies.get("sessionid")
-                if sessionid:
-                    cls._ig_cookies = {"sessionid": sessionid}
-                    logger.info("[INSTAGRAM] Successfully restored sessionid from IG_SESSION_B64 dict.")
-                    return
+                for k, v in cookies.items():
+                    if isinstance(v, str) and v:
+                        result_cookies[k] = v
             else:
                 for cookie in cookies:
-                    if hasattr(cookie, "name") and cookie.name == "sessionid":
-                        cls._ig_cookies = {"sessionid": cookie.value}
-                        logger.info("[INSTAGRAM] Successfully restored sessionid from IG_SESSION_B64 cookie jar.")
-                        return
+                    if hasattr(cookie, "name") and hasattr(cookie, "value") and cookie.value:
+                        result_cookies[cookie.name] = cookie.value
+                        
+            if "sessionid" in result_cookies:
+                cls._ig_cookies = result_cookies
+                logger.info("[INSTAGRAM] Successfully restored full cookie suite from IG_SESSION_B64.")
+            else:
+                logger.warning("[INSTAGRAM] IG_SESSION_B64 parsed successfully, but no sessionid found (session expired?).")
+                
         except Exception as e:
             logger.error("[INSTAGRAM] Failed to parse IG_SESSION_B64: %s", type(e).__name__)
 

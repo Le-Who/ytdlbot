@@ -240,11 +240,11 @@ class TestInstagramServiceDownloadStoryItem(unittest.IsolatedAsyncioTestCase):
         mock_resp = MagicMock()
         mock_resp.status_code = 200
 
-        def _iter():
+        async def _aiter():
             for c in chunks:
                 yield c
 
-        mock_resp.iter_content = _iter
+        mock_resp.aiter_content = _aiter
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)

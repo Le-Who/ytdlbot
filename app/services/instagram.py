@@ -207,6 +207,8 @@ class InstagramService:
         result = IGProfileMedia(username=username)
 
         try:
+            uid = None
+
             # 1. Fetch profile ANONYMOUSLY to avoid session flagging and HTML challenge pages
             async with AsyncSession(impersonate=cls.IMPERSONATE) as session:
                 doc = await session.get(
@@ -220,34 +222,87 @@ class InstagramService:
                     result.error = f"⚠️ Профиль @{username} не найден."
                     return result
 
-                try:
-                    data = doc.json()
-                    user_data = data["data"]["user"]
-                    uid = user_data["id"]
-                except Exception:
-                    logger.warning(
-                        "[INSTAGRAM] Failed to parse web_profile_info for %s: %s",
-                        username,
-                        doc.status_code,
-                    )
-                    result.error = f"⚠️ Профиль @{username} недоступен (IP Block)."
-                    return result
+                if doc.status_code == 200:
+                    try:
+                        data = doc.json()
+                        user_data = data.get("data", {}).get("user", {})
+                        if user_data:
+                            uid = str(user_data["id"])
+                            # Parse highlights if available
+                            if user_data.get("highlight_reel_count", 0) > 0:
+                                highlights_edges = user_data.get("edge_highlight_reels", {}).get("edges", [])
+                                for edge in highlights_edges:
+                                    node = edge["node"]
+                                    result.highlights.append(
+                                        IGHighlight(
+                                            highlight_id=node["id"],
+                                            title=node["title"],
+                                            cover_url=node["cover_media_cropped_thumbnail"]["url"],
+                                            item_count=1,  # Approximate
+                                        )
+                                    )
+                    except Exception as e:
+                        logger.warning("[INSTAGRAM] Failed to parse web_profile_info for %s: %s", username, type(e).__name__)
 
-                # Parse highlights if available
-                if user_data.get("highlight_reel_count", 0) > 0:
-                    highlights_edges = user_data.get("edge_highlight_reels", {}).get(
-                        "edges", []
+            # 2. Fallback to Authenticated Mobile API if Anonymous Web API was blocked (401/302/JSON parse error)
+            if not uid and cls._ig_cookies:
+                logger.info("[INSTAGRAM] Anonymous Web API blocked/failed (status %s). Falling back to Mobile API for %s", doc.status_code, username)
+                async with AsyncSession(impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies) as auth_session:
+                    # Mobile fetch 1: UID
+                    mobile_doc = await auth_session.get(
+                        f"https://i.instagram.com/api/v1/users/{username}/usernameinfo/",
+                        headers={"User-Agent": "Instagram 219.0.0.12.117 Android"}
                     )
-                    for edge in highlights_edges:
-                        node = edge["node"]
-                        result.highlights.append(
-                            IGHighlight(
-                                highlight_id=node["id"],
-                                title=node["title"],
-                                cover_url=node["cover_media_cropped_thumbnail"]["url"],
-                                item_count=1,  # Approximate since edge_highlight_reels doesn't always give item count cleanly
-                            )
+                    if mobile_doc.status_code == 200:
+                        try:
+                            m_data = mobile_doc.json()
+                            if "user" in m_data and "pk" in m_data["user"]:
+                                uid = str(m_data["user"]["pk"])
+                        except Exception as e:
+                            logger.warning("[INSTAGRAM] Failed to parse usernameinfo for %s: %s", username, e)
+
+                    # Mobile fetch 2: Highlights Tray
+                    if uid:
+                        tray_doc = await auth_session.get(
+                            f"https://i.instagram.com/api/v1/highlights/{uid}/highlights_tray/",
+                            headers={"User-Agent": "Instagram 219.0.0.12.117 Android"}
                         )
+                        if tray_doc.status_code == 200:
+                            try:
+                                tray_data = tray_doc.json()
+                                for edge in tray_data.get("tray", []):
+                                    raw_id = str(edge.get("id", ""))
+                                    hid = raw_id.replace("highlight:", "") if "highlight:" in raw_id else raw_id
+                                    
+                                    title = edge.get("title", "")
+                                    cover_url = ""
+                                    
+                                    cover_media = edge.get("cover_media", {})
+                                    if isinstance(cover_media, dict):
+                                        cropped = cover_media.get("cropped_image_version", {})
+                                        if isinstance(cropped, dict):
+                                            cover_url = cropped.get("url", "")
+                                    
+                                    if not cover_url:
+                                        # Default empty fallback to prevent pydantic/dataclass constraint errors
+                                        cover_url = "https://scontent.cdninstagram.com/v/t51.2885-15/e35/c0.0.1080.1080a/s150x150/1_1_2.jpg"
+                                        
+                                    if hid:
+                                        result.highlights.append(
+                                            IGHighlight(
+                                                highlight_id=hid,
+                                                title=title,
+                                                cover_url=cover_url,
+                                                item_count=edge.get("media_count", 1)
+                                            )
+                                        )
+                            except Exception as e:
+                                logger.warning("[INSTAGRAM] Failed to parse highlights_tray for %s: %s", username, e)
+
+            if not uid:
+                logger.warning("[INSTAGRAM] Exhausted all fetch strategies for %s", username)
+                result.error = f"⚠️ Профиль @{username} недоступен (IP Block / Скрыт)."
+                return result
 
             # 2. Fetch stories AUTHENTICATED (because anonymous request will always fail)
             if cls._ig_cookies:

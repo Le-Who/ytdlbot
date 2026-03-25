@@ -5,7 +5,6 @@ Implemented via Tier 1 Anonymous Mobile API Forgery (GraphQL Bypass).
 Uses `curl_cffi` to bypass datacenter TLS fingerprints.
 """
 
-import asyncio
 import logging
 import os
 import re
@@ -14,7 +13,7 @@ import base64
 import pickle
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Literal
 
 from curl_cffi.requests import AsyncSession
 from app.core.config import TEMP_DIR, IG_SESSION_B64
@@ -152,7 +151,7 @@ class InstagramService:
     """Fetches Instagram media using anonymous mobile endpoint forgery via curl_cffi."""
 
     IG_APP_ID = "936619743392459"
-    IMPERSONATE = "chrome110"
+    IMPERSONATE: Literal["chrome110"] = "chrome110"
 
     _ig_cookies: Optional[Dict[str, str]] = None
     _session_initialized: bool = False
@@ -212,24 +211,33 @@ class InstagramService:
             async with AsyncSession(impersonate=cls.IMPERSONATE) as session:
                 doc = await session.get(
                     f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}",
-                    headers={"X-IG-App-ID": cls.IG_APP_ID, "X-Requested-With": "XMLHttpRequest"}
+                    headers={
+                        "X-IG-App-ID": cls.IG_APP_ID,
+                        "X-Requested-With": "XMLHttpRequest",
+                    },
                 )
                 if doc.status_code == 404:
                     result.error = f"⚠️ Профиль @{username} не найден."
                     return result
-                
+
                 try:
                     data = doc.json()
                     user_data = data["data"]["user"]
                     uid = user_data["id"]
                 except Exception:
-                    logger.warning("[INSTAGRAM] Failed to parse web_profile_info for %s: %s", username, doc.status_code)
+                    logger.warning(
+                        "[INSTAGRAM] Failed to parse web_profile_info for %s: %s",
+                        username,
+                        doc.status_code,
+                    )
                     result.error = f"⚠️ Профиль @{username} недоступен (IP Block)."
                     return result
 
                 # Parse highlights if available
                 if user_data.get("highlight_reel_count", 0) > 0:
-                    highlights_edges = user_data.get("edge_highlight_reels", {}).get("edges", [])
+                    highlights_edges = user_data.get("edge_highlight_reels", {}).get(
+                        "edges", []
+                    )
                     for edge in highlights_edges:
                         node = edge["node"]
                         result.highlights.append(
@@ -237,13 +245,15 @@ class InstagramService:
                                 highlight_id=node["id"],
                                 title=node["title"],
                                 cover_url=node["cover_media_cropped_thumbnail"]["url"],
-                                item_count=1 # Approximate since edge_highlight_reels doesn't always give item count cleanly
+                                item_count=1,  # Approximate since edge_highlight_reels doesn't always give item count cleanly
                             )
                         )
 
             # 2. Fetch stories AUTHENTICATED (because anonymous request will always fail)
             if cls._ig_cookies:
-                async with AsyncSession(impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies) as auth_session:  # type: ignore
+                async with AsyncSession(
+                    impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies
+                ) as auth_session:  # type: ignore
                     stories = await cls._fetch_reels_media(auth_session, [uid])
                     result.stories = stories.get(uid, [])
 
@@ -263,7 +273,7 @@ class InstagramService:
         try:
             async with AsyncSession(
                 impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies
-            ) as session:  # type: ignore
+            ) as session:
                 hid = f"highlight:{highlight_id}"
                 items = await cls._fetch_reels_media(session, [hid])
                 return items.get(hid, []), None
@@ -366,7 +376,7 @@ class InstagramService:
             cls._init_session()
             async with AsyncSession(
                 impersonate=cls.IMPERSONATE, cookies=cls._ig_cookies
-            ) as session:  # type: ignore
+            ) as session:
                 resp = await session.get(item.url, stream=True)
                 if resp.status_code != 200:
                     return None, f"⚠️ Ошибка CDN Instagram: {resp.status_code}"

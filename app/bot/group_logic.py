@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import uuid
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, Message
 from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 
@@ -503,8 +503,6 @@ async def on_group_slideshow(
     finally:
         state.tasks_sem.release()
 
-
-from telegram import Update, Message
 
 # ... existing code ...
 

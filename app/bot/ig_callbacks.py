@@ -525,6 +525,7 @@ async def on_ig_hl_download_all(
 
     sem = asyncio.Semaphore(3)
     sent = 0
+    chat_id = q.message.chat_id
 
     async def _dl_send(item: IGStoryItem) -> bool:
         async with sem:
@@ -533,7 +534,7 @@ async def on_ig_hl_download_all(
                 return False
             return await TelegramSender.send_file(
                 context.bot,
-                q.message.chat_id,
+                chat_id,
                 path,
                 is_audio=False,
                 is_gif=False,

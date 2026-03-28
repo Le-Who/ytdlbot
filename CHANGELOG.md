@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **X (Twitter) Ultra-Fast Download via Cobalt**: Twitter/X URLs are now cleanly intercepted and processed instantaneously through the Cobalt API. This completely bypasses legacy `yt-dlp` constraints, resolving all "429 Too Many Requests" errors and blocked extractions.
+- **X Multi-Media Posts Support**: Robust extraction pipeline accurately handles Twitter posts containing multiple media items (mixed videos/photos), downloading and delivering the entire collection sequentially. 
 - **Instagram Stories & Highlights**: Download Instagram stories and highlights with an interactive rich selection UX. Users send a profile link and get a menu with `[📸 Stories] [📁 Highlights] [📥 Download All]`. Each story shows date, time, and duration. Requires `IG_SESSION_B64` environment variable for authenticated access.
   - New files: `app/services/instagram.py`, `app/bot/ig_callbacks.py`
   - 8 new callback handlers registered in `main.py`

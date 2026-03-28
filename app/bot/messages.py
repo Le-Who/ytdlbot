@@ -52,6 +52,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     # ── End Instagram Intercept ──────────────────────────────────────────
 
+    # ── Twitter / X Early Intercept ──────────────────────────────────────
+    is_twitter_url = "x.com" in text.lower() or "twitter.com" in text.lower()
+    if is_twitter_url:
+        handled = await _handle_twitter(update, context, text, parse_token)
+        if handled:
+            return
+    # ── End Twitter / X Intercept ────────────────────────────────────────
+
     kb_cancel = InlineKeyboardMarkup(
         [
             [
@@ -675,3 +683,151 @@ async def _handle_instagram(
         "⚠️ Не удалось распознать ссылку Instagram. "
         "Поддерживаются: профили, истории, хайлайты и посты/рилсы."
     )
+
+
+# ── Twitter / X Handler ──────────────────────────────────────────────────────
+
+
+async def _handle_twitter(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url: str,
+    parse_token: str,
+) -> bool:
+    """Handle Twitter/X URLs using Cobalt. Returns True if handled, False if fallback needed."""
+    msg = update.message
+    user = update.effective_user
+    chat = update.effective_chat
+    assert msg is not None and user is not None and chat is not None
+
+    from app.services.cobalt import CobaltService
+    from app.services.sender import TelegramSender
+    import os
+
+    status_msg = await msg.reply_text("⏳ Поиск в X (Twitter)...")
+
+    try:
+        res = await CobaltService.process(url)
+
+        if res.status == "error":
+            logger.warning(
+                "Cobalt failed for Twitter: %s, falling back to yt-dlp",
+                res.error_message,
+            )
+            await status_msg.delete()
+            return False
+
+        if res.status in ("tunnel", "redirect"):
+            if not res.url:
+                await status_msg.delete()
+                return False
+
+            await status_msg.edit_text("⏳ Загрузка видео с X...")
+            file_path = await CobaltService.download_file(res.url, "mp4")
+            if not file_path:
+                await status_msg.edit_text("⚠️ Ошибка загрузки видео с X.")
+                return True
+
+            await status_msg.edit_text("⏳ Отправка видео с X...")
+            success = await TelegramSender.send_file(
+                context.bot,
+                chat.id,
+                file_path,
+                is_audio=False,
+                is_gif=False,
+                caption=f"🐦 X (Twitter) • {user.mention_html()}",
+                parse_mode="HTML",
+            )
+
+            if success:
+                try:
+                    await status_msg.delete()
+                    await msg.delete()
+                except Exception:
+                    pass
+            else:
+                await status_msg.edit_text("⚠️ Ошибка отправки видео с X.")
+
+            # Clean up
+            try:
+                os.unlink(file_path)
+            except Exception:
+                pass
+            return True
+
+        if res.status == "picker":
+            # Post with multiple media
+            await status_msg.edit_text("⏳ Загрузка коллекции из X...")
+            files = []
+            for i, item in enumerate(res.picker):
+                if item.url:
+                    ext = "mp4" if item.type in ("video", "gif") else "jpg"
+                    path = await CobaltService.download_file(item.url, ext)
+                    if path:
+                        files.append((path, item.type))
+
+            if not files:
+                await status_msg.edit_text("⚠️ Не найдено медиа для загрузки.")
+                return True
+
+            await status_msg.edit_text(f"⏳ Отправка {len(files)} файлов из X...")
+            success_count = 0
+            for i, (path, item_type) in enumerate(files):
+                is_photo = item_type == "photo"
+                caption = f"🐦 X (Twitter) • {user.mention_html()}" if i == 0 else ""
+
+                # Use standard send_file but correctly specify flags based on photo
+                # TelegramSender.send_file behaves differently if we send a photo via send_video fallback
+                # Wait, send_file only handles video, audio, gif. But wait!
+                # If it's a photo, we should use send_photo
+                # TelegramSender.send_file doesn't have is_photo flag, so it'll use bot.send_video.
+                if is_photo:
+                    try:
+                        with open(path, "rb") as fh:
+                            await context.bot.send_photo(
+                                chat_id=chat.id,
+                                photo=fh,
+                                caption=caption,
+                                parse_mode="HTML",
+                            )
+                            success_count += 1
+                    except Exception as e:
+                        logger.error("Failed to send X photo: %s", e)
+                else:
+                    success = await TelegramSender.send_file(
+                        context.bot,
+                        chat.id,
+                        path,
+                        is_audio=False,
+                        is_gif=(item_type == "gif"),
+                        caption=caption,
+                        parse_mode="HTML",
+                    )
+                    if success:
+                        success_count += 1
+
+                try:
+                    os.unlink(path)
+                except Exception:
+                    pass
+
+            if success_count > 0:
+                try:
+                    await status_msg.delete()
+                    await msg.delete()
+                except Exception:
+                    pass
+            else:
+                await status_msg.edit_text("⚠️ Ошибка отправки медиа с X.")
+
+            return True
+
+    except Exception as e:
+        logger.error("Twitter Cobalt error: %s", e, exc_info=True)
+        try:
+            await status_msg.delete()
+        except Exception:
+            pass
+        return False
+
+    return False

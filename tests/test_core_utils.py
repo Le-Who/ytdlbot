@@ -68,6 +68,12 @@ class TestIsSupportedUrl(unittest.TestCase):
     def test_fb_watch(self):
         self.assertTrue(is_supported_url("https://fb.watch/abc"))
 
+    def test_x_com(self):
+        self.assertTrue(is_supported_url("https://x.com/i/status/123"))
+
+    def test_twitter_com(self):
+        self.assertTrue(is_supported_url("https://twitter.com/user/status/123"))
+
     # ── Negative cases ──
     def test_unsupported_domain(self):
         self.assertFalse(is_supported_url("https://example.com/video"))

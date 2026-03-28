@@ -21,6 +21,8 @@ SUPPORTED_PLATFORMS = {
     "instagram.com",
     "instagr.am",
     "www.instagram.com",
+    "x.com",
+    "twitter.com",
 }
 SUPPORTED_PLATFORMS_SUFFIXES = tuple(f".{p}" for p in SUPPORTED_PLATFORMS)
 

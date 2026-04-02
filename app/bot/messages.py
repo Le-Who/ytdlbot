@@ -150,9 +150,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                         format_note="gallerydl_fallback",
                     )
                 ],
-                special_format="gallerydl_fallback"  # type: ignore
-                if not _fallback_is_slideshow
-                else None,
+                special_format=(
+                    "gallerydl_fallback"  # type: ignore
+                    if not _fallback_is_slideshow
+                    else None
+                ),
                 duration_str="—",
                 is_slideshow=_fallback_is_slideshow,
                 info_json_path=None,
@@ -235,9 +237,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                             _platform = (
                                 "youtube"
                                 if "youtu" in text
-                                else "tiktok"
-                                if "tiktok" in text
-                                else "other"
+                                else "tiktok" if "tiktok" in text else "other"
                             )
                             _m.extraction_duration.observe(
                                 _time.monotonic() - _ext_start,

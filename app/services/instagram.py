@@ -498,9 +498,11 @@ class InstagramService:
                 headers={
                     "X-IG-App-ID": cls.IG_APP_ID,
                     "User-Agent": cls.IG_USER_AGENT,
-                    "X-CSRFToken": session.cookies.get("csrftoken", "")
-                    if hasattr(session, "cookies") and session.cookies
-                    else "",
+                    "X-CSRFToken": (
+                        session.cookies.get("csrftoken", "")
+                        if hasattr(session, "cookies") and session.cookies
+                        else ""
+                    ),
                 },
             )
             if resp.status_code != 200:
@@ -550,9 +552,9 @@ class InstagramService:
                             thumbnail_url=thumb,
                             timestamp=dt,
                             duration=duration if duration > 0 else None,
-                            typename="GraphStoryVideo"
-                            if is_video
-                            else "GraphStoryImage",
+                            typename=(
+                                "GraphStoryVideo" if is_video else "GraphStoryImage"
+                            ),
                         )
                     )
                 out[reel_id] = parsed
@@ -659,9 +661,11 @@ class InstagramService:
                 if not cookies_to_use:
                     return (
                         None,
-                        "⏳ Все аккаунты-доноры заблокированы или исчерпали лимит. Замените сессии в IG_SESSIONS_B64."
-                        if sess_idx == -2 and cls._dead_sessions
-                        else "⏳ Инстаграм на паузе. Лимит загрузок исчерпан на всех аккаунтах для защиты от бана.",
+                        (
+                            "⏳ Все аккаунты-доноры заблокированы или исчерпали лимит. Замените сессии в IG_SESSIONS_B64."
+                            if sess_idx == -2 and cls._dead_sessions
+                            else "⏳ Инстаграм на паузе. Лимит загрузок исчерпан на всех аккаунтах для защиты от бана."
+                        ),
                     )
 
                 try:

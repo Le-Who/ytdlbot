@@ -324,9 +324,9 @@ async def on_ig_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         await context.bot.send_chat_action(
             chat_id=q.message.chat_id,
-            action=ChatAction.UPLOAD_VIDEO
-            if story.is_video
-            else ChatAction.UPLOAD_PHOTO,
+            action=(
+                ChatAction.UPLOAD_VIDEO if story.is_video else ChatAction.UPLOAD_PHOTO
+            ),
         )
     except Exception:
         pass
@@ -407,9 +407,11 @@ async def on_ig_download_all(
         try:
             await context.bot.send_chat_action(
                 chat_id=q.message.chat_id,
-                action=ChatAction.UPLOAD_VIDEO
-                if item.is_video
-                else ChatAction.UPLOAD_PHOTO,
+                action=(
+                    ChatAction.UPLOAD_VIDEO
+                    if item.is_video
+                    else ChatAction.UPLOAD_PHOTO
+                ),
             )
         except Exception:
             pass

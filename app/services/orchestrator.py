@@ -8,7 +8,7 @@ from typing import Optional, Callable, Awaitable, Union
 from telegram.constants import ChatAction
 from telegram import Bot
 
-from app.core import state
+from app.core import state, config
 from app.core.config import MAX_TG_UPLOAD_MB
 from app.core.utils import safe_remove
 from app.core.policy import size_allowed
@@ -315,21 +315,26 @@ class DownloadOrchestrator:
             # Telegram Bot API hard-limit is 50 MB; we target 48.5 MB.
             # Two-pass bitrate-targeted encode: precise, quality-preserving.
             if isinstance(file_path, str) and not is_gif and not is_audio:
-                original_path = file_path
-                compressed_path = await compress_video_to_size(file_path)
-                if compressed_path is not None:
-                    # Compression succeeded — swap path, delete original
-                    safe_remove(original_path)
-                    file_path = compressed_path
-                    logger.info(
-                        "File compressed for Telegram upload: %s",
-                        compressed_path,
-                    )
+                if not config.TELEGRAM_LOCAL_ENDPOINT:
+                    original_path = file_path
+                    compressed_path = await compress_video_to_size(file_path)
+                    if compressed_path is not None:
+                        # Compression succeeded — swap path, delete original
+                        safe_remove(original_path)
+                        file_path = compressed_path
+                        logger.info(
+                            "File compressed for Telegram upload: %s",
+                            compressed_path,
+                        )
+                    else:
+                        # compress_video_to_size returns None when:
+                        #   (a) file is already under limit — no-op, keep original
+                        #   (b) compression failed — best-effort, proceed with original
+                        pass
                 else:
-                    # compress_video_to_size returns None when:
-                    #   (a) file is already under limit — no-op, keep original
-                    #   (b) compression failed — best-effort, proceed with original
-                    pass
+                    logger.debug(
+                        "Skipping video compression; Local API provides 2GB upload limit"
+                    )
 
             # Extract video metadata for faster Telegram delivery + preview
             video_meta = await _extract_video_meta(

@@ -20,6 +20,7 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 - **TikTok Slideshow Support**: Converts TikTok carousels natively via TikWM API into either a 📸 Photo Album (media group) or a 🎬 Video Slideshow (MP4 with audio) using `ffmpeg`.
 - **Strict Format Binding**: Guaranteed zero-mismatch downloads across platforms. Parses formats early to skip FFmpeg muxing (pre-mux priority), conserving resources and preventing Telegram size-limit errors.
 - **Smart Video Target Compression**: Automatically intercepts oversized videos before Telegram limits reject them. Implements a mathematically precise two-pass `libx264` scaling down to exact 48.5MB targets, protecting long/high-bitrate videos from `413 Request Entity Too Large` Bot API errors.
+- **Local Bot API Integration**: Automatically detects and leverages `TELEGRAM_LOCAL_ENDPOINT` to completely disable CPU-heavy compression. Uses absolute `file://` URIs for zero-copy data transfer directly from the container disk to the Telegram daemon, unlocking file uploads up to **2000 MB (2 GB)** with near-instantaneous speeds.
 - **Optimized Download Pipeline**: Passes metadata to bypass duplicate `yt-dlp` extraction calls, and supports direct pipe-to-memory streaming for videos <50MB, saving disk I/O.
 - **Zero-Disk Pipeline**: Converts video to GIF natively without saving intermediary files to disk (`yt-dlp` -> `ffmpeg` pipe).
 - **Rate Limiting**: Multi-layered token bucket limiter preventing abuse per User, Chat, IP, and Token.
@@ -27,7 +28,7 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 
 ## Non-Goals / Limitations
 
-- Exceeding Telegram's hard 50MB bot upload limit is fundamentally restricted (downloads >45MB are either aborted or sent as direct HTTP download links).
+- Exceeding Telegram's hard 50MB bot upload limit is restricted by default (downloads >45MB are compressed or aborted). However, configuring a `TELEGRAM_LOCAL_ENDPOINT` seamlessly bypasses this limit, expanding upload capacity to **2000 MB (2 GB)**.
 - Direct age-restricted or pure-private content downloads might fail unless `*_COOKIES_B64` variables are manually configured and refreshed by the server admin.
 - The bot is not a permanent file host. HTTP direct download links expire based on `LINK_TTL_MINUTES`.
 

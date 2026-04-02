@@ -160,9 +160,11 @@ async def handle_group_message(
                 chat_id=chat.id,
                 original_msg_id=update.message.message_id,
                 api_source=api_source,
-                api_json=tiktok_api_res.__dict__
-                if is_tiktok_api_success and tiktok_api_res
-                else None,
+                api_json=(
+                    tiktok_api_res.__dict__
+                    if is_tiktok_api_success and tiktok_api_res
+                    else None
+                ),
             ),
         )
 

@@ -186,7 +186,7 @@ async def compress_video_to_size(
         "-an",
         "-f",
         "null",
-        "/dev/null",  # Linux container (Dockerfile uses python:3.12-slim)
+        os.devnull,  # Cross-platform safe (NUL on Windows, /dev/null on POSIX)
     ]
 
     # Pass 2: actual encode

@@ -1,5 +1,6 @@
 """Media conversion service — GIF and slideshow-to-video via ffmpeg."""
 
+import json
 import os
 import uuid
 import asyncio
@@ -22,6 +23,251 @@ _MP4_SAFE_CODECS = frozenset({"h264", "hevc", "h265", "mpeg4", "avc"})
 # Timeout for ffprobe / ffmpeg subprocesses (seconds).
 _FFPROBE_TIMEOUT = 10.0
 _FFMPEG_TIMEOUT = 300.0
+
+# Target file size ceiling for Telegram Bot API uploads (bytes).
+# Hard limit is 50 MB; we use 48.5 MB to absorb MP4 container/moov-atom overhead.
+_TG_MAX_BYTES = int(48.5 * 1024 * 1024)
+
+# Audio bitrate assumed for compression calculation when stream bitrate is unknown.
+_FALLBACK_AUDIO_KBPS = 128
+
+# Minimum acceptable video bitrate — below this quality degrades severely.
+_MIN_VIDEO_KBPS = 100
+
+
+async def _probe_full_meta(video_path: str) -> dict:
+    """Probe duration, audio bitrate, and overall bitrate from a file via ffprobe.
+
+    Returns a dict with keys:
+        duration_s  (float | None)  — total duration in seconds
+        audio_kbps  (int | None)    — audio stream bitrate in kbps
+    """
+    result: dict = {"duration_s": None, "audio_kbps": None}
+    cmd = [
+        "ffprobe",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+        video_path,
+    ]
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_FFPROBE_TIMEOUT)
+        if not stdout:
+            return result
+        probe = json.loads(stdout)
+        fmt = probe.get("format", {})
+        dur = fmt.get("duration")
+        if dur:
+            result["duration_s"] = float(dur)
+        for stream in probe.get("streams", []):
+            if stream.get("codec_type") == "audio":
+                br = stream.get("bit_rate")
+                if br:
+                    result["audio_kbps"] = int(br) // 1000
+                break
+    except Exception as exc:
+        logger.debug("_probe_full_meta failed for %s: %s", video_path, exc)
+    return result
+
+
+async def compress_video_to_size(
+    input_path: str,
+    *,
+    target_bytes: int = _TG_MAX_BYTES,
+    audio_kbps: int = _FALLBACK_AUDIO_KBPS,
+) -> Optional[str]:
+    """Re-encode a video with a mathematically calculated bitrate to fit target_bytes.
+
+    Algorithm (two-pass libx264):
+      1. Probe the video's exact duration and audio bitrate.
+      2. Compute required video bitrate:
+             total_kbps  = (target_bytes * 8) / (duration_s * 1000)
+             video_kbps  = total_kbps - audio_kbps
+      3. Run FFmpeg pass 1 (analysis only, no output — fast).
+      4. Run FFmpeg pass 2 (real encode at computed bitrate).
+
+    This mirrors the "pixel-perfect" JPEG technique — encode precisely once with
+    full information rather than guessing and retrying.
+
+    Returns:
+        Path to the compressed file, or None if compression failed/unnecessary.
+    """
+    if not input_path or not os.path.exists(input_path):
+        return None
+
+    # --- Guard: only compress if actually over limit ---
+    current_size = os.path.getsize(input_path)
+    if current_size <= target_bytes:
+        logger.debug(
+            "compress_video_to_size: %s is %d bytes, under limit — skip",
+            input_path,
+            current_size,
+        )
+        return None
+
+    size_mb = current_size / (1024 * 1024)
+    target_mb = target_bytes / (1024 * 1024)
+    logger.info(
+        "Video is %.1f MB > %.1f MB limit — running two-pass size-targeting compression",
+        size_mb,
+        target_mb,
+    )
+
+    # --- Step 1: probe duration & audio bitrate ---
+    meta = await _probe_full_meta(input_path)
+    duration_s = meta["duration_s"]
+    if not duration_s or duration_s <= 0:
+        logger.error("compress_video_to_size: cannot probe duration for %s", input_path)
+        return None
+
+    probed_audio_kbps = meta.get("audio_kbps") or audio_kbps
+
+    # --- Step 2: compute exact video bitrate ---
+    total_kbps = (target_bytes * 8) / (duration_s * 1000)
+    video_kbps = int(total_kbps - probed_audio_kbps)
+
+    if video_kbps < _MIN_VIDEO_KBPS:
+        logger.warning(
+            "compress_video_to_size: computed video_kbps=%d is below minimum %d — "
+            "video is too long to compress within %.1f MB at acceptable quality",
+            video_kbps,
+            _MIN_VIDEO_KBPS,
+            target_mb,
+        )
+        return None
+
+    logger.info(
+        "compress_video_to_size: duration=%.1fs, audio=%dkbps, "
+        "total=%.0fkbps → video_kbps=%d",
+        duration_s,
+        probed_audio_kbps,
+        total_kbps,
+        video_kbps,
+    )
+
+    # --- Step 3 & 4: two-pass encode ---
+    uid = uuid.uuid4().hex
+    output_path = input_path.rsplit(".", 1)[0] + f"_compressed_{uid}.mp4"
+    # FFmpeg writes pass-log files alongside the passlogfile prefix.
+    passlog_prefix = os.path.join(TEMP_DIR, f"ffmpeg2pass_{uid}")
+
+    common_video_args = [
+        "-c:v",
+        "libx264",
+        "-b:v",
+        f"{video_kbps}k",
+        "-preset",
+        "veryfast",
+        "-pix_fmt",
+        "yuv420p",
+        "-threads",
+        str(_FFMPEG_THREADS),
+        "-passlogfile",
+        passlog_prefix,
+    ]
+
+    # Pass 1: analysis only (no output written, -f null /dev/null)
+    pass1_cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_path,
+        *common_video_args,
+        "-pass",
+        "1",
+        "-an",
+        "-f",
+        "null",
+        "/dev/null",  # Linux container (Dockerfile uses python:3.12-slim)
+    ]
+
+    # Pass 2: actual encode
+    pass2_cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_path,
+        *common_video_args,
+        "-pass",
+        "2",
+        "-c:a",
+        "aac",
+        "-b:a",
+        f"{probed_audio_kbps}k",
+        "-movflags",
+        "+faststart",
+        output_path,
+    ]
+
+    async def _run(cmd: list[str], label: str) -> tuple[int, str]:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        try:
+            _, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=_FFMPEG_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+            return -1, "timeout"
+        return proc.returncode or 0, stderr.decode("utf-8", errors="ignore")
+
+    try:
+        async with state.conversion_sem:
+            rc1, err1 = await _run(pass1_cmd, "pass1")
+            if rc1 != 0:
+                logger.error(
+                    "compress_video_to_size pass1 failed (rc=%d): %s",
+                    rc1,
+                    err1[-500:],
+                )
+                return None
+
+            rc2, err2 = await _run(pass2_cmd, "pass2")
+            if rc2 != 0:
+                logger.error(
+                    "compress_video_to_size pass2 failed (rc=%d): %s",
+                    rc2,
+                    err2[-500:],
+                )
+                safe_remove(output_path)
+                return None
+
+        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+            logger.error("compress_video_to_size: output file missing or empty")
+            safe_remove(output_path)
+            return None
+
+        final_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+        logger.info(
+            "compress_video_to_size: %.1f MB → %.1f MB (target %.1f MB) ✓",
+            size_mb,
+            final_size_mb,
+            target_mb,
+        )
+        return output_path
+
+    except Exception as exc:
+        logger.error("compress_video_to_size exception: %s", exc, exc_info=True)
+        safe_remove(output_path)
+        return None
+    finally:
+        # Clean up the two-pass log files (ffmpeg writes <prefix>-0.log etc.)
+        for suffix in ("-0.log", "-0.log.mbtree"):
+            safe_remove(passlog_prefix + suffix)
 
 
 async def _probe_video_codec(video_path: str) -> Optional[str]:
@@ -158,7 +404,7 @@ class MediaConverter:
                 pass
             return -1, "timeout"
 
-        return proc.returncode, stderr.decode("utf-8", errors="ignore")
+        return proc.returncode or 0, stderr.decode("utf-8", errors="ignore")
 
     @staticmethod
     async def convert_to_gif_ffmpeg(video_path: str) -> Optional[str]:

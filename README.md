@@ -9,7 +9,7 @@ YTDL Bot solves the problem of friction in downloading and sharing media from so
 ## Current Status
 
 **Production-ish / API-Stabilized**
-The project is well-structured and highly tested (>510 tests, CI/CD pipeline). However, since it relies heavily on third-party extraction tools (`yt-dlp`, `gallery-dl`) and platform algorithms, it is inherently subject to platform-side changes (e.g., rate limits, blockages).
+The project is well-structured and highly tested (>528 tests, CI/CD pipeline). However, since it relies heavily on third-party extraction tools (`yt-dlp`, `gallery-dl`) and platform algorithms, it is inherently subject to platform-side changes (e.g., rate limits, blockages).
 Recent systemic fixes have stabilized asynchronous subprocess extraction and decoupled Redis caching dependencies, making the pipeline heavily resilient to coroutine clashes. Some advanced evasion techniques (proxies, cookies) are configured but require manual upkeep by the admin.
 
 ## Features
@@ -19,6 +19,7 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 - **Interactive Private Mode**: Presents inline keyboard options for users to select specific video qualities or audio-only formats.
 - **TikTok Slideshow Support**: Converts TikTok carousels natively via TikWM API into either a 📸 Photo Album (media group) or a 🎬 Video Slideshow (MP4 with audio) using `ffmpeg`.
 - **Strict Format Binding**: Guaranteed zero-mismatch downloads across platforms. Parses formats early to skip FFmpeg muxing (pre-mux priority), conserving resources and preventing Telegram size-limit errors.
+- **Smart Video Target Compression**: Automatically intercepts oversized videos before Telegram limits reject them. Implements a mathematically precise two-pass `libx264` scaling down to exact 48.5MB targets, protecting long/high-bitrate videos from `413 Request Entity Too Large` Bot API errors.
 - **Optimized Download Pipeline**: Passes metadata to bypass duplicate `yt-dlp` extraction calls, and supports direct pipe-to-memory streaming for videos <50MB, saving disk I/O.
 - **Zero-Disk Pipeline**: Converts video to GIF natively without saving intermediary files to disk (`yt-dlp` -> `ffmpeg` pipe).
 - **Rate Limiting**: Multi-layered token bucket limiter preventing abuse per User, Chat, IP, and Token.

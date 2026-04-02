@@ -19,6 +19,7 @@ from app.services.downloader import MediaSender
 from app.services.tikwm import TikWMService
 from app.services.gallery_dl.service import GalleryDlService
 from app.services.pinterest import PinterestNativeService
+from app.services.converter import compress_video_to_size
 
 logger = logging.getLogger("app.services.orchestrator")
 
@@ -309,6 +310,26 @@ class DownloadOrchestrator:
             # (TikTok CDN often serves HEVC which Telegram can't play)
             if isinstance(file_path, str) and not is_gif and not is_audio:
                 file_path = await _ensure_telegram_compatible(file_path)
+
+            # Compress oversized videos before sending.
+            # Telegram Bot API hard-limit is 50 MB; we target 48.5 MB.
+            # Two-pass bitrate-targeted encode: precise, quality-preserving.
+            if isinstance(file_path, str) and not is_gif and not is_audio:
+                original_path = file_path
+                compressed_path = await compress_video_to_size(file_path)
+                if compressed_path is not None:
+                    # Compression succeeded — swap path, delete original
+                    safe_remove(original_path)
+                    file_path = compressed_path
+                    logger.info(
+                        "File compressed for Telegram upload: %s",
+                        compressed_path,
+                    )
+                else:
+                    # compress_video_to_size returns None when:
+                    #   (a) file is already under limit — no-op, keep original
+                    #   (b) compression failed — best-effort, proceed with original
+                    pass
 
             # Extract video metadata for faster Telegram delivery + preview
             video_meta = await _extract_video_meta(

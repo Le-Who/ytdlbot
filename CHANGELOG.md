@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Smart Video Compression**: Implemented mathematically precise, automatic two-pass `libx264` video compression for files exceeding Telegram's 50MB limit. The system probes video duration/audio bitrate and dynamically scales video bitrates to fit seamlessly within a 48.5MB container cap (`_TG_MAX_BYTES`).
 - **X (Twitter) Ultra-Fast Download via Cobalt**: Twitter/X URLs are now cleanly intercepted and processed instantaneously through the Cobalt API. This completely bypasses legacy `yt-dlp` constraints, resolving all "429 Too Many Requests" errors and blocked extractions.
 - **X Multi-Media Posts Support**: Robust extraction pipeline accurately handles Twitter posts containing multiple media items (mixed videos/photos), downloading and delivering the entire collection sequentially. 
 - **Instagram Stories & Highlights**: Download Instagram stories and highlights with an interactive rich selection UX. Users send a profile link and get a menu with `[📸 Stories] [📁 Highlights] [📥 Download All]`. Each story shows date, time, and duration. Requires `IG_SESSION_B64` environment variable for authenticated access.
@@ -40,7 +41,7 @@ All notable changes to this project will be documented in this file.
 
 ### Quality & Testing
 
-- **Test suite expanded**: 257 → 440+ tests (76% coverage, threshold 75%)
+- **Test suite expanded**: 257 → 528 tests (60% coverage, threshold 60%)
 - **Property-based testing**: 14 `hypothesis` properties (~1400 random examples) for parsers, URL detection, sanitization
 - **Integration tests**: 4 tests with real `yt-dlp` + `ffmpeg` binaries (`@pytest.mark.integration`)
 - **Mutation testing**: `mutmut` configured targeting `parsers.py` (runs in CI)

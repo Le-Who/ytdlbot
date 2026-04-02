@@ -18,15 +18,9 @@ MAX_TELEGRAM_ALBUM_SIZE = 10
 
 @contextmanager
 def _open_media(file_path_or_buffer: Union[str, io.BytesIO]) -> Any:
-    from app.core import config
-
     if isinstance(file_path_or_buffer, str):
-        if config.TELEGRAM_LOCAL_ENDPOINT:
-            # Tell PTB to read using the local API server directly via zero-copy
-            yield f"file://{os.path.abspath(file_path_or_buffer)}"
-        else:
-            with open(file_path_or_buffer, "rb") as f:
-                yield f
+        with open(file_path_or_buffer, "rb") as f:
+            yield f
     else:
         # It's a BytesIO, just yield it
         yield file_path_or_buffer
@@ -143,26 +137,14 @@ class TelegramSender:
         # fall back to sendPhoto for a single image.
         if len(valid_images) == 1:
             try:
-                from app.core import config
-
-                # Single photo send logic
-                if config.TELEGRAM_LOCAL_ENDPOINT:
+                with open(valid_images[0], "rb") as fh:
                     await bot.send_photo(
                         chat_id=chat_id,
-                        photo=f"file://{os.path.abspath(valid_images[0])}",
+                        photo=fh,
                         caption=caption,
                         parse_mode=parse_mode,
                         reply_to_message_id=reply_to_message_id,
                     )
-                else:
-                    with open(valid_images[0], "rb") as fh:
-                        await bot.send_photo(
-                            chat_id=chat_id,
-                            photo=fh,
-                            caption=caption,
-                            parse_mode=parse_mode,
-                            reply_to_message_id=reply_to_message_id,
-                        )
                 return True
             except Exception as e:
                 logger.error("Single photo send error: %s", e, exc_info=True)
@@ -170,26 +152,18 @@ class TelegramSender:
 
         file_handles = []
         try:
-            from app.core import config
-
             media = []
-            from typing import Union, BinaryIO
             for i, img_path in enumerate(valid_images):
-                media_input: Union[str, BinaryIO]
-                if config.TELEGRAM_LOCAL_ENDPOINT:
-                    media_input = f"file://{os.path.abspath(img_path)}"
-                else:
-                    fh = await asyncio.to_thread(open, img_path, "rb")
-                    file_handles.append(fh)
-                    media_input = fh
-
+                fh = await asyncio.to_thread(open, img_path, "rb")
+                file_handles.append(fh)
                 media.append(
                     InputMediaPhoto(
-                        media=media_input,
+                        media=fh,
                         caption=caption if i == 0 else None,
                         parse_mode=parse_mode if i == 0 else None,
                     )
                 )
+
 
             await bot.send_media_group(
                 chat_id=chat_id,

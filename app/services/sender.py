@@ -60,6 +60,9 @@ class TelegramSender:
                         duration=duration,
                         width=width,
                         height=height,
+                        read_timeout=120,
+                        write_timeout=120,
+                        connect_timeout=30,
                     )
                 elif is_audio:
                     await bot.send_audio(
@@ -70,6 +73,9 @@ class TelegramSender:
                         reply_markup=reply_markup,
                         reply_to_message_id=reply_to_message_id,
                         duration=duration,
+                        read_timeout=120,
+                        write_timeout=120,
+                        connect_timeout=30,
                     )
                 else:
                     await bot.send_video(
@@ -83,6 +89,9 @@ class TelegramSender:
                         duration=duration,
                         width=width,
                         height=height,
+                        read_timeout=120,
+                        write_timeout=120,
+                        connect_timeout=30,
                     )
             return True
 
@@ -93,7 +102,7 @@ class TelegramSender:
                 else "BytesIO"
             )
             logger.warning(
-                "Network error sending file", extra={"file": file_name_debug}
+                "Network error sending file", extra={"file": file_name_debug}, exc_info=True
             )
             return False
         except Exception as e:
@@ -144,6 +153,9 @@ class TelegramSender:
                         caption=caption,
                         parse_mode=parse_mode,
                         reply_to_message_id=reply_to_message_id,
+                        read_timeout=120,
+                        write_timeout=120,
+                        connect_timeout=30,
                     )
                 return True
             except Exception as e:
@@ -169,8 +181,9 @@ class TelegramSender:
                 chat_id=chat_id,
                 media=media,
                 reply_to_message_id=reply_to_message_id,
-                write_timeout=30,
-                read_timeout=30,
+                write_timeout=120,
+                read_timeout=120,
+                connect_timeout=30,
             )
             return True
 

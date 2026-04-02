@@ -1,3 +1,6 @@
+# ── Stage 0: Telegram Bot API ───────────────────────────────────────
+FROM aiogram/telegram-bot-api:latest AS telegram-api
+
 # ── Stage 1: Builder ──────────────────────────────────────────────
 FROM python:3.12-slim AS builder
 
@@ -40,6 +43,9 @@ COPY --from=builder /usr/local/bin/deno /usr/local/bin/deno
 # Copy Python venv from builder
 COPY --from=builder /opt/venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy Telegram Bot API Server from its image
+COPY --from=telegram-api /usr/local/bin/telegram-bot-api /usr/local/bin/telegram-bot-api
 
 # Copy application code
 COPY app ./app

@@ -17,7 +17,7 @@ TELEGRAM_SECRET_TOKEN: str = os.getenv(
 ) or secrets.token_urlsafe(32)
 TELEGRAM_LOCAL_ENDPOINT = os.getenv("TELEGRAM_LOCAL_ENDPOINT", "").strip()
 
-LINK_TTL_MINUTES = int(os.getenv("LINK_TTL_MINUTES", "30"))
+LINK_TTL_MINUTES = int(os.getenv("LINK_TTL_MINUTES", "60"))
 ENABLE_TELEGRAM_UPLOAD = os.getenv("ENABLE_TELEGRAM_UPLOAD", "1").strip() == "1"
 _max_tg_upload_default = "2000" if TELEGRAM_LOCAL_ENDPOINT else "45"
 MAX_TG_UPLOAD_MB = int(os.getenv("MAX_TG_UPLOAD_MB", _max_tg_upload_default))

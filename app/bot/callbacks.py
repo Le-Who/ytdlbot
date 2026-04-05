@@ -586,14 +586,22 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
     7. Update button state to ✅ done.
     """
     from app.services.converter import MediaConverter
-    from app.core.config import TELEGRAM_LOCAL_ENDPOINT
     from telegram import InputFile
 
     q = update.callback_query
     assert q is not None and isinstance(q.message, Message) and q.data is not None
 
     _, token = q.data.split("|", 1)
-    cache_key = f"gifdoc:{token}"
+    
+    # Needs to get URL from context to determine global cache key
+    ctx = await state.link_cache.get(token)
+    page_url = None
+    cache_key = f"gifdoc:{token}" # fallback
+    if ctx and hasattr(ctx, "page_url"):
+        page_url = ctx.page_url
+        import hashlib
+        h = hashlib.md5(page_url.encode()).hexdigest()
+        cache_key = f"gifdoc_{h}"
 
     # -- 1. Immediate UX feedback --
     try:
@@ -612,8 +620,8 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
     except Exception as e:
         logger.debug("Spinner button update failed: %s", e)
 
-    # -- 2. Check Redis cache for previously uploaded document --
-    cached_doc_id = await state.link_cache.get(cache_key)
+    # -- 2. Check Global Redis cache for previously uploaded native GIF --
+    cached_doc_id = await state.gifdoc_cache.get(cache_key)
     if cached_doc_id and isinstance(cached_doc_id, str):
         try:
             await context.bot.send_document(
@@ -643,7 +651,7 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         video_path = None  # stale entry — evict implicitly
 
     if not video_path:
-        # Fallback: re-download from Telegram using the animation's file_id
+        # Fallback 1: re-download from Telegram using the animation's file_id
         # Local API serves this at full size with zero external traffic
         try:
             anim = getattr(q.message, "animation", None) or getattr(q.message, "video", None)
@@ -671,6 +679,15 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         except Exception:
             pass
         return
+
+    # -- Check size soft limit (50MB) to protect CPU and mobile clients --
+    try:
+        val_size = os.path.getsize(video_path)
+        if val_size > 50 * 1024 * 1024:
+            await q.answer("⚠️ Исходник слишком большой для генерации GIF (>50MB).", show_alert=True)
+            return
+    except OSError:
+        pass
 
     # -- 4. Check if already being processed (debounce) --
     debounce_key = f"giffile_lock:{token}"
@@ -723,11 +740,11 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
                 connect_timeout=30,
             )
 
-            # -- 7. Cache the Telegram file_id for instant future re-sends --
+            # -- 7. Cache the Telegram file_id purely by URL hash for 7-days instant future re-sends --
             if sent and sent.document:
-                await state.link_cache.set(cache_key, sent.document.file_id)
+                await state.gifdoc_cache.set(cache_key, sent.document.file_id)
                 logger.info(
-                    "on_save_as_gif_file: cached gif doc_file_id for token=%s", token
+                    "on_save_as_gif_file: cached gif doc_file_id globally (%s)", cache_key
                 )
 
             # Update button state to ✅ done

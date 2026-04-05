@@ -77,16 +77,18 @@ if redis_client:
     )
     info_cache = RedisStorage(redis_client, default_ttl=600, prefix="inf")
     cancel_cache = RedisStorage(redis_client, default_ttl=3600, prefix="can")
+    gifdoc_cache = RedisStorage(redis_client, default_ttl=604800, prefix="gifdoc")
 else:
     link_cache = MemoryStorage(maxsize=500, ttl=LINK_TTL_MINUTES * 60)
     info_cache = MemoryStorage(maxsize=200, ttl=600)
     cancel_cache = MemoryStorage(maxsize=100, ttl=3600)
+    gifdoc_cache = MemoryStorage(maxsize=500, ttl=604800)
 
 inflight_parsing: TTLCache = TTLCache(
     maxsize=100, ttl=600
 )  # url -> asyncio.Event (auto-evicts after 10 min)
 file_cache: FileTTLCache = FileTTLCache(
-    maxsize=100, ttl=3600, on_eviction=safe_remove
+    maxsize=30, ttl=LINK_TTL_MINUTES * 60, on_eviction=safe_remove
 )  # token -> file_path
 
 if redis_client:

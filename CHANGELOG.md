@@ -14,10 +14,10 @@ All notable changes to this project will be documented in this file.
   process ("ask for MP4 animation -> then ask for GIF file"). Delivered videos now feature an 
   inline keyboard with both `[🔄 Анимация (MP4)]` and `[💾 Файлом (.gif)]`, providing immediate, 
   clear choices up-front.
-- **Redis doc_file_id caching** (`gifdoc:{token}`): Subsequent presses of the `.gif` button
-  bypass conversion entirely and re-send the cached Telegram `file_id` via `sendDocument`.
-- **Local API passthrough for GIF documents**: `sendDocument` routed through
-  `tg-api-server:8081` when `TELEGRAM_LOCAL_ENDPOINT` is set; supports files up to 2 GB.
+- **Global 7-day GIF Cache by URL**: Replaced `cache_key` from token to `md5(page_url)` for `gifdoc` caching. This ensures exactly 1 processing operation per URL even if multiple users download it over several days.
+- **Resource limit safety guards**: Reduced `file_cache` memory capacity from 100 to 30 elements to safely stay within 1.5GB ephemeral volume constraint.
+- **50MB Soft Limit for GIF conversion**: Protects CPU and mobile Telegram clients from catastrophic stuttering on large video conversions.
+- **Seamless UX Recovery (`on_save_as_gif_file`)**: Added multi-tier fallback resolving. If `file_cache` (30 max) rotates off the source video, the bot will seamlessly re-download the video from Telegram servers natively using `bot.get_file(animation.file_id)` in local mode.
 - **`gif_file_sem = asyncio.Semaphore(2)`** in `state.py`: Dedicated bounded concurrency
   for GIF export jobs, independent from `tasks_sem` and `conversion_sem`.
 - **`on_save_as_gif_file()` debounce guard**: `processing_gifs` set prevents double-firing

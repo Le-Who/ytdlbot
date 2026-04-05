@@ -237,7 +237,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                             _platform = (
                                 "youtube"
                                 if "youtu" in text
-                                else "tiktok" if "tiktok" in text else "other"
+                                else "tiktok"
+                                if "tiktok" in text
+                                else "other"
                             )
                             _m.extraction_duration.observe(
                                 _time.monotonic() - _ext_start,

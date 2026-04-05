@@ -103,9 +103,7 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
         status_msg = AsyncMock()
         self.update.message.reply_text = AsyncMock(return_value=status_msg)
 
-        mock_sender.download_video = AsyncMock(
-            return_value=(None, "⚠️ Ошибка загрузки")
-        )
+        mock_sender.download_video = AsyncMock(return_value=(None, "⚠️ Ошибка загрузки"))
 
         state.ytdlp = AsyncMock()
         state.ytdlp.tiktok_proxy = None

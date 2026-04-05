@@ -126,6 +126,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **Pinterest GIF Extraction**: Fixed a bug where downloading animated GIFs via Pinterest URLs returned corrupted static thumbnails (`.jpg`) instead of the true `.gif` loops. The algorithm now checks `og:image` path hashes and seamlessly upgrades them via deterministic search against the JSON payload to stream the `.gif` format.
 - **Prometheus Metric Leak**: Fixed an issue in `downloader.py` where timeout cancellations incorrectly orphaned active downloads incrementally, resulting in unbounded `active_downloads` gauge drifts.
 - **Group Command Throttling**: Closed a web-hook concurrency gap in `group_logic.py` where downloads could trigger simultaneously missing standard `state.tasks_sem` isolation bounds.
 - **GIF Conversion Deadlock**: Lifted nested asynchronous tracking semaphore locks globally preventing race conditions in `callbacks.py` rendering `FFmpeg` freezes.

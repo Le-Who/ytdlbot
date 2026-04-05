@@ -54,8 +54,31 @@ class PinterestNativeService:
                 # 2. Try og:image (static image pins / carousels)
                 image_url = _extract_og_image(html)
 
+                # 3. Upgrade jpg to gif if the original animated asset exists
+                if image_url:
+                    match = re.search(
+                        r"pinimg\.com/[^/]+/(.+)\.jpg", image_url, re.IGNORECASE
+                    )
+                    if match:
+                        core_path = match.group(1)
+                        expected_gif_url = (
+                            f"https://i.pinimg.com/originals/{core_path}.gif"
+                        )
+                        if expected_gif_url in html:
+                            image_url = expected_gif_url
+                        else:
+                            gif_match = re.search(
+                                rf"(https://i\.pinimg\.com/[^/]+/{re.escape(core_path)}\.gif)",
+                                html,
+                                re.IGNORECASE,
+                            )
+                            if gif_match:
+                                image_url = gif_match.group(1)
+
                 if video_url:
                     logger.info("[PINTEREST] Found og:video: %s", video_url[:80])
+                elif image_url and image_url.endswith(".gif"):
+                    logger.info("[PINTEREST] Found original gif: %s", image_url[:80])
                 elif image_url:
                     logger.info("[PINTEREST] Found og:image: %s", image_url[:80])
                 else:

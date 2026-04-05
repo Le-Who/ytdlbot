@@ -279,7 +279,10 @@ class DownloadOrchestrator:
                 )
                 if file_path and not error:
                     state.file_cache[token] = file_path
-            elif payload.format_id == "pinterest_native":
+            elif payload.format_id == "pinterest_native" or (
+                payload.format_id == GIF_FORMAT_ID
+                and "pinterest" in payload.page_url.lower()
+            ):
                 file_path, error = await PinterestNativeService.download_video(
                     payload.page_url
                 )

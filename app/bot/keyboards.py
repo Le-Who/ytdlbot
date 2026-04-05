@@ -105,3 +105,18 @@ def build_video_keyboard(token: str) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def build_cancel_keyboard(token: str) -> InlineKeyboardMarkup:
+    """Keyboard shown mid-download so the user can abort at any threshold checkpoint."""
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    Texts.BTN_CANCEL_DOWNLOAD,
+                    callback_data=f"cancel|{token}",
+                )
+            ]
+        ]
+    )
+

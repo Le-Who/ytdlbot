@@ -7,7 +7,7 @@ from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 
 from app.core import state
-from app.core.utils import extract_supported_url
+from app.core.utils import extract_url_and_section
 from app.bot.keyboards import build_format_keyboard, build_slideshow_keyboard
 from app.core.texts import Texts
 from app.services.ytdlp.exceptions import (
@@ -27,7 +27,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     assert user is not None and msg is not None and chat is not None
     text = (msg.text or "").strip()
 
-    url = extract_supported_url(text)
+    url, section = extract_url_and_section(text)
     if not url:
         await msg.reply_text(Texts.URL_NOT_SUPPORTED)
         return
@@ -48,14 +48,14 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     from app.services.instagram import is_instagram_url
 
     if is_instagram_url(text):
-        await _handle_instagram(update, context, text, parse_token)
+        await _handle_instagram(update, context, text, parse_token, section)
         return
     # ── End Instagram Intercept ──────────────────────────────────────────
 
     # ── Twitter / X Early Intercept ──────────────────────────────────────
     is_twitter_url = "x.com" in text.lower() or "twitter.com" in text.lower()
     if is_twitter_url:
-        handled = await _handle_twitter(update, context, text, parse_token)
+        handled = await _handle_twitter(update, context, text, parse_token, section)
         if handled:
             return
     # ── End Twitter / X Intercept ────────────────────────────────────────
@@ -291,6 +291,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     data["is_slideshow"] = is_slideshow
     data["info_json_path"] = info_json_path if not is_slideshow else None
     data["thumbnail_url"] = thumbnail_url
+    data["section"] = section
 
     if is_slideshow:
         # Save specific api state for the slideshow
@@ -306,6 +307,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     original_msg_id=status_msg.message_id,
                     api_source=api_source,
                     api_json=tiktok_api_res.__dict__,  # Will restore this in callbacks.py
+                    section=section,
                 ),
             )
             # Override callback_data for API mode slideshows
@@ -457,6 +459,7 @@ async def _handle_instagram(
     context: ContextTypes.DEFAULT_TYPE,
     url: str,
     parse_token: str,
+    section: str | None,
 ) -> None:
     """Handle Instagram URLs with rich selection UX."""
     from app.services.instagram import (
@@ -649,6 +652,7 @@ async def _handle_instagram(
                 original_msg_id=status_msg.message_id,
                 api_source="instagram",
                 api_json=ig_cache_data,
+                section=section,
             ),
         )
 
@@ -706,6 +710,7 @@ async def _handle_twitter(
     context: ContextTypes.DEFAULT_TYPE,
     url: str,
     parse_token: str,
+    section: str | None,
 ) -> bool:
     """Handle Twitter/X URLs using Cobalt. Returns True if handled, False if fallback needed."""
     msg = update.message

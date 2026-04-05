@@ -17,3 +17,5 @@ class DownloadContext:
     api_source: Optional[str] = None
     api_json: Optional[dict] = None
     youtube_fallback: bool = False
+    section: Optional[str] = None
+

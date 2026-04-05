@@ -60,6 +60,7 @@ class YtDlpCLIBuilder:
         info_json_path: Optional[str] = None,
         fallback_clients: bool = False,
         pipe_mode: bool = False,
+        section: Optional[str] = None,
     ) -> List[str]:
         """Build args for downloading media"""
         cmd = self._base_args.copy()
@@ -74,8 +75,8 @@ class YtDlpCLIBuilder:
             height_cap = height or 1080
             # Prefer H.264 (avc1) for Telegram compatibility; fallback to any
             fallback = (
-                f"bestvideo[height<={height_cap}][vcodec^=avc]+bestaudio[acodec^=mp4a]/"
-                f"bestvideo[height<={height_cap}]+bestaudio/bestvideo+bestaudio/best"
+                f"bestvideo[height<={height_cap}][filesize<?50M][vcodec^=avc]+bestaudio[acodec^=mp4a]/"
+                f"bestvideo[height<={height_cap}][filesize<?50M]+bestaudio/bestvideo+bestaudio/best"
             )
             final_fmt = f"{format_id}/{fallback}"
 
@@ -90,7 +91,8 @@ class YtDlpCLIBuilder:
                 output_path,
                 "--merge-output-format",
                 "mp4",
-                "--quiet",
+                "--no-warnings",
+                "--newline",
                 "--no-playlist",
                 "--no-mtime",
                 "--retries",
@@ -144,6 +146,9 @@ class YtDlpCLIBuilder:
             cmd.extend(["--load-info-json", info_json_path])
         else:
             cmd.extend(["--", url])
+
+        if section:
+            cmd.extend(["--download-sections", section])
 
         return cmd
 

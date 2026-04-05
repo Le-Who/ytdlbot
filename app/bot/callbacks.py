@@ -195,6 +195,7 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             title=data["title"],
             info_json_path=data.get("info_json_path"),
             youtube_fallback=data.get("youtube_fallback", False),
+            section=data.get("section"),
         ),
     )
 
@@ -522,9 +523,15 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 await _edit_or_reply(q, Texts.SLIDESHOW_SENDING)
 
                 total = len(result.images)
-                caption = "📸"
-                if total > MAX_TELEGRAM_ALBUM_SIZE:
-                    caption += f"\n{Texts.SLIDESHOW_TRUNCATED.format(total=total)}"
+                import math
+                from app.services.sender import MAX_TELEGRAM_ALBUM_SIZE
+                total_batches = math.ceil(total / MAX_TELEGRAM_ALBUM_SIZE)
+                if total_batches > 1:
+                    caption = Texts.SLIDESHOW_MULTI_ALBUM.format(
+                        total_batches=total_batches, total=total
+                    )
+                else:
+                    caption = "📸"
 
                 success = await MediaSender.send_slideshow_photos(
                     context.bot,

@@ -332,7 +332,9 @@ class DownloadOrchestrator:
                 )
                 return False
 
-            await update_ui(Texts.STARTING_DOWNLOAD, None)
+            from app.bot.keyboards import build_cancel_keyboard
+            
+            await update_ui(Texts.STARTING_DOWNLOAD, build_cancel_keyboard(token))
             try:
                 await bot.send_chat_action(
                     chat_id=chat_id, action=ChatAction.UPLOAD_VIDEO
@@ -400,6 +402,21 @@ class DownloadOrchestrator:
                     state.file_cache[token] = file_path
 
             else:
+                last_threshold = 0
+
+                async def _on_progress(pct: float, eta: str) -> None:
+                    nonlocal last_threshold
+                    thresholds = [10, 25, 50, 75, 90]
+                    passed = [t for t in thresholds if pct >= t]
+                    if passed:
+                        current = passed[-1]
+                        if current > last_threshold:
+                            last_threshold = current
+                            filled = int(pct / 10)
+                            bar = "■" * filled + "□" * (10 - filled)
+                            text = Texts.DOWNLOAD_PROGRESS.format(pct=f"{pct:.1f}", bar=bar, eta=eta)
+                            await update_ui(text, build_cancel_keyboard(token))
+
                 file_path, error = await MediaSender.download_video(
                     payload.page_url,
                     payload.format_id or "",
@@ -407,6 +424,7 @@ class DownloadOrchestrator:
                     token,
                     info_json_path=payload.info_json_path,
                     fallback_clients=payload.youtube_fallback,
+                    progress_callback=_on_progress,
                 )
 
             if error or not file_path:

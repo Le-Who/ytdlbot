@@ -14,8 +14,9 @@ import uuid
 import time
 import asyncio
 import logging
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Callable, Awaitable
 import io
+import re
 
 
 from app.core import state
@@ -65,6 +66,8 @@ class VideoDownloader:
         token: str,
         info_json_path: Optional[str] = None,
         fallback_clients: bool = False,
+        progress_callback: Optional[Callable[[float, str], Awaitable[None]]] = None,
+        section: Optional[str] = None,
     ) -> Tuple[Optional[Union[str, io.BytesIO]], Optional[str]]:
         """
         Downloads a video.
@@ -117,13 +120,33 @@ class VideoDownloader:
             info_json_path=info_json_path,
             fallback_clients=fallback_clients,
             pipe_mode=use_pipe,
+            section=section,
         )
 
         _dl_start = time.time()
         try:
             _metrics().downloads_total.inc(platform="telegram")
             _metrics().active_downloads.inc()
-            async with run_subprocess(cmd) as handle:
+
+            PROGRESS_RE = re.compile(rb"\[download\]\s+([\d\.]+)%[^E]*ETA\s+([\d:]+)")
+            
+            async def _handle_progress(line: bytes) -> None:
+                if not progress_callback:
+                    return
+                m = PROGRESS_RE.search(line)
+                if m:
+                    try:
+                        pct = float(m.group(1))
+                        eta = f"ETA {m.group(2).decode()}"
+                        await progress_callback(pct, eta)
+                    except Exception:
+                        pass
+
+            def on_stderr(line: bytes) -> None:
+                if progress_callback:
+                    asyncio.create_task(_handle_progress(line))
+
+            async with run_subprocess(cmd, stderr_callback=on_stderr) as handle:
                 proc = handle.proc
                 assert proc.stdout is not None
                 stderr = handle.stderr_data

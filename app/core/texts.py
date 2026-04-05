@@ -81,6 +81,14 @@ class Texts:
     GENERIC_ERROR_SHORT = "⚠️ Ошибка."
     SENDING_TO_TG = "📤 Отправляю в Telegram..."
     SEND_ERROR = "⚠️ Ошибка при отправке файла."
+    # Progress threshold bar (phase 1)
+    # bar: filled/empty blocks, pct: 0-100, eta: ETA string or empty string
+    DOWNLOAD_PROGRESS = "⬇️ Загрузка {pct}%\n{bar}\n{eta}"
+    BTN_CANCEL_DOWNLOAD = "✖️ Отмена"
+    DOWNLOAD_CLIP_HINT = (
+        "⚡️ Совет: отправьте ссылку с таймкодом для нарезки фрагмента:\n"
+        "<code>ссылка 01:20 01:35</code>"
+    )
     GIF_CONVERTING = "⏳ Конвертирую в GIF..."
     GIF_DOWNLOAD_CANCEL = "❌ Загрузка отменена."
     GIF_FILE_EXPIRED = "⚠️ Файл не найден или устарел."
@@ -105,6 +113,8 @@ class Texts:
     SLIDESHOW_SENDING = "📤 Отправляю фотоальбом..."
     SLIDESHOW_TRUNCATED = "ℹ️ Показаны первые 10 из {total} фото."
     SLIDESHOW_ERROR = "⚠️ Ошибка загрузки слайдшоу."
+    # Shown as caption on the first album when content spans multiple batches of 10
+    SLIDESHOW_MULTI_ALBUM = "📸 1/{total_batches} • {total} фото — остальные придут следующими 🤫"
 
     # ── Group logic ───────────────────────────────────────────────
     GROUP_ERROR = "❌ Ошибка."

@@ -23,6 +23,19 @@ All notable changes to this project will be documented in this file.
 - **OPT-3 — Native Opus Audio Bypass** (`orchestrator.py`):
   Added `_is_native_audio_container()`, `_detect_opus_from_webm()`, and
   `_maybe_rename_webm_to_ogg()`. WebM files with Opus audio (detected via the
+  cached `formats` json or direct parsing) are safely renamed to `.ogg` directly, avoiding FFmpeg conversion entirely for high-quality audio fetching.
+
+- **Progress UI & Download Throttling** (`orchestrator.py`, `downloader.py`):
+  Implemented `DOWNLOAD_PROGRESS` tracking through real-time `yt-dlp` stderr parsing. To prevent Telegram UI spam or rate limits, the UI update is clamped to specific thresholds (10%, 25%, 50%, 75%, 90%), complete with cancellation support via the `build_cancel_keyboard(token)`.
+
+- **Silent Album Logic** (`sender.py`, `callbacks.py`):
+  If an album has >10 photos, Telegram's `sendMediaGroup` max limit is circumnavigated by chunking. The first 10 items fire a notification, while subsequent parts are sent using `disable_notification=True` (silent delivery). `SLIDESHOW_MULTI_ALBUM` handles the user-facing text dynamically computing `total_batches`.
+
+- **CDN Downscaling Capping** (`builders.py`):
+  Appended `[filesize<?50M]` to `fallback` formats logic. This strictly avoids downloading formats larger than the Telegram limit if possible, preventing severe CPU saturation induced by `ffmpeg` local downscaling.
+
+- **Timestamp Slicing Engine** (`utils.py`, `messages.py`, `builders.py`):
+  Added slicing context extraction (`url 01:10-01:25`) via regex matching in `utils.py`. The `section` parameter cascades down the `DownloadContext` straight into `builders.py` using `--download-sections`. Server-side execution fetches only required media sections!
   `OpusHead` magic bytes in the first 512 bytes) are renamed to `.ogg` in-place —
   no FFmpeg transcoding. Telegram accepts `.ogg` as a native audio format.
 

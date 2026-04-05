@@ -2,7 +2,7 @@ import asyncio
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncIterator
+from typing import AsyncIterator, Callable
 
 from app.core import state
 
@@ -81,6 +81,7 @@ async def run_subprocess(
     stdout_pipe: bool = True,
     stderr_pipe: bool = True,
     timeout: float | None = None,
+    stderr_callback: Callable[[bytes], None] | None = None,
 ) -> AsyncIterator[ProcessHandle]:
     import sys
     import subprocess
@@ -114,6 +115,11 @@ async def run_subprocess(
                 if not line:
                     break
                 stderr_data.append(line)
+                if stderr_callback:
+                    try:
+                        stderr_callback(line)
+                    except Exception:
+                        pass
 
         stderr_task = asyncio.create_task(consume_stderr())
 

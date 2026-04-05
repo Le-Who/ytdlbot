@@ -713,6 +713,7 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
                 document=doc_input,
                 caption="🎞 Нативный .gif файл",
                 reply_to_message_id=q.message.message_id,
+                disable_content_type_detection=True,
                 read_timeout=120,
                 write_timeout=120,
                 connect_timeout=30,

@@ -25,9 +25,10 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- **PTB Local Mode crash**: Added explicit `app_builder.local_mode(True)` initialization when
-  `TELEGRAM_LOCAL_ENDPOINT` is configured, preventing `ValueError` exceptions when attempting 
-  to pass `file://` URIs directly to `send_document()` for >50MB GIF exports.
+- **Local Bot API Server File Transport**: Replaced `file://` URI paths with standard 
+  `InputFile(open(..., "rb"))` HTTP multipart transfers for GIF export. Using `file://` caused 
+  `Can't find real file path` errors at the Telegram API server level because the bot container 
+  and the `tg-api-server` container do not share a common filesystem `volume`.
 - **Pinterest GIF detection root cause** (`PinterestNativeService`): Video pins that lack
   `og:video` meta tags now have a regex fallback scanning the raw HTML for CDN-hosted
   `.mp4` stream URLs (`cdn.fbcdn.net`, `v1.pinimg.com`), eliminating silent `.jpg`

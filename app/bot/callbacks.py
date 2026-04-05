@@ -704,13 +704,9 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
             return
 
-        # -- 6. Send as document (reply to animation) via Local API for 2GB limit --
-        use_local = bool(TELEGRAM_LOCAL_ENDPOINT)
+        # -- 6. Send as document (reply to animation) --
         try:
-            if use_local:
-                doc_input: str | InputFile = f"file://{os.path.abspath(gif_path)}"
-            else:
-                doc_input = InputFile(open(gif_path, "rb"), filename=f"animation_{token[:8]}.gif")
+            doc_input = InputFile(open(gif_path, "rb"), filename=f"animation_{token[:8]}.gif")
 
             sent = await context.bot.send_document(
                 chat_id=q.message.chat_id,

@@ -695,7 +695,11 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
 
         # -- 5. Convert using palette-based native GIF export --
-        gif_path = await MediaConverter.convert_to_native_gif(video_path)
+        if video_path.lower().endswith(".gif"):
+            logger.info("on_save_as_gif_file: bypassing FFmpeg, source is already .gif (%s)", video_path)
+            gif_path = video_path
+        else:
+            gif_path = await MediaConverter.convert_to_native_gif(video_path)
 
         if not gif_path:
             try:
@@ -743,7 +747,7 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
                 pass
     finally:
         state.processing_gifs.discard(debounce_key)
-        if gif_path:
+        if gif_path and gif_path != video_path:
             await asyncio.to_thread(safe_remove, gif_path)
         if tmp_src_created and video_path:
             await asyncio.to_thread(safe_remove, video_path)

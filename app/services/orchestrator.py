@@ -202,6 +202,7 @@ def _build_gif_reply_markup(token: str, is_gif: bool) -> Optional[object]:
     if not is_gif:
         return None
     from app.bot.keyboards import build_sent_gif_keyboard
+
     return build_sent_gif_keyboard(token)
 
 

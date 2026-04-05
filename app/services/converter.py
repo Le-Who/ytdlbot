@@ -501,23 +501,33 @@ class MediaConverter:
         gif_path = f"{base}_native.gif"
 
         # Scale to max 480px wide, 15fps; odd-dimension safety with force_divisible_by=2
-        scale_filter = "fps=15,scale=w='min(480,iw)':h=-2:force_divisible_by=2:flags=lanczos"
+        scale_filter = (
+            "fps=15,scale=w='min(480,iw)':h=-2:force_divisible_by=2:flags=lanczos"
+        )
 
         pass1_cmd = [
-            "ffmpeg", "-y",
-            "-i", video_path,
-            "-vf", f"{scale_filter},palettegen=max_colors=256:stats_mode=diff",
-            "-frames:v", "1",
+            "ffmpeg",
+            "-y",
+            "-i",
+            video_path,
+            "-vf",
+            f"{scale_filter},palettegen=max_colors=256:stats_mode=diff",
+            "-frames:v",
+            "1",
             palette_path,
         ]
 
         pass2_cmd = [
-            "ffmpeg", "-y",
-            "-i", video_path,
-            "-i", palette_path,
+            "ffmpeg",
+            "-y",
+            "-i",
+            video_path,
+            "-i",
+            palette_path,
             "-filter_complex",
             f"[0:v]{scale_filter}[scaled];[scaled][1:v]paletteuse=dither=bayer:bayer_scale=5:diff_mode=rectangle",
-            "-loop", "0",
+            "-loop",
+            "0",
             "-an",
             gif_path,
         ]
@@ -529,7 +539,9 @@ class MediaConverter:
                 stderr=asyncio.subprocess.PIPE,
             )
             try:
-                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=_FFMPEG_TIMEOUT)
+                _, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=_FFMPEG_TIMEOUT
+                )
             except asyncio.TimeoutError:
                 try:
                     proc.kill()
@@ -546,7 +558,9 @@ class MediaConverter:
                 rc1, err1 = await _run(pass1_cmd)
                 if rc1 != 0:
                     logger.error(
-                        "convert_to_native_gif: palettegen failed (rc=%d): %s", rc1, err1[-400:]
+                        "convert_to_native_gif: palettegen failed (rc=%d): %s",
+                        rc1,
+                        err1[-400:],
                     )
                     return None
 
@@ -554,7 +568,9 @@ class MediaConverter:
                 rc2, err2 = await _run(pass2_cmd)
                 if rc2 != 0:
                     logger.error(
-                        "convert_to_native_gif: paletteuse failed (rc=%d): %s", rc2, err2[-400:]
+                        "convert_to_native_gif: paletteuse failed (rc=%d): %s",
+                        rc2,
+                        err2[-400:],
                     )
                     safe_remove(gif_path)
                     return None
@@ -564,9 +580,7 @@ class MediaConverter:
                 return None
 
             size_mb = os.path.getsize(gif_path) / (1024 * 1024)
-            logger.info(
-                "convert_to_native_gif: OK → %s (%.1f MB)", gif_path, size_mb
-            )
+            logger.info("convert_to_native_gif: OK → %s (%.1f MB)", gif_path, size_mb)
             return gif_path
 
         except Exception as exc:

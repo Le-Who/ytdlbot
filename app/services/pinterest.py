@@ -183,15 +183,19 @@ def _extract_og_video(html: str) -> Optional[str]:
         for group in match.groups():
             if group and isinstance(group, str) and ".mp4" in group:
                 return group if group.startswith("https") else None
-                
+
     # Fallback: Many video pins lack og:video but embed the MP4 stream directly in the JSON script payload.
     # We prefer 720p/mc format if available.
-    match = re.search(r'(https?://[a-zA-Z0-9_\-\.]+\.pinimg\.com/videos/mc/[^"\']+\.mp4)\b', html)
+    match = re.search(
+        r'(https?://[a-zA-Z0-9_\-\.]+\.pinimg\.com/videos/mc/[^"\']+\.mp4)\b', html
+    )
     if match:
         return match.group(1)
-        
+
     # Any other MP4 fallback
-    match = re.search(r'(https?://[a-zA-Z0-9_\-\.]+\.pinimg\.com/videos/[^"\']+\.mp4)\b', html)
+    match = re.search(
+        r'(https?://[a-zA-Z0-9_\-\.]+\.pinimg\.com/videos/[^"\']+\.mp4)\b', html
+    )
     if match:
         return match.group(1)
 

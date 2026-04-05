@@ -128,7 +128,11 @@ class TelegramSender:
                 return True
 
             except RetryAfter as e:
-                delay = e.retry_after.total_seconds() if hasattr(e.retry_after, 'total_seconds') else float(e.retry_after)
+                delay = (
+                    e.retry_after.total_seconds()
+                    if hasattr(e.retry_after, "total_seconds")
+                    else float(e.retry_after)
+                )
                 logger.warning("FloodWait sending file. Sleeping %s s.", delay)
                 if attempt < max_retries - 1:
                     await asyncio.sleep(delay)
@@ -261,7 +265,11 @@ class TelegramSender:
                 )
 
             except RetryAfter as e:
-                delay = e.retry_after.total_seconds() if hasattr(e.retry_after, 'total_seconds') else float(e.retry_after)
+                delay = (
+                    e.retry_after.total_seconds()
+                    if hasattr(e.retry_after, "total_seconds")
+                    else float(e.retry_after)
+                )
                 logger.warning(
                     "FloodWait sending slideshow chunk. Sleeping %s s.", delay
                 )

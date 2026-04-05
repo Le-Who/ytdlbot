@@ -70,6 +70,7 @@ else:
 link_cache: StateStorage
 info_cache: StateStorage
 cancel_cache: StateStorage
+gifdoc_cache: StateStorage
 
 if redis_client:
     link_cache = RedisStorage(

@@ -572,7 +572,9 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         state.tasks_sem.release()
 
 
-async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def on_save_as_gif_file(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Handles 'Save as .gif file' button press.
 
     On-demand native GIF export pipeline:
@@ -592,14 +594,15 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
     assert q is not None and isinstance(q.message, Message) and q.data is not None
 
     _, token = q.data.split("|", 1)
-    
+
     # Needs to get URL from context to determine global cache key
     ctx = await state.link_cache.get(token)
     page_url = None
-    cache_key = f"gifdoc:{token}" # fallback
+    cache_key = f"gifdoc:{token}"  # fallback
     if ctx and hasattr(ctx, "page_url"):
         page_url = ctx.page_url
         import hashlib
+
         h = hashlib.md5(page_url.encode()).hexdigest()
         cache_key = f"gifdoc_{h}"
 
@@ -613,8 +616,15 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         from app.bot.keyboards import build_sent_gif_keyboard
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
         spinner_kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton(Texts.BTN_SAVE_GIF_WAIT, callback_data=f"giffile|{token}")]]
+            [
+                [
+                    InlineKeyboardButton(
+                        Texts.BTN_SAVE_GIF_WAIT, callback_data=f"giffile|{token}"
+                    )
+                ]
+            ]
         )
         await q.message.edit_reply_markup(reply_markup=spinner_kb)
     except Exception as e:
@@ -635,7 +645,14 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             # Update button to done
             try:
                 done_kb = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton(Texts.BTN_SAVE_GIF_DONE, callback_data=f"giffile|{token}")]]
+                    [
+                        [
+                            InlineKeyboardButton(
+                                Texts.BTN_SAVE_GIF_DONE,
+                                callback_data=f"giffile|{token}",
+                            )
+                        ]
+                    ]
                 )
                 await q.message.edit_reply_markup(reply_markup=done_kb)
             except Exception:
@@ -654,7 +671,9 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Fallback 1: re-download from Telegram using the animation's file_id
         # Local API serves this at full size with zero external traffic
         try:
-            anim = getattr(q.message, "animation", None) or getattr(q.message, "video", None)
+            anim = getattr(q.message, "animation", None) or getattr(
+                q.message, "video", None
+            )
             if anim:
                 tg_file = await context.bot.get_file(anim.file_id)
                 tmp = os.path.join(
@@ -664,7 +683,9 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
                 await tg_file.download_to_drive(tmp)
                 if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
                     video_path = tmp
-                    logger.info("on_save_as_gif_file: re-fetched source from TG → %s", tmp)
+                    logger.info(
+                        "on_save_as_gif_file: re-fetched source from TG → %s", tmp
+                    )
         except Exception as e:
             logger.warning("on_save_as_gif_file: TG re-download failed: %s", e)
 
@@ -675,7 +696,10 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             pass
         try:
             from app.bot.keyboards import build_sent_gif_keyboard
-            await q.message.edit_reply_markup(reply_markup=build_sent_gif_keyboard(token))
+
+            await q.message.edit_reply_markup(
+                reply_markup=build_sent_gif_keyboard(token)
+            )
         except Exception:
             pass
         return
@@ -684,7 +708,9 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
     try:
         val_size = os.path.getsize(video_path)
         if val_size > 50 * 1024 * 1024:
-            await q.answer("⚠️ Исходник слишком большой для генерации GIF (>50MB).", show_alert=True)
+            await q.answer(
+                "⚠️ Исходник слишком большой для генерации GIF (>50MB).", show_alert=True
+            )
             return
     except OSError:
         pass
@@ -701,7 +727,7 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
         state.processing_gifs.add(debounce_key)
 
     gif_path: str | None = None
-    tmp_src_created = (video_path and "gif_src_" in video_path)  # cleanup flag
+    tmp_src_created = video_path and "gif_src_" in video_path  # cleanup flag
 
     try:
         # -- Queue toast if semaphore is crowded --
@@ -713,7 +739,10 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # -- 5. Convert using palette-based native GIF export --
         if video_path.lower().endswith(".gif"):
-            logger.info("on_save_as_gif_file: bypassing FFmpeg, source is already .gif (%s)", video_path)
+            logger.info(
+                "on_save_as_gif_file: bypassing FFmpeg, source is already .gif (%s)",
+                video_path,
+            )
             gif_path = video_path
         else:
             gif_path = await MediaConverter.convert_to_native_gif(video_path)
@@ -727,7 +756,9 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         # -- 6. Send as document (reply to animation) --
         try:
-            doc_input = InputFile(open(gif_path, "rb"), filename=f"animation_{token[:8]}.gif")
+            doc_input = InputFile(
+                open(gif_path, "rb"), filename=f"animation_{token[:8]}.gif"
+            )
 
             sent = await context.bot.send_document(
                 chat_id=q.message.chat_id,
@@ -744,20 +775,30 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             if sent and sent.document:
                 await state.gifdoc_cache.set(cache_key, sent.document.file_id)
                 logger.info(
-                    "on_save_as_gif_file: cached gif doc_file_id globally (%s)", cache_key
+                    "on_save_as_gif_file: cached gif doc_file_id globally (%s)",
+                    cache_key,
                 )
 
             # Update button state to ✅ done
             try:
                 done_kb = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton(Texts.BTN_SAVE_GIF_DONE, callback_data=f"giffile|{token}")]]
+                    [
+                        [
+                            InlineKeyboardButton(
+                                Texts.BTN_SAVE_GIF_DONE,
+                                callback_data=f"giffile|{token}",
+                            )
+                        ]
+                    ]
                 )
                 await q.message.edit_reply_markup(reply_markup=done_kb)
             except Exception:
                 pass
 
         except Exception as e:
-            logger.error("on_save_as_gif_file: send_document failed: %s", e, exc_info=True)
+            logger.error(
+                "on_save_as_gif_file: send_document failed: %s", e, exc_info=True
+            )
             try:
                 await q.message.reply_text(Texts.GIF_FILE_ERROR, do_quote=True)
             except Exception:

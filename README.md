@@ -193,12 +193,12 @@ _Prerequisites: System must have `ffmpeg` and local `python -m pytest` available
 - **Preconditions**: Bot has delivered a video with dual GIF format buttons (`🔄 Анимация (MP4)` and `💾 Файлом (.gif)`).
 - **Steps**:
   1. User presses the `💾 Файлом (.gif)` button; bot answers with a Toast and updates the button to `⏳ Готовлю .gif файл...`.
-  2. Handler checks Redis cache (`gifdoc:{token}`) — if a `file_id` is cached, it re-sends instantly via `sendDocument`.
-  3. If no cache hit: locates the source MP4 from `file_cache`; or re-fetches from Telegram via `bot.get_file()` (Local API, zero external traffic).
-  4. Runs two-pass FFmpeg conversion: `palettegen` (pass 1) → `paletteuse` with Bayer dithering (pass 2), capped at 480px/15fps.
-  5. Sends the resulting `GIF89a` file via `sendDocument` (routed through Local API for 2GB headroom).
-  6. Caches the returned `document.file_id` in Redis; updates button to `✅ .gif файл отправлен`.
-- **Expected Outcome**: User receives a standards-compliant `.gif` file compatible with Discord, Windows Photo Viewer, phone galleries, and any tool that reads magic bytes — not an MP4 renamed to `.gif`.
+  2. Handler checks Global Redis cache (`gifdoc:{hash(url)}`) — if a `file_id` is cached within the last 7 days, it re-sends instantly via `sendDocument`.
+  3. If no cache hit: locates the source MP4 from `file_cache` (limited to 30 elements in `/tmp`). If evicted, it seamlessly re-fetches from Telegram using `bot.get_file(anim.file_id)` (Local API, zero external traffic).
+  4. Defends against catastrophic CPU consumption by rejecting sources > 50MB. If source is already `.gif`, bypasses FFmpeg entirely.
+  5. Computes native conversion via FFmpeg two-pass `palettegen` → `paletteuse` algorithm capped at 480px/15fps.
+  6. Sends the output file via `sendDocument` and caches the file globally by URL hash.
+- **Expected Outcome**: User receives a standards-compliant `.gif` file. Overheads are nullified for repetitive requests (same URL cross-user) through robust 7-day global caching and seamless UX recovery mechanisms for older sources.
 
 ## Troubleshooting
 

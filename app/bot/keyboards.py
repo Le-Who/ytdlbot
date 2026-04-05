@@ -90,9 +90,9 @@ def build_sent_gif_keyboard(token: str) -> InlineKeyboardMarkup:
         ]
     )
 
+
 def build_video_keyboard(token: str) -> InlineKeyboardMarkup:
-    """Keyboard attached to a standard video message to offer GIF conversions.
-    """
+    """Keyboard attached to a standard video message to offer GIF conversions."""
     return InlineKeyboardMarkup(
         [
             [
@@ -101,7 +101,7 @@ def build_video_keyboard(token: str) -> InlineKeyboardMarkup:
                 ),
                 InlineKeyboardButton(
                     Texts.BTN_SAVE_GIF_FILE, callback_data=f"giffile|{token}"
-                )
+                ),
             ]
         ]
     )

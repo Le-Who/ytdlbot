@@ -358,6 +358,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             return
 
         from app.bot.keyboards import build_video_keyboard
+
         kb = build_video_keyboard(parse_token)
         state.file_cache[parse_token] = file_path  # for GIF conversions
 

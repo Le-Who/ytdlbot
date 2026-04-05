@@ -120,6 +120,11 @@ class YtDlpCLIBuilder:
                 ]
             )
 
+        # Write thumbnail alongside download for zero-cost Telegram preview injection.
+        # Skipped for: pipe mode (no file path), audio (irrelevant), GIF (no preview needed).
+        if not pipe_mode and not is_gif_format and format_id not in ("bestaudio/best", "audio"):
+            cmd.extend(["--write-thumbnail", "--convert-thumbnails", "jpg"])
+
         if output_path != "-" and use_aria2:
             cmd.extend(
                 [

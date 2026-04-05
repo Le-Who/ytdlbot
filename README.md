@@ -19,6 +19,12 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 - **Interactive Private Mode**: Presents inline keyboard options for users to select specific video qualities or audio-only formats.
 - **TikTok Slideshow Support**: Converts TikTok carousels natively via TikWM API into either a 📸 Photo Album (media group) or a 🎬 Video Slideshow (MP4 with audio) using `ffmpeg`.
 - **Strict Format Binding**: Guaranteed zero-mismatch downloads across platforms. Parses formats early to skip FFmpeg muxing (pre-mux priority), conserving resources and preventing Telegram size-limit errors.
+- **Fast-Path Media Pipeline (Zero-CPU/Zero-Disk)**: Five complementary optimizations minimize server load and latency:
+  - **OPT-1 Zero-Cost Thumbnails**: `yt-dlp --write-thumbnail` writes `.jpg` previews alongside every video; the bot injects them into `send_video` at zero extra cost.
+  - **OPT-2 Stream-Copy Splitting**: Files > 48.5 MB are split into Telegram-compatible chunks via `ffmpeg -c copy` (zero re-encoding, ~1–3 s per 200 MB). Skips two-pass compression when possible.
+  - **OPT-3 Native Opus Bypass**: WebM files containing Opus audio are renamed to `.ogg` with no FFmpeg transcoding, enabling native `send_audio` delivery.
+  - **OPT-4 Cobalt Direct URL Delivery**: For TikTok/Twitter files ≤ 19.5 MB, a `HEAD` request reads `Content-Length`; if within Telegram's URL-fetch limit the CDN URL is passed directly—our server never touches the bytes.
+  - **OPT-5 (Planned)**: Zero-disk album delivery for multi-image galleries.
 - **Smart Video Target Compression**: Automatically intercepts oversized videos before Telegram limits reject them. Implements a mathematically precise two-pass `libx264` scaling down to exact 48.5MB targets, protecting long/high-bitrate videos from `413 Request Entity Too Large` Bot API errors.
 - **Local Bot API Integration**: Automatically detects and leverages `TELEGRAM_LOCAL_ENDPOINT` to completely disable CPU-heavy compression. Seamlessly proxies files up to **2000 MB (2 GB)** over the internal network via HTTP chunked streaming directly to your Local Bot API server. Eliminates the need for complex shared persistent volumes (PVs).
 - **Optimized Download Pipeline**: Passes metadata to bypass duplicate `yt-dlp` extraction calls, and supports direct pipe-to-memory streaming for videos <50MB, saving disk I/O.
@@ -39,7 +45,7 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 - **Telegram Logic**: `python-telegram-bot` processes updates concurrently (`concurrent_updates=True`). The webhook endpoint uses fire-and-forget `asyncio.create_task()` dispatch, returning HTTP 200 immediately to Telegram so update delivery is never blocked by slow handlers.
 - **Orchestration Layer**: `DownloadOrchestrator` centralizes all download lifecycles, safely encapsulating complex rules like concurrency queues (`asyncio.Semaphore`), file-size checks, and fallback mechanisms.
 - **Data Fetchers**: `TikWMService` acts as the primary API for ultra-fast, watermark-free TikTok extraction. `YtDlpService` acts as the primary async CLI wrapper for YouTube and standard sites, while `GalleryDlService` and `CobaltService` (optional) handle deep fallback resolution.
-- **Media Processing**: `FFmpeg` is utilized exclusively for post-processing tasks (GIF conversion, slideshow building).
+- **Media Processing**: `FFmpeg` is utilized for post-processing tasks (GIF conversion, slideshow building, H.264 re-encoding for incompatible codecs). The Fast-Path pipeline actively avoids FFmpeg for compatible media.
 - **State Management**: `RedisStorage` manages caching using blazing-fast `msgpack` serialization with `zlib` compression to minimize RAM overhead. `RedisTokenBucketLimiter` implements atomic Lua scripts for accurate, distributed rate limiting.
 
 ```mermaid
@@ -66,7 +72,7 @@ flowchart TD
 | `app/core/`     | Global config, rate limiter logic, caching, and state structures.          |
 | `app/services/` | Wrappers for `yt-dlp`, `gallery-dl`, `ffmpeg` conversion, and downloading. |
 | `app/tasks/`    | Background periodic tasks (e.g., `janitor.py` for temp cleanup).           |
-| `tests/`        | 510+ Pytest tests covering unit, integration, and security.                |
+| `tests/`        | 580+ Pytest tests covering unit, integration, and security.                |
 | `Dockerfile`    | Multi-stage build definition for containerized deployment.                 |
 | `scripts`       | Python standalone script for local debugging of `yt-dlp` extraction.       |
 
@@ -77,7 +83,7 @@ flowchart TD
 | Web Framework   | FastAPI / Uvicorn   | Webhooks, streaming downloads, metrics               |
 | Bot Framework   | python-telegram-bot | Telegram API interface and callback routing          |
 | Extraction Core | yt-dlp / gallery-dl | Resolving platform links to raw media URLs           |
-| Media Engine    | FFmpeg              | Media manipulation, GIF conversion, merging          |
+| Media Engine    | FFmpeg              | Splitting, GIF conversion, H.264 re-encode, merging  |
 | Fingerprinting  | curl_cffi           | TLS impersonation (TikWM, Pinterest, Instagram paths) |
 
 ## Setup

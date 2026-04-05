@@ -21,7 +21,11 @@ def _open_media(
     file_path_or_buffer: Union[str, io.BytesIO], use_local_api: bool = False
 ) -> Any:
     if isinstance(file_path_or_buffer, str):
-        if use_local_api:
+        # OPT-4: HTTP/HTTPS URLs are passed through directly to Telegram.
+        # Telegram servers fetch the file from the CDN URL (zero upload cost from our side).
+        if file_path_or_buffer.startswith(("http://", "https://")):
+            yield file_path_or_buffer
+        elif use_local_api:
             # Pass the file:// URI directly; no need to open the file in Python
             yield f"file://{os.path.abspath(file_path_or_buffer)}"
         else:

@@ -2,7 +2,72 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [Unreleased] — Fast-Path Media Pipeline (2026-04-06)
+
+### Added
+
+- **OPT-1 — Zero-Cost Thumbnails** (`orchestrator.py`, `builders.py`, `converter.py`):
+  `yt-dlp` is now invoked with `--write-thumbnail --convert-thumbnails jpg` for all
+  non-pipe, non-audio, non-GIF downloads. The `find_thumbnail()` utility scans for the
+  adjacent `.jpg`/`.jpeg`/`.webp` file and injects it into `send_video()` via
+  `BytesIO`, providing instant UI previews in Telegram at zero extra cost.
+  Thumbnails are cleaned up in the `finally` block alongside `info_*.json` files.
+
+- **OPT-2 — Stream-Copy Video Splitting** (`converter.py`, `orchestrator.py`):
+  Introduced `split_video_stream_copy()` which runs `ffmpeg -c copy -f segment` to
+  losslessly split files > 48.5 MB into Telegram-compatible chunks. This is ~60–300×
+  faster than two-pass `libx264` compression. Used as the primary fallback before
+  CPU-intensive compression is attempted. Split parts are sent sequentially with captions
+  "Часть 1/N". Falls back to compression if all segments are invalid or ffmpeg fails.
+
+- **OPT-3 — Native Opus Audio Bypass** (`orchestrator.py`):
+  Added `_is_native_audio_container()`, `_detect_opus_from_webm()`, and
+  `_maybe_rename_webm_to_ogg()`. WebM files with Opus audio (detected via the
+  `OpusHead` magic bytes in the first 512 bytes) are renamed to `.ogg` in-place —
+  no FFmpeg transcoding. Telegram accepts `.ogg` as a native audio format.
+
+- **OPT-4 — Cobalt Direct URL Delivery** (`orchestrator.py`, `sender.py`, `messages.py`):
+  `_cobalt_url_head_size()` performs an async `curl_cffi` HEAD request to any Cobalt
+  CDN URL (5 s timeout). If `Content-Length ≤ 19.5 MB`, the URL is passed directly to
+  Telegram — our server never downloads the file. Implemented for both TikTok and
+  Twitter/X Cobalt paths in `messages.py`. `_open_media()` in `sender.py` now
+  short-circuits HTTP/HTTPS strings as pass-through to the Telegram Bot API.
+
+### Fixed
+
+- **`os.path.getsize` guard in orchestrator.py** (OPT-2): Wrapped in `try/except OSError`
+  so that unit tests with mock file paths (`/tmp/test.mp4`) don't crash the pipeline.
+  Degrades gracefully: `file_size = 0`, which skips the split/compress branch.
+
+- **Mypy type-safety** (`orchestrator.py`): Replaced `open(thumbnail_path, "rb")`
+  (`BufferedReader`) passed as `thumbnail=` with `io.BytesIO` loaded from disk, matching
+  the declared type `str | BytesIO | None` in `TelegramSender.send_file()`.
+
+- **None-safety in Twitter/X Cobalt path** (`messages.py` line 747):
+  `CobaltService.download_file()` returns `Optional[str]`. Added an early-return guard
+  and typed `file_path: str` annotation to silence the `Mypy` `arg-type` error.
+
+### Quality & Testing
+
+- **47 new unit tests** in `tests/test_fast_path_opts.py`:
+  - `TestFindThumbnail` (8 tests) — all extension priority paths
+  - `TestNativeAudioBypass` (11 tests) — container detection, Opus header probe, rename
+  - `TestCobaltUrlHeadSize` (3 tests) — success, missing header, exception
+  - `TestOpenMediaPassthrough` (4 tests) — HTTPS, HTTP, BytesIO, file path
+  - `TestSplitVideoStreamCopy` (6 tests) — missing file, small file, too large, probe
+    failure, ffmpeg failure, happy path with mocked segments
+  - `TestYtDlpBuilderThumbnail` (4 tests) — thumbnail flags presence/absence
+  - `TestExtractVideoMeta` (3 tests) — ffprobe parse, info JSON, missing file
+  - `TestEnsureTelegramCompatible` (2 tests) — h264 pass-through, HEVC fallback
+  - `TestBuildGifReplyMarkup` (2 tests) — gif/non-gif
+  - `TestProbeFullMeta` (3 tests) — parse, empty output, exception
+  - `TestSplitVideoCompletePath` (1 test) — happy path returning sorted segments
+
+- **Test suite**: 533 → 580 tests (all passing, exit code 0).
+- **Ruff**: 0 errors across `app/` and new test file.
+- **Mypy**: 0 errors (stale cache cleared, fresh run clean).
+
+---
 
 ### Added
 

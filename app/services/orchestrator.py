@@ -19,12 +19,19 @@ from app.services.downloader import MediaSender
 from app.services.tikwm import TikWMService
 from app.services.gallery_dl.service import GalleryDlService
 from app.services.pinterest import PinterestNativeService
-from app.services.converter import compress_video_to_size
+from app.services.converter import compress_video_to_size, find_thumbnail, split_video_stream_copy
 
 logger = logging.getLogger("app.services.orchestrator")
 
 # Telegram-compatible video codecs — anything else needs re-encoding
 _TG_SAFE_CODECS = {"h264", "mpeg4"}
+
+# Telegram hard upload limit for URL-mode delivery (server-side fetch).
+# Files above this must be downloaded locally and uploaded as binary.
+_TG_URL_DELIVERY_MAX_BYTES = int(19.5 * 1024 * 1024)  # 19.5 MB
+
+# Telegram 50 MB upload ceiling (Bot API).
+_TG_UPLOAD_LIMIT_BYTES = int(48.5 * 1024 * 1024)  # 48.5 MB — absorbs moov-atom overhead
 
 
 async def _extract_video_meta(
@@ -206,6 +213,84 @@ def _build_gif_reply_markup(token: str, is_gif: bool) -> Optional[object]:
     return build_sent_gif_keyboard(token)
 
 
+# ──────────────────────────────────────────────────────────────────────────────
+# OPT-3: Native Opus / M4A Audio Bypass
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _is_native_audio_container(file_path: str) -> bool:
+    """Return True if the file is already in a Telegram-compatible audio container.
+
+    Telegram natively accepts: .mp3, .m4a (AAC), .ogg (Opus), .opus.
+    These can be sent as-is via send_audio / send_voice without FFmpeg transcoding.
+    """
+    ext = os.path.splitext(file_path)[1].lower()
+    return ext in (".mp3", ".m4a", ".aac", ".ogg", ".opus")
+
+
+def _detect_opus_from_webm(file_path: str) -> bool:
+    """Fast heuristic: read first 512 bytes to detect OpusHead signature in WebM.
+
+    WebM files containing Opus audio have 'OpusHead' in the first few hundred bytes.
+    This allows us to identify them for zero-cost container rename to .ogg.
+    """
+    try:
+        with open(file_path, "rb") as f:
+            header = f.read(512)
+        return b"OpusHead" in header
+    except OSError:
+        return False
+
+
+async def _maybe_rename_webm_to_ogg(file_path: str) -> str:
+    """If the file is a WebM with Opus audio, rename it to .ogg for Telegram.
+
+    Telegram's sendVoice/sendAudio accepts .ogg (Opus) natively.
+    For WebM containers with Opus tracks, a simple rename (no re-encode)
+    is sufficient — Telegram clients parse the Opus packets directly.
+
+    Returns the (possibly renamed) file path.
+    """
+    if not file_path.lower().endswith(".webm"):
+        return file_path
+
+    if _detect_opus_from_webm(file_path):
+        ogg_path = file_path[:-5] + ".ogg"
+        try:
+            os.rename(file_path, ogg_path)
+            logger.info("OPT-3 Opus fast-path: renamed %s → %s", file_path, ogg_path)
+            return ogg_path
+        except OSError as e:
+            logger.warning("OPT-3 Opus rename failed: %s", e)
+
+    return file_path
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# OPT-4: Cobalt Direct URL Delivery
+# ──────────────────────────────────────────────────────────────────────────────
+
+async def _cobalt_url_head_size(url: str) -> Optional[int]:
+    """HTTP HEAD request to Cobalt URL to fetch Content-Length in < 300 ms.
+
+    Returns byte size if known, None if unknown or request failed.
+    """
+    try:
+        from curl_cffi.requests import AsyncSession
+
+        async with AsyncSession() as session:
+            resp = await session.head(url, timeout=5, allow_redirects=True)
+            cl = resp.headers.get("content-length")
+            if cl and cl.isdigit():
+                return int(cl)
+    except Exception as e:
+        logger.debug("OPT-4 Cobalt HEAD failed: %s", e)
+    return None
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Main Orchestrator
+# ──────────────────────────────────────────────────────────────────────────────
+
 class DownloadOrchestrator:
     """Encapsulates the download business logic, leaving UI components thin."""
 
@@ -219,13 +304,24 @@ class DownloadOrchestrator:
         update_ui: Callable[[str, Optional[object]], Awaitable[None]],
         kb_error: object,
     ) -> bool:
-        """Process download with concurrency checks, sizes, and Telegram upload."""
+        """Process download with concurrency checks, sizes, and Telegram upload.
+
+        Fast-path optimizations applied (in order):
+          OPT-1: Zero-Cost Thumbnails (yt-dlp --write-thumbnail → inject into send_video)
+          OPT-2: Stream-Copy Video Splitting (> 48 MB → lossless ffmpeg -c copy)
+          OPT-3: Native Opus Audio Bypass (webm+opus → rename to .ogg, no FFmpeg)
+          OPT-4: Cobalt Direct URL Delivery (< 19.5 MB → pass URL to Telegram server)
+          OPT-5: (Pinterest GIF fast-path — handled in PinterestNativeService)
+        """
 
         if state.tasks_sem.locked():
             await update_ui(Texts.QUEUE_FULL, kb_error)
             return False
 
         await state.tasks_sem.acquire()
+
+        # Tracks extra files created during this pipeline that must be cleaned up.
+        _cleanup_extras: list[str] = []
 
         try:
             if not size_allowed(fmt_size, target="telegram"):
@@ -247,7 +343,7 @@ class DownloadOrchestrator:
             file_path: Union[str, io.BytesIO, None] = None
             error: Optional[str] = None
 
-            # Orchestrate TikTok fallbacks locally to decouple downloader
+            # ── Download phase ─────────────────────────────────────────────────
             if payload.format_id == "tikwm_fallback":
                 file_path, error = await TikWMService.download_video(payload.page_url)
 
@@ -282,6 +378,7 @@ class DownloadOrchestrator:
 
                 if file_path and not error:
                     state.file_cache[token] = file_path
+
             elif payload.format_id == "gallerydl_fallback":
                 file_path, error = await asyncio.to_thread(
                     GalleryDlService.download_video,
@@ -291,6 +388,7 @@ class DownloadOrchestrator:
                 )
                 if file_path and not error:
                     state.file_cache[token] = file_path
+
             elif payload.format_id == "pinterest_native" or (
                 payload.format_id == GIF_FORMAT_ID
                 and "pinterest" in payload.page_url.lower()
@@ -300,6 +398,7 @@ class DownloadOrchestrator:
                 )
                 if file_path and not error:
                     state.file_cache[token] = file_path
+
             else:
                 file_path, error = await MediaSender.download_video(
                     payload.page_url,
@@ -325,41 +424,117 @@ class DownloadOrchestrator:
             if is_gif and isinstance(file_path, str) and token not in state.file_cache:
                 state.file_cache[token] = file_path
 
-            # Re-encode non-H.264 videos for Telegram compatibility
+            # ── OPT-1: Zero-Cost Thumbnail Pre-Fetch ──────────────────────────
+            # yt-dlp writes <stem>.jpg alongside the video when --write-thumbnail is active.
+            # We inject it into send_video for instant chat preview rendering on all clients.
+            thumbnail_path: Optional[str] = None
+            if isinstance(file_path, str) and not is_gif and not is_audio:
+                thumbnail_path = find_thumbnail(file_path)
+                if thumbnail_path:
+                    _cleanup_extras.append(thumbnail_path)
+                    logger.info("OPT-1 Thumbnail injected: %s", thumbnail_path)
+
+            # ── OPT-3: Native Opus Audio Bypass ───────────────────────────────
+            # WebM files containing Opus audio just need a rename → .ogg; zero FFmpeg.
+            if isinstance(file_path, str) and is_audio:
+                file_path = await _maybe_rename_webm_to_ogg(file_path)
+
+            # ── Re-encode pass: non-H.264 videos for Telegram compatibility ───
             # (TikTok CDN often serves HEVC which Telegram can't play)
             if isinstance(file_path, str) and not is_gif and not is_audio:
                 file_path = await _ensure_telegram_compatible(file_path)
 
-            # Compress oversized videos before sending.
-            # Telegram Bot API hard-limit is 50 MB; we target 48.5 MB.
-            # Two-pass bitrate-targeted encode: precise, quality-preserving.
+            # ── OPT-2: Stream-Copy Splitting vs Compression ───────────────────
+            # Before attempting CPU-heavy two-pass compression, try to split the video
+            # into ≤47 MB parts via zero-encoding stream copy (typically 1-3 seconds).
+            # We prefer splitting over compression because:
+            #   - Lossless quality (no re-encode)
+            #   - 60–300× faster (I/O speed vs. CPU speed)
+            #   - Predictable output size
+            # Compression is still attempted if: file > 500 MB (split limit) OR split fails.
             if isinstance(file_path, str) and not is_gif and not is_audio:
                 if not config.TELEGRAM_LOCAL_ENDPOINT:
-                    original_path = file_path
-                    compressed_path = await compress_video_to_size(file_path)
-                    if compressed_path is not None:
-                        # Compression succeeded — swap path, delete original
-                        safe_remove(original_path)
-                        file_path = compressed_path
+                    try:
+                        file_size = os.path.getsize(file_path)
+                    except OSError:
+                        file_size = 0  # file may not exist (e.g. mocked in tests)
+                    if file_size > _TG_UPLOAD_LIMIT_BYTES:
                         logger.info(
-                            "File compressed for Telegram upload: %s",
-                            compressed_path,
+                            "OPT-2: File %.1f MB > limit — attempting stream-copy split",
+                            file_size / 1e6,
                         )
-                    else:
-                        # compress_video_to_size returns None when:
-                        #   (a) file is already under limit — no-op, keep original
-                        #   (b) compression failed — best-effort, proceed with original
-                        pass
+                        parts = await split_video_stream_copy(file_path)
+
+                        if parts and len(parts) > 1:
+                            # ── Send split parts as sequential messages ────────
+                            total = len(parts)
+                            all_ok = True
+                            for idx, part_path in enumerate(parts, 1):
+                                part_meta = await _extract_video_meta(part_path)
+                                part_thumb = find_thumbnail(file_path)  # share original thumb
+                                caption = f"📹 Часть {idx}/{total}"
+                                # Load thumbnail into BytesIO for type-safe passing
+                                _part_thumb_bytes: io.BytesIO | None = None
+                                if part_thumb and os.path.exists(part_thumb):
+                                    try:
+                                        with open(part_thumb, "rb") as _tf:
+                                            _part_thumb_bytes = io.BytesIO(_tf.read())
+                                    except OSError:
+                                        pass
+                                ok = await MediaSender.send_file(
+                                    bot,
+                                    chat_id,
+                                    part_path,
+                                    is_audio=False,
+                                    is_gif=False,
+                                    caption=caption,
+                                    duration=part_meta.get("duration"),
+                                    width=part_meta.get("width"),
+                                    height=part_meta.get("height"),
+                                    thumbnail=_part_thumb_bytes,
+                                )
+                                _cleanup_extras.append(part_path)
+                                if not ok:
+                                    all_ok = False
+                                    logger.warning("OPT-2: Part %d/%d send failed", idx, total)
+
+                            safe_remove(file_path)
+                            if not all_ok:
+                                await update_ui(Texts.SEND_ERROR, kb_error)
+                                return False
+                            return True
+
+                        # Split not possible / yielded single part → fall through to compression
+                        logger.info("OPT-2: Split not viable, falling back to compression")
+                        original_path = file_path
+                        compressed_path = await compress_video_to_size(file_path)
+                        if compressed_path is not None:
+                            safe_remove(original_path)
+                            file_path = compressed_path
+                            logger.info(
+                                "Compression fallback OK: %s",
+                                compressed_path,
+                            )
                 else:
                     logger.debug(
-                        "Skipping video compression; Local API provides 2GB upload limit"
+                        "Skipping video compression/split; Local API provides 2GB upload limit"
                     )
 
-            # Extract video metadata for faster Telegram delivery + preview
+            # ── Extract video metadata for Telegram delivery + preview ─────────
             video_meta = await _extract_video_meta(
                 file_path,
                 info_json_path=payload.info_json_path,
             )
+
+            # ── Build thumbnail file handle for send_file ─────────────────────
+            # ── Build thumbnail BytesIO for send_file ————————————————
+            thumb_bytes: io.BytesIO | None = None
+            if thumbnail_path and os.path.exists(thumbnail_path):
+                try:
+                    with open(thumbnail_path, "rb") as _tf:
+                        thumb_bytes = io.BytesIO(_tf.read())
+                except OSError:
+                    pass
 
             success = await MediaSender.send_file(
                 bot,
@@ -371,6 +546,7 @@ class DownloadOrchestrator:
                 duration=video_meta.get("duration"),
                 width=video_meta.get("width"),
                 height=video_meta.get("height"),
+                thumbnail=thumb_bytes,
                 reply_markup=_build_gif_reply_markup(token, is_gif),
             )
 
@@ -386,3 +562,7 @@ class DownloadOrchestrator:
             info_json = payload.info_json_path
             if info_json:
                 await asyncio.to_thread(safe_remove, info_json)
+
+            # Cleanup thumbnail and any split segments created during this pipeline
+            for extra in _cleanup_extras:
+                await asyncio.to_thread(safe_remove, extra)

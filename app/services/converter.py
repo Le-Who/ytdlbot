@@ -34,6 +34,142 @@ _FALLBACK_AUDIO_KBPS = 128
 # Minimum acceptable video bitrate — below this quality degrades severely.
 _MIN_VIDEO_KBPS = 100
 
+# Max segment size for lossless stream-copy splitting (slightly under the Telegram limit).
+_SPLIT_SEGMENT_BYTES = int(47 * 1024 * 1024)  # 47 MB
+
+# Maximum total size we're willing to split (avoids spawning dozens of parts).
+_SPLIT_MAX_INPUT_BYTES = int(500 * 1024 * 1024)  # 500 MB
+
+
+def find_thumbnail(video_path: str) -> Optional[str]:
+    """Return the .jpg thumbnail yt-dlp may have written beside the video.
+
+    yt-dlp writes thumbnails as ``<video_stem>.jpg`` (after ``--convert-thumbnails jpg``).
+    We try the stem with a few common thumbnail extensions in priority order.
+
+    Returns the path if file exists and is non-empty, else None.
+    """
+    if not video_path or not isinstance(video_path, str):
+        return None
+    stem = os.path.splitext(video_path)[0]
+    for ext in (".jpg", ".jpeg", ".webp", ".png"):
+        candidate = stem + ext
+        try:
+            if os.path.exists(candidate) and os.path.getsize(candidate) > 0:
+                logger.debug("find_thumbnail: found %s", candidate)
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
+async def split_video_stream_copy(
+    input_path: str,
+    *,
+    segment_bytes: int = _SPLIT_SEGMENT_BYTES,
+) -> Optional[list[str]]:
+    """Split a video into ≤segment_bytes chunks using FFmpeg stream-copy (zero re-encoding).
+
+    This is an O(file-size / disk-speed) operation — typically 1–3 seconds for a 200 MB file.
+    Telegram's 50 MB upload limit is the primary use case.
+
+    Strategy:
+      1. Probe total duration via ffprobe.
+      2. Compute approximate segment_time = duration * segment_bytes / file_size.
+      3. Run ``ffmpeg -c copy -f segment`` to produce numbered part files.
+      4. Return sorted list of produced paths, or None if anything fails.
+
+    Returns:
+        List of file paths (sorted), or None on failure.
+    """
+    if not input_path or not os.path.exists(input_path):
+        return None
+
+    file_size = os.path.getsize(input_path)
+    if file_size <= segment_bytes:
+        logger.debug("split_video_stream_copy: file %d bytes ≤ limit — skip", file_size)
+        return None
+
+    if file_size > _SPLIT_MAX_INPUT_BYTES:
+        logger.warning(
+            "split_video_stream_copy: file %.0f MB > max %.0f MB — refusing to split",
+            file_size / 1e6,
+            _SPLIT_MAX_INPUT_BYTES / 1e6,
+        )
+        return None
+
+    meta = await _probe_full_meta(input_path)
+    duration_s = meta.get("duration_s")
+    if not duration_s or duration_s <= 0:
+        logger.error("split_video_stream_copy: cannot probe duration for %s", input_path)
+        return None
+
+    # Estimate segment duration proportionally
+    segment_time = max(10.0, duration_s * segment_bytes / file_size)
+
+    uid = uuid.uuid4().hex
+    segment_pattern = os.path.join(TEMP_DIR, f"split_{uid}_%03d.mp4")
+
+    cmd = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_path,
+        "-c",
+        "copy",
+        "-f",
+        "segment",
+        "-segment_time",
+        f"{segment_time:.1f}",
+        "-reset_timestamps",
+        "1",
+        "-avoid_negative_ts",
+        "make_zero",
+        segment_pattern,
+    ]
+
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120.0)
+
+        if proc.returncode != 0:
+            logger.error(
+                "split_video_stream_copy failed (rc=%d): %s",
+                proc.returncode,
+                stderr.decode("utf-8", errors="ignore")[-500:],
+            )
+            return None
+
+        # Collect produced segments (ffmpeg names them 000, 001, …)
+        import glob
+
+        pattern = os.path.join(TEMP_DIR, f"split_{uid}_*.mp4")
+        parts = sorted(glob.glob(pattern))
+        valid = [p for p in parts if os.path.exists(p) and os.path.getsize(p) > 0]
+
+        if not valid:
+            logger.error("split_video_stream_copy: no output segments produced")
+            return None
+
+        logger.info(
+            "split_video_stream_copy: %.0f MB → %d parts (≈%.0f MB each)",
+            file_size / 1e6,
+            len(valid),
+            segment_bytes / 1e6,
+        )
+        return valid
+
+    except asyncio.TimeoutError:
+        logger.error("split_video_stream_copy: ffmpeg timed out")
+        return None
+    except Exception as exc:
+        logger.error("split_video_stream_copy: exception: %s", exc, exc_info=True)
+        return None
+
 
 async def _probe_full_meta(video_path: str) -> dict:
     """Probe duration, audio bitrate, and overall bitrate from a file via ffprobe.

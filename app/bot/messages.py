@@ -350,8 +350,19 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             )
         elif api_source == "cobalt":
             from app.services.cobalt import CobaltService
+            from app.services.orchestrator import _cobalt_url_head_size
 
-            file_path = await CobaltService.download_file(tiktok_api_res.url, "mp4")
+            # OPT-4: Attempt direct URL delivery if file is small enough for TG server-fetch
+            _cobalt_size = await _cobalt_url_head_size(tiktok_api_res.url)
+            _tg_url_limit = int(19.5 * 1024 * 1024)
+            if _cobalt_size is not None and _cobalt_size <= _tg_url_limit:
+                logger.info(
+                    "OPT-4 TikTok Cobalt URL delivery: %.1f MB (url mode)",
+                    _cobalt_size / 1e6,
+                )
+                file_path = tiktok_api_res.url  # Pass URL directly to send_file
+            else:
+                file_path = await CobaltService.download_file(tiktok_api_res.url, "mp4")
 
         if not file_path:
             await status_msg.edit_text("⚠️ Ошибка загрузки видео.")
@@ -725,7 +736,19 @@ async def _handle_twitter(
                 return False
 
             await status_msg.edit_text("⏳ Загрузка видео с X...")
-            file_path = await CobaltService.download_file(res.url, "mp4")
+            # OPT-4: Direct URL delivery for small files (< 19.5 MB)
+            from app.services.orchestrator import _cobalt_url_head_size
+            _x_size = await _cobalt_url_head_size(res.url)
+            _tg_url_limit = int(19.5 * 1024 * 1024)
+            if _x_size is not None and _x_size <= _tg_url_limit:
+                logger.info("OPT-4 X/Twitter URL delivery: %.1f MB", _x_size / 1e6)
+                file_path = res.url  # URL delivered to TG server directly
+            else:
+                _downloaded = await CobaltService.download_file(res.url, "mp4")
+                if not _downloaded:
+                    await status_msg.edit_text("⚠️ Ошибка загрузки видео с X.")
+                    return True
+                file_path = _downloaded
             if not file_path:
                 await status_msg.edit_text("⚠️ Ошибка загрузки видео с X.")
                 return True

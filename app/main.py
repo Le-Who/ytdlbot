@@ -55,6 +55,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     if config.TELEGRAM_LOCAL_ENDPOINT:
         app_builder.base_url(f"{config.TELEGRAM_LOCAL_ENDPOINT}/bot")
+        app_builder.local_mode(True)
         logger.info(
             "Using local Telegram Bot API Server at %s", config.TELEGRAM_LOCAL_ENDPOINT
         )

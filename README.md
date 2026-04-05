@@ -190,9 +190,9 @@ _Prerequisites: System must have `ffmpeg` and local `python -m pytest` available
 
 ### Flow 3: On-Demand Native GIF Export
 
-- **Preconditions**: Bot has delivered a GIF/animation (Pinterest, TikTok, etc.) with the `💾 Скачать как .gif файл` inline button.
+- **Preconditions**: Bot has delivered a video with dual GIF format buttons (`🔄 Анимация (MP4)` and `💾 Файлом (.gif)`).
 - **Steps**:
-  1. User presses the button; bot answers with a Toast and updates the button to `⏳ Готовлю .gif файл...`.
+  1. User presses the `💾 Файлом (.gif)` button; bot answers with a Toast and updates the button to `⏳ Готовлю .gif файл...`.
   2. Handler checks Redis cache (`gifdoc:{token}`) — if a `file_id` is cached, it re-sends instantly via `sendDocument`.
   3. If no cache hit: locates the source MP4 from `file_cache`; or re-fetches from Telegram via `bot.get_file()` (Local API, zero external traffic).
   4. Runs two-pass FFmpeg conversion: `palettegen` (pass 1) → `paletteuse` with Bayer dithering (pass 2), capped at 480px/15fps.

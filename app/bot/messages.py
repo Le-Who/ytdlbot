@@ -357,9 +357,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             await status_msg.edit_text("⚠️ Ошибка загрузки видео.")
             return
 
-        kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{parse_token}")]]
-        )
+        from app.bot.keyboards import build_video_keyboard
+        kb = build_video_keyboard(parse_token)
         state.file_cache[parse_token] = file_path  # for GIF conversions
 
         from app.services.sender import TelegramSender

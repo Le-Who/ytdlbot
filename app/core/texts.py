@@ -88,7 +88,8 @@ class Texts:
     GIF_CONVERSION_ERROR = "⚠️ Ошибка конвертации."
     GIF_SEND_ERROR = "⚠️ Не удалось отправить GIF."
     # Native .gif file export (on-demand)
-    BTN_SAVE_GIF_FILE = "💾 Скачать как .gif файл"
+    BTN_SEND_ANIMATION_MP4 = "🔄 Анимация (MP4)"
+    BTN_SAVE_GIF_FILE = "💾 Файлом (.gif)"
     BTN_SAVE_GIF_WAIT = "⏳ Готовлю .gif файл..."
     BTN_SAVE_GIF_DONE = "✅ .gif файл отправлен"
     GIF_FILE_PREPARING_TOAST = "Конвертирую в нативный .gif, подождите..."

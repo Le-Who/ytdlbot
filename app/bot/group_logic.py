@@ -269,10 +269,8 @@ async def handle_group_message(
         except Exception:
             pass
 
-        # Create "Send GIF" button
-        kb = InlineKeyboardMarkup(
-            [[InlineKeyboardButton("🎬 Send GIF", callback_data=f"gif|{token}")]]
-        )
+        from app.bot.keyboards import build_video_keyboard
+        kb = build_video_keyboard(token)
 
         is_gif = isinstance(file_path, str) and file_path.lower().endswith(".gif")
 
@@ -403,15 +401,8 @@ async def on_group_slideshow(
                 caption = f"👤 {user_tag}"
                 gif_token = uuid.uuid4().hex
                 state.file_cache[gif_token] = tikwm_path
-                kb = InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton(
-                                "🎬 Send GIF", callback_data=f"gif|{gif_token}"
-                            )
-                        ]
-                    ]
-                )
+                from app.bot.keyboards import build_video_keyboard
+                kb = build_video_keyboard(gif_token)
                 success = await MediaSender.send_file(
                     context.bot,
                     chat_id,
@@ -484,15 +475,8 @@ async def on_group_slideshow(
 
                 gif_token = uuid.uuid4().hex
                 state.file_cache[gif_token] = video_path
-                kb = InlineKeyboardMarkup(
-                    [
-                        [
-                            InlineKeyboardButton(
-                                "🎬 Send GIF", callback_data=f"gif|{gif_token}"
-                            )
-                        ]
-                    ]
-                )
+                from app.bot.keyboards import build_video_keyboard
+                kb = build_video_keyboard(gif_token)
                 success = await MediaSender.send_file(
                     context.bot,
                     chat_id,

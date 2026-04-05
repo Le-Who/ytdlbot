@@ -9,20 +9,15 @@ All notable changes to this project will be documented in this file.
 - **Native `.gif` File Export** (`giffile|` callback): On-demand two-pass FFmpeg palette pipeline
   (`palettegen` stats_mode=diff → `paletteuse` Bayer dithering, `diff_mode=rectangle`).
   Output is a standards-compliant `GIF89a` binary (magic bytes `47 49 46 38 39 61`) capped
-  at 480 px width / 15 fps with Lanczos scaling — compatible with Discord avatars/banners,
-  Windows Photo Viewer, Android/iOS galleries, and any tool that validates magic bytes.
-  Root cause of the prior limitation: `convert_to_gif_ffmpeg()` produced an MP4 container
-  (`ftyp` magic) — a silent video Telegram accepts as animation, but external apps reject
-  when saved as `.gif`.
-- **`💾 Скачать как .gif файл` inline button**: Attached to every animation message delivered
-  by the orchestrator and `on_convert_to_gif`. Token-bound via `file_cache`; UX shows
-  spinner `⏳ Готовлю...` → `✅ Отправлен` states.
-- **Redis doc_file_id caching** (`gifdoc:{token}`): Subsequent presses of the same button
+  at 480 px width / 15 fps with Lanczos scaling.
+- **Dual GIF Format Selection Interface**: Redesigned the UX to eliminate the confusing two-step
+  process ("ask for MP4 animation -> then ask for GIF file"). Delivered videos now feature an 
+  inline keyboard with both `[🔄 Анимация (MP4)]` and `[💾 Файлом (.gif)]`, providing immediate, 
+  clear choices up-front.
+- **Redis doc_file_id caching** (`gifdoc:{token}`): Subsequent presses of the `.gif` button
   bypass conversion entirely and re-send the cached Telegram `file_id` via `sendDocument`.
 - **Local API passthrough for GIF documents**: `sendDocument` routed through
   `tg-api-server:8081` when `TELEGRAM_LOCAL_ENDPOINT` is set; supports files up to 2 GB.
-  Source MP4 re-fetched from Telegram via `bot.get_file()` when `file_cache` entry has
-  expired — zero persistent disk usage.
 - **`gif_file_sem = asyncio.Semaphore(2)`** in `state.py`: Dedicated bounded concurrency
   for GIF export jobs, independent from `tasks_sem` and `conversion_sem`.
 - **`on_save_as_gif_file()` debounce guard**: `processing_gifs` set prevents double-firing
@@ -30,6 +25,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **PTB Local Mode crash**: Added explicit `app_builder.local_mode(True)` initialization when
+  `TELEGRAM_LOCAL_ENDPOINT` is configured, preventing `ValueError` exceptions when attempting 
+  to pass `file://` URIs directly to `send_document()` for >50MB GIF exports.
 - **Pinterest GIF detection root cause** (`PinterestNativeService`): Video pins that lack
   `og:video` meta tags now have a regex fallback scanning the raw HTML for CDN-hosted
   `.mp4` stream URLs (`cdn.fbcdn.net`, `v1.pinimg.com`), eliminating silent `.jpg`

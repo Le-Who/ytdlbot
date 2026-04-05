@@ -87,6 +87,13 @@ class Texts:
     GIF_ALREADY_IN_PROGRESS = "⏳ У вас уже идет генерация..."
     GIF_CONVERSION_ERROR = "⚠️ Ошибка конвертации."
     GIF_SEND_ERROR = "⚠️ Не удалось отправить GIF."
+    # Native .gif file export (on-demand)
+    BTN_SAVE_GIF_FILE = "💾 Скачать как .gif файл"
+    BTN_SAVE_GIF_WAIT = "⏳ Готовлю .gif файл..."
+    BTN_SAVE_GIF_DONE = "✅ .gif файл отправлен"
+    GIF_FILE_PREPARING_TOAST = "Конвертирую в нативный .gif, подождите..."
+    GIF_FILE_ERROR = "⚠️ Ошибка конвертации. Попробуйте ещё раз."
+    GIF_FILE_QUEUE_TOAST = "Сервер занят, добавляю в очередь..."
 
     # ── Slideshow ─────────────────────────────────────────────────
     SLIDESHOW_DETECTED = "🖼 <b>{title}</b>\n📸 Это фотоальбом (TikTok Slideshow)"

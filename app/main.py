@@ -89,6 +89,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         CallbackQueryHandler(callbacks.on_convert_to_gif, pattern=r"^gif\|")
     )
     bot_app.add_handler(
+        CallbackQueryHandler(callbacks.on_save_as_gif_file, pattern=r"^giffile\|")
+    )
+    bot_app.add_handler(
         CallbackQueryHandler(
             callbacks.on_slideshow, pattern=r"^(slideshow|cbslide|apislide)\|"
         )

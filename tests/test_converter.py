@@ -180,3 +180,82 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestConvertToNativeGif(unittest.IsolatedAsyncioTestCase):
+    """Unit tests for MediaConverter.convert_to_native_gif."""
+
+    def setUp(self):
+        from app.core import state
+
+        state.gif_file_sem = MagicMock()
+        state.gif_file_sem.__aenter__ = AsyncMock()
+        state.gif_file_sem.__aexit__ = AsyncMock()
+
+    @staticmethod
+    def _make_proc(returncode=0, stderr=b""):
+        proc = AsyncMock()
+        proc.returncode = returncode
+        proc.communicate = AsyncMock(return_value=(b"", stderr))
+        return proc
+
+    @patch("app.services.converter.safe_remove")
+    @patch("app.services.converter.os.path.getsize", return_value=4096)
+    @patch("app.services.converter.os.path.exists", return_value=True)
+    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    async def test_convert_to_native_gif_success(
+        self, mock_exec, mock_exists, mock_size, mock_safe_remove
+    ):
+        """Happy path: palettegen + paletteuse both succeed → returns gif path."""
+        mock_exec.return_value = self._make_proc(0)
+
+        with patch("app.services.converter.uuid.uuid4") as mock_uuid:
+            mock_uuid.return_value.hex = "aabbcc"
+            result = await MediaConverter.convert_to_native_gif("/tmp/test.mp4")
+
+        self.assertIsNotNone(result)
+        self.assertTrue(result.endswith("_native.gif"))
+        # Two ffmpeg calls: palettegen + paletteuse
+        self.assertEqual(mock_exec.call_count, 2)
+        # palette png must be cleaned up
+        mock_safe_remove.assert_called()
+
+    @patch("app.services.converter.safe_remove")
+    @patch("app.services.converter.os.path.exists", return_value=True)
+    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    async def test_convert_to_native_gif_palettegen_failure(
+        self, mock_exec, mock_exists, mock_safe_remove
+    ):
+        """Palettegen (pass 1) fails → returns None immediately."""
+        mock_exec.return_value = self._make_proc(1, b"palettegen error")
+
+        result = await MediaConverter.convert_to_native_gif("/tmp/test.mp4")
+
+        self.assertIsNone(result)
+        # Only one ffmpeg call (pass 1 bails early)
+        self.assertEqual(mock_exec.call_count, 1)
+
+    @patch("app.services.converter.safe_remove")
+    @patch("app.services.converter.os.path.getsize", return_value=0)
+    @patch("app.services.converter.os.path.exists", return_value=True)
+    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    async def test_convert_to_native_gif_empty_output(
+        self, mock_exec, mock_exists, mock_size, mock_safe_remove
+    ):
+        """Paletteuse succeeds but output is empty → returns None."""
+        mock_exec.return_value = self._make_proc(0)
+
+        result = await MediaConverter.convert_to_native_gif("/tmp/test.mp4")
+
+        self.assertIsNone(result)
+
+    @patch("app.services.converter.os.path.exists", return_value=False)
+    async def test_convert_to_native_gif_missing_input(self, mock_exists):
+        """Missing source file → returns None immediately."""
+        result = await MediaConverter.convert_to_native_gif("/nonexistent/video.mp4")
+        self.assertIsNone(result)
+
+    async def test_convert_to_native_gif_empty_path(self):
+        """Empty/None source path → returns None immediately."""
+        self.assertIsNone(await MediaConverter.convert_to_native_gif(""))
+        self.assertIsNone(await MediaConverter.convert_to_native_gif(None))  # type: ignore

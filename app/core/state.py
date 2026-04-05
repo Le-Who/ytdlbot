@@ -42,6 +42,9 @@ processing_gifs: set[str] = set()  # Set of tokens currently being converted to 
 conversion_sem = asyncio.Semaphore(
     3
 )  # Bounded concurrency for CPU-intensive conversions
+gif_file_sem = asyncio.Semaphore(
+    2
+)  # Bounded concurrency for on-demand native .gif file exports (palette+scale)
 
 
 # Глобальный объект приложения Telegram (инициализируется в main.py)

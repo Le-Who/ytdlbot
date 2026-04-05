@@ -71,3 +71,21 @@ def build_slideshow_keyboard() -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+def build_sent_gif_keyboard(token: str) -> InlineKeyboardMarkup:
+    """Keyboard attached to a sent GIF animation message.
+
+    Provides a single 'Save as .gif file' button that triggers on-demand
+    native GIF export via the giffile| callback.
+    """
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    Texts.BTN_SAVE_GIF_FILE,
+                    callback_data=f"giffile|{token}",
+                )
+            ]
+        ]
+    )

@@ -194,6 +194,17 @@ async def _ensure_telegram_compatible(file_path: str) -> str:
         return file_path
 
 
+def _build_gif_reply_markup(token: str, is_gif: bool) -> Optional[object]:
+    """Return the 'Save as .gif file' keyboard when delivering an animation.
+
+    Returns None for non-GIF files so regular videos are unaffected.
+    """
+    if not is_gif:
+        return None
+    from app.bot.keyboards import build_sent_gif_keyboard
+    return build_sent_gif_keyboard(token)
+
+
 class DownloadOrchestrator:
     """Encapsulates the download business logic, leaving UI components thin."""
 
@@ -309,6 +320,10 @@ class DownloadOrchestrator:
             )
             is_audio = payload.format_id == AUDIO_FORMAT_ID
 
+            # Cache file path for on-demand GIF file export (giffile| callback)
+            if is_gif and isinstance(file_path, str) and token not in state.file_cache:
+                state.file_cache[token] = file_path
+
             # Re-encode non-H.264 videos for Telegram compatibility
             # (TikTok CDN often serves HEVC which Telegram can't play)
             if isinstance(file_path, str) and not is_gif and not is_audio:
@@ -355,6 +370,7 @@ class DownloadOrchestrator:
                 duration=video_meta.get("duration"),
                 width=video_meta.get("width"),
                 height=video_meta.get("height"),
+                reply_markup=_build_gif_reply_markup(token, is_gif),
             )
 
             if not success:

@@ -649,7 +649,6 @@ async def on_save_as_gif_file(update: Update, context: ContextTypes.DEFAULT_TYPE
             anim = getattr(q.message, "animation", None) or getattr(q.message, "video", None)
             if anim:
                 tg_file = await context.bot.get_file(anim.file_id)
-                import tempfile
                 tmp = os.path.join(
                     __import__("app.core.config", fromlist=["TEMP_DIR"]).TEMP_DIR,
                     f"gif_src_{token}.mp4",

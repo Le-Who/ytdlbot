@@ -6,6 +6,56 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **Native `.gif` File Export** (`giffile|` callback): On-demand two-pass FFmpeg palette pipeline
+  (`palettegen` stats_mode=diff → `paletteuse` Bayer dithering, `diff_mode=rectangle`).
+  Output is a standards-compliant `GIF89a` binary (magic bytes `47 49 46 38 39 61`) capped
+  at 480 px width / 15 fps with Lanczos scaling — compatible with Discord avatars/banners,
+  Windows Photo Viewer, Android/iOS galleries, and any tool that validates magic bytes.
+  Root cause of the prior limitation: `convert_to_gif_ffmpeg()` produced an MP4 container
+  (`ftyp` magic) — a silent video Telegram accepts as animation, but external apps reject
+  when saved as `.gif`.
+- **`💾 Скачать как .gif файл` inline button**: Attached to every animation message delivered
+  by the orchestrator and `on_convert_to_gif`. Token-bound via `file_cache`; UX shows
+  spinner `⏳ Готовлю...` → `✅ Отправлен` states.
+- **Redis doc_file_id caching** (`gifdoc:{token}`): Subsequent presses of the same button
+  bypass conversion entirely and re-send the cached Telegram `file_id` via `sendDocument`.
+- **Local API passthrough for GIF documents**: `sendDocument` routed through
+  `tg-api-server:8081` when `TELEGRAM_LOCAL_ENDPOINT` is set; supports files up to 2 GB.
+  Source MP4 re-fetched from Telegram via `bot.get_file()` when `file_cache` entry has
+  expired — zero persistent disk usage.
+- **`gif_file_sem = asyncio.Semaphore(2)`** in `state.py`: Dedicated bounded concurrency
+  for GIF export jobs, independent from `tasks_sem` and `conversion_sem`.
+- **`on_save_as_gif_file()` debounce guard**: `processing_gifs` set prevents double-firing
+  from rapid button taps during conversion.
+
+### Fixed
+
+- **Pinterest GIF detection root cause** (`PinterestNativeService`): Video pins that lack
+  `og:video` meta tags now have a regex fallback scanning the raw HTML for CDN-hosted
+  `.mp4` stream URLs (`cdn.fbcdn.net`, `v1.pinimg.com`), eliminating silent `.jpg`
+  thumbnail delivery in place of the actual animated content.
+- **Orchestrator GIF routing** (`DownloadOrchestrator`): `GIF_FORMAT_ID` requests for
+  Pinterest URLs are now explicitly routed to `PinterestNativeService` instead of falling
+  through to `yt-dlp`, which fails with `No video formats found!`.
+
+### Changed
+
+- **`convert_to_gif_ffmpeg()` responsibility narrowed**: Responsible only for stripping
+  audio from MP4 for in-Telegram `sendAnimation` delivery. Native `.gif` export is now a
+  separate on-demand operation (`convert_to_native_gif()`).
+
+### Quality & Testing
+
+- **5 new unit tests** in `test_converter.py` (`TestConvertToNativeGif`):
+  happy path, palettegen failure, empty output guard, missing input, empty/None path.
+- **Test suite**: 528 → 533 tests (all passing, exit code 0).
+- **Ruff**: 0 errors (auto-fixed 1 unused import in `callbacks.py`).
+- **Mypy**: 0 errors across all source files.
+
+---
+
+
+
 - **Smart Video Compression**: Implemented mathematically precise, automatic two-pass `libx264` video compression for files exceeding Telegram's 50MB limit. The system probes video duration/audio bitrate and dynamically scales video bitrates to fit seamlessly within a 48.5MB container cap (`_TG_MAX_BYTES`).
 - **Local Bot API Server Integration (Zero-Copy)**: Introduced native support for local Telegram Bot API servers. Configuring `TELEGRAM_LOCAL_ENDPOINT` transparently increases the maximum upload limit to 2000 MB (2 GB). All `ffmpeg` compression algorithms are bypassed entirely to preserve CPU, and files are streamed via `file://` absolute URI pointers directly into the Telegram daemon without multipart HTTP overhead.
 - **Windows Host FFmpeg Compatibility Fix**: Fixed a critical silent crash in the `compress_video_to_size` function caused by hardcoded `/dev/null` paths in the first-pass encode. Replaced with cross-platform `os.devnull` (handling `NUL` on Windows environments).

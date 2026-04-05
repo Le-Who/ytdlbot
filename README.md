@@ -9,7 +9,7 @@ YTDL Bot solves the problem of friction in downloading and sharing media from so
 ## Current Status
 
 **Production-ish / API-Stabilized**
-The project is well-structured and highly tested (>528 tests, CI/CD pipeline). However, since it relies heavily on third-party extraction tools (`yt-dlp`, `gallery-dl`) and platform algorithms, it is inherently subject to platform-side changes (e.g., rate limits, blockages).
+The project is well-structured and highly tested (>533 tests, CI/CD pipeline). However, since it relies heavily on third-party extraction tools (`yt-dlp`, `gallery-dl`) and platform algorithms, it is inherently subject to platform-side changes (e.g., rate limits, blockages).
 Recent systemic fixes have stabilized asynchronous subprocess extraction and decoupled Redis caching dependencies, making the pipeline heavily resilient to coroutine clashes. Some advanced evasion techniques (proxies, cookies) are configured but require manual upkeep by the admin.
 
 ## Features
@@ -22,7 +22,8 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 - **Smart Video Target Compression**: Automatically intercepts oversized videos before Telegram limits reject them. Implements a mathematically precise two-pass `libx264` scaling down to exact 48.5MB targets, protecting long/high-bitrate videos from `413 Request Entity Too Large` Bot API errors.
 - **Local Bot API Integration**: Automatically detects and leverages `TELEGRAM_LOCAL_ENDPOINT` to completely disable CPU-heavy compression. Seamlessly proxies files up to **2000 MB (2 GB)** over the internal network via HTTP chunked streaming directly to your Local Bot API server. Eliminates the need for complex shared persistent volumes (PVs).
 - **Optimized Download Pipeline**: Passes metadata to bypass duplicate `yt-dlp` extraction calls, and supports direct pipe-to-memory streaming for videos <50MB, saving disk I/O.
-- **Zero-Disk Pipeline**: Converts video to GIF natively without saving intermediary files to disk (`yt-dlp` -> `ffmpeg` pipe).
+- **Zero-Disk Pipeline**: Converts video to GIF natively without saving intermediary files to disk (`yt-dlp` → `ffmpeg` pipe).
+- **Native `.gif` File Export**: On-demand two-pass FFmpeg palette generation (`palettegen`→`paletteuse`) for full `GIF89a`-spec files (480px/15fps, Bayer dithering). Sent via `sendDocument` so users receive a real `.gif` that works in Discord, phone galleries, and local media players — not an MP4 in disguise.
 - **Rate Limiting**: Multi-layered token bucket limiter preventing abuse per User, Chat, IP, and Token.
 - **Monitoring & Logging**: Built-in Prometheus-compatible metrics endpoint (`/metrics`) exposing operational telemetry cleanly via client integration. Fully structured logging across the pipeline.
 
@@ -164,6 +165,7 @@ _Prerequisites: System must have `ffmpeg` and local `python -m pytest` available
 - `^pick\|` : Quality format selected by user.
 - `^cancel\|` : Task cancellation request.
 - `^send\|` | `^gif\|` : Post-download interactive transforms.
+- `^giffile\|` : On-demand native `.gif` file export (palettegen→paletteuse, sendDocument reply).
 - `^slideshow\|` / `^grpslide\|` : Specific selectors for TikTok carousel behavior.
 
 ## Main User Flows
@@ -186,13 +188,17 @@ _Prerequisites: System must have `ffmpeg` and local `python -m pytest` available
   3. Bot posts the video directly as a reply to the original message.
 - **Expected Outcome**: Immediate, seamless media playback in group without menu spam.
 
-### Flow 3: Fast GIF Conversion
+### Flow 3: On-Demand Native GIF Export
 
-- **Preconditions**: Bot previously posted a video into the chat.
+- **Preconditions**: Bot has delivered a GIF/animation (Pinterest, TikTok, etc.) with the `💾 Скачать как .gif файл` inline button.
 - **Steps**:
-  1. User presses the inline "Send GIF" button attached to the bot's video message.
-  2. Webhook triggers GIF callback handler.
-- **Expected Outcome**: Bot relies on the cached stream (zero-disk streaming via `pipe:0` to `ffmpeg`), converts it instantly, and returns an animated GIF version.
+  1. User presses the button; bot answers with a Toast and updates the button to `⏳ Готовлю .gif файл...`.
+  2. Handler checks Redis cache (`gifdoc:{token}`) — if a `file_id` is cached, it re-sends instantly via `sendDocument`.
+  3. If no cache hit: locates the source MP4 from `file_cache`; or re-fetches from Telegram via `bot.get_file()` (Local API, zero external traffic).
+  4. Runs two-pass FFmpeg conversion: `palettegen` (pass 1) → `paletteuse` with Bayer dithering (pass 2), capped at 480px/15fps.
+  5. Sends the resulting `GIF89a` file via `sendDocument` (routed through Local API for 2GB headroom).
+  6. Caches the returned `document.file_id` in Redis; updates button to `✅ .gif файл отправлен`.
+- **Expected Outcome**: User receives a standards-compliant `.gif` file compatible with Discord, Windows Photo Viewer, phone galleries, and any tool that reads magic bytes — not an MP4 renamed to `.gif`.
 
 ## Troubleshooting
 

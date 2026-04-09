@@ -1,6 +1,7 @@
 import logging
 import uuid
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 
@@ -93,8 +94,8 @@ async def handle_group_message(update: Update, context: ContextTypes.DEFAULT_TYP
             await status_msg.edit_text(error or "❌ Ошибка.")
             # await asyncio.sleep(5)
             # await status_msg.delete()
-        except Exception:
-            pass
+        except TelegramError as e:
+            logger.debug(f"Group error UI update failed: {e}")
         return
 
     # Success! Send video in Silent Mode (Delete original, Tag user)

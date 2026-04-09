@@ -1,10 +1,11 @@
 import os
+import time
 import asyncio
 import re
 from collections import deque
 from urllib.parse import urlsplit
 from app.constants import SUPPORTED_PLATFORMS, SUPPORTED_PLATFORMS_SUFFIXES
-from app.core.state import active_processes_lock, active_processes
+from app.core.state import active_processes_lock, active_processes, user_rates
 
 # Regex паттерны
 URL_RE = re.compile(r"https?://\S+", re.I)
@@ -58,7 +59,26 @@ def extract_supported_url(text: str) -> str | None:
     return None
 
 def check_rate_limit(user_id: int, limit: int = 5) -> bool:
-    """Проверяет лимит запросов пользователя в минуту (Отключено пользователем)"""
+    """Проверяет лимит запросов пользователя в минуту."""
+    now = time.time()
+    # Get history of timestamps, filter out old ones (> 60s ago)
+    # user_rates stores a list of timestamps for each user
+    history = user_rates.get(user_id, [])
+    # If for some reason history is not a list (e.g. legacy int), reset it
+    if not isinstance(history, list):
+        history = []
+
+    history = [t for t in history if now - t < 60]
+
+    if len(history) >= limit:
+        # Update cache with cleaned history to prevent it from growing indefinitely
+        # even if blocked, but TTLCache might handle expiration.
+        # However, to be safe and keep TTL active, we update it.
+        user_rates[user_id] = history
+        return False
+
+    history.append(now)
+    user_rates[user_id] = history
     return True
 
 def safe_remove(path: str) -> None:

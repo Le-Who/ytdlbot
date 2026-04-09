@@ -1,4 +1,8 @@
 import asyncio
+import os
+import signal
+import subprocess
+import sys
 from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -17,14 +21,8 @@ class ProcessHandle:
         if self.proc.returncode is not None:
             return
 
-        import sys
-        import subprocess
-        import os
-
         try:
             if sys.platform != "win32":
-                import signal
-
                 try:
                     os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
                 except ProcessLookupError:
@@ -59,8 +57,6 @@ async def run_subprocess(
     stderr_pipe: bool = True,
     timeout: float | None = None,
 ) -> AsyncIterator[ProcessHandle]:
-    import sys
-    import subprocess
 
     kwargs = {}
     if sys.platform != "win32":

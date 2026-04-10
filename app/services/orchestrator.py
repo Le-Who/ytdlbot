@@ -584,11 +584,6 @@ class DownloadOrchestrator:
         finally:
             _sem.release()
 
-            # Cleanup info JSON after download (prevent /tmp fill)
-            info_json = payload.info_json_path
-            if info_json:
-                await asyncio.to_thread(safe_remove, info_json)
-
             # Cleanup thumbnail and any split segments created during this pipeline
             for extra in _cleanup_extras:
                 await asyncio.to_thread(safe_remove, extra)

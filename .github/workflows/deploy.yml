@@ -1,0 +1,65 @@
+name: Deploy to VPS
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - vps
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    # Рекомендуется использовать environment для защиты секретов
+    environment: production
+
+    steps:
+      - name: Execute deployment script via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || '22' }}
+          script: |
+            # 1. Переходим в рабочую директорию бота (должна быть заранее создана и склонирована!)
+            # Измени путь, если репозиторий лежит в другом месте
+            cd /opt/ytdlbot || exit 1
+
+            # 2. Подтягиваем актуальный код
+            git pull origin main || git pull origin master
+
+            # 3. Перезаписываем .env файл защищёнными секретами из GitHub Actions
+            cat << 'EOF' > .env
+            # --- Основные ---
+            BOT_TOKEN=${{ secrets.BOT_TOKEN }}
+            BASE_URL=${{ secrets.BASE_URL }}
+            WEBHOOK_URL=${{ secrets.WEBHOOK_URL }}
+            TELEGRAM_SECRET_TOKEN=${{ secrets.TELEGRAM_SECRET_TOKEN }}
+
+            # --- Telegram Local API ---
+            TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
+            TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}
+
+            # --- Лимиты и таймауты (можно хардкодить, а можно передавать из секретов) ---
+            MAX_TG_UPLOAD_MB=${{ secrets.MAX_TG_UPLOAD_MB || '48' }}
+            MAX_DL_MB=${{ secrets.MAX_DL_MB || '4000' }}
+            MAX_CONCURRENT_TASKS=${{ secrets.MAX_CONCURRENT_TASKS || '4' }}
+            MAX_API_TASKS=${{ secrets.MAX_API_TASKS || '20' }}
+            YTDLP_CONCURRENT_FRAGMENTS=${{ secrets.YTDLP_CONCURRENT_FRAGMENTS || '10' }}
+            DL_TIMEOUT_TELEGRAM=${{ secrets.DL_TIMEOUT_TELEGRAM || '1200' }}
+            DL_TIMEOUT_HTTP=${{ secrets.DL_TIMEOUT_HTTP || '1800' }}
+            YOUTUBE_PIPE_MODE=${{ secrets.YOUTUBE_PIPE_MODE || '0' }}
+
+            # --- API интеграции (опционально) ---
+            ENABLE_COBALT_TIKTOK=${{ secrets.ENABLE_COBALT_TIKTOK || '0' }}
+            COBALT_API_URL=${{ secrets.COBALT_API_URL }}
+            COBALT_API_KEY=${{ secrets.COBALT_API_KEY }}
+            IG_SESSIONS_B64=${{ secrets.IG_SESSIONS_B64 }}
+            TIKTOK_PROXY=${{ secrets.TIKTOK_PROXY }}
+            EOF
+
+            # 4. Пересобираем контейнер бота (меняются зависимости) и перезапускаем весь стек
+            docker compose build bot
+            docker compose down
+            docker compose up -d

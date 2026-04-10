@@ -2,24 +2,60 @@ services:
   bot:
     build: .
     restart: always
-    env_file:
-      - .env
+    env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
-      - WEBHOOK_URL=${WEBHOOK_URL:-}
+      - TELEGRAM_LOCAL_ENDPOINT=http://tg-api:8081
     ports:
       - "8000:8000"
     depends_on:
       redis:
         condition: service_healthy
+      tg-api:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 5G
+          cpus: "3.5"
+
+  tg-api:
+    image: aiogram/telegram-bot-api:latest
+    restart: always
+    environment:
+      - TELEGRAM_API_ID=${TELEGRAM_API_ID}
+      - TELEGRAM_API_HASH=${TELEGRAM_API_HASH}
+      - TELEGRAM_LOCAL=1
+    volumes:
+      - tg-api-data:/var/lib/telegram-bot-api
+    ports:
+      - "127.0.0.1:8081:8081"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8081"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1"
 
   redis:
     image: redis:7-alpine
     restart: always
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+volumes:
+  tg-api-data:
+  redis-data:

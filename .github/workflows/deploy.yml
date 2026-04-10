@@ -44,7 +44,10 @@ jobs:
             
             # === ФИКСИРОВАННЫЕ НАСТРОЙКИ Сервера ===
             BASE_URL=https://vid.tri.mom
-            WEBHOOK_URL=https://vid.tri.mom
+            # WEBHOOK_URL указывает локальному TG API куда слать апдейты.
+            # Если указать внешний домен — пакеты могут умереть на NAT loopback сервера.
+            # Указываем внутреннее имя контейнера бота в сети Docker!
+            WEBHOOK_URL=http://bot:8000
             TELEGRAM_SECRET_TOKEN=133769
             # REDIS_URL убран — Docker Compose сам подключится к своему внутреннему Redis
             # TELEGRAM_LOCAL_ENDPOINT убран — Docker Compose сам его выставляет

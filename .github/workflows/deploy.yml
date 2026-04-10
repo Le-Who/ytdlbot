@@ -29,34 +29,56 @@ jobs:
             git checkout vps || git checkout -b vps origin/vps
             git reset --hard origin/vps
 
-            # 3. Перезаписываем .env файл защищёнными секретами из GitHub Actions
+            # 3. Перезаписываем .env файл
             cat << 'EOF' > .env
-            # --- Основные ---
+            # === СЕКРЕТЫ ИЗ GITHUB ACTIONS ===
             BOT_TOKEN=${{ secrets.BOT_TOKEN }}
-            BASE_URL=${{ secrets.BASE_URL }}
-            WEBHOOK_URL=${{ secrets.WEBHOOK_URL }}
-            TELEGRAM_SECRET_TOKEN=${{ secrets.TELEGRAM_SECRET_TOKEN }}
-
-            # --- Telegram Local API ---
             TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
             TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}
-
-            # --- Лимиты и таймауты (можно хардкодить, а можно передавать из секретов) ---
-            MAX_TG_UPLOAD_MB=${{ secrets.MAX_TG_UPLOAD_MB || '48' }}
-            MAX_DL_MB=${{ secrets.MAX_DL_MB || '4000' }}
-            MAX_CONCURRENT_TASKS=${{ secrets.MAX_CONCURRENT_TASKS || '4' }}
-            MAX_API_TASKS=${{ secrets.MAX_API_TASKS || '20' }}
-            YTDLP_CONCURRENT_FRAGMENTS=${{ secrets.YTDLP_CONCURRENT_FRAGMENTS || '10' }}
-            DL_TIMEOUT_TELEGRAM=${{ secrets.DL_TIMEOUT_TELEGRAM || '1200' }}
-            DL_TIMEOUT_HTTP=${{ secrets.DL_TIMEOUT_HTTP || '1800' }}
-            YOUTUBE_PIPE_MODE=${{ secrets.YOUTUBE_PIPE_MODE || '0' }}
-
-            # --- API интеграции (опционально) ---
-            ENABLE_COBALT_TIKTOK=${{ secrets.ENABLE_COBALT_TIKTOK || '0' }}
-            COBALT_API_URL=${{ secrets.COBALT_API_URL }}
-            COBALT_API_KEY=${{ secrets.COBALT_API_KEY }}
+            
+            # Платформенные куки (оставь пустыми в GitHub Secrets, если не используешь)
+            YTDLP_COOKIES_B64=${{ secrets.YTDLP_COOKIES_B64 }}
+            FACEBOOK_COOKIES_B64=${{ secrets.FACEBOOK_COOKIES_B64 }}
+            TIKTOK_COOKIES_B64=${{ secrets.TIKTOK_COOKIES_B64 }}
             IG_SESSIONS_B64=${{ secrets.IG_SESSIONS_B64 }}
-            TIKTOK_PROXY=${{ secrets.TIKTOK_PROXY }}
+            
+            # === ФИКСИРОВАННЫЕ НАСТРОЙКИ Сервера ===
+            BASE_URL=https://vid.tri.mom
+            WEBHOOK_URL=https://vid.tri.mom
+            TELEGRAM_SECRET_TOKEN=133769
+            # REDIS_URL убран — Docker Compose сам подключится к своему внутреннему Redis
+            # TELEGRAM_LOCAL_ENDPOINT убран — Docker Compose сам его выставляет
+            
+            # --- Настройки скачивания/загрузки ---
+            ENABLE_TELEGRAM_UPLOAD=1
+            MAX_TG_UPLOAD_MB=900
+            MAX_DL_MB=1000
+            MAX_CONCURRENT_TASKS=4
+            MAX_API_TASKS=20
+            YTDLP_CONCURRENT_FRAGMENTS=10
+            DL_TIMEOUT_TELEGRAM=1200
+            DL_TIMEOUT_HTTP=1800
+            YOUTUBE_PIPE_MODE=0
+            
+            # --- Очистка и система ---
+            TMPDIR=/tmp
+            MAX_TEMP_AGE_SECONDS=3600
+            JANITOR_INTERVAL_SECONDS=300
+            
+            # --- Лимиты ---
+            LIMITER_USER_CAPACITY=5
+            LIMITER_USER_REFILL_PER_SEC=0.5
+            LIMITER_CHAT_CAPACITY=20
+            LIMITER_CHAT_REFILL_PER_SEC=1
+            LIMITER_IP_CAPACITY=15
+            LIMITER_IP_REFILL_PER_SEC=1
+            LIMITER_TOKEN_CAPACITY=3
+            LIMITER_TOKEN_REFILL_PER_SEC=0.25
+            LIMITER_IG_CAPACITY=15
+            
+            # --- Внешние API ---
+            COBALT_API_URL=https://api.cobalt.tools
+            ENABLE_COBALT_TIKTOK=0
             EOF
 
             # 4. Пересобираем контейнер бота (меняются зависимости) и перезапускаем весь стек

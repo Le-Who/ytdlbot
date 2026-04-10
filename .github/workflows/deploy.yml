@@ -26,8 +26,10 @@ jobs:
             # Измени путь, если репозиторий лежит в другом месте
             cd /opt/ytdlbot || exit 1
 
-            # 2. Подтягиваем актуальный код
-            git pull origin main || git pull origin master
+            # 2. Подтягиваем актуальный код (жёстко приравниваем к ветке vps, удаляя локальные конфликты)
+            git fetch origin vps
+            git checkout vps || git checkout -b vps origin/vps
+            git reset --hard origin/vps
 
             # 3. Перезаписываем .env файл защищёнными секретами из GitHub Actions
             cat << 'EOF' > .env

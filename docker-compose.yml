@@ -6,8 +6,7 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - TELEGRAM_LOCAL_ENDPOINT=http://tg-api:8081
-    ports:
-      - "8000:8000"
+    # Убрали public port 8000. Внешний мир попадает сюда только через Caddy
     depends_on:
       redis:
         condition: service_healthy
@@ -56,6 +55,34 @@ services:
       timeout: 5s
       retries: 5
 
+  # Прокси-сервер для автоматического HTTPS и маршрутизации на домен
+  caddy:
+    image: caddy:2-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    command: caddy reverse-proxy --from https://vid.tri.mom --to http://bot:8000
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - bot
+
+  # Управление контейнерами (Web-интерфейс)
+  portainer:
+    image: portainer/portainer-ce:latest
+    restart: always
+    ports:
+      - "9000:9000"     # Доступ по HTTP: http://твои_ip:9000
+      - "9443:9443"     # Доступ по HTTPS (self-signed): https://твои_ip:9443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+
 volumes:
   tg-api-data:
   redis-data:
+  caddy_data:
+  caddy_config:
+  portainer_data:

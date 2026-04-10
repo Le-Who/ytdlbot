@@ -34,6 +34,7 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         state.info_cache = AsyncMockCache()
         state.link_cache = AsyncMockCache()
         state.cancel_cache = AsyncMockCache()
+        state.prefs_cache = AsyncMockCache()  # needed by user_prefs fast-path in on_message
         state.inflight_parsing = {}
         state.limiter = MagicMock()
         state.limiter.allow_user = AsyncMock(return_value=True)
@@ -50,6 +51,8 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         self.update.effective_user.id = 123
         self.update.effective_chat.id = 456
         self.update.message.text = "https://youtube.com/watch?v=abc"
+        self.update.message.caption = None
+        self.update.message.reply_to_message = None
         self.update.message.message_id = 1
         self.update.message.reply_text = AsyncMock()
         self.update.message.reply_photo = AsyncMock()

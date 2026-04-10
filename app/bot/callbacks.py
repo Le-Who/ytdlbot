@@ -27,7 +27,7 @@ from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID, SLIDESHOW_PHOTO_FORMAT
 from app.bot.keyboards import build_format_keyboard
 from app.core.texts import Texts
 from app.core.logging import set_correlation_id
-from app.services.downloader import MediaSender, MAX_TELEGRAM_ALBUM_SIZE
+from app.services.downloader import MediaSender
 from app.core.models import DownloadContext
 from app.services.orchestrator import DownloadOrchestrator
 
@@ -477,11 +477,11 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         is_photo_mode = mode == "photo"
     else:
         is_photo_mode = mode == SLIDESHOW_PHOTO_FORMAT_ID
-    if state.tasks_sem.locked():
+    if state.download_sem.locked():
         await _edit_or_reply(q, Texts.QUEUE_FULL)
         return
 
-    await state.tasks_sem.acquire()
+    await state.download_sem.acquire()
     try:
         await _edit_or_reply(q, Texts.SLIDESHOW_DOWNLOADING)
 
@@ -576,7 +576,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             # Always cleanup slideshow download directory
             await asyncio.to_thread(MediaSender.cleanup_slideshow, result)
     finally:
-        state.tasks_sem.release()
+        state.download_sem.release()
 
 
 async def on_save_as_gif_file(

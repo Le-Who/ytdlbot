@@ -44,6 +44,29 @@ class Texts:
     TIMEOUT_RETRY = (
         "⏳ Время ожидания истекло. Сервер перегружен, пожалуйста, попробуйте еще раз."
     )
+    CMD_MP3_USAGE = (
+        "🎵 Использование: <code>/mp3 &lt;ссылка&gt;</code>\n"
+        "Или ответьте этой командой на сообщение со ссылкой."
+    )
+    CMD_MP4_USAGE = (
+        "🎬 Использование: <code>/mp4 &lt;ссылка&gt;</code>\n"
+        "Или ответьте этой командой на сообщение со ссылкой."
+    )
+    CMD_FAST_DL_START = "⏳ Скачиваю..."
+    SETTINGS_HEADER = (
+        "⚙️ <b>Ваши настройки</b>\n\n"
+        "• Формат: <b>{fmt}</b>\n"
+        "• Качество: <b>{quality}</b>\n\n"
+        "<i>Команды для изменения:</i>\n"
+        "/setformat video|audio\n"
+        "/setquality best|1080|720|480|360\n"
+        "/settings reset — сбросить настройки"
+    )
+    SETTINGS_FMT_SET = "✅ Формат по умолчанию установлен: <b>{fmt}</b>"
+    SETTINGS_QUALITY_SET = "✅ Качество по умолчанию установлено: <b>{quality}</b>"
+    SETTINGS_RESET = "✅ Настройки сброшены."
+    SETTINGS_INVALID_FMT = "❌ Неверный формат. Используйте: <code>video</code> или <code>audio</code>."
+    SETTINGS_INVALID_QUALITY = "❌ Неверное качество. Используйте: <code>best</code>, <code>1080</code>, <code>720</code>, <code>480</code>, <code>360</code>."
     FETCH_ERROR_RETRY = "⚠️ Ошибка при получении данных. Пожалуйста, проверьте ссылку и попробуйте еще раз."
     TIMEOUT_UNAVAILABLE = "❌ Время ожидания истекло. Сервис недоступен."
     ACCESS_DENIED = (

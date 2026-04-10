@@ -314,11 +314,19 @@ class DownloadOrchestrator:
           OPT-5: (Pinterest GIF fast-path — handled in PinterestNativeService)
         """
 
-        if state.tasks_sem.locked():
+        # ── Tiered semaphore selection ────────────────────────────────────
+        # API-origin payloads (TikWM, Cobalt URL delivery, Pinterest) have
+        # near-zero CPU cost — route them through the higher-capacity api_sem
+        # so a flood of heavy yt-dlp jobs cannot starve them.
+        _api_origin_ids = {"tikwm_fallback", "pinterest_native", "gallerydl_fallback"}
+        _is_api_origin = payload.format_id in _api_origin_ids
+        _sem = state.api_sem if _is_api_origin else state.download_sem
+
+        if _sem.locked():
             await update_ui(Texts.QUEUE_FULL, kb_error)
             return False
 
-        await state.tasks_sem.acquire()
+        await _sem.acquire()
 
         # Tracks extra files created during this pipeline that must be cleaned up.
         _cleanup_extras: list[str] = []
@@ -574,7 +582,7 @@ class DownloadOrchestrator:
 
             return True
         finally:
-            state.tasks_sem.release()
+            _sem.release()
 
             # Cleanup info JSON after download (prevent /tmp fill)
             info_json = payload.info_json_path

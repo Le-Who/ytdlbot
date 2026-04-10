@@ -35,6 +35,8 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
         state.cancel_cache = AsyncMockCache()
         state.ytdlp = MagicMock()
         state.tasks_sem = asyncio.Semaphore(5)
+        state.download_sem = asyncio.Semaphore(5)
+        state.api_sem = asyncio.Semaphore(10)
         state.parsing_sem = MagicMock()
         state.parsing_sem.__aenter__ = AsyncMock(return_value=None)
         state.parsing_sem.__aexit__ = AsyncMock(return_value=None)
@@ -167,7 +169,7 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
     async def test_on_slideshow_queue_full(self):
         """Full queue should show queue full error."""
         self.update.callback_query.data = f"slideshow|{SLIDESHOW_PHOTO_FORMAT_ID}"
-        state.tasks_sem = asyncio.Semaphore(0)  # Fully exhausted = queue full
+        state.download_sem = asyncio.Semaphore(0)  # Fully exhausted = queue full
 
         await callbacks.on_slideshow(self.update, self.context)
 

@@ -7,7 +7,8 @@ from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 
 from app.core import state
-from app.core.utils import extract_url_and_section
+from app.core.config import MAX_TG_UPLOAD_MB
+from app.core.utils import extract_url_from_update
 from app.bot.keyboards import build_format_keyboard, build_slideshow_keyboard
 from app.core.texts import Texts
 from app.services.ytdlp.exceptions import (
@@ -27,7 +28,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     assert user is not None and msg is not None and chat is not None
     text = (msg.text or "").strip()
 
-    url, section = extract_url_and_section(text)
+    url, section = extract_url_from_update(msg)
     if not url:
         await msg.reply_text(Texts.URL_NOT_SUPPORTED)
         return
@@ -59,6 +60,41 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if handled:
             return
     # ── End Twitter / X Intercept ────────────────────────────────────────
+
+    # ── User Preferences Fast-Path ───────────────────────────────────────
+    # If the user has set a default format/quality, skip the picker entirely.
+    # Instagram and Twitter are handled by their own intercepts above.
+    from app.core.user_prefs import get_prefs
+
+    _prefs = await get_prefs(user.id)
+    _default_fmt = _prefs.get("default_format")
+    _default_quality = _prefs.get("default_quality")  # int or None
+
+    if _default_fmt == "audio":
+        from app.bot.commands import cmd_mp3
+
+        await cmd_mp3(update, context)
+        return
+
+    if _default_fmt == "video" or _default_quality is not None:
+        # Build a height-constrained format string when a quality is set
+        if _default_quality:
+            _sz_pref = f"{MAX_TG_UPLOAD_MB}M"
+            _fmt_pref = (
+                f"bestvideo[height<={_default_quality}][ext=mp4]+bestaudio[ext=m4a]"
+                f"/best[height<={_default_quality}][ext=mp4]"
+                f"/bestvideo[height<={_default_quality}]+bestaudio"
+                f"/best[height<={_default_quality}][filesize<{_sz_pref}]/best"
+            )
+        else:
+            from app.bot.commands import _MP4_FORMAT as _fmt_pref  # type: ignore[attr-defined]
+        from app.bot.commands import _fast_download
+
+        await _fast_download(
+            update, context, format_id=_fmt_pref, is_audio=False
+        )
+        return
+    # ── End User Preferences Fast-Path ───────────────────────────────────
 
     kb_cancel = InlineKeyboardMarkup(
         [

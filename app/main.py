@@ -18,6 +18,7 @@ from app.bot import callbacks, commands, messages
 from app.core import config, state
 from app.core.logging import set_correlation_id, setup_logging
 from app.tasks.janitor import janitor_loop
+from app.tasks.auto_updater import auto_updater_loop
 
 setup_logging()
 logger = logging.getLogger("app.main")
@@ -50,6 +51,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     stop_event = asyncio.Event()
     janitor_task = asyncio.create_task(janitor_loop(stop_event))
+    updater_task = asyncio.create_task(auto_updater_loop(stop_event))
 
     app_builder = Application.builder().token(config.BOT_TOKEN).concurrent_updates(True)
 
@@ -62,6 +64,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     bot_app = app_builder.build()
     bot_app.add_handler(CommandHandler("start", commands.cmd_start))
     bot_app.add_handler(CommandHandler("help", commands.cmd_help))
+    bot_app.add_handler(CommandHandler("mp3", commands.cmd_mp3))
+    bot_app.add_handler(CommandHandler("mp4", commands.cmd_mp4))
+    bot_app.add_handler(CommandHandler("settings", commands.cmd_settings))
+    bot_app.add_handler(CommandHandler("setformat", commands.cmd_setformat))
+    bot_app.add_handler(CommandHandler("setquality", commands.cmd_setquality))
     bot_app.add_handler(
         MessageHandler(
             filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND,
@@ -159,6 +166,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Shutting down...")
     stop_event.set()
     await janitor_task
+    await updater_task
     if config.WEBHOOK_URL:
         await bot_app.bot.delete_webhook()
     else:

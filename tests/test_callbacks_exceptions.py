@@ -37,6 +37,8 @@ class TestCallbacksExceptions(unittest.IsolatedAsyncioTestCase):
         state.cancel_cache = AsyncMockCache()
         state.ytdlp = MagicMock()
         state.tasks_sem = asyncio.Semaphore(5)
+        state.download_sem = asyncio.Semaphore(5)
+        state.api_sem = asyncio.Semaphore(10)
 
         state.parsing_sem = MagicMock()
         state.parsing_sem.__aenter__ = AsyncMock(return_value=None)

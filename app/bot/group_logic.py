@@ -7,7 +7,7 @@ from telegram.constants import ChatAction
 
 from app.core import state
 from app.core.config import MAX_TG_UPLOAD_MB
-from app.core.utils import extract_supported_url
+from app.core.utils import extract_url_from_update
 from app.services.downloader import MediaSender
 from app.core.models import DownloadContext
 from app.core.texts import Texts
@@ -34,8 +34,7 @@ async def handle_group_message(
     if not update.message or not update.message.text:
         return
 
-    text = update.message.text.strip()
-    url = extract_supported_url(text)
+    url, _ = extract_url_from_update(update.message)
 
     # In groups, we only react if a URL is found.
     # We do NOT reply with error if URL is not supported (passive mode).
@@ -139,12 +138,12 @@ async def handle_group_message(
                     is_slideshow = False
 
     # Route format processing
+    is_pinterest = "pinterest" in url or "pin.it" in url
     if tiktok_auth_error:
         # We always want GalleryDL now for TikTok since it handles auth restrictions natively
         video_format = "gallerydl_fallback"
     else:
         # Detect Pinterest to use a simpler format
-        is_pinterest = "pinterest" in url or "pin.it" in url
         if is_pinterest:
             video_format = "pinterest_native"
         else:
@@ -193,14 +192,17 @@ async def handle_group_message(
         except Exception:
             return
 
-    if state.tasks_sem.locked():
+    _api_fmt = is_tiktok_url or is_pinterest or tiktok_auth_error
+    _sem = state.api_sem if _api_fmt else state.download_sem
+
+    if _sem.locked():
         try:
             await status_msg.edit_text(Texts.QUEUE_FULL)
         except Exception:
             pass
         return
 
-    await state.tasks_sem.acquire()
+    await _sem.acquire()
     try:
         if (
             is_tiktok_api_success
@@ -286,7 +288,7 @@ async def handle_group_message(
             reply_markup=kb,
         )
     finally:
-        state.tasks_sem.release()
+        _sem.release()
 
     if success:
         try:
@@ -342,14 +344,14 @@ async def on_group_slideshow(
     except Exception:
         pass
 
-    if state.tasks_sem.locked():
+    if state.download_sem.locked():
         try:
             await q.edit_message_text(Texts.QUEUE_FULL)
         except Exception:
             pass
         return
 
-    await state.tasks_sem.acquire()
+    await state.download_sem.acquire()
     try:
         await q.edit_message_text(Texts.SLIDESHOW_DOWNLOADING)
 
@@ -504,4 +506,4 @@ async def on_group_slideshow(
         finally:
             await asyncio.to_thread(MediaSender.cleanup_slideshow, result)
     finally:
-        state.tasks_sem.release()
+        state.download_sem.release()

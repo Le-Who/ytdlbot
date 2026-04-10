@@ -81,6 +81,14 @@ def mock_state():
     state.tasks_sem.locked.return_value = False
     state.tasks_sem.__aenter__ = AsyncMock(return_value=None)
     state.tasks_sem.__aexit__ = AsyncMock(return_value=None)
+    state.download_sem = MagicMock()
+    state.download_sem.locked.return_value = False
+    state.download_sem.acquire = AsyncMock()
+    state.download_sem.release = MagicMock()
+    state.api_sem = MagicMock()
+    state.api_sem.locked.return_value = False
+    state.api_sem.acquire = AsyncMock()
+    state.api_sem.release = MagicMock()
     state.inflight_parsing = {}
     state.ytdlp = MagicMock()
     state.bot_app = MagicMock()

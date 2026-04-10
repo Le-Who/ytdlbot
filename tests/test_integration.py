@@ -180,6 +180,8 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
         state.link_cache = AsyncMockCache()
         state.cancel_cache = AsyncMockCache()
         state.tasks_sem = asyncio.Semaphore(5)
+        state.download_sem = asyncio.Semaphore(5)
+        state.api_sem = asyncio.Semaphore(10)
         state.limiter = MagicMock()
         state.limiter.allow_user = AsyncMock(return_value=True)
         state.limiter.allow_chat = AsyncMock(return_value=True)

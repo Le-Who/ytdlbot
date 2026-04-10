@@ -32,6 +32,11 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 - **Optimized Download Pipeline**: Passes metadata to bypass duplicate `yt-dlp` extraction calls, and supports direct pipe-to-memory streaming for videos <50MB, saving disk I/O.
 - **Zero-Disk Pipeline**: Converts video to GIF natively without saving intermediary files to disk (`yt-dlp` → `ffmpeg` pipe).
 - **Native `.gif` File Export**: On-demand two-pass FFmpeg palette generation (`palettegen`→`paletteuse`) for full `GIF89a`-spec files (480px/15fps, Bayer dithering). Sent via `sendDocument` so users receive a real `.gif` that works in Discord, phone galleries, and local media players — not an MP4 in disguise.
+- **Autonomous `yt-dlp` Auto-Updater**: Background task runs `yt-dlp -U` every 24 h (configurable via `YTDLP_UPDATE_INTERVAL_HOURS`), logging version transitions and incrementing a Prometheus counter.
+- **Reply-to URL Resolution**: All handlers fall back to the replied-to message when the primary message contains no supported URL — works naturally in group chats.
+- **Fast-Path Slash Commands**: `/mp3 <url>` and `/mp4 <url>` bypass the format picker and deliver audio/video directly. Both accept reply-to messages containing the URL.
+- **Per-User Download Preferences**: Users can persist their preferred format and quality via `/setformat`, `/setquality`, and `/settings`. Preferences are stored in Redis with a 90-day TTL and automatically applied on every subsequent link.
+- **Adaptive Tiered Concurrency**: Two purpose-built semaphores — `api_sem` (high-capacity, for TikWM/Cobalt/Pinterest) and `download_sem` (for yt-dlp/ffmpeg) — prevent fast API fetches from being starved by heavy encoding jobs.
 - **Rate Limiting**: Multi-layered token bucket limiter preventing abuse per User, Chat, IP, and Token.
 - **Monitoring & Logging**: Built-in Prometheus-compatible metrics endpoint (`/metrics`) exposing operational telemetry cleanly via client integration. Fully structured logging across the pipeline.
 
@@ -73,8 +78,8 @@ flowchart TD
 | `app/bot/`      | Telegram bot command/message handlers and inline keyboards.                |
 | `app/core/`     | Global config, rate limiter logic, caching, and state structures.          |
 | `app/services/` | Wrappers for `yt-dlp`, `gallery-dl`, `ffmpeg` conversion, and downloading. |
-| `app/tasks/`    | Background periodic tasks (e.g., `janitor.py` for temp cleanup).           |
-| `tests/`        | 580+ Pytest tests covering unit, integration, and security.                |
+| `app/tasks/`    | Background periodic tasks: `janitor.py` for temp cleanup, `auto_updater.py` for yt-dlp updates. |
+| `tests/`        | 608+ Pytest tests covering unit, integration, and security.                |
 | `Dockerfile`    | Multi-stage build definition for containerized deployment.                 |
 | `scripts`       | Python standalone script for local debugging of `yt-dlp` extraction.       |
 
@@ -127,6 +132,8 @@ Selected key variables from `.env.example`:
 | `IG_SESSIONS_B64`         | No       | —                          | Comma-separated Base64-encoded Instagram sessions for anti-ban rotation pool                | Instagram Service |
 | `LIMITER_IG_CAPACITY`     | No       | `15`                       | Max hourly requests per Instagram session                                                   | Config Limiter   |
 | `TELEGRAM_LOCAL_ENDPOINT` | No       | —                          | Internal HTTP URL to your local Telegram Bot API Server (e.g., `http://tg-api:8081`)        | Downloader / PTB |
+| `YTDLP_UPDATE_INTERVAL_HOURS` | No   | `24`                       | Interval (hours) between autonomous `yt-dlp` self-updates                                  | Auto-Updater     |
+| `MAX_API_TASKS`           | No       | `10`                       | Semaphore capacity for lightweight API-origin downloads (TikWM, Pinterest, Cobalt)          | Orchestrator     |
 
 ## Run
 

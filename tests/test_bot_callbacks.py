@@ -35,6 +35,8 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.ytdlp = MagicMock()
         state.ytdlp.list_formats = AsyncMock()
         state.tasks_sem = asyncio.Semaphore(5)
+        state.download_sem = asyncio.Semaphore(5)
+        state.api_sem = asyncio.Semaphore(10)
 
         state.parsing_sem = MagicMock()
         state.parsing_sem.__aenter__ = AsyncMock(return_value=None)
@@ -182,7 +184,8 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         token = "token"
         self.update.callback_query.data = f"send|{token}"
         state.link_cache[token] = {"page_url": "http://example.com", "format_id": "137"}
-        state.tasks_sem = asyncio.Semaphore(0)  # Fully exhausted = queue full
+        # Exhaust the semaphore that process_download now checks for yt-dlp jobs
+        state.download_sem = asyncio.Semaphore(0)
 
         await callbacks.on_send(self.update, self.context)
         args, _ = self.update.callback_query.edit_message_text.call_args

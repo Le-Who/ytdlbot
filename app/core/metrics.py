@@ -139,6 +139,10 @@ class MetricsCollector:
             "ytdlbot_conversion_failures_total",
             "Failed ffmpeg conversions",
         )
+        self.ytdlp_updates_total = _Counter(
+            "ytdlbot_ytdlp_updates_total",
+            "Total yt-dlp self-update runs that produced a new version",
+        )
 
         # Gauges
         self.active_downloads = _Gauge(
@@ -184,6 +188,7 @@ class MetricsCollector:
             self.parse_requests,
             self.parse_cancellations,
             self.conversion_failures,
+            self.ytdlp_updates_total,
             self.active_downloads,
         ]
         for metric in counter_and_gauge_metrics:

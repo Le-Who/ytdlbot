@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING, Any
 from cachetools import TTLCache
 from app.core.cache import FileTTLCache
@@ -34,7 +35,15 @@ logger = logging.getLogger("app")
 ytdlp = YtDlpService()
 
 # Глобальные примитивы синхронизации
-tasks_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
+# ── Semaphores —————————————————————————————————————————————————————
+# Tiered to prevent heavy FFmpeg jobs from starving lightweight API calls.
+#
+# api_sem     : TikWM / Cobalt / Pinterest fetches (near-zero CPU).
+# download_sem: yt-dlp + aria2 downloads (IO-bound, moderate CPU).
+# conversion_sem / gif_file_sem retain their existing limits.
+tasks_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)   # kept for legacy callbacks.py usage
+api_sem = asyncio.Semaphore(int(os.getenv("MAX_API_TASKS", "10")))
+download_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 parsing_sem = asyncio.Semaphore(5)  # Лимит на одновременный парсинг форматов
 active_processes_lock = asyncio.Lock()
 active_processes: set[asyncio.subprocess.Process] = set()
@@ -84,6 +93,13 @@ else:
     info_cache = MemoryStorage(maxsize=200, ttl=600)
     cancel_cache = MemoryStorage(maxsize=100, ttl=3600)
     gifdoc_cache = MemoryStorage(maxsize=500, ttl=604800)
+
+# Per-user download preferences (format / quality)
+prefs_cache: StateStorage
+if redis_client:
+    prefs_cache = RedisStorage(redis_client, default_ttl=90 * 86400, prefix="prefs")
+else:
+    prefs_cache = MemoryStorage(maxsize=5000, ttl=90 * 86400)
 
 inflight_parsing: TTLCache = TTLCache(
     maxsize=100, ttl=600

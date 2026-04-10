@@ -2,7 +2,74 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] — Architectural Synthesis Sprint (2026-04-10)
+
+### Added
+
+- **Autonomous `yt-dlp` Auto-Updater** (`app/tasks/auto_updater.py`):
+  New background task that runs `yt-dlp -U` on a configurable interval
+  (`YTDLP_UPDATE_INTERVAL_HOURS`, default 24 h). Logs version transitions
+  and increments the Prometheus counter `ytdlbot_ytdlp_updates_total`.
+  Integrated into `main.py` via the existing `stop_event` pattern for
+  graceful shutdown.
+
+- **Reply-to URL Resolution** (`app/core/utils.py` — `extract_url_from_update`):
+  All message handlers now transparently fall back to `reply_to_message.text`
+  and `reply_to_message.caption` when the primary message contains no
+  supported URL. Enables natural "reply-to-link" UX in group chats.
+  Non-string attributes (MagicMock, etc.) are safely ignored.
+
+- **Fast-Path Slash Commands** (`app/bot/commands.py`):
+  - `/mp3 <url>` — download best audio, bypassing the format picker entirely.
+  - `/mp4 <url>` — download best-quality video without a format picker.
+  - Both commands also accept reply-to messages containing the URL.
+  - Registered in `main.py` alongside `/start` and `/help`.
+
+- **Per-User Download Preferences** (`app/core/user_prefs.py`):
+  New Redis-backed (or in-memory fallback) preference store with a 90-day TTL.
+  Commands:
+  - `/settings` — show current preferences; `/settings reset` to clear.
+  - `/setformat video|audio` — persist default format.
+  - `/setquality best|1080|720|480|360` — persist default quality.
+  When preferences are set, `on_message` and `handle_group_message` skip the
+  format picker and invoke the fast-path directly.
+
+- **Adaptive Tiered Concurrency** (`app/core/state.py`, `app/services/orchestrator.py`,
+  `app/bot/callbacks.py`, `app/bot/group_logic.py`):
+  Replaced the monolithic `tasks_sem` with two targeted semaphores:
+  - `api_sem (MAX_API_TASKS, default 10)` — for near-zero-CPU API fetches
+    (TikWM, Cobalt, Pinterest, GalleryDL).
+  - `download_sem (MAX_CONCURRENT_TASKS)` — for heavy `yt-dlp`/`ffmpeg` jobs.
+  This prevents a flood of lightweight API calls from being blocked by slow
+  yt-dlp jobs and vice versa. `tasks_sem` is retained for legacy compat.
+
+- **Texts constants** (`app/core/texts.py`):
+  `CMD_MP3_USAGE`, `CMD_MP4_USAGE`, `CMD_FAST_DL_START`, `SETTINGS_HEADER`,
+  `SETTINGS_FMT_SET`, `SETTINGS_QUALITY_SET`, `SETTINGS_RESET`,
+  `SETTINGS_INVALID_FMT`, `SETTINGS_INVALID_QUALITY`.
+
+### Quality & Testing
+
+- **28 new unit tests** in `tests/test_new_features.py`:
+  - `TestExtractUrlFromUpdate` (9 tests) — text/caption/reply priority, unsupported
+    URLs, non-string attributes, section extraction.
+  - `TestUserPrefs` (7 tests) — empty read, set/get format & quality, merge,
+    clear, VALID_FORMATS/VALID_QUALITIES constants.
+  - `TestAutoUpdater` (4 tests) — version capture, unknown on failure, loop
+    stops on event, silences exceptions.
+  - `TestTieredSemaphoreLogic` (2 tests) — routing set membership assertions.
+
+- All existing tests updated to mock `download_sem` and `api_sem` alongside
+  `tasks_sem` where relevant.
+- `conftest.py` `mock_state` fixture extended with `download_sem`, `api_sem`,
+  and `prefs_cache` mocks.
+- **Test suite**: passes with exit code 0 (no-cov run).
+- **Ruff**: 0 errors across `app/` and new test files.
+
+---
+
 ## [Unreleased] — Fast-Path Media Pipeline (2026-04-06)
+
 
 ### Added
 

@@ -73,7 +73,7 @@ async def handle_group_message(
             pass
         from app.bot.messages import _handle_instagram
 
-        await _handle_instagram(update, context, url, uuid.uuid4().hex[:8])
+        await _handle_instagram(update, context, url, uuid.uuid4().hex[:8], None)
         return
 
     # Generate token for this operation (used for file cache & callbacks)

@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] — Resilience & Stability Hardening Sprint (2026-04-12)
+
+### Added
+
+- **Fair Download Queue** (`app/core/download_queue.py`):
+  Replaced the blunt `semaphore.locked() → reject` pattern with a position-aware
+  `DownloadQueue` class. When concurrency slots are exhausted, users are placed in
+  an ordered asyncio queue and receive live position updates
+  (`"⏳ Вы #3 в очереди (~45 сек)"`) via Telegram message edits.
+  - Hard queue cap: `MAX_QUEUE_SIZE` (default 15) — hard-rejects requests beyond
+    that watermark with a user-friendly "queue full" message.
+  - Configurable timeout: `QUEUE_TIMEOUT_SECONDS` (default 300 s) — abandoned
+    tasks are timed out and their slot released to prevent memory pressure.
+  - Two independent queue instances: `download_queue` (yt-dlp/ffmpeg tier) and
+    `api_queue` (TikWM/Pinterest/Cobalt tier).
+
+- **Proactive Disk Space Protection** (`app/tasks/janitor.py`):
+  The janitor now monitors free disk space on the `TEMP_DIR` partition on every
+  maintenance cycle and implements a three-tier health system:
+  - **Warning (≤ `DISK_WARNING_PCT`%, default 15%)**: Admin alert sent via Telegram.
+  - **Critical (≤ `DISK_CRITICAL_PCT`%, default 5%)**: Aggressive purge of **all**
+    bot-created temp files, maintenance mode (`state.disk_critical = True`)
+    activated, admin alert sent.
+  - **Recovery**: Maintenance mode cleared, admin recovery notification sent.
+  - Alert de-duplication: alerts only fire on state *changes* (escalation or
+    recovery), preventing repeated spam on every tick at the same level.
+
+- **Maintenance Mode** (`app/core/state.py`):
+  New `disk_critical: bool` flag on the global state. While `True`, the
+  `DownloadQueue.enqueue()` shortcircuits immediately with the maintenance
+  message — preventing cascading disk exhaustion from in-flight downloads.
+
+- **New Config Variables** (`app/core/config.py`):
+  - `MAX_QUEUE_SIZE` (default: 15)
+  - `QUEUE_TIMEOUT_SECONDS` (default: 300)
+  - `DISK_WARNING_PCT` (default: 15)
+  - `DISK_CRITICAL_PCT` (default: 5)
+
+### Fixed
+
+- **Test Suite State Isolation**: Added `download_queue` / `api_queue` resets to
+  all `asyncSetUp` fixtures that set semaphores. Previously, tests modifying
+  `state.download_queue` for queue-full simulation bled into subsequent tests
+  (cross-test state pollution causing 13 false failures). All 602 tests now pass
+  cleanly in any execution order.
+
+---
+
 ## [Unreleased] — Architectural Synthesis Sprint (2026-04-10)
 
 ### Added

@@ -477,11 +477,14 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         is_photo_mode = mode == "photo"
     else:
         is_photo_mode = mode == SLIDESHOW_PHOTO_FORMAT_ID
-    if state.download_sem.locked():
-        await _edit_or_reply(q, Texts.QUEUE_FULL)
+
+    async def _queue_ui(text: str, _markup=None) -> None:
+        await _edit_or_reply(q, text)
+
+    acquired = await state.download_queue.enqueue(_queue_ui)
+    if not acquired:
         return
 
-    await state.download_sem.acquire()
     try:
         await _edit_or_reply(q, Texts.SLIDESHOW_DOWNLOADING)
 
@@ -576,7 +579,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             # Always cleanup slideshow download directory
             await asyncio.to_thread(MediaSender.cleanup_slideshow, result)
     finally:
-        state.download_sem.release()
+        state.download_queue.release()
 
 
 async def on_save_as_gif_file(

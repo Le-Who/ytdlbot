@@ -193,16 +193,12 @@ async def handle_group_message(
             return
 
     _api_fmt = is_tiktok_url or is_pinterest or tiktok_auth_error
-    _sem = state.api_sem if _api_fmt else state.download_sem
+    _grp_queue = state.api_queue if _api_fmt else state.download_queue
 
-    if _sem.locked():
-        try:
-            await status_msg.edit_text(Texts.QUEUE_FULL)
-        except Exception:
-            pass
+    acquired = await _grp_queue.enqueue(update_ui)
+    if not acquired:
         return
 
-    await _sem.acquire()
     try:
         if (
             is_tiktok_api_success
@@ -288,7 +284,7 @@ async def handle_group_message(
             reply_markup=kb,
         )
     finally:
-        _sem.release()
+        _grp_queue.release()
 
     if success:
         try:
@@ -344,14 +340,16 @@ async def on_group_slideshow(
     except Exception:
         pass
 
-    if state.download_sem.locked():
+    async def _grp_slide_ui(text: str, _markup=None) -> None:
         try:
-            await q.edit_message_text(Texts.QUEUE_FULL)
+            await q.edit_message_text(text)
         except Exception:
             pass
+
+    acquired = await state.download_queue.enqueue(_grp_slide_ui)
+    if not acquired:
         return
 
-    await state.download_sem.acquire()
     try:
         await q.edit_message_text(Texts.SLIDESHOW_DOWNLOADING)
 
@@ -506,4 +504,4 @@ async def on_group_slideshow(
         finally:
             await asyncio.to_thread(MediaSender.cleanup_slideshow, result)
     finally:
-        state.download_sem.release()
+        state.download_queue.release()

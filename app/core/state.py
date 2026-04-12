@@ -20,6 +20,8 @@ from app.core.config import (
     LIMITER_IG_CAPACITY,
     LIMITER_IG_REFILL_PER_SEC,
     REDIS_URL,
+    MAX_QUEUE_SIZE,
+    QUEUE_TIMEOUT_SECONDS,
 )
 from app.core.limiter import LimiterRegistry
 from app.core.utils import safe_remove
@@ -54,6 +56,27 @@ conversion_sem = asyncio.Semaphore(
 gif_file_sem = asyncio.Semaphore(
     2
 )  # Bounded concurrency for on-demand native .gif file exports (palette+scale)
+
+# ── Download queues (fair wait-queue wrapping each semaphore tier) ──────────
+from app.core.download_queue import DownloadQueue
+
+download_queue = DownloadQueue(
+    download_sem,
+    max_queue_size=MAX_QUEUE_SIZE,
+    timeout_seconds=QUEUE_TIMEOUT_SECONDS,
+    avg_task_seconds=45,
+)
+api_queue = DownloadQueue(
+    api_sem,
+    max_queue_size=MAX_QUEUE_SIZE,
+    timeout_seconds=QUEUE_TIMEOUT_SECONDS,
+    avg_task_seconds=15,  # API tasks are much faster
+)
+
+# ── System health flags ───────────────────────────────────────────────────────
+# Set to True by janitor when free disk space drops below DISK_CRITICAL_PCT.
+# When True, all new download enqueue() calls are rejected with MAINTENANCE_MODE.
+disk_critical: bool = False
 
 
 # Глобальный объект приложения Telegram (инициализируется в main.py)

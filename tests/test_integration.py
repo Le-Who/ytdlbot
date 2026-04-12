@@ -182,6 +182,9 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
         state.tasks_sem = asyncio.Semaphore(5)
         state.download_sem = asyncio.Semaphore(5)
         state.api_sem = asyncio.Semaphore(10)
+        from app.core.download_queue import DownloadQueue
+        state.download_queue = DownloadQueue(state.download_sem, max_queue_size=15)
+        state.api_queue = DownloadQueue(state.api_sem, max_queue_size=15)
         state.limiter = MagicMock()
         state.limiter.allow_user = AsyncMock(return_value=True)
         state.limiter.allow_chat = AsyncMock(return_value=True)

@@ -36,9 +36,10 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 - **Reply-to URL Resolution**: All handlers fall back to the replied-to message when the primary message contains no supported URL — works naturally in group chats.
 - **Fast-Path Slash Commands**: `/mp3 <url>` and `/mp4 <url>` bypass the format picker and deliver audio/video directly. Both accept reply-to messages containing the URL.
 - **Per-User Download Preferences**: Users can persist their preferred format and quality via `/setformat`, `/setquality`, and `/settings`. Preferences are stored in Redis with a 90-day TTL and automatically applied on every subsequent link.
-- **Adaptive Tiered Concurrency**: Two purpose-built semaphores — `api_sem` (high-capacity, for TikWM/Cobalt/Pinterest) and `download_sem` (for yt-dlp/ffmpeg) — prevent fast API fetches from being starved by heavy encoding jobs.
+- **Adaptive Tiered Concurrency with Fair Queue**: Two purpose-built semaphores — `api_sem` (high-capacity, for TikWM/Cobalt/Pinterest) and `download_sem` (for yt-dlp/ffmpeg) — now backed by a position-aware `DownloadQueue`. When all slots are busy, users are queued fairly and receive live position updates (`"⏳ Вы #3 в очереди (~45 сек)"`) instead of a hard rejection. A configurable hard cap (`MAX_QUEUE_SIZE`, default 15) still applies for true overload scenarios.
+- **Proactive Disk Protection**: The janitor monitors free disk space every cycle. At ≤15% free it sends an admin alert; at ≤5% it triggers an aggressive purge of all cached files, activates maintenance mode (new downloads rejected with a user-friendly message), and notifies the admin via Telegram. Maintenance mode auto-clears once disk recovers above the warning threshold.
 - **Rate Limiting**: Multi-layered token bucket limiter preventing abuse per User, Chat, IP, and Token.
-- **Monitoring & Logging**: Built-in Prometheus-compatible metrics endpoint (`/metrics`) exposing operational telemetry cleanly via client integration. Fully structured logging across the pipeline.
+- **Monitoring, Logging & Admin Reporting**: Built-in Prometheus-compatible metrics endpoint (`/metrics`) exposing operational telemetry. Fully structured logging across the pipeline. Global error handler sends formatted exception reports (traceback, user/chat context) directly to `ADMIN_CHAT_ID` via Telegram.
 
 ## Non-Goals / Limitations
 
@@ -50,7 +51,7 @@ Recent systemic fixes have stabilized asynchronous subprocess extraction and dec
 
 - **Web Layer**: FastAPI serves HTTP endpoints (health checks, Prometheus metrics, and chunked video streams) and handles incoming Telegram Webhooks.
 - **Telegram Logic**: `python-telegram-bot` processes updates concurrently (`concurrent_updates=True`). The webhook endpoint uses fire-and-forget `asyncio.create_task()` dispatch, returning HTTP 200 immediately to Telegram so update delivery is never blocked by slow handlers.
-- **Orchestration Layer**: `DownloadOrchestrator` centralizes all download lifecycles, safely encapsulating complex rules like concurrency queues (`asyncio.Semaphore`), file-size checks, and fallback mechanisms.
+- **Orchestration Layer**: `DownloadOrchestrator` centralizes all download lifecycles, safely encapsulating complex rules like concurrency queues (`DownloadQueue` wrapping `asyncio.Semaphore`), file-size checks, and fallback mechanisms.
 - **Data Fetchers**: `TikWMService` acts as the primary API for ultra-fast, watermark-free TikTok extraction. `YtDlpService` acts as the primary async CLI wrapper for YouTube and standard sites, while `GalleryDlService` and `CobaltService` (optional) handle deep fallback resolution.
 - **Media Processing**: `FFmpeg` is utilized for post-processing tasks (GIF conversion, slideshow building, H.264 re-encoding for incompatible codecs). The Fast-Path pipeline actively avoids FFmpeg for compatible media.
 - **State Management**: `RedisStorage` manages caching using blazing-fast `msgpack` serialization with `zlib` compression to minimize RAM overhead. `RedisTokenBucketLimiter` implements atomic Lua scripts for accurate, distributed rate limiting.
@@ -78,8 +79,8 @@ flowchart TD
 | `app/bot/`      | Telegram bot command/message handlers and inline keyboards.                |
 | `app/core/`     | Global config, rate limiter logic, caching, and state structures.          |
 | `app/services/` | Wrappers for `yt-dlp`, `gallery-dl`, `ffmpeg` conversion, and downloading. |
-| `app/tasks/`    | Background periodic tasks: `janitor.py` for temp cleanup, `auto_updater.py` for yt-dlp updates. |
-| `tests/`        | 608+ Pytest tests covering unit, integration, and security.                |
+| `app/tasks/`    | Background periodic tasks: `janitor.py` for temp cleanup + **proactive disk monitoring**, `auto_updater.py` for yt-dlp updates. |
+| `tests/`        | 602+ Pytest tests covering unit, integration, and security.                |
 | `Dockerfile`    | Multi-stage build definition for containerized deployment.                 |
 | `scripts`       | Python standalone script for local debugging of `yt-dlp` extraction.       |
 
@@ -134,6 +135,11 @@ Selected key variables from `.env.example`:
 | `TELEGRAM_LOCAL_ENDPOINT` | No       | —                          | Internal HTTP URL to your local Telegram Bot API Server (e.g., `http://tg-api:8081`)        | Downloader / PTB |
 | `YTDLP_UPDATE_INTERVAL_HOURS` | No   | `24`                       | Interval (hours) between autonomous `yt-dlp` self-updates                                  | Auto-Updater     |
 | `MAX_API_TASKS`           | No       | `10`                       | Semaphore capacity for lightweight API-origin downloads (TikWM, Pinterest, Cobalt)          | Orchestrator     |
+| `ADMIN_CHAT_ID`           | No       | —                          | Your Telegram user ID. Enables unhandled-exception reports and disk alerts to the admin     | Error Handler / Janitor |
+| `MAX_QUEUE_SIZE`          | No       | `15`                       | Max requests that may wait in the download queue before being hard-rejected                 | DownloadQueue    |
+| `QUEUE_TIMEOUT_SECONDS`   | No       | `300`                      | Max seconds a request may wait in queue before timing out                                   | DownloadQueue    |
+| `DISK_WARNING_PCT`        | No       | `15`                       | Free-disk-space threshold (%) that triggers an admin warning alert                         | Janitor          |
+| `DISK_CRITICAL_PCT`       | No       | `5`                        | Free-disk-space threshold (%) that triggers aggressive purge and maintenance mode           | Janitor          |
 
 ## Run
 

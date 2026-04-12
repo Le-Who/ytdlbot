@@ -1,5 +1,7 @@
 import asyncio
+import html
 import logging
+import traceback
 from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
 from typing import Any
@@ -30,6 +32,8 @@ async def _global_error_handler(update, context):
         exc_info=context.error,
         extra={"op": "error_handler"},
     )
+
+    # ── Notify user ───────────────────────────────────────────────
     try:
         if update and update.effective_message:
             await update.effective_message.reply_text(
@@ -37,6 +41,50 @@ async def _global_error_handler(update, context):
             )
     except Exception:
         pass
+
+    # ── Notify admin ──────────────────────────────────────────────
+    if not config.ADMIN_CHAT_ID:
+        return
+
+    try:
+        # Format traceback (capped to keep within 4096 TG limit)
+        tb_lines = traceback.format_exception(
+            type(context.error), context.error, context.error.__traceback__
+        )
+        tb_text = "".join(tb_lines)
+        if len(tb_text) > 3500:
+            tb_text = "...(truncated)\n" + tb_text[-3500:]
+
+        # Extract useful update context
+        ctx_lines: list[str] = []
+        if update:
+            if update.effective_user:
+                u = update.effective_user
+                ctx_lines.append(f"👤 User: {u.full_name} (@{u.username}) id={u.id}")
+            if update.effective_chat:
+                c = update.effective_chat
+                ctx_lines.append(f"💬 Chat: {c.title or c.type} id={c.id}")
+            msg = update.effective_message
+            if msg and msg.text:
+                preview = msg.text[:200]
+                ctx_lines.append(f"📨 Message: {preview!r}")
+
+        ctx_text = "\n".join(ctx_lines) or "No update context"
+
+        report = (
+            f"🔴 <b>Unhandled exception</b>\n\n"
+            f"{html.escape(ctx_text)}\n\n"
+            f"<pre>{html.escape(tb_text)}</pre>"
+        )
+
+        await context.bot.send_message(
+            chat_id=config.ADMIN_CHAT_ID,
+            text=report,
+            parse_mode="HTML",
+        )
+    except Exception as notify_err:
+        logger.warning("Failed to send error report to admin: %s", notify_err)
+
 
 
 @asynccontextmanager

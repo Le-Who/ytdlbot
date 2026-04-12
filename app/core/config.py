@@ -76,6 +76,24 @@ IG_SESSIONS_B64 = [
     if s.strip()
 ]
 
+# Admin chat ID for error reporting. Set to your Telegram user ID.
+# If unset, error reporting to admin is disabled.
+_admin_raw = os.getenv("ADMIN_CHAT_ID", "").strip()
+ADMIN_CHAT_ID: Optional[int] = int(_admin_raw) if _admin_raw.lstrip("-").isdigit() else None
+
+# ── Download Queue ───────────────────────────────────────────────────────────
+# Hard cap on how many requests can wait in the queue before rejecting.
+MAX_QUEUE_SIZE = int(os.getenv("MAX_QUEUE_SIZE", "15"))
+# Seconds a task may wait in queue before it's abandoned.
+QUEUE_TIMEOUT_SECONDS = int(os.getenv("QUEUE_TIMEOUT_SECONDS", "300"))
+
+# ── Disk Protection ──────────────────────────────────────────────────────────
+# Janitor checks free disk space after every cleanup cycle.
+# Below WARNING → admin alert only.
+# Below CRITICAL → admin alert + aggressive purge + maintenance mode (no new downloads).
+DISK_WARNING_PCT = int(os.getenv("DISK_WARNING_PCT", "15"))
+DISK_CRITICAL_PCT = int(os.getenv("DISK_CRITICAL_PCT", "5"))
+
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is required")
 if not BASE_URL:

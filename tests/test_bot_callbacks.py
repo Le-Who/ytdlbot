@@ -37,6 +37,10 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.tasks_sem = asyncio.Semaphore(5)
         state.download_sem = asyncio.Semaphore(5)
         state.api_sem = asyncio.Semaphore(10)
+        # Reset queues each test so _queue_full tests don't pollute successors
+        from app.core.download_queue import DownloadQueue
+        state.download_queue = DownloadQueue(state.download_sem, max_queue_size=15)
+        state.api_queue = DownloadQueue(state.api_sem, max_queue_size=15)
 
         state.parsing_sem = MagicMock()
         state.parsing_sem.__aenter__ = AsyncMock(return_value=None)
@@ -184,12 +188,15 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         token = "token"
         self.update.callback_query.data = f"send|{token}"
         state.link_cache[token] = {"page_url": "http://example.com", "format_id": "137"}
-        # Exhaust the semaphore that process_download now checks for yt-dlp jobs
-        state.download_sem = asyncio.Semaphore(0)
+        # Replace download_queue with one whose enqueue() rejects immediately
+        from app.core.download_queue import DownloadQueue
+        full_sem = asyncio.Semaphore(0)  # 0 capacity → wait path
+        queue = DownloadQueue(full_sem, max_queue_size=0)  # 0 queue cap → immediate QUEUE_FULL
+        state.download_queue = queue
 
         await callbacks.on_send(self.update, self.context)
         args, _ = self.update.callback_query.edit_message_text.call_args
-        self.assertIn("Очередь переполнена", args[0])
+        self.assertIn("Очередь", args[0])
 
     async def test_on_send_success_video(self):
         token = "valid_token"

@@ -35,6 +35,7 @@ jobs:
             BOT_TOKEN=${{ secrets.BOT_TOKEN }}
             TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
             TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}
+            ADMIN_CHAT_ID=${{ secrets.ADMIN_CHAT_ID }}
             
             # Платформенные куки (оставь пустыми в GitHub Secrets, если не используешь)
             YTDLP_COOKIES_B64=${{ secrets.YTDLP_COOKIES_B64 }}

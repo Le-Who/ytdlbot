@@ -37,6 +37,13 @@ class TestOnGroupSlideshowExtended(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         state.link_cache = AsyncMockCache()
         state.file_cache = AsyncMockCache()
+        import asyncio
+        from app.core.download_queue import DownloadQueue
+        state.download_sem = asyncio.Semaphore(5)
+        state.api_sem = asyncio.Semaphore(10)
+        state.download_queue = DownloadQueue(state.download_sem, max_queue_size=15)
+        state.api_queue = DownloadQueue(state.api_sem, max_queue_size=15)
+        state.disk_critical = False
 
     @patch("app.bot.group_logic.MediaSender")
     async def test_photo_mode_success(self, mock_sender):

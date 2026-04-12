@@ -26,12 +26,19 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
     """Test handle_group_message."""
 
     async def asyncSetUp(self):
+        import asyncio
         state.limiter = MagicMock()
         state.limiter.allow_user = AsyncMock(return_value=True)
         state.limiter.allow_chat = AsyncMock(return_value=True)
         state.link_cache = AsyncMockCache()
         state.file_cache = AsyncMockCache()
         state.cancel_cache = AsyncMockCache()
+        state.download_sem = asyncio.Semaphore(5)
+        state.api_sem = asyncio.Semaphore(10)
+        from app.core.download_queue import DownloadQueue
+        state.download_queue = DownloadQueue(state.download_sem, max_queue_size=15)
+        state.api_queue = DownloadQueue(state.api_sem, max_queue_size=15)
+        state.disk_critical = False
 
         self.context = MagicMock()
         self.context.bot = AsyncMock()
@@ -185,8 +192,15 @@ class TestOnGroupSlideshow(unittest.IsolatedAsyncioTestCase):
     """Test on_group_slideshow callback."""
 
     async def asyncSetUp(self):
+        import asyncio
         state.link_cache = AsyncMockCache()
         state.file_cache = AsyncMockCache()
+        state.download_sem = asyncio.Semaphore(5)
+        state.api_sem = asyncio.Semaphore(10)
+        from app.core.download_queue import DownloadQueue
+        state.download_queue = DownloadQueue(state.download_sem, max_queue_size=15)
+        state.api_queue = DownloadQueue(state.api_sem, max_queue_size=15)
+        state.disk_critical = False
 
     async def test_no_data_returns(self):
         """No callback data → immediate return."""

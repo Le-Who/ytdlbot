@@ -221,6 +221,7 @@ class TikWMService:
             (file_path, None) on success.
             (None, error_message) on failure.
         """
+        # Resolve video URL (from cache/API or direct override)
         if not direct_video_url:
             res = await TikWMService.process(url)
             if res.status != "video" or not res.url:
@@ -232,6 +233,9 @@ class TikWMService:
         # Download the video from CDN
         output_path = os.path.join(TEMP_DIR, f"tikwm_{uuid.uuid4().hex}.mp4")
 
+        # Minimum valid MP4 size — anything smaller is an error page / redirect body.
+        _MIN_VIDEO_BYTES = 10 * 1024  # 10 KB
+
         try:
             assert video_url is not None  # guaranteed by fetch_video success path
             async with AsyncSession() as session:
@@ -241,11 +245,35 @@ class TikWMService:
                     timeout=60,
                 )
 
-                def _write_file(path: str, data: bytes) -> None:
-                    with open(path, "wb") as f:
-                        f.write(data)
+            # ── Guard: reject non-200 CDN responses ──────────────────────────
+            if resp.status_code != 200:
+                logger.error(
+                    "[TIKWM] CDN returned HTTP %d for %s — evicting cache",
+                    resp.status_code,
+                    video_url[:120],
+                )
+                # Evict so the next call re-fetches a fresh CDN URL from TikWM API
+                _tikwm_cache.pop(url, None)
+                return None, f"TikWM CDN error: HTTP {resp.status_code}"
 
-                await asyncio.to_thread(_write_file, output_path, resp.content)
+            content = resp.content
+
+            # ── Guard: reject suspiciously small bodies (error JSON / HTML) ──
+            if not content or len(content) < _MIN_VIDEO_BYTES:
+                ct = resp.headers.get("content-type", "unknown")
+                logger.error(
+                    "[TIKWM] CDN body too small (%d bytes, content-type=%s) — likely an error page. Evicting cache.",
+                    len(content) if content else 0,
+                    ct,
+                )
+                _tikwm_cache.pop(url, None)
+                return None, "TikWM CDN returned empty/invalid body"
+
+            def _write_file(path: str, data: bytes) -> None:
+                with open(path, "wb") as f:
+                    f.write(data)
+
+            await asyncio.to_thread(_write_file, output_path, content)
 
             file_size = await asyncio.to_thread(os.path.getsize, output_path)
             size_mb = file_size / (1024 * 1024)

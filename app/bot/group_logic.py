@@ -208,7 +208,6 @@ async def handle_group_message(
         ):
             from typing import Any
 
-            file_path: Any = None
             if api_source == "tikwm":
                 from app.services.tikwm import TikWMService
 
@@ -220,7 +219,20 @@ async def handle_group_message(
                     tiktok_api_res.url, "mp4"
                 )
                 file_path = str(file_path_raw) if file_path_raw else None
-            error = None if file_path else "⚠️ Ошибка загрузки видео."
+                err = "Cobalt API download failed" if not file_path else None
+            
+            if not file_path:
+                logger.warning("Group TikTok fast-path failed (%s). Falling back to yt-dlp...", err)
+                file_path, error = await MediaSender.download_video(
+                    page_url=url,
+                    format_id="bestvideo[vcodec^=avc]+bestaudio/best",
+                    height=None,
+                    token=token,
+                    info_json_path=info_json_path,
+                )
+            else:
+                error = None
+                
             if file_path:
                 state.file_cache[token] = file_path
         elif video_format == "gallerydl_fallback":

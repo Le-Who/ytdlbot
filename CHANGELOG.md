@@ -42,7 +42,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- **TikWM CDN Geo-Blocking & Cache Loop**: Fixed an issue where US-region CDN URLs (e.g., tiktokcdn-us.com) returned HTTP 404 to non-US server IPs, causing a silent cache eviction failure and infinite retry loops. Implemented correct cache invalidation and a robust `yt-dlp` fallback mechanism for when TikWM CDN encounters download errors.
+- **TikWM CDN Geo-Blocking & Cache Loop**: Fixed an issue where US-region CDN URLs (e.g., tiktokcdn-us.com) returned HTTP 404 to non-US server IPs, causing a silent cache eviction failure and infinite retry loops. Implemented correct cache invalidation and a robust `yt-dlp` fallback mechanism for when TikWM CDN encounters download errors, covering standard inline menus, direct private Fast-Paths, and automatic group passive-downloads.
 
 - **Test Suite State Isolation**: Added `download_queue` / `api_queue` resets to
   all `asyncSetUp` fixtures that set semaphores. Previously, tests modifying

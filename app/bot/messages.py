@@ -403,8 +403,19 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 file_path = await CobaltService.download_file(tiktok_api_res.url, "mp4")
 
         if not file_path:
-            await status_msg.edit_text("⚠️ Ошибка загрузки видео.")
-            return
+            logger.warning("Fast-path TikTok download failed (%s). Falling back to yt-dlp...", err)
+            await status_msg.edit_text("⏳ Загрузка через резервный канал...")
+            from app.services.downloader import MediaSender
+            file_path, err = await MediaSender.download_video(
+                page_url=text,
+                format_id="bestvideo[vcodec^=avc]+bestaudio/best",
+                height=None,
+                token=parse_token,
+                info_json_path=info_json_path,
+            )
+            if not file_path:
+                await status_msg.edit_text(err or "⚠️ Ошибка загрузки видео.")
+                return
 
         from app.bot.keyboards import build_video_keyboard
 

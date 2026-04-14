@@ -385,6 +385,21 @@ class DownloadOrchestrator:
                             token + "_yt",
                         )
 
+                # CDN geo-block / download failure fallback:
+                # TikWM CDN URLs are region-locked (e.g. tiktokcdn-us.com).
+                # If the server IP is geo-blocked (404 after retry), yt-dlp
+                # extracts its own stream and may resolve a compatible URL.
+                elif not file_path and error:
+                    logger.warning(
+                        "TikWM download failed (%s) — falling back to yt-dlp", error
+                    )
+                    file_path, error = await MediaSender.download_video(
+                        payload.page_url,
+                        "bestvideo[vcodec^=avc]+bestaudio/best",
+                        payload.height,
+                        token + "_yt",
+                    )
+
                 if file_path and not error:
                     state.file_cache[token] = file_path
 

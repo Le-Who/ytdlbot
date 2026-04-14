@@ -147,7 +147,8 @@ class TestTikWMDownloadVideo(unittest.IsolatedAsyncioTestCase):
         tmpdir = tempfile.mkdtemp()
 
         mock_resp = MagicMock()
-        mock_resp.content = b"fake video data"
+        mock_resp.status_code = 200
+        mock_resp.content = b"fake video data" * 1024
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)

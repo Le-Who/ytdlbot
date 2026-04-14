@@ -25,6 +25,7 @@ from app.core.config import (
 )
 from app.core.limiter import LimiterRegistry
 from app.core.utils import safe_remove
+from app.core.download_queue import DownloadQueue
 
 from app.services.ytdlp.service import YtDlpService
 from app.core.storage.base import StateStorage
@@ -58,7 +59,6 @@ gif_file_sem = asyncio.Semaphore(
 )  # Bounded concurrency for on-demand native .gif file exports (palette+scale)
 
 # ── Download queues (fair wait-queue wrapping each semaphore tier) ──────────
-from app.core.download_queue import DownloadQueue
 
 download_queue = DownloadQueue(
     download_sem,

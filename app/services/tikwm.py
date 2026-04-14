@@ -44,6 +44,10 @@ class TikWMResult:
     images: Optional[List[str]] = None  # for slideshow
     audio_url: Optional[str] = None  # for slideshow
     error_message: Optional[str] = None
+    # The resolved (unshortened) page URL used as the _tikwm_cache key.
+    # download_video() must use this — not the original short URL — for
+    # correct cache eviction when the CDN URL turns out to be invalid.
+    canonical_url: Optional[str] = None
 
     @property
     def is_slideshow(self) -> bool:
@@ -59,7 +63,10 @@ class TikWMService:
         Fetch TikTok media info via TikWM API.
         Returns unified TikWMResult for Video or Picker (Slideshow).
         """
-        # Unshorten vm.tiktok.com or vt.tiktok.com links before passing to TikWM
+        # Unshorten vm.tiktok.com or vt.tiktok.com links before passing to TikWM.
+        # Keep the original short URL so we can also invalidate that cache key
+        # if the caller needs to evict (short URL is what download_video() has).
+        _original_url = url
         if "vm.tiktok.com/" in url or "vt.tiktok.com/" in url:
             try:
                 async with AsyncSession() as session:
@@ -183,7 +190,12 @@ class TikWMService:
                     info.get("duration", "?"),
                     title[:60],
                 )
-                res = TikWMResult(status="video", title=title, url=video_url)
+                res = TikWMResult(
+                    status="video",
+                    title=title,
+                    url=video_url,
+                    canonical_url=url,  # url is already unshortened here
+                )
 
                 # Apply 80% dynamic TTL cache based on `expire=` parameter
                 ttl = 7200  # 2 hours default
@@ -198,7 +210,11 @@ class TikWMService:
                 except Exception as e:
                     logger.debug("[TIKWM] URL expiration parse error: %s", e)
 
+                # Cache under both the canonical (long) URL and the original
+                # short URL so that callers holding either form can evict.
                 _tikwm_cache[url] = (res, time.time() + ttl)
+                if _original_url != url:
+                    _tikwm_cache[_original_url] = (res, time.time() + ttl)
                 return res
 
             logger.warning("[TIKWM] Unrecognized response format (no video or images)")
@@ -212,21 +228,32 @@ class TikWMService:
 
     @staticmethod
     async def download_video(
-        url: str, direct_video_url: Optional[str] = None
+        url: str,
+        direct_video_url: Optional[str] = None,
+        _cdn_retry: bool = True,
     ) -> tuple[Optional[str], Optional[str]]:
         """
         Fetch video URL via TikWM API (or use direct url), then download to a temp file.
+
+        Args:
+            url: Original TikTok page URL (may be a short vt.tiktok.com link).
+            direct_video_url: Skip the API call and use this CDN URL directly.
+            _cdn_retry: Internal flag — when True, a single retry with a fresh
+                API call is attempted after a CDN 404/empty-body failure.
+                Set to False on the retry call to prevent infinite recursion.
 
         Returns:
             (file_path, None) on success.
             (None, error_message) on failure.
         """
         # Resolve video URL (from cache/API or direct override)
+        _canonical: Optional[str] = None  # cache key for potential eviction
         if not direct_video_url:
             res = await TikWMService.process(url)
             if res.status != "video" or not res.url:
                 return None, res.error_message or "TikWM: Not a video"
             video_url = res.url
+            _canonical = res.canonical_url or url  # prefer the long-form key
         else:
             video_url = direct_video_url
 
@@ -252,8 +279,15 @@ class TikWMService:
                     resp.status_code,
                     video_url[:120],
                 )
-                # Evict so the next call re-fetches a fresh CDN URL from TikWM API
-                _tikwm_cache.pop(url, None)
+                # Evict using the canonical (long-form) URL — that is the actual
+                # cache key in _tikwm_cache.  Evicting with the short URL was a
+                # silent no-op and caused infinite retries against a dead URL.
+                for _key in {url, _canonical}:
+                    if _key:
+                        _tikwm_cache.pop(_key, None)
+                if _cdn_retry:
+                    logger.info("[TIKWM] CDN %d — retrying with fresh API fetch...", resp.status_code)
+                    return await TikWMService.download_video(url, _cdn_retry=False)
                 return None, f"TikWM CDN error: HTTP {resp.status_code}"
 
             content = resp.content
@@ -266,7 +300,12 @@ class TikWMService:
                     len(content) if content else 0,
                     ct,
                 )
-                _tikwm_cache.pop(url, None)
+                for _key in {url, _canonical}:
+                    if _key:
+                        _tikwm_cache.pop(_key, None)
+                if _cdn_retry:
+                    logger.info("[TIKWM] CDN returned empty body — retrying with fresh API fetch...")
+                    return await TikWMService.download_video(url, _cdn_retry=False)
                 return None, "TikWM CDN returned empty/invalid body"
 
             def _write_file(path: str, data: bytes) -> None:

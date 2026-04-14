@@ -28,7 +28,8 @@ class TestTikWMDownloadVideoOptimized(unittest.IsolatedAsyncioTestCase):
         tmpdir = tempfile.mkdtemp()
 
         mock_resp = MagicMock()
-        mock_resp.content = b"fake video data"
+        mock_resp.status_code = 200
+        mock_resp.content = b"fake video data" * 1024
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -59,7 +60,7 @@ class TestTikWMDownloadVideoOptimized(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(path, expected_path)
         self.assertTrue(os.path.exists(path))
         with open(path, "rb") as f:
-            self.assertEqual(f.read(), b"fake video data")
+            self.assertEqual(f.read(), b"fake video data" * 1024)
 
         os.unlink(path)
         os.rmdir(tmpdir)

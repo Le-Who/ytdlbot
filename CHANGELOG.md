@@ -42,6 +42,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- **TikTok BVC2 / HEVC Fast-Path Bypass**: Fixed a critical issue where direct fast-path API downloads for TikTok videos (via `TikWM` or `Cobalt` in both groups and private chats) completely bypassed Telegram compatibility checks. The bot now correctly identifies proprietary ByteDance `bvc2`/`hevc` codecs on these fast paths and instantly falls back to `yt-dlp` to fetch the standard H.264 streams, preventing unplayable audio-only video files from being sent to Telegram.
+
 - **TikWM CDN Geo-Blocking & Cache Loop**: Fixed an issue where US-region CDN URLs (e.g., tiktokcdn-us.com) returned HTTP 404 to non-US server IPs, causing a silent cache eviction failure and infinite retry loops. Implemented correct cache invalidation and a robust `yt-dlp` fallback mechanism for when TikWM CDN encounters download errors, covering standard inline menus, direct private Fast-Paths, and automatic group passive-downloads.
 
 - **Test Suite State Isolation**: Added `download_queue` / `api_queue` resets to

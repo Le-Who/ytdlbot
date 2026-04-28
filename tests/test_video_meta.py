@@ -1,6 +1,6 @@
 from unittest.mock import AsyncMock
 
-"""Tests for _extract_video_meta helper in callbacks.py."""
+"""Tests for extract_video_meta helper in callbacks.py."""
 
 import json
 import os
@@ -9,11 +9,11 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from app.services.orchestrator import _extract_video_meta
+from app.services.orchestrator import extract_video_meta
 
 
 class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
-    """Tests for _extract_video_meta helper."""
+    """Tests for extract_video_meta helper."""
 
     async def test_from_info_json_full(self):
         """All fields present in info JSON → returns without ffprobe."""
@@ -23,7 +23,7 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
             path = f.name
 
         try:
-            meta = await _extract_video_meta("/fake/video.mp4", info_json_path=path)
+            meta = await extract_video_meta("/fake/video.mp4", info_json_path=path)
             self.assertEqual(meta["duration"], 125)
             self.assertEqual(meta["width"], 1920)
             self.assertEqual(meta["height"], 1080)
@@ -46,7 +46,7 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
                 proc_mock.communicate.return_value = (b"", b"")
                 mock_proc.return_value = proc_mock
 
-                meta = await _extract_video_meta("/fake/video.mp4", info_json_path=path)
+                meta = await extract_video_meta("/fake/video.mp4", info_json_path=path)
                 # width/height from JSON should still be set
                 self.assertEqual(meta["width"], 1280)
                 self.assertEqual(meta["height"], 720)
@@ -73,7 +73,7 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
             proc_mock.communicate.return_value = (ffprobe_output.encode(), b"")
             mock_proc.return_value = proc_mock
 
-            meta = await _extract_video_meta("/fake/video.mp4")
+            meta = await extract_video_meta("/fake/video.mp4")
             self.assertEqual(meta["duration"], 90)
             self.assertEqual(meta["width"], 854)
             self.assertEqual(meta["height"], 480)
@@ -81,7 +81,7 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
     async def test_no_info_json_no_ffprobe(self):
         """Neither info JSON nor ffprobe available → returns all None."""
         with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError):
-            meta = await _extract_video_meta("/fake/video.mp4")
+            meta = await extract_video_meta("/fake/video.mp4")
             self.assertIsNone(meta["duration"])
             self.assertIsNone(meta["width"])
             self.assertIsNone(meta["height"])
@@ -89,7 +89,7 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
     async def test_info_json_path_nonexistent(self):
         """info_json_path points to a missing file → proceeds to ffprobe."""
         with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError):
-            meta = await _extract_video_meta(
+            meta = await extract_video_meta(
                 "/fake/video.mp4",
                 info_json_path="/nonexistent/info.json",
             )
@@ -103,7 +103,7 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
 
         try:
             with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError):
-                meta = await _extract_video_meta("/fake/video.mp4", info_json_path=path)
+                meta = await extract_video_meta("/fake/video.mp4", info_json_path=path)
                 self.assertIsNone(meta["duration"])
         finally:
             os.unlink(path)
@@ -117,7 +117,7 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
             proc_mock.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
             mock_proc.return_value = proc_mock
 
-            meta = await _extract_video_meta("/fake/video.mp4")
+            meta = await extract_video_meta("/fake/video.mp4")
             self.assertIsNone(meta["duration"])
 
     async def test_duration_float_truncation(self):
@@ -128,7 +128,7 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
             path = f.name
 
         try:
-            meta = await _extract_video_meta("/fake/video.mp4", info_json_path=path)
+            meta = await extract_video_meta("/fake/video.mp4", info_json_path=path)
             self.assertEqual(meta["duration"], 123)
         finally:
             os.unlink(path)

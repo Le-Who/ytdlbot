@@ -24,7 +24,7 @@ from app.services.converter import compress_video_to_size, find_thumbnail, split
 logger = logging.getLogger("app.services.orchestrator")
 
 # Telegram-compatible video codecs — anything else needs re-encoding
-_TG_SAFE_CODECS = {"h264", "mpeg4"}
+TG_SAFE_CODECS = {"h264", "mpeg4"}
 
 # Telegram hard upload limit for URL-mode delivery (server-side fetch).
 # Files above this must be downloaded locally and uploaded as binary.
@@ -34,7 +34,7 @@ _TG_URL_DELIVERY_MAX_BYTES = int(19.5 * 1024 * 1024)  # 19.5 MB
 _TG_UPLOAD_LIMIT_BYTES = int(48.5 * 1024 * 1024)  # 48.5 MB — absorbs moov-atom overhead
 
 
-async def _extract_video_meta(
+async def extract_video_meta(
     file_path: str | object,
     info_json_path: Optional[str] = None,
 ) -> dict:
@@ -109,7 +109,7 @@ async def _extract_video_meta(
     return meta
 
 
-async def _ensure_telegram_compatible(file_path: str) -> str:
+async def ensure_telegram_compatible(file_path: str) -> str:
     """Re-encode video to H.264/AAC if its codec is not Telegram-compatible.
 
     TikTok CDN often serves HEVC (H.265) videos which Telegram clients
@@ -120,13 +120,13 @@ async def _ensure_telegram_compatible(file_path: str) -> str:
     Returns:
         Original path if already compatible, or path to re-encoded file.
     """
-    meta = await _extract_video_meta(file_path)
+    meta = await extract_video_meta(file_path)
     vcodec = meta.get("vcodec")
     pix_fmt = meta.get("pix_fmt")
 
     # If ffprobe failed completely (vcodec=None), it might be a broken container.
     # We should attempt re-encoding rather than passing it raw to Telegram.
-    is_safe_codec = (vcodec is not None) and (vcodec in _TG_SAFE_CODECS)
+    is_safe_codec = (vcodec is not None) and (vcodec in TG_SAFE_CODECS)
     # Telegram cannot natively play 10-bit H.264 (yuv420p10le).
     is_safe_pix_fmt = not pix_fmt or "10" not in pix_fmt
 
@@ -361,12 +361,12 @@ class DownloadOrchestrator:
                 # ffmpeg cannot decode it, creating scrambled video. Instead of transcoding,
                 # we immediately fallback to yt-dlp to fetch TikTok's native H.264 alternate stream.
                 if file_path and not error:
-                    meta = await _extract_video_meta(file_path)
+                    meta = await extract_video_meta(file_path)
                     vcodec = meta.get("vcodec")
                     pix_fmt = meta.get("pix_fmt")
                     codec_tag = meta.get("codec_tag", "")
 
-                    is_safe_codec = (vcodec is not None) and (vcodec in _TG_SAFE_CODECS)
+                    is_safe_codec = (vcodec is not None) and (vcodec in TG_SAFE_CODECS)
                     is_safe_pix_fmt = not pix_fmt or "10" not in pix_fmt
                     is_safe_tag = "bvc" not in codec_tag and "hvc" not in codec_tag
 
@@ -482,7 +482,7 @@ class DownloadOrchestrator:
             # ── Re-encode pass: non-H.264 videos for Telegram compatibility ───
             # (TikTok CDN often serves HEVC which Telegram can't play)
             if isinstance(file_path, str) and not is_gif and not is_audio:
-                file_path = await _ensure_telegram_compatible(file_path)
+                file_path = await ensure_telegram_compatible(file_path)
 
             # ── OPT-2: Stream-Copy Splitting vs Compression ───────────────────
             # Before attempting CPU-heavy two-pass compression, try to split the video
@@ -510,7 +510,7 @@ class DownloadOrchestrator:
                             total = len(parts)
                             all_ok = True
                             for idx, part_path in enumerate(parts, 1):
-                                part_meta = await _extract_video_meta(part_path)
+                                part_meta = await extract_video_meta(part_path)
                                 part_thumb = find_thumbnail(file_path)  # share original thumb
                                 caption = f"📹 Часть {idx}/{total}"
                                 # Load thumbnail into BytesIO for type-safe passing
@@ -561,7 +561,7 @@ class DownloadOrchestrator:
                     )
 
             # ── Extract video metadata for Telegram delivery + preview ─────────
-            video_meta = await _extract_video_meta(
+            video_meta = await extract_video_meta(
                 file_path,
                 info_json_path=payload.info_json_path,
             )

@@ -348,15 +348,15 @@ class TestYtDlpBuilderThumbnail(unittest.TestCase):
 
 
 class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
-    """Tests for orchestrator._extract_video_meta – ffprobe integration."""
+    """Tests for orchestrator.extract_video_meta – ffprobe integration."""
 
     async def test_returns_empty_dict_for_missing_file(self):
-        from app.services.orchestrator import _extract_video_meta
-        result = await _extract_video_meta("/nonexistent/file.mp4")
+        from app.services.orchestrator import extract_video_meta
+        result = await extract_video_meta("/nonexistent/file.mp4")
         self.assertIsInstance(result, dict)
 
     async def test_parses_ffprobe_output(self):
-        from app.services.orchestrator import _extract_video_meta
+        from app.services.orchestrator import extract_video_meta
         import json
 
         fake_probe = {
@@ -380,7 +380,7 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            result = await _extract_video_meta("/fake/video.mp4")
+            result = await extract_video_meta("/fake/video.mp4")
 
         self.assertEqual(result.get("duration"), 42)
         self.assertEqual(result.get("width"), 1920)
@@ -390,7 +390,7 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.get("codec_tag"), "avc1")
 
     async def test_returns_meta_from_info_json_if_present(self):
-        from app.services.orchestrator import _extract_video_meta
+        from app.services.orchestrator import extract_video_meta
         import json
         import tempfile
 
@@ -402,7 +402,7 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
             json_path = f.name
 
         try:
-            result = await _extract_video_meta("/fake/video.mp4", info_json_path=json_path)
+            result = await extract_video_meta("/fake/video.mp4", info_json_path=json_path)
             self.assertEqual(result.get("duration"), 120)
             self.assertEqual(result.get("vcodec"), "h264")
         finally:
@@ -410,10 +410,10 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
 
 
 class TestEnsureTelegramCompatible(unittest.IsolatedAsyncioTestCase):
-    """Tests for orchestrator._ensure_telegram_compatible."""
+    """Tests for orchestrator.ensure_telegram_compatible."""
 
     async def test_h264_passes_through(self):
-        from app.services.orchestrator import _ensure_telegram_compatible
+        from app.services.orchestrator import ensure_telegram_compatible
         import json
 
         fake_probe = {
@@ -435,11 +435,11 @@ class TestEnsureTelegramCompatible(unittest.IsolatedAsyncioTestCase):
             return_value=(json.dumps(fake_probe).encode(), b"")
         )
         with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
-            result = await _ensure_telegram_compatible("/fake/h264.mp4")
+            result = await ensure_telegram_compatible("/fake/h264.mp4")
         self.assertEqual(result, "/fake/h264.mp4")
 
     async def test_hevc_triggers_reencode_and_falls_back_on_failure(self):
-        from app.services.orchestrator import _ensure_telegram_compatible
+        from app.services.orchestrator import ensure_telegram_compatible
         import json
 
         fake_probe = {
@@ -473,7 +473,7 @@ class TestEnsureTelegramCompatible(unittest.IsolatedAsyncioTestCase):
             return ffmpeg_proc  # ffmpeg re-encode
 
         with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
-            result = await _ensure_telegram_compatible("/fake/hevc.mp4")
+            result = await ensure_telegram_compatible("/fake/hevc.mp4")
 
         # On re-encode failure should fall back to original path
         self.assertEqual(result, "/fake/hevc.mp4")

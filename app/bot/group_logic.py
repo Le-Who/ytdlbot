@@ -220,7 +220,29 @@ async def handle_group_message(
                 )
                 file_path = str(file_path_raw) if file_path_raw else None
                 err = "Cobalt API download failed" if not file_path else None
-            
+
+            # Smart BVC2/HEVC Fallback Check
+            if file_path and (not file_path.startswith("http")):
+                from app.services.orchestrator import extract_video_meta, TG_SAFE_CODECS
+                meta = await extract_video_meta(file_path)
+                vcodec = meta.get("vcodec")
+                pix_fmt = meta.get("pix_fmt")
+                codec_tag = meta.get("codec_tag", "")
+
+                is_safe_codec = (vcodec is not None) and (vcodec in TG_SAFE_CODECS)
+                is_safe_pix_fmt = not pix_fmt or "10" not in pix_fmt
+                is_safe_tag = "bvc" not in codec_tag and "hvc" not in codec_tag
+
+                if not (is_safe_codec and is_safe_pix_fmt and is_safe_tag):
+                    logger.warning(
+                        "TikTok group fast-path returned incompatible format (codec:%s, pix_fmt:%s, tag:%s). Falling back to yt-dlp H.264 stream...",
+                        vcodec, pix_fmt, codec_tag
+                    )
+                    from app.core.utils import safe_remove
+                    safe_remove(file_path)
+                    file_path = None
+                    err = "Incompatible video codec (BVC2/HEVC)"
+
             if not file_path:
                 logger.warning("Group TikTok fast-path failed (%s). Falling back to yt-dlp...", err)
                 file_path, error = await MediaSender.download_video(
@@ -232,6 +254,9 @@ async def handle_group_message(
                 )
             else:
                 error = None
+                if file_path and not file_path.startswith("http"):
+                    from app.services.orchestrator import ensure_telegram_compatible
+                    file_path = await ensure_telegram_compatible(file_path)
                 
             if file_path:
                 state.file_cache[token] = file_path

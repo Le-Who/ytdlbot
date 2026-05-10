@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from app.core import state
+
 
 logger = logging.getLogger("app.core.user_prefs")
 
@@ -41,7 +43,7 @@ def _key(user_id: int) -> str:
 
 async def get_prefs(user_id: int) -> dict[str, Any]:
     """Return the preference dict for *user_id*.  Always returns a dict (never None)."""
-    from app.core import state  # late import to avoid circular at module load
+    
 
     raw = await state.prefs_cache.get(_key(user_id))
     if raw is None:
@@ -55,7 +57,7 @@ async def get_prefs(user_id: int) -> dict[str, Any]:
 
 async def set_prefs(user_id: int, **kwargs: Any) -> None:
     """Merge *kwargs* into the stored preference dict and persist."""
-    from app.core import state
+    
 
     existing = await get_prefs(user_id)
     existing.update(kwargs)
@@ -64,6 +66,6 @@ async def set_prefs(user_id: int, **kwargs: Any) -> None:
 
 async def clear_prefs(user_id: int) -> None:
     """Delete all stored preferences for *user_id*."""
-    from app.core import state
+    
 
     await state.prefs_cache.delete(_key(user_id))

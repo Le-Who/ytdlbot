@@ -154,14 +154,18 @@ class VideoDownloader:
                 max_download_time = DL_TIMEOUT_TELEGRAM
 
                 buffer = io.BytesIO() if use_pipe else None
+                last_cancel_check = 0.0
 
-                # Drain stdout; check cancel/timeout every 2s
+                # Drain stdout; check cancel/timeout throttled (every 2s)
                 while True:
-                    if await state.cancel_cache.get(token):
-                        logger.info("Cancelled by user", extra={"token": token})
-                        return None, "❌ Загрузка отменена пользователем."
+                    now = time.time()
+                    if now - last_cancel_check > 2.0:
+                        if await state.cancel_cache.get(token):
+                            logger.info("Cancelled by user", extra={"token": token})
+                            return None, "❌ Загрузка отменена пользователем."
+                        last_cancel_check = now
 
-                    if time.time() - download_start > max_download_time:
+                    if now - download_start > max_download_time:
                         logger.warning("[DL-TG] Download timeout exceeded")
                         return None, "⚠️ Время ожидания загрузки истекло."
 

@@ -1,4 +1,5 @@
 import re
+from collections import OrderedDict
 from enum import Enum
 from typing import List, Dict, Any, Optional
 from app.constants import (
@@ -13,6 +14,13 @@ HEIGHT_REGEX = re.compile(HEIGHT_PATTERN)
 BYTES_IN_KB = 1024
 BYTES_IN_MB = 1024 * 1024
 BITRATE_COEFFICIENT = 128.0  # 1024 / 8
+
+_COMMON_HEIGHTS = {
+    "1080p": 1080, "1080p60": 1080, "1080p50": 1080,
+    "720p": 720, "720p60": 720, "720p50": 720,
+    "480p": 480, "360p": 360, "240p": 240, "144p": 144,
+    "tiny": None, "small": None, "medium": None, "large": None
+}
 
 
 def _is_tiktok(url: str) -> bool:
@@ -87,7 +95,13 @@ def _format_duration(seconds: Optional[float]) -> str:
 
 
 def _extract_height(format_note: str) -> Optional[int]:
-    match = HEIGHT_REGEX.search(format_note or "")
+    if not format_note:
+        return None
+        
+    if format_note in _COMMON_HEIGHTS:
+        return _COMMON_HEIGHTS[format_note]
+        
+    match = HEIGHT_REGEX.search(format_note)
     if match:
         return int(match.group(1))
     return None
@@ -182,6 +196,21 @@ def create_format_item(metadata: FormatMetadata, is_tiktok: bool) -> FormatItem:
     )
 
 
+def _score_format(f: FormatMetadata) -> int:
+    """Score a format for deduplication: higher is preferred."""
+    s = 0
+    if f.vcodec not in ("none", "unknown") and f.acodec not in ("none", "unknown"):
+        s += 1000  # Premuxed is heavily preferred to save CPU and RAM
+    vcodec_low = f.vcodec.lower()
+    if "avc1" in vcodec_low or "h264" in vcodec_low:
+        s += 500  # H264 is the most compatible
+    elif "mp4" in vcodec_low:
+        s += 300
+    elif "vp" in vcodec_low:
+        s += 100
+    return s
+
+
 def deduplicate_formats(
     formats: List[FormatMetadata], is_tiktok_url: bool
 ) -> List[FormatMetadata]:
@@ -196,20 +225,10 @@ def deduplicate_formats(
                 seen_sizes.add(key)
         return unique
 
-    def score(f: FormatMetadata) -> int:
-        s = 0
-        if f.vcodec not in ("none", "unknown") and f.acodec not in ("none", "unknown"):
-            s += 1000  # Premuxed is heavily preferred to save CPU and RAM
-        vcodec_low = f.vcodec.lower()
-        if "avc1" in vcodec_low or "h264" in vcodec_low:
-            s += 500  # H264 is the most compatible
-        elif "mp4" in vcodec_low:
-            s += 300
-        elif "vp" in vcodec_low:
-            s += 100
-        return s
-
-    from collections import OrderedDict
+    # Pre-compute original positions once (O(N)) to avoid O(N²) list.index() calls
+    # in the sort key below. Using id() is safe because the list elements are the
+    # same objects throughout this function's scope.
+    pos: dict[int, int] = {id(f): i for i, f in enumerate(formats)}
 
     groups: OrderedDict[int | None, list[FormatMetadata]] = OrderedDict()
     for fmt in formats:
@@ -224,7 +243,7 @@ def deduplicate_formats(
             unique_formats.extend(fmts)
         else:
             best_fmt = sorted(
-                fmts, key=lambda f: (score(f), -(formats.index(f))), reverse=True
+                fmts, key=lambda f: (_score_format(f), -pos[id(f)]), reverse=True
             )[0]
             unique_formats.append(best_fmt)
 

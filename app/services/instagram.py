@@ -107,6 +107,10 @@ _IG_POST_RE = re.compile(
 
 
 def parse_instagram_url(url: str) -> Tuple[str, Optional[str], Optional[str]]:
+    url_lower = url.lower()
+    if "instagram.com" not in url_lower and "instagr.am" not in url_lower:
+        return "unknown", None, None
+
     m = _IG_HIGHLIGHT_RE.search(url)
     if m:
         return "highlight", m.group(1), None

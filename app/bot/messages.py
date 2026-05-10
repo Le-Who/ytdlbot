@@ -7,7 +7,18 @@ from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
 
 from app.core import state
-from app.core.config import MAX_TG_UPLOAD_MB
+from typing import Any
+from app.core.config import MAX_TG_UPLOAD_MB, ENABLE_COBALT_TIKTOK
+from app.core.user_prefs import get_prefs
+from app.core.models import DownloadContext
+from app.core.metrics import metrics as _m
+from app.bot.commands import cmd_mp3, _MP4_FORMAT as _fmt_pref, _fast_download
+from app.services.instagram import is_instagram_url, parse_instagram_url, InstagramService
+from app.services.tikwm import TikWMService
+from app.services.cobalt import CobaltService
+from app.services.ytdlp.parsers import classify_tiktok_content
+from app.services.ytdlp.service import FormatItem
+from app.services.ytdlp.models import ExtractionResult
 from app.core.utils import extract_url_from_update
 from app.bot.keyboards import build_format_keyboard, build_slideshow_keyboard
 from app.core.texts import Texts
@@ -46,10 +57,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     parse_token = uuid.uuid4().hex[:8]
 
     # ── Instagram Early Intercept ────────────────────────────────────────
-    from app.services.instagram import is_instagram_url
-
-    if is_instagram_url(text):
-        await _handle_instagram(update, context, text, parse_token, section)
+    url_type, ig_target, ig_item_id = parse_instagram_url(text)
+    if url_type != "unknown":
+        await _handle_instagram(update, context, text, parse_token, section, url_type, ig_target, ig_item_id)
         return
     # ── End Instagram Intercept ──────────────────────────────────────────
 
@@ -64,15 +74,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # ── User Preferences Fast-Path ───────────────────────────────────────
     # If the user has set a default format/quality, skip the picker entirely.
     # Instagram and Twitter are handled by their own intercepts above.
-    from app.core.user_prefs import get_prefs
-
     _prefs = await get_prefs(user.id)
     _default_fmt = _prefs.get("default_format")
     _default_quality = _prefs.get("default_quality")  # int or None
 
     if _default_fmt == "audio":
-        from app.bot.commands import cmd_mp3
-
         await cmd_mp3(update, context)
         return
 
@@ -80,18 +86,17 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         # Build a height-constrained format string when a quality is set
         if _default_quality:
             _sz_pref = f"{MAX_TG_UPLOAD_MB}M"
-            _fmt_pref = (
+            target_fmt = (
                 f"bestvideo[height<={_default_quality}][ext=mp4]+bestaudio[ext=m4a]"
                 f"/best[height<={_default_quality}][ext=mp4]"
                 f"/bestvideo[height<={_default_quality}]+bestaudio"
                 f"/best[height<={_default_quality}][filesize<{_sz_pref}]/best"
             )
         else:
-            from app.bot.commands import _MP4_FORMAT as _fmt_pref  # type: ignore[attr-defined]
-        from app.bot.commands import _fast_download
-
+            target_fmt = _fmt_pref
+        
         await _fast_download(
-            update, context, format_id=_fmt_pref, is_audio=False
+            update, context, format_id=target_fmt, is_audio=False
         )
         return
     # ── End User Preferences Fast-Path ───────────────────────────────────
@@ -111,8 +116,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     is_tiktok_url = "tiktok" in text.lower()
     is_tiktok_api_success = False
     is_slideshow = False
-    from typing import Any
-
     tiktok_api_res: Any = None
     title = ""
     duration = "—"
@@ -123,9 +126,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     api_source = None  # 'tikwm' or 'cobalt'
 
     if is_tiktok_url:
-        from app.services.tikwm import TikWMService
-        from app.core.config import ENABLE_COBALT_TIKTOK
-
         # Try TikWM first
         try:
             tikwm_res = await TikWMService.process(text)
@@ -146,8 +146,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         # Try Cobalt if enabled and TikWM failed
         if not is_tiktok_api_success and ENABLE_COBALT_TIKTOK:
-            from app.services.cobalt import CobaltService
-
             try:
                 cobalt_res = await CobaltService.process(text)
                 if cobalt_res.status in ("tunnel", "redirect", "picker"):
@@ -170,9 +168,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if is_tiktok_url:
             # Bypass yt-dlp completely for TikTok to prevent proxy blocks.
             # We assume it's just a fallback video or slideshow for GalleryDL.
-            from app.services.ytdlp.parsers import classify_tiktok_content
-            from app.services.ytdlp.service import ExtractionResult, FormatItem
-
             _fallback_is_slideshow = classify_tiktok_content(text) == "slideshow"
             result = ExtractionResult(
                 title="TikTok Content",
@@ -212,8 +207,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if cached:
             logger.info("Cache hit", extra={"url": text})
             if isinstance(cached, dict):
-                from app.services.ytdlp.models import ExtractionResult
-
                 result = ExtractionResult.from_dict(cached)
             else:
                 result = cached
@@ -237,8 +230,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 cached = await state.info_cache.get(text)
                 if cached:
                     if isinstance(cached, dict):
-                        from app.services.ytdlp.models import ExtractionResult
-
                         result = ExtractionResult.from_dict(cached)
                     else:
                         result = cached
@@ -259,8 +250,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     async with asyncio.timeout(300.0):
                         async with state.parsing_sem:
                             import time as _time
-                            from app.core.metrics import metrics as _m
-
                             _ext_start = _time.monotonic()
                             result = await state.ytdlp.list_formats(text)
                             title = result.title
@@ -332,8 +321,6 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if is_slideshow:
         # Save specific api state for the slideshow
         if is_tiktok_api_success:
-            from app.core.models import DownloadContext
-
             await state.link_cache.set(
                 parse_token,
                 DownloadContext(
@@ -381,13 +368,10 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         await status_msg.edit_text("⏳ Загрузка видео...")
         file_path = None
         if api_source == "tikwm":
-            from app.services.tikwm import TikWMService
-
             file_path, err = await TikWMService.download_video(
                 text, direct_video_url=tiktok_api_res.url
             )
         elif api_source == "cobalt":
-            from app.services.cobalt import CobaltService
             from app.services.orchestrator import _cobalt_url_head_size
 
             # OPT-4: Attempt direct URL delivery if file is small enough for TG server-fetch
@@ -533,19 +517,15 @@ async def _handle_instagram(
     url: str,
     parse_token: str,
     section: str | None,
+    url_type: str,
+    target: str | None,
+    item_id: str | None,
 ) -> None:
     """Handle Instagram URLs with rich selection UX."""
-    from app.services.instagram import (
-        InstagramService,
-        parse_instagram_url,
-    )
-
     msg = update.message
     user = update.effective_user
     chat = update.effective_chat
     assert msg is not None and user is not None and chat is not None
-
-    url_type, target, item_id = parse_instagram_url(url)
 
     # ── Direct post/reel: download immediately via Cobalt ────────
     if url_type == "post" and target:
@@ -690,8 +670,6 @@ async def _handle_instagram(
             return
 
         # Cache stories and highlights for callback retrieval
-        from app.core.models import DownloadContext
-
         ig_cache_data = {
             "stories": [
                 {
@@ -790,8 +768,6 @@ async def _handle_twitter(
     user = update.effective_user
     chat = update.effective_chat
     assert msg is not None and user is not None and chat is not None
-
-    from app.services.cobalt import CobaltService
     from app.services.sender import TelegramSender
     import os
 

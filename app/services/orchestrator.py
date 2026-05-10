@@ -58,7 +58,10 @@ async def extract_video_meta(
             if info.get("height"):
                 meta["height"] = int(info["height"])
             meta["vcodec"] = info.get("vcodec")
-            if meta["duration"]:
+            
+            # Fast-path return: if we have duration, or if we have vcodec and dimensions 
+            # (duration is optional for Telegram, and missing in slideshows/images), skip ffprobe.
+            if meta["duration"] or (meta["vcodec"] and meta["width"] and meta["height"]):
                 return meta
         except Exception:
             pass
@@ -109,7 +112,7 @@ async def extract_video_meta(
     return meta
 
 
-async def ensure_telegram_compatible(file_path: str) -> str:
+async def ensure_telegram_compatible(file_path: str, info_json_path: Optional[str] = None) -> str:
     """Re-encode video to H.264/AAC if its codec is not Telegram-compatible.
 
     TikTok CDN often serves HEVC (H.265) videos which Telegram clients
@@ -120,7 +123,7 @@ async def ensure_telegram_compatible(file_path: str) -> str:
     Returns:
         Original path if already compatible, or path to re-encoded file.
     """
-    meta = await extract_video_meta(file_path)
+    meta = await extract_video_meta(file_path, info_json_path=info_json_path)
     vcodec = meta.get("vcodec")
     pix_fmt = meta.get("pix_fmt")
 
@@ -482,7 +485,7 @@ class DownloadOrchestrator:
             # ── Re-encode pass: non-H.264 videos for Telegram compatibility ───
             # (TikTok CDN often serves HEVC which Telegram can't play)
             if isinstance(file_path, str) and not is_gif and not is_audio:
-                file_path = await ensure_telegram_compatible(file_path)
+                file_path = await ensure_telegram_compatible(file_path, info_json_path=payload.info_json_path)
 
             # ── OPT-2: Stream-Copy Splitting vs Compression ───────────────────
             # Before attempting CPU-heavy two-pass compression, try to split the video

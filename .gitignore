@@ -41,6 +41,7 @@ Desktop.ini
 .hypothesis/
 .coverage
 htmlcov/
+artifacts/
 
 # Temp
 *.tmp

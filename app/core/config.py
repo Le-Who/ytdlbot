@@ -45,6 +45,7 @@ DL_TIMEOUT_HTTP = int(os.getenv("DL_TIMEOUT_HTTP", "900"))
 # Above 10 risks rate-limiting on YouTube. Configurable for easy tuning.
 CONCURRENT_FRAGMENTS = int(os.getenv("YTDLP_CONCURRENT_FRAGMENTS", "8"))
 YOUTUBE_PIPE_MODE = os.getenv("YOUTUBE_PIPE_MODE", "0").strip() == "1"
+YOUTUBE_OAUTH2 = os.getenv("YOUTUBE_OAUTH2", "0").strip() == "1"
 
 # YouTube POT (Proof-of-Origin Token) provider — bypasses "Sign in to confirm
 # you're not a bot" without requiring YouTube cookies.

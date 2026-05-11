@@ -1,6 +1,6 @@
 from typing import List, Optional
 from app.constants import GIF_FORMAT_ID
-from app.core.config import CONCURRENT_FRAGMENTS, POT_PROVIDER_URL
+from app.core.config import CONCURRENT_FRAGMENTS, POT_PROVIDER_URL, YOUTUBE_OAUTH2
 
 
 def _is_youtube_url(url: str) -> bool:
@@ -47,8 +47,8 @@ class YtDlpCLIBuilder:
         if fallback_clients and _is_youtube_url(url):
             cmd.extend(["--extractor-args", "youtube:player_client=ios,android"])
 
-        # POT provider for YouTube bot-check bypass
-        self._append_youtube_pot_args(cmd, url)
+        # POT provider and OAuth2 for YouTube bot-check bypass
+        self._append_youtube_bypasses(cmd, url)
 
         self._append_network_opts(cmd, cookies_path, proxy, user_agent)
         cmd.extend(["--", url])
@@ -90,8 +90,8 @@ class YtDlpCLIBuilder:
         if fallback_clients and _is_youtube_url(url):
             cmd.extend(["--extractor-args", "youtube:player_client=ios,android"])
 
-        # POT provider for YouTube bot-check bypass
-        self._append_youtube_pot_args(cmd, url)
+        # POT provider and OAuth2 for YouTube bot-check bypass
+        self._append_youtube_bypasses(cmd, url)
 
         cmd.extend(
             [
@@ -177,12 +177,17 @@ class YtDlpCLIBuilder:
             cmd.extend(["--user-agent", user_agent])
 
     @staticmethod
-    def _append_youtube_pot_args(cmd: List[str], url: str) -> None:
-        """Inject POT provider extractor-args for YouTube URLs.
-        Tells the bgutil plugin where to find the token generation server."""
-        if POT_PROVIDER_URL and _is_youtube_url(url):
+    def _append_youtube_bypasses(cmd: List[str], url: str) -> None:
+        """Inject POT provider and OAuth2 args for YouTube URLs."""
+        if not _is_youtube_url(url):
+            return
+
+        if POT_PROVIDER_URL:
             cmd.extend([
                 "--extractor-args",
                 f"youtubepot-bgutilhttp:base_url={POT_PROVIDER_URL}",
             ])
+
+        if YOUTUBE_OAUTH2:
+            cmd.extend(["--username", "oauth2", "--password", ""])
 

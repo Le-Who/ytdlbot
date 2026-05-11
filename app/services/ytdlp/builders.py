@@ -1,6 +1,10 @@
 from typing import List, Optional
 from app.constants import GIF_FORMAT_ID
-from app.core.config import CONCURRENT_FRAGMENTS
+from app.core.config import CONCURRENT_FRAGMENTS, POT_PROVIDER_URL
+
+
+def _is_youtube_url(url: str) -> bool:
+    return "youtube.com" in url or "youtu.be" in url
 
 
 class YtDlpCLIBuilder:
@@ -40,8 +44,11 @@ class YtDlpCLIBuilder:
         # TikTok specific edge case applied generically for strict JSON extraction
         cmd.extend(["--extractor-args", "tiktok:app_info="])
 
-        if fallback_clients and ("youtube.com" in url or "youtu.be" in url):
+        if fallback_clients and _is_youtube_url(url):
             cmd.extend(["--extractor-args", "youtube:player_client=ios,android"])
+
+        # POT provider for YouTube bot-check bypass
+        self._append_youtube_pot_args(cmd, url)
 
         self._append_network_opts(cmd, cookies_path, proxy, user_agent)
         cmd.extend(["--", url])
@@ -80,8 +87,11 @@ class YtDlpCLIBuilder:
             )
             final_fmt = f"{format_id}/{fallback}"
 
-        if fallback_clients and ("youtube.com" in url or "youtu.be" in url):
+        if fallback_clients and _is_youtube_url(url):
             cmd.extend(["--extractor-args", "youtube:player_client=ios,android"])
+
+        # POT provider for YouTube bot-check bypass
+        self._append_youtube_pot_args(cmd, url)
 
         cmd.extend(
             [
@@ -165,3 +175,14 @@ class YtDlpCLIBuilder:
             cmd.extend(["--proxy", proxy])
         if user_agent:
             cmd.extend(["--user-agent", user_agent])
+
+    @staticmethod
+    def _append_youtube_pot_args(cmd: List[str], url: str) -> None:
+        """Inject POT provider extractor-args for YouTube URLs.
+        Tells the bgutil plugin where to find the token generation server."""
+        if POT_PROVIDER_URL and _is_youtube_url(url):
+            cmd.extend([
+                "--extractor-args",
+                f"youtubepot-bgutilhttp:base_url={POT_PROVIDER_URL}",
+            ])
+

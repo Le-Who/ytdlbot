@@ -46,6 +46,11 @@ DL_TIMEOUT_HTTP = int(os.getenv("DL_TIMEOUT_HTTP", "900"))
 CONCURRENT_FRAGMENTS = int(os.getenv("YTDLP_CONCURRENT_FRAGMENTS", "8"))
 YOUTUBE_PIPE_MODE = os.getenv("YOUTUBE_PIPE_MODE", "0").strip() == "1"
 
+# YouTube POT (Proof-of-Origin Token) provider — bypasses "Sign in to confirm
+# you're not a bot" without requiring YouTube cookies.
+# Set to the bgutil HTTP server URL. Empty string disables POT injection.
+POT_PROVIDER_URL: Optional[str] = os.getenv("POT_PROVIDER_URL", "").strip() or None
+
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 
 # TikTok proxy — route TikTok requests through WireGuard/SOCKS5 to bypass

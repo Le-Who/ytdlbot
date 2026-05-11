@@ -6,17 +6,31 @@ services:
     environment:
       - REDIS_URL=redis://redis:6379/0
       - TELEGRAM_LOCAL_ENDPOINT=http://tg-api:8081
+      - POT_PROVIDER_URL=http://bgutil-pot:4416
     # Убрали public port 8000. Внешний мир попадает сюда только через Caddy
     depends_on:
       redis:
         condition: service_healthy
       tg-api:
         condition: service_started
+      bgutil-pot:
+        condition: service_started
     deploy:
       resources:
         limits:
           memory: 5G
           cpus: "3.5"
+
+  # YouTube POT (Proof-of-Origin Token) server — generates tokens to bypass
+  # "Sign in to confirm you're not a bot" checks. Eliminates need for YouTube cookies.
+  bgutil-pot:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    restart: always
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "0.5"
 
   tg-api:
     image: aiogram/telegram-bot-api:latest

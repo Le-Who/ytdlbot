@@ -76,7 +76,18 @@ def map_ytdlp_error(stderr_output: str, url: str) -> YtDlpError:
     if "format is not available" in stderr_lower:
         return ExtractionError(Texts.SVC_FORMAT_UNAVAILABLE)
 
-    # 5. Geoblock
+    # 5. VK badbrowser anti-bot redirect
+    # VK redirects unauthenticated requests to badbrowser.php; yt-dlp then
+    # reports "Unsupported URL" for that redirect target — misleading for users.
+    if "badbrowser" in stderr_lower or (
+        "vk.com" in url.lower() and "unsupported url" in stderr_lower
+    ):
+        return AccessDeniedError(
+            "🔐 VK аудио требует авторизации.\n"
+            "Настройте <code>VK_COOKIES_B64</code> в конфигурации бота."
+        )
+
+    # 6. Geoblock
     if (
         "geo-restricted" in stderr_lower
         or "uploader has not made this video available in your country" in stderr_lower
@@ -85,7 +96,7 @@ def map_ytdlp_error(stderr_output: str, url: str) -> YtDlpError:
             "⚠️ Это видео недоступно в нашей стране (Geo-restricted)."
         )
 
-    # 6. Fallback Generic Error
+    # 7. Fallback Generic Error
     clean_error = (
         stderr_output.strip().split("\n")[-1]
         if stderr_output

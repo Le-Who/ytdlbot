@@ -40,6 +40,22 @@ def _is_facebook(url: str) -> bool:
     return "facebook.com" in low or "fb.watch" in low
 
 
+def _is_vk(url: str) -> bool:
+    return "vk.com" in url.lower()
+
+
+def _is_vk_audio(url: str) -> bool:
+    """True for VK audio tracks: vk.com/audio{owner}_{id}[_{hash}]"""
+    low = url.lower()
+    return "vk.com" in low and "/audio" in low
+
+
+def _is_vk_video(url: str) -> bool:
+    """True for VK video clips: vk.com/video*, vk.com/clip*"""
+    low = url.lower()
+    return "vk.com" in low and ("/video" in low or "/clip" in low)
+
+
 # ── TikTok content-type classification ─────────────────────────────
 
 

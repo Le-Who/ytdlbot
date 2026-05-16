@@ -24,6 +24,7 @@ class PlatformCookiesManager:
         "tiktok.com": "TIKTOK_COOKIES_B64",
         "facebook.com": "FACEBOOK_COOKIES_B64",
         "fb.watch": "FACEBOOK_COOKIES_B64",
+        "vk.com": "VK_COOKIES_B64",
     }
 
     _GLOBAL_ENV_VAR = "YTDLP_COOKIES_B64"
@@ -136,6 +137,11 @@ _CRITICAL_COOKIES = {
     "APISID",
     "SAPISID",
     "LOGIN_INFO",
+    # VK
+    "remixsid",
+    "remixstid",
+    "remixlang",
+    "remixnsid",
 }
 
 

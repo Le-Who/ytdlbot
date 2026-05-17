@@ -42,6 +42,7 @@ jobs:
             FACEBOOK_COOKIES_B64=${{ secrets.FACEBOOK_COOKIES_B64 }}
             TIKTOK_COOKIES_B64=${{ secrets.TIKTOK_COOKIES_B64 }}
             VK_COOKIES_B64=${{ secrets.VK_COOKIES_B64 }}
+            VK_PROXY=${{ secrets.VK_PROXY }}
             IG_SESSIONS_B64=${{ secrets.IG_SESSIONS_B64 }}
             
             # === ФИКСИРОВАННЫЕ НАСТРОЙКИ Сервера ===

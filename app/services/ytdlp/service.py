@@ -7,7 +7,7 @@ from typing import Dict, Any, List, Optional
 
 __all__ = ["YtDlpService"]
 
-from app.core.config import TIKTOK_PROXY, TEMP_DIR
+from app.core.config import TIKTOK_PROXY, VK_PROXY, TEMP_DIR
 from .models import FormatItem, FormatMetadata, ExtractionResult
 from .cookies import PlatformCookiesManager
 from .builders import YtDlpCLIBuilder
@@ -18,6 +18,7 @@ from .parsers import (
     _format_duration,
     get_special_format,
     _is_tiktok,
+    _is_vk,
     _is_youtube,
     _is_pinterest,
     detect_tiktok_slideshow,
@@ -42,6 +43,7 @@ class YtDlpService:
     def __init__(self):
         self.cookies_manager = PlatformCookiesManager()
         self.tiktok_proxy = TIKTOK_PROXY
+        self.vk_proxy = VK_PROXY
         self.has_aria2 = bool(shutil.which("aria2c"))
 
         # Initialize builder without hardcoded youtube clients
@@ -51,6 +53,8 @@ class YtDlpService:
             logger.info("✅ aria2c found — multi-connection downloads enabled")
         if self.tiktok_proxy:
             logger.info("🔒 TikTok proxy configured: %s", self.tiktok_proxy)
+        if self.vk_proxy:
+            logger.info("🔒 VK proxy configured: %s", self.vk_proxy)
 
     @property
     def cookies_path(self) -> Optional[str]:
@@ -64,7 +68,7 @@ class YtDlpService:
         from app.core.process import run_subprocess
 
         cookies = self.cookies_manager.get_cookies_path(url)
-        proxy = self.tiktok_proxy if _is_tiktok(url) else None
+        proxy = self.tiktok_proxy if _is_tiktok(url) else (self.vk_proxy if _is_vk(url) else None)
 
         cmd = self.builder.build_extraction_cmd(
             url=url,
@@ -258,6 +262,7 @@ class YtDlpService:
         """Proxy to new CLI builder"""
         cookies = self.cookies_manager.get_cookies_path(page_url)
         is_tiktok = _is_tiktok(page_url)
+        is_vk = _is_vk(page_url)
 
         cmd = self.builder.build_download_cmd(
             url=page_url,
@@ -265,7 +270,7 @@ class YtDlpService:
             output_path=output,
             height=height,
             cookies_path=cookies,
-            proxy=self.tiktok_proxy if is_tiktok else None,
+            proxy=self.tiktok_proxy if is_tiktok else (self.vk_proxy if _is_vk(page_url) else None),
             max_filesize_mb=max_filesize,
             use_aria2=use_aria2 and self.has_aria2,
             info_json_path=info_json_path,

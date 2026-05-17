@@ -59,6 +59,11 @@ REDIS_URL = os.getenv("REDIS_URL", "").strip()
 # Example: socks5://wireguard-proxy:1080
 TIKTOK_PROXY: Optional[str] = os.getenv("TIKTOK_PROXY", "").strip() or None
 
+# VK proxy — residential HTTP/SOCKS5 proxy to bypass VK's datacenter IP block.
+# VK redirects datacenter IPs to badbrowser.php even with valid cookies.
+# Format: http://user:pass@host:port  OR  socks5://host:port
+VK_PROXY: Optional[str] = os.getenv("VK_PROXY", "").strip() or None
+
 # Cobalt API (Primary TikTok backend) - Supports multiple comma-separated instances for fallback
 # NOTE: The public api.cobalt.tools now requires Turnstile JWT auth and cannot be used by bots.
 # You MUST set your own instance URL. See README.md for deployment instructions.

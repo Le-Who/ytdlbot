@@ -54,15 +54,39 @@ POT_PROVIDER_URL: Optional[str] = os.getenv("POT_PROVIDER_URL", "").strip() or N
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 
+def parse_proxy_uri(proxy_raw: Optional[str]) -> Optional[str]:
+    if not proxy_raw:
+        return None
+    proxy_raw = proxy_raw.strip()
+    if not proxy_raw:
+        return None
+    
+    # If it already has a scheme, assume it is correctly formatted
+    if "://" in proxy_raw:
+        return proxy_raw
+        
+    parts = proxy_raw.split(":")
+    if len(parts) == 4:
+        # Format: host:port:user:pass
+        host, port, user, password = parts
+        return f"http://{user}:{password}@{host}:{port}"
+    elif len(parts) == 2:
+        # Format: host:port
+        host, port = parts
+        return f"http://{host}:{port}"
+        
+    # Fallback to appending http://
+    return f"http://{proxy_raw}"
+
 # TikTok proxy — route TikTok requests through WireGuard/SOCKS5 to bypass
 # datacenter IP blocks on age-restricted content.
-# Example: socks5://wireguard-proxy:1080
-TIKTOK_PROXY: Optional[str] = os.getenv("TIKTOK_PROXY", "").strip() or None
+# Example: socks5://wireguard-proxy:1080 or host:port:user:pass
+TIKTOK_PROXY: Optional[str] = parse_proxy_uri(os.getenv("TIKTOK_PROXY"))
 
 # VK proxy — residential HTTP/SOCKS5 proxy to bypass VK's datacenter IP block.
 # VK redirects datacenter IPs to badbrowser.php even with valid cookies.
-# Format: http://user:pass@host:port  OR  socks5://host:port
-VK_PROXY: Optional[str] = os.getenv("VK_PROXY", "").strip() or None
+# Format: http://user:pass@host:port, socks5://host:port, or host:port:user:pass
+VK_PROXY: Optional[str] = parse_proxy_uri(os.getenv("VK_PROXY"))
 
 # Cobalt API (Primary TikTok backend) - Supports multiple comma-separated instances for fallback
 # NOTE: The public api.cobalt.tools now requires Turnstile JWT auth and cannot be used by bots.

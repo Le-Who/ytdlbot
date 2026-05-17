@@ -282,8 +282,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     await status_msg.edit_text(Texts.TIMEOUT_UNAVAILABLE)
                     return
 
-                except AccessDeniedError:
-                    await status_msg.edit_text(Texts.ACCESS_DENIED)
+                except AccessDeniedError as e:
+                    # Use the exception's own message: it may carry a platform-specific
+                    # hint (e.g. VK badbrowser auth instructions) rather than the generic one.
+                    err_text = str(e) if str(e) else Texts.ACCESS_DENIED
+                    await status_msg.edit_text(err_text, parse_mode="HTML")
                     return
                 except VideoNotFoundError:
                     await status_msg.edit_text(Texts.VIDEO_NOT_FOUND)

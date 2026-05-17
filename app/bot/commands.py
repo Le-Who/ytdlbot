@@ -121,7 +121,7 @@ async def _fast_download(
     async def _update_ui(text: str, markup: object = None) -> None:
         if status_msg:
             try:
-                await status_msg.edit_text(text, reply_markup=markup)  # type: ignore[arg-type]
+                await status_msg.edit_text(text, reply_markup=markup, parse_mode="HTML")  # type: ignore[arg-type]
             except Exception:
                 pass
 

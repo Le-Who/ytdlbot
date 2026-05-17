@@ -304,7 +304,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     async def update_progress_ui(text: str, markup: Optional[object] = None) -> None:
         try:
-            await q.edit_message_text(text, reply_markup=markup)  # type: ignore
+            await q.edit_message_text(text, reply_markup=markup, parse_mode="HTML")  # type: ignore
         except Exception as e:
             logger.warning("UI update failed", extra={"error": str(e)})
 

@@ -215,7 +215,8 @@ class VideoDownloader:
                         )
 
                     if isinstance(mapped_err, AccessDeniedError):
-                        return None, "⚠️ Требуется авторизация (Sign-in required)."
+                        # Surface the specific message (e.g. VK auth instruction)
+                        return None, str(mapped_err)
                     elif isinstance(mapped_err, VideoNotFoundError):
                         return (
                             None,

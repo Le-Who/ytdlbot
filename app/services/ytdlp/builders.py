@@ -2,6 +2,13 @@ from typing import List, Optional
 from app.constants import GIF_FORMAT_ID
 from app.core.config import CONCURRENT_FRAGMENTS, POT_PROVIDER_URL, YOUTUBE_OAUTH2
 
+# Shared browser User-Agent for all yt-dlp requests.
+# Must match across extraction and download to satisfy VK's anti-bot fingerprinting.
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
+)
+
 
 def _is_youtube_url(url: str) -> bool:
     return "youtube.com" in url or "youtu.be" in url
@@ -50,7 +57,7 @@ class YtDlpCLIBuilder:
         # POT provider and OAuth2 for YouTube bot-check bypass
         self._append_youtube_bypasses(cmd, url)
 
-        self._append_network_opts(cmd, cookies_path, proxy, user_agent)
+        self._append_network_opts(cmd, cookies_path, proxy, user_agent or _BROWSER_UA)
         cmd.extend(["--", url])
         return cmd
 
@@ -150,7 +157,7 @@ class YtDlpCLIBuilder:
         if max_filesize_mb:
             cmd.extend(["--max-filesize", f"{max_filesize_mb}M"])
 
-        self._append_network_opts(cmd, cookies_path, proxy, None)
+        self._append_network_opts(cmd, cookies_path, proxy, _BROWSER_UA)
 
         if info_json_path:
             cmd.extend(["--load-info-json", info_json_path])

@@ -67,14 +67,18 @@ class YtDlpService:
         """Извлекает метаданные видео через subprocess yt-dlp (async isolation)."""
         from app.core.process import run_subprocess
 
+        is_vk = _is_vk(url)
+        if is_vk:
+            url = url.replace("vk.com", "m.vk.com")
+
         cookies = self.cookies_manager.get_cookies_path(url)
-        proxy = self.tiktok_proxy if _is_tiktok(url) else (self.vk_proxy if _is_vk(url) else None)
+        proxy = self.tiktok_proxy if _is_tiktok(url) else (self.vk_proxy if is_vk else None)
 
         cmd = self.builder.build_extraction_cmd(
             url=url,
             cookies_path=cookies,
             proxy=proxy,
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0",
+            user_agent="" if is_vk else None,
             fallback_clients=fallback_clients,
         )
         # Ensure we use the current python executable for stability
@@ -264,9 +268,9 @@ class YtDlpService:
         is_tiktok = _is_tiktok(page_url)
         is_vk = _is_vk(page_url)
 
-        # Disable aria2c for VK because it might fail to properly forward residential proxy 
-        # credentials or cookies to the VK CDN, triggering badbrowser.php during the stream.
+        # Rewrite to m.vk.com for better anti-bot bypass
         if is_vk:
+            page_url = page_url.replace("vk.com", "m.vk.com")
             use_aria2 = False
 
         cmd = self.builder.build_download_cmd(
@@ -276,6 +280,7 @@ class YtDlpService:
             height=height,
             cookies_path=cookies,
             proxy=self.tiktok_proxy if is_tiktok else (self.vk_proxy if is_vk else None),
+            user_agent="" if is_vk else None,
             max_filesize_mb=max_filesize,
             use_aria2=use_aria2 and self.has_aria2,
             info_json_path=info_json_path,

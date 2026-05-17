@@ -57,7 +57,9 @@ class YtDlpCLIBuilder:
         # POT provider and OAuth2 for YouTube bot-check bypass
         self._append_youtube_bypasses(cmd, url)
 
-        self._append_network_opts(cmd, cookies_path, proxy, user_agent or _BROWSER_UA)
+        self._append_network_opts(
+            cmd, cookies_path, proxy, user_agent if user_agent is not None else _BROWSER_UA
+        )
         cmd.extend(["--", url])
         return cmd
 
@@ -69,6 +71,7 @@ class YtDlpCLIBuilder:
         height: Optional[int] = None,
         cookies_path: Optional[str] = None,
         proxy: Optional[str] = None,
+        user_agent: Optional[str] = None,
         max_filesize_mb: Optional[int] = None,
         use_aria2: bool = False,
         info_json_path: Optional[str] = None,
@@ -157,7 +160,9 @@ class YtDlpCLIBuilder:
         if max_filesize_mb:
             cmd.extend(["--max-filesize", f"{max_filesize_mb}M"])
 
-        self._append_network_opts(cmd, cookies_path, proxy, _BROWSER_UA)
+        self._append_network_opts(
+            cmd, cookies_path, proxy, user_agent if user_agent is not None else _BROWSER_UA
+        )
 
         # We use info_json cache for all platforms to avoid redundant extraction.
         # This is especially critical for VK because extracting the same URL twice 

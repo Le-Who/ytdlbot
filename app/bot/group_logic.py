@@ -119,23 +119,25 @@ async def handle_group_message(
 
         # If TikTok APIs fail, bypass yt-dlp and force a GalleryDL fallback
         if not is_tiktok_api_success:
-            if is_tiktok_url:
-                from app.services.ytdlp.parsers import classify_tiktok_content
+            from app.services.ytdlp.parsers import classify_tiktok_content
 
-                logger.info(
-                    "TikTok APIs failed in group, falling back to gallery-dl directly."
-                )
-                is_slideshow = classify_tiktok_content(url) == "slideshow"
-                tiktok_auth_error = True
-            else:
-                try:
-                    result = await state.ytdlp.list_formats(url)
-                    is_slideshow = result.is_slideshow
-                    tiktok_auth_error = result.tiktok_auth_error
-                    info_json_path = result.info_json_path
-                except Exception as exc:
-                    logger.info("yt-dlp list_formats error in group: %s", exc)
-                    is_slideshow = False
+            logger.info(
+                "TikTok APIs failed in group, falling back to gallery-dl directly."
+            )
+            is_slideshow = classify_tiktok_content(url) == "slideshow"
+            tiktok_auth_error = True
+
+    if not is_tiktok_url or tiktok_auth_error is False:
+        # For non-TikTok URLs (or if we skipped TikTok block), run extraction
+        if not is_tiktok_url:
+            try:
+                result = await state.ytdlp.list_formats(url)
+                is_slideshow = result.is_slideshow
+                tiktok_auth_error = result.tiktok_auth_error
+                info_json_path = result.info_json_path
+            except Exception as exc:
+                logger.info("yt-dlp list_formats error in group: %s", exc)
+                is_slideshow = False
 
     # Route format processing
     is_pinterest = "pinterest" in url or "pin.it" in url

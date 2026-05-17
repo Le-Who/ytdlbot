@@ -159,7 +159,10 @@ class YtDlpCLIBuilder:
 
         self._append_network_opts(cmd, cookies_path, proxy, _BROWSER_UA)
 
-        if info_json_path:
+        # VK audio/video URLs are short-lived signed tokens.
+        # --load-info-json would pass the already-expired URL from the extraction cache,
+        # causing a redirect to badbrowser.php. For VK, always re-extract at download time.
+        if info_json_path and "vk.com" not in url.lower():
             cmd.extend(["--load-info-json", info_json_path])
         else:
             cmd.extend(["--", url])

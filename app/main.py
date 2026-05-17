@@ -92,6 +92,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting up...")
     logger.info("aria2c: %s", "enabled ✅" if state.ytdlp.has_aria2 else "not found ❌")
 
+    # Cookie diagnostics — re-emit after logging is configured (cookies init at import time)
+    _cm = state.ytdlp.cookies_manager
+    _loaded = [k for k, v in _cm._platform_cookies.items() if v]
+    if _cm._global_cookies_path:
+        logger.info("Cookies: global ✅ | platforms loaded: %s", _loaded or "none")
+    elif _loaded:
+        logger.info("Cookies: platforms loaded ✅: %s", _loaded)
+    else:
+        logger.warning("Cookies: none configured ⚠️  (VK/FB/TT downloads will fail)")
+
     # Redis lifecycle: verify connectivity at startup
     if state.redis_client:
         await state.redis_client.ping()

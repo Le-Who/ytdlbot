@@ -122,6 +122,10 @@ class VideoDownloader:
             pipe_mode=use_pipe,
             section=section,
         )
+        logger.info(
+            "yt-dlp download cmd: %s",
+            " ".join(str(a) for a in cmd),
+        )
 
         _dl_start = time.time()
         try:

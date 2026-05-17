@@ -264,13 +264,18 @@ class YtDlpService:
         is_tiktok = _is_tiktok(page_url)
         is_vk = _is_vk(page_url)
 
+        # Disable aria2c for VK because it might fail to properly forward residential proxy 
+        # credentials or cookies to the VK CDN, triggering badbrowser.php during the stream.
+        if is_vk:
+            use_aria2 = False
+
         cmd = self.builder.build_download_cmd(
             url=page_url,
             format_id=format_id,
             output_path=output,
             height=height,
             cookies_path=cookies,
-            proxy=self.tiktok_proxy if is_tiktok else (self.vk_proxy if _is_vk(page_url) else None),
+            proxy=self.tiktok_proxy if is_tiktok else (self.vk_proxy if is_vk else None),
             max_filesize_mb=max_filesize,
             use_aria2=use_aria2 and self.has_aria2,
             info_json_path=info_json_path,

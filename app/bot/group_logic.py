@@ -64,16 +64,20 @@ async def handle_group_message(
         user_tag = user.mention_html()
 
     # ── Instagram Early Intercept ────────────────────────────────────────
-    from app.services.instagram import is_instagram_url
+    from app.services.instagram import parse_instagram_url
 
-    if is_instagram_url(url):
+    url_type, ig_target, ig_item_id = parse_instagram_url(url)
+    if url_type != "unknown":
         try:
             await status_msg.delete()
         except Exception:
             pass
         from app.bot.messages import _handle_instagram
 
-        await _handle_instagram(update, context, url, uuid.uuid4().hex[:8], None)
+        await _handle_instagram(
+            update, context, url, uuid.uuid4().hex[:8], None,
+            url_type, ig_target, ig_item_id,
+        )
         return
 
     # Generate token for this operation (used for file cache & callbacks)

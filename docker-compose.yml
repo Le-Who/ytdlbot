@@ -20,8 +20,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 5G
-          cpus: "3.5"
+          memory: 2G
+          cpus: "1.4"
 
   # YouTube POT (Proof-of-Origin Token) server — generates tokens to bypass
   # "Sign in to confirm you're not a bot" checks. Eliminates need for YouTube cookies.
@@ -32,7 +32,7 @@ services:
       resources:
         limits:
           memory: 256M
-          cpus: "0.5"
+          cpus: "0.2"
 
   tg-api:
     image: aiogram/telegram-bot-api:latest
@@ -48,8 +48,8 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G
-          cpus: "1"
+          memory: 768M
+          cpus: "0.4"
 
   redis:
     image: redis:7-alpine
@@ -84,7 +84,6 @@ services:
     image: portainer/portainer-ce:latest
     restart: always
     ports:
-      - "9000:9000"     # Доступ по HTTP: http://твои_ip:9000
       - "9443:9443"     # Доступ по HTTPS (self-signed): https://твои_ip:9443
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

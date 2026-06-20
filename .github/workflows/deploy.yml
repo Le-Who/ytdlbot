@@ -4,58 +4,133 @@ on:
   push:
     branches:
       - vps
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
 
-    # Рекомендуется использовать environment для защиты секретов
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set lowercase repository name
+        run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.REPO }}:latest
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
     environment: production
 
     steps:
-      - name: Execute deployment script via SSH
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set lowercase repository name
+        run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+
+      - name: Ensure deploy directory exists
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || '22' }}
+          script: mkdir -p /opt/ytdlbot
+
+      - name: Copy docker-compose.yml to VPS
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || '22' }}
+          source: "docker-compose.yml"
+          target: "/opt/ytdlbot"
+
+      - name: Deploy to VPS via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ env.REPO }}
+          REGISTRY: ${{ env.REGISTRY }}
+          # --- Bot secrets ---
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
+          # --- Platform cookies ---
+          YTDLP_COOKIES_B64: ${{ secrets.YTDLP_COOKIES_B64 }}
+          FACEBOOK_COOKIES_B64: ${{ secrets.FACEBOOK_COOKIES_B64 }}
+          TIKTOK_COOKIES_B64: ${{ secrets.TIKTOK_COOKIES_B64 }}
+          VK_COOKIES_B64: ${{ secrets.VK_COOKIES_B64 }}
+          VK_PROXY: ${{ secrets.VK_PROXY }}
+          IG_SESSIONS_B64: ${{ secrets.IG_SESSIONS_B64 }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || '22' }}
+          envs: GITHUB_TOKEN,REPO,REGISTRY,BOT_TOKEN,TELEGRAM_API_ID,TELEGRAM_API_HASH,ADMIN_CHAT_ID,YTDLP_COOKIES_B64,FACEBOOK_COOKIES_B64,TIKTOK_COOKIES_B64,VK_COOKIES_B64,VK_PROXY,IG_SESSIONS_B64
           script: |
-            # 1. Переходим в рабочую директорию бота (должна быть заранее создана и склонирована!)
-            # Измени путь, если репозиторий лежит в другом месте
-            cd /opt/ytdlbot || exit 1
+            set -e
 
-            # 2. Подтягиваем актуальный код (жёстко приравниваем к ветке vps, удаляя локальные конфликты)
-            git fetch origin vps
-            git checkout vps || git checkout -b vps origin/vps
-            git reset --hard origin/vps
+            DEPLOY_DIR=/opt/ytdlbot
+            cd "$DEPLOY_DIR"
 
-            # 3. Перезаписываем .env файл
-            cat << 'EOF' > .env
-            # === СЕКРЕТЫ ИЗ GITHUB ACTIONS ===
-            BOT_TOKEN=${{ secrets.BOT_TOKEN }}
-            TELEGRAM_API_ID=${{ secrets.TELEGRAM_API_ID }}
-            TELEGRAM_API_HASH=${{ secrets.TELEGRAM_API_HASH }}
-            ADMIN_CHAT_ID=${{ secrets.ADMIN_CHAT_ID }}
-            
-            # Платформенные куки (оставь пустыми в GitHub Secrets, если не используешь)
-            YTDLP_COOKIES_B64=${{ secrets.YTDLP_COOKIES_B64 }}
-            FACEBOOK_COOKIES_B64=${{ secrets.FACEBOOK_COOKIES_B64 }}
-            TIKTOK_COOKIES_B64=${{ secrets.TIKTOK_COOKIES_B64 }}
-            VK_COOKIES_B64=${{ secrets.VK_COOKIES_B64 }}
-            VK_PROXY=${{ secrets.VK_PROXY }}
-            IG_SESSIONS_B64=${{ secrets.IG_SESSIONS_B64 }}
-            
-            # === ФИКСИРОВАННЫЕ НАСТРОЙКИ Сервера ===
+            # ── Авторизация в GHCR ────────────────────────────────────────
+            echo "$GITHUB_TOKEN" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+
+            # ── Обновляем образ ───────────────────────────────────────────
+            # docker-compose.yml уже скопирован на VPS через SCP-шаг выше
+            docker pull "$REGISTRY/$REPO:latest"
+
+            # ── Перезаписываем .env ───────────────────────────────────────
+            umask 077
+            cat > .env << EOF
+            # === GHCR image path ===
+            GHCR_REPO=$REPO
+
+            # === Секреты из GitHub Actions ===
+            BOT_TOKEN=$BOT_TOKEN
+            TELEGRAM_API_ID=$TELEGRAM_API_ID
+            TELEGRAM_API_HASH=$TELEGRAM_API_HASH
+            ADMIN_CHAT_ID=$ADMIN_CHAT_ID
+
+            # Платформенные куки
+            YTDLP_COOKIES_B64=$YTDLP_COOKIES_B64
+            FACEBOOK_COOKIES_B64=$FACEBOOK_COOKIES_B64
+            TIKTOK_COOKIES_B64=$TIKTOK_COOKIES_B64
+            VK_COOKIES_B64=$VK_COOKIES_B64
+            VK_PROXY=$VK_PROXY
+            IG_SESSIONS_B64=$IG_SESSIONS_B64
+
+            # === Фиксированные настройки сервера ===
             BASE_URL=https://vid.tri.mom
             TZ=Europe/Kyiv
-            # WEBHOOK_URL указывает локальному TG API куда слать апдейты.
-            # Если указать внешний домен — пакеты могут умереть на NAT loopback сервера.
-            # Указываем внутреннее имя контейнера бота в сети Docker!
             WEBHOOK_URL=http://bot:8000
             TELEGRAM_SECRET_TOKEN=133769
-            # REDIS_URL убран — Docker Compose сам подключится к своему внутреннему Redis
-            # TELEGRAM_LOCAL_ENDPOINT убран — Docker Compose сам его выставляет
-            
+
             # --- Настройки скачивания/загрузки ---
             ENABLE_TELEGRAM_UPLOAD=1
             MAX_TG_UPLOAD_MB=900
@@ -66,12 +141,12 @@ jobs:
             DL_TIMEOUT_TELEGRAM=1200
             DL_TIMEOUT_HTTP=1800
             YOUTUBE_PIPE_MODE=0
-            
+
             # --- Очистка и система ---
             TMPDIR=/tmp
             MAX_TEMP_AGE_SECONDS=3600
             JANITOR_INTERVAL_SECONDS=300
-            
+
             # --- Лимиты ---
             LIMITER_USER_CAPACITY=5
             LIMITER_USER_REFILL_PER_SEC=0.5
@@ -82,13 +157,46 @@ jobs:
             LIMITER_TOKEN_CAPACITY=3
             LIMITER_TOKEN_REFILL_PER_SEC=0.25
             LIMITER_IG_CAPACITY=15
-            
+
             # --- Внешние API ---
             COBALT_API_URL=https://api.cobalt.tools
             ENABLE_COBALT_TIKTOK=0
             EOF
 
-            # 4. Пересобираем контейнер бота (меняются зависимости) и перезапускаем весь стек
-            docker compose build bot
-            docker compose down
-            docker compose up -d
+            # ── Поднимаем стек через GHCR-образ (без локальной сборки) ──
+            export GHCR_REPO="$REPO"
+            docker compose pull
+            docker compose up -d --remove-orphans
+
+            # ── Регистрация маршрута в хостовом Caddy (idempotent) ───────
+            CADDY_SITE=/etc/caddy/sites-enabled/ytdlbot.caddy
+            if [ ! -f "$CADDY_SITE" ] || ! grep -q "vid.tri.mom" "$CADDY_SITE"; then
+              mkdir -p /etc/caddy/sites-enabled
+              cat > "$CADDY_SITE" << 'CADDYEOF'
+            vid.tri.mom {
+              reverse_proxy 127.0.0.1:8000
+            }
+            CADDYEOF
+              caddy reload --config /etc/caddy/Caddyfile
+              echo ">>> Caddy route for vid.tri.mom registered."
+            else
+              echo ">>> Caddy route already exists, skipping."
+            fi
+
+            # ── Portainer — один на весь хост (idempotent) ───────────────
+            if ! docker inspect portainer > /dev/null 2>&1; then
+              docker run -d \
+                --name portainer \
+                --restart unless-stopped \
+                -p 9443:9443 \
+                -v /var/run/docker.sock:/var/run/docker.sock \
+                -v portainer_data:/data \
+                portainer/portainer-ce:latest
+              echo ">>> Portainer started."
+            else
+              echo ">>> Portainer already running, skipping."
+            fi
+
+            docker image prune -f
+            echo ">>> Deploy complete."
+

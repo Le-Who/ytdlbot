@@ -1,13 +1,17 @@
 services:
   bot:
-    build: .
+    # Образ собирается в GitHub Actions и публикуется в GHCR.
+    # На VPS только docker pull — никакой локальной сборки.
+    image: ghcr.io/${GHCR_REPO}:latest
     restart: always
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
       - TELEGRAM_LOCAL_ENDPOINT=http://tg-api:8081
       - POT_PROVIDER_URL=http://bgutil-pot:4416
-    # Убрали public port 8000. Внешний мир попадает сюда только через Caddy
+    # Хостовый Caddy проксирует vid.tri.mom → 127.0.0.1:8000
+    ports:
+      - "127.0.0.1:8000:8000"
     depends_on:
       redis:
         condition: service_healthy
@@ -43,8 +47,7 @@ services:
       - TELEGRAM_LOCAL=1
     volumes:
       - tg-api-data:/var/lib/telegram-bot-api
-    ports:
-      - "127.0.0.1:8081:8081"
+    # Порт не публикуется наружу — bot обращается по имени сервиса внутри сети
     deploy:
       resources:
         limits:
@@ -57,42 +60,14 @@ services:
     command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
       - redis-data:/data
-    ports:
-      - "127.0.0.1:6379:6379"
+    # Порт не публикуется наружу — используется только внутри compose-сети
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Прокси-сервер для автоматического HTTPS и маршрутизации на домен
-  caddy:
-    image: caddy:2-alpine
-    restart: always
-    ports:
-      - "80:80"
-      - "443:443"
-    command: caddy reverse-proxy --from https://vid.tri.mom --to http://bot:8000
-    volumes:
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      - bot
-
-  # Управление контейнерами (Web-интерфейс)
-  portainer:
-    image: portainer/portainer-ce:latest
-    restart: always
-    ports:
-      - "9443:9443"     # Доступ по HTTPS (self-signed): https://твои_ip:9443
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - portainer_data:/data
-
 volumes:
   tg-api-data:
   redis-data:
-  caddy_data:
-  caddy_config:
-  portainer_data:
   bot_cache:

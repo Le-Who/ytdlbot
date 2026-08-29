@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import deque
 from collections.abc import Awaitable, Callable
 from typing import Optional
 
@@ -78,7 +79,7 @@ class DownloadQueue:
         self._timeout = timeout_seconds
         self._avg_duration = avg_task_seconds
         # Ordered list of active waiters (index 0 = next in line).
-        self._waiters: list[_Waiter] = []
+        self._waiters: deque[_Waiter] = deque()
         self._lock = asyncio.Lock()  # guards _waiters mutations
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -149,7 +150,7 @@ class DownloadQueue:
             if self._waiters:
                 # Pop the first waiter and grant them the slot directly
                 # (we do NOT call sem.release() + sem.acquire() to avoid races).
-                next_waiter = self._waiters.pop(0)
+                next_waiter = self._waiters.popleft()
                 # Update positions for remaining waiters
                 for idx, w in enumerate(self._waiters, start=1):
                     w.position = idx

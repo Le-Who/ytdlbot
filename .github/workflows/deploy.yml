@@ -312,17 +312,20 @@ jobs:
             scripts/preflight-production.sh
             scripts/rollback-release.sh'
             expected_files="$(printf '%s\n' ./docker-compose.yml ./release.manifest ./scripts/bootstrap-migrate-production.sh ./scripts/bootstrap-production.sh ./scripts/deploy-release.sh ./scripts/preflight-production.sh ./scripts/rollback-release.sh | LC_ALL=C sort)"
+            expected_entries="$(printf '%s\n' ./docker-compose.yml ./release.manifest ./scripts ./scripts/bootstrap-migrate-production.sh ./scripts/bootstrap-production.sh ./scripts/deploy-release.sh ./scripts/preflight-production.sh ./scripts/rollback-release.sh | LC_ALL=C sort)"
             verify_release_payload() {
               payload_root=$1
               test -d "$payload_root"
               test ! -L "$payload_root"
               test "$(stat -c '%u' "$payload_root")" = "$(id -u)"
               test "$(readlink -f "$payload_root")" = "$payload_root"
-              actual_files="$(cd "$payload_root" && find . -type f -print | LC_ALL=C sort)"
-              test "$actual_files" = "$expected_files"
+              actual_entries="$(cd "$payload_root" && find . -mindepth 1 -print | LC_ALL=C sort)"
+              test "$actual_entries" = "$expected_entries"
               test -z "$(find "$payload_root" -type l -print -quit)"
+              test -d "$payload_root/scripts"
               test "$(stat -c '%u' "$payload_root/scripts")" = "$(id -u)"
               for relative_path in $payload_files; do
+                test -f "$payload_root/$relative_path"
                 test "$(stat -c '%u' "$payload_root/$relative_path")" = "$(id -u)"
               done
               test "$(grep -Fxc "RELEASE_SHA=$RELEASE_SHA" "$payload_root/release.manifest")" = 1
@@ -332,6 +335,21 @@ jobs:
               expected_compose_sha="$(sed -n 's/^COMPOSE_SHA256=//p' "$payload_root/release.manifest")"
               test "$(sha256sum "$payload_root/docker-compose.yml" | awk '{print $1}')" = "$expected_compose_sha"
             }
+            test -d "$staging_dir"
+            test ! -L "$staging_dir"
+            test "$(stat -c '%u' "$staging_dir")" = "$(id -u)"
+            test "$(readlink -f "$staging_dir")" = "$staging_dir"
+            actual_entries="$(cd "$staging_dir" && find . -mindepth 1 -print | LC_ALL=C sort)"
+            test "$actual_entries" = "$expected_entries"
+            test -z "$(find "$staging_dir" -type l -print -quit)"
+            test -d "$staging_dir/scripts"
+            test ! -L "$staging_dir/scripts"
+            chown --no-dereference "$(id -u):$(id -g)" "$staging_dir/scripts"
+            for relative_path in $payload_files; do
+              test -f "$staging_dir/$relative_path"
+              test ! -L "$staging_dir/$relative_path"
+              chown --no-dereference "$(id -u):$(id -g)" "$staging_dir/$relative_path"
+            done
             verify_release_payload "$staging_dir"
             if test -e "$releases_root" || test -L "$releases_root"; then
               test -d "$releases_root"

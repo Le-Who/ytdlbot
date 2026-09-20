@@ -1083,6 +1083,47 @@ def test_remote_registry_auth_is_ephemeral_and_read_only() -> None:
     assert "|| true" not in script
 
 
+def test_uploaded_payload_ownership_is_normalized_only_after_shape_validation() -> (
+    None
+):
+    script = _activation_workflow_script()
+    exact_entries_check = 'test "$actual_entries" = "$expected_entries"'
+    no_links_check = 'test -z "$(find "$staging_dir" -type l -print -quit)"'
+    normalize_scripts = (
+        'chown --no-dereference "$(id -u):$(id -g)" "$staging_dir/scripts"'
+    )
+    normalize_file = (
+        'chown --no-dereference "$(id -u):$(id -g)" '
+        '"$staging_dir/$relative_path"'
+    )
+    verify = 'verify_release_payload "$staging_dir"'
+    normalize_index = script.index(normalize_scripts)
+    normalize_block_start = script.rfind("\n}\n", 0, normalize_index)
+    assert normalize_block_start != -1
+    verify_function = script[
+        script.index("verify_release_payload() {") : normalize_block_start
+    ]
+    normalize_block = script[normalize_block_start + 3 : script.index(verify)]
+
+    assert 'test -d "$payload_root/scripts"' in verify_function
+    assert 'test -f "$payload_root/$relative_path"' in verify_function
+    assert "find . -mindepth 1 -print" in normalize_block
+    assert exact_entries_check in normalize_block
+    assert no_links_check in normalize_block
+    assert normalize_scripts in normalize_block
+    assert normalize_file in normalize_block
+    assert normalize_block.index(exact_entries_check) < normalize_block.index(
+        no_links_check
+    )
+    assert normalize_block.index(no_links_check) < normalize_block.index(
+        normalize_scripts
+    )
+    assert normalize_block.index(normalize_scripts) < normalize_block.index(
+        normalize_file
+    )
+    assert "chown -R" not in script
+
+
 @pytest.mark.parametrize("initial_failure", ["interrupted-promotion", "activation"])
 def test_same_sha_promotion_reuses_only_an_identical_immutable_release(
     tmp_path: Path,

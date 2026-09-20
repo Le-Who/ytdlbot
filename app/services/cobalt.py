@@ -21,6 +21,25 @@ logger = logging.getLogger("app.services.cobalt")
 
 TIMEOUT = 15  # seconds
 MAX_RETRIES = 2
+CHUNK_SIZE = 1024 * 1024
+MAX_MEDIA_BYTES = 2_000_000_000
+
+
+async def _stream_response(response: Response, output_path: str) -> int:
+    """Stream one response with the shared decimal media cap."""
+    written = 0
+    output = await asyncio.to_thread(open, output_path, "wb")
+    try:
+        async for chunk in response.aiter_content(chunk_size=CHUNK_SIZE):
+            if not chunk:
+                continue
+            written += len(chunk)
+            if written > MAX_MEDIA_BYTES:
+                raise ValueError("media exceeds 2,000,000,000 byte limit")
+            await asyncio.to_thread(output.write, chunk)
+    finally:
+        await asyncio.to_thread(output.close)
+    return written
 
 
 @dataclass
@@ -175,18 +194,16 @@ class CobaltService:
         output_path = os.path.join(TEMP_DIR, f"cblt_{uuid.uuid4().hex}.{ext}")
         try:
             async with AsyncSession() as session:
-                resp = await session.get(url, impersonate="chrome", timeout=60)
+                resp = await session.get(
+                    url, impersonate="chrome", timeout=60, stream=True
+                )
                 if resp.status_code >= 400:
                     logger.error(
                         "[COBALT] File download failed: HTTP %s", resp.status_code
                     )
                     return None
 
-                def _save():
-                    with open(output_path, "wb") as f:
-                        f.write(resp.content)
-
-                await asyncio.to_thread(_save)
+                await _stream_response(resp, output_path)
             return output_path
         except Exception as e:
             logger.error("[COBALT] File download error: %s", e)
@@ -215,14 +232,13 @@ class CobaltService:
         # Download images concurrently
         async def dl_image(idx: int, img_url: str) -> str:
             async with AsyncSession() as session:
-                resp = await session.get(img_url, impersonate="chrome", timeout=30)
+                resp = await session.get(
+                    img_url, impersonate="chrome", timeout=30, stream=True
+                )
                 path = os.path.join(base_dir, f"{idx:03d}.jpg")
-
-                def _save():
-                    with open(path, "wb") as f:
-                        f.write(resp.content)
-
-                await asyncio.to_thread(_save)
+                if resp.status_code != 200:
+                    raise RuntimeError(f"media returned HTTP {resp.status_code}")
+                await _stream_response(resp, path)
                 return path
 
         for i, url in enumerate(image_urls):
@@ -239,15 +255,12 @@ class CobaltService:
             try:
                 async with AsyncSession() as session:
                     resp = await session.get(
-                        result.audio, impersonate="chrome", timeout=30
+                        result.audio, impersonate="chrome", timeout=30, stream=True
                     )
                     audio_path = os.path.join(base_dir, "audio.mp3")
-
-                    def _save_audio():
-                        with open(audio_path, "wb") as f:
-                            f.write(resp.content)
-
-                    await asyncio.to_thread(_save_audio)
+                    if resp.status_code != 200:
+                        raise RuntimeError(f"media returned HTTP {resp.status_code}")
+                    await _stream_response(resp, audio_path)
             except Exception as e:
                 logger.error("[COBALT] Slideshow audio download error: %s", e)
                 # It's okay to proceed without audio

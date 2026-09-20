@@ -292,6 +292,16 @@ async def probe_candidate(
 ) -> None:
     """Perform only a bounded Range probe; never forward resolver credentials."""
     ensure_not_expired(url, wall_clock=wall_clock)
+    if isinstance(transport, CurlProviderTransport):
+        # Production probing shares the same DNS pinning, redirect checks, byte
+        # bounds, and credential stripping as materialization. Resolver fixture
+        # transports retain the small protocol below for deterministic tests.
+        import tempfile
+
+        from ..transport import MediaTransport
+
+        await MediaTransport(output_dir=tempfile.gettempdir()).probe(url)
+        return
     response = await request_response(
         transport,
         "GET",

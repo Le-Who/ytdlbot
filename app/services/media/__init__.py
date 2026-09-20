@@ -16,6 +16,14 @@ from .models import (
     canonicalize_media_url,
     request_cache_key,
 )
+from .transport import (
+    DECIMAL_MEDIA_LIMIT,
+    MaterializedItem,
+    MediaSizeExceeded,
+    MediaTransport,
+    UnsafeMediaURL,
+    URLPolicy,
+)
 from .validation import (
     CandidateRejectionReason,
     CandidateValidationResult,
@@ -23,6 +31,7 @@ from .validation import (
 )
 
 __all__ = [
+    "DECIMAL_MEDIA_LIMIT",
     "CandidateRejectionReason",
     "CandidateValidationResult",
     "ClipInterval",
@@ -30,12 +39,17 @@ __all__ = [
     "DeliveryReceipt",
     "DeliveryStatus",
     "DeliveryTarget",
+    "MaterializedItem",
     "MediaCandidate",
     "MediaItem",
     "MediaKind",
     "MediaRequest",
+    "MediaSizeExceeded",
+    "MediaTransport",
     "QualityPolicy",
     "ResolvedMedia",
+    "URLPolicy",
+    "UnsafeMediaURL",
     "UnsupportedMediaUrlError",
     "canonicalize_media_url",
     "request_cache_key",

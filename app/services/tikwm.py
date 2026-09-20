@@ -34,6 +34,24 @@ API_BASE = "https://tikwm.com/api/"
 TIMEOUT = 15  # seconds
 MAX_RETRIES = 3
 CHUNK_SIZE = 1024 * 1024  # 1 MB
+MAX_MEDIA_BYTES = 2_000_000_000
+
+
+async def _stream_response(response: Response, output_path: str) -> int:
+    """Stream a response to disk without ever materializing the whole body."""
+    written = 0
+    output = await asyncio.to_thread(open, output_path, "wb")
+    try:
+        async for chunk in response.aiter_content(chunk_size=CHUNK_SIZE):
+            if not chunk:
+                continue
+            written += len(chunk)
+            if written > MAX_MEDIA_BYTES:
+                raise ValueError("media exceeds 2,000,000,000 byte limit")
+            await asyncio.to_thread(output.write, chunk)
+    finally:
+        await asyncio.to_thread(output.close)
+    return written
 
 
 @dataclass
@@ -258,6 +276,7 @@ class TikWMService:
                     video_url,
                     impersonate="chrome",
                     timeout=60,
+                    stream=True,
                 )
 
             # ── Guard: reject non-200 CDN responses ──────────────────────────
@@ -278,16 +297,16 @@ class TikWMService:
                     return await TikWMService.download_video(url, _cdn_retry=False)
                 return None, f"TikWM CDN error: HTTP {resp.status_code}"
 
-            content = resp.content
-
             # ── Guard: reject suspiciously small bodies (error JSON / HTML) ──
-            if not content or len(content) < _MIN_VIDEO_BYTES:
+            content_size = await _stream_response(resp, output_path)
+            if content_size < _MIN_VIDEO_BYTES:
                 ct = resp.headers.get("content-type", "unknown")
                 logger.error(
                     "[TIKWM] CDN body too small (%d bytes, content-type=%s) — likely an error page. Evicting cache.",
-                    len(content) if content else 0,
+                    content_size,
                     ct,
                 )
+                await asyncio.to_thread(safe_remove, output_path)
                 for _key in {url, _canonical}:
                     if _key:
                         _tikwm_cache.pop(_key, None)
@@ -295,12 +314,6 @@ class TikWMService:
                     logger.info("[TIKWM] CDN returned empty body — retrying with fresh API fetch...")
                     return await TikWMService.download_video(url, _cdn_retry=False)
                 return None, "TikWM CDN returned empty/invalid body"
-
-            def _write_file(path: str, data: bytes) -> None:
-                with open(path, "wb") as f:
-                    f.write(data)
-
-            await asyncio.to_thread(_write_file, output_path, content)
 
             file_size = await asyncio.to_thread(os.path.getsize, output_path)
             size_mb = file_size / (1024 * 1024)
@@ -329,13 +342,11 @@ class TikWMService:
                     audio_url,
                     impersonate="chrome",
                     timeout=60,
+                    stream=True,
                 )
-
-                def _write_file(path: str, data: bytes) -> None:
-                    with open(path, "wb") as f:
-                        f.write(data)
-
-                await asyncio.to_thread(_write_file, output_path, resp.content)
+                if resp.status_code != 200:
+                    return None
+                await _stream_response(resp, output_path)
 
             file_size = await asyncio.to_thread(os.path.getsize, output_path)
             size_mb = file_size / (1024 * 1024)
@@ -368,7 +379,7 @@ class TikWMService:
                 try:
                     async with AsyncSession() as session:
                         resp = await session.get(
-                            img_url, impersonate="chrome", timeout=30
+                            img_url, impersonate="chrome", timeout=30, stream=True
                         )
 
                     # Validate HTTP response
@@ -382,14 +393,15 @@ class TikWMService:
                         )
                         return
 
-                    content = resp.content
-                    if not content or len(content) < 100:
+                    content_size = await _stream_response(resp, out_path)
+                    if content_size < 100:
                         logger.warning(
                             "[TIKWM] Image %d/%d is too small (%d bytes), skipping",
                             idx + 1,
                             len(images),
-                            len(content) if content else 0,
+                            content_size,
                         )
+                        await asyncio.to_thread(safe_remove, out_path)
                         return
 
                     ct = resp.headers.get("content-type", "unknown")
@@ -397,15 +409,9 @@ class TikWMService:
                         "[TIKWM] Image %d/%d: %d bytes, content-type=%s",
                         idx + 1,
                         len(images),
-                        len(content),
+                        content_size,
                         ct,
                     )
-
-                    def _write_file(path: str, data: bytes) -> None:
-                        with open(path, "wb") as f:
-                            f.write(data)
-
-                    await asyncio.to_thread(_write_file, out_path, content)
                     image_paths[idx] = out_path
                 except Exception as e:
                     logger.error(

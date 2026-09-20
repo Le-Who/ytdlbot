@@ -5,6 +5,7 @@ import time
 import logging
 
 from app.core.config import TEMP_DIR, MAX_TEMP_AGE_SECONDS, JANITOR_INTERVAL_SECONDS
+from app.core.resource_budget import is_active_media_lease, media_lease_path
 from app.core.utils import safe_remove
 
 logger = logging.getLogger("app.tasks.janitor")
@@ -19,6 +20,12 @@ def cleanup_temp_dir() -> tuple[int, int]:
 
     for name in os.listdir(TEMP_DIR):
         path = os.path.join(TEMP_DIR, name)
+
+        if name.endswith(".lease"):
+            target = path.removesuffix(".lease")
+            if not is_active_media_lease(target):
+                safe_remove(path)
+            continue
 
         # Clean slideshow directories (slideshow_* subdirs)
         if name.startswith("slideshow_") and os.path.isdir(path):
@@ -42,6 +49,7 @@ def cleanup_temp_dir() -> tuple[int, int]:
             or name.startswith("tikwm_")
             or name.startswith("gdl_video_")
             or name.startswith("info_")
+            or name.startswith("media_")
         ):
             continue
         if not os.path.isfile(path):
@@ -51,8 +59,11 @@ def cleanup_temp_dir() -> tuple[int, int]:
         except OSError:
             continue
         if age > MAX_TEMP_AGE_SECONDS:
+            if is_active_media_lease(path):
+                continue
             orphan += 1
             safe_remove(path)
+            media_lease_path(path).unlink(missing_ok=True)
             deleted += 1
 
     return deleted, orphan
@@ -65,6 +76,11 @@ def _aggressive_purge_temp() -> int:
         return deleted
     for name in os.listdir(TEMP_DIR):
         path = os.path.join(TEMP_DIR, name)
+        if name.endswith(".lease"):
+            target = path.removesuffix(".lease")
+            if not is_active_media_lease(target):
+                safe_remove(path)
+            continue
         if name.startswith("slideshow_") and os.path.isdir(path):
             try:
                 shutil.rmtree(path, ignore_errors=True)
@@ -78,10 +94,14 @@ def _aggressive_purge_temp() -> int:
             or name.startswith("tikwm_")
             or name.startswith("gdl_video_")
             or name.startswith("info_")
+            or name.startswith("media_")
         ):
             continue
         if os.path.isfile(path):
+            if is_active_media_lease(path):
+                continue
             safe_remove(path)
+            media_lease_path(path).unlink(missing_ok=True)
             deleted += 1
     return deleted
 

@@ -151,7 +151,10 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.content = b"video_data"
+        async def video_chunks(chunk_size):
+            del chunk_size
+            yield b"video_data"
+        mock_resp.aiter_content = video_chunks
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
@@ -176,11 +179,17 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
 
         mock_resp_img = MagicMock()
         mock_resp_img.status_code = 200
-        mock_resp_img.content = b"img_data"
+        async def image_chunks(chunk_size):
+            del chunk_size
+            yield b"img_data"
+        mock_resp_img.aiter_content = image_chunks
 
         mock_resp_audio = MagicMock()
         mock_resp_audio.status_code = 200
-        mock_resp_audio.content = b"audio_data"
+        async def audio_chunks(chunk_size):
+            del chunk_size
+            yield b"audio_data"
+        mock_resp_audio.aiter_content = audio_chunks
 
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)

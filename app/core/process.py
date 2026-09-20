@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import logging
 import os
 import shutil
 import signal
@@ -27,10 +28,13 @@ from pathlib import Path
 
 from app.core import state
 
+logger = logging.getLogger("app.core.process")
+
 _CREATE_SUSPENDED = 0x00000004
 _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+_OWNER_CANCEL_TIMEOUT_SECONDS = 1.5
 _process_owner: ContextVar[Hashable | None] = ContextVar(
     "media_process_owner", default=None
 )
@@ -38,14 +42,22 @@ _process_owner: ContextVar[Hashable | None] = ContextVar(
 
 @contextmanager
 def process_owner_scope(owner: Hashable | None) -> Iterator[None]:
-    """Bind a stable request owner for every nested supervised subprocess."""
+    """Bind one request owner to its task and every nested subprocess."""
     if owner is None:
         yield
         return
+    try:
+        task = asyncio.current_task()
+    except RuntimeError:
+        task = None
     binding = _process_owner.set(owner)
+    if task is not None:
+        process_supervisor._bind_owner_task(owner, task)
     try:
         yield
     finally:
+        if task is not None:
+            process_supervisor._unbind_owner_task(owner, task)
         _process_owner.reset(binding)
 
 
@@ -355,6 +367,23 @@ class ProcessSupervisor:
         self._by_owner: dict[Hashable, set[ProcessHandle]] = {}
         self._owner_generation: dict[Hashable, int] = {}
         self._owner_slot_refs: dict[Hashable, int] = {}
+        self._owner_tasks: dict[Hashable, dict[asyncio.Task[object], int]] = {}
+
+    def _bind_owner_task(self, owner: Hashable, task: asyncio.Task[object]) -> None:
+        tasks = self._owner_tasks.setdefault(owner, {})
+        tasks[task] = tasks.get(task, 0) + 1
+
+    def _unbind_owner_task(self, owner: Hashable, task: asyncio.Task[object]) -> None:
+        tasks = self._owner_tasks.get(owner)
+        if tasks is None:
+            return
+        references = tasks.get(task, 0)
+        if references <= 1:
+            tasks.pop(task, None)
+        else:
+            tasks[task] = references - 1
+        if not tasks:
+            self._owner_tasks.pop(owner, None)
 
     @staticmethod
     def _owner(owner: Hashable | None) -> Hashable:
@@ -642,12 +671,44 @@ class ProcessSupervisor:
             await asyncio.shield(self._finish(handle))
 
     async def cancel_owner(self, owner: Hashable) -> None:
+        current_task = asyncio.current_task()
         async with self._lock:
             self._owner_generation[owner] = self._owner_generation.get(owner, 0) + 1
             handles = tuple(self._by_owner.get(owner, ()))
-        if handles:
-            await asyncio.gather(*(handle.cancel() for handle in handles))
-            await asyncio.gather(*(self._finish(handle) for handle in handles))
+            owner_tasks = tuple(
+                task
+                for task in self._owner_tasks.get(owner, ())
+                if task is not current_task and not task.done()
+            )
+        for task in owner_tasks:
+            task.cancel()
+
+        async def cancel_handle(handle: ProcessHandle) -> None:
+            await handle.cancel()
+            await self._finish(handle)
+
+        cleanup_tasks = tuple(
+            asyncio.create_task(cancel_handle(handle)) for handle in handles
+        )
+        pending_work = (*owner_tasks, *cleanup_tasks)
+        if not pending_work:
+            return
+        done, pending = await asyncio.wait(
+            pending_work, timeout=_OWNER_CANCEL_TIMEOUT_SECONDS
+        )
+        completed = tuple(task for task in pending_work if task in done)
+        if completed:
+            await asyncio.gather(
+                *completed,
+                return_exceptions=True,
+            )
+        if pending:
+            logger.warning(
+                "Owner %r cancellation exceeded %.1fs (%d task(s) still unwinding)",
+                owner,
+                _OWNER_CANCEL_TIMEOUT_SECONDS,
+                len(pending),
+            )
 
     def processes_for(self, owner: Hashable) -> tuple[asyncio.subprocess.Process, ...]:
         return tuple(handle.proc for handle in self._by_owner.get(owner, ()))

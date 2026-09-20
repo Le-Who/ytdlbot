@@ -216,6 +216,30 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
     # ── End User Preferences Fast-Path ───────────────────────────────────
 
+    # Register before the cancel keyboard is published, so a fast click cannot
+    # fall between showing the control and owning this request task.
+    with process_owner_scope(parse_token):
+        await _complete_message_parse(
+            context,
+            msg,
+            user,
+            chat,
+            text,
+            section,
+            parse_token,
+        )
+
+
+async def _complete_message_parse(
+    context: ContextTypes.DEFAULT_TYPE,
+    msg: Any,
+    user: Any,
+    chat: Any,
+    text: str,
+    section: str | None,
+    parse_token: str,
+) -> None:
+
     kb_cancel = InlineKeyboardMarkup(
         [
             [

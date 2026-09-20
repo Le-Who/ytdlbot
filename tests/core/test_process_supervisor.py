@@ -157,6 +157,41 @@ async def test_explicit_owner_overrides_scoped_owner(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_cancel_owner_does_not_cancel_its_calling_task():
+    from app.core.process import process_owner_scope, process_supervisor
+
+    current = asyncio.current_task()
+    assert current is not None
+    with process_owner_scope("cancel-caller"):
+        await asyncio.wait_for(
+            process_supervisor.cancel_owner("cancel-caller"), timeout=2
+        )
+
+    assert current.cancelling() == 0
+
+
+@pytest.mark.asyncio
+async def test_nested_owner_scope_remains_registered_until_outer_exit():
+    from app.core.process import process_owner_scope, process_supervisor
+
+    ready = asyncio.Event()
+
+    async def request() -> None:
+        with process_owner_scope("nested-request"):
+            with process_owner_scope("nested-request"):
+                await asyncio.sleep(0)
+            ready.set()
+            await asyncio.Future()
+
+    task = asyncio.create_task(request())
+    await asyncio.wait_for(ready.wait(), timeout=1)
+    await process_supervisor.cancel_owner("nested-request")
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+@pytest.mark.asyncio
 async def test_token_cancels_long_gallery_dl_service_process(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

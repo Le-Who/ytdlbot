@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 
 """Tests for on_message handler — the core user flow."""
 
+import asyncio
 import unittest
 from types import SimpleNamespace
 
@@ -168,6 +169,59 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
             await messages.on_message(self.update, self.context)
 
         self.assertEqual(self.context.user_data["parse_token"], "parseown")
+
+    async def test_cancel_parse_stops_hanging_search(self):
+        from app.bot import callbacks
+
+        url = "https://youtube.com/watch?v=cancelparse"
+        self.update.message.text = url
+        status_msg = AsyncMock()
+        self.update.message.reply_text = AsyncMock(return_value=status_msg)
+        search_started = asyncio.Event()
+        search_closed = asyncio.Event()
+
+        async def list_formats(_url):
+            search_started.set()
+            try:
+                await asyncio.Future()
+            finally:
+                search_closed.set()
+
+        ytdlp = MagicMock()
+        ytdlp.list_formats = AsyncMock(side_effect=list_formats)
+        cancel_update = MagicMock()
+        cancel_update.callback_query = MagicMock()
+        cancel_update.callback_query.data = "cancel_parse|parseown"
+        cancel_update.callback_query.answer = AsyncMock()
+        cancel_update.callback_query.edit_message_text = AsyncMock()
+        message_task = None
+
+        try:
+            with (
+                patch.object(state, "media_pipeline", None),
+                patch.object(state, "ytdlp", ytdlp),
+                patch.object(
+                    messages.uuid,
+                    "uuid4",
+                    return_value=SimpleNamespace(hex="parseown"),
+                ),
+            ):
+                message_task = asyncio.create_task(
+                    messages.on_message(self.update, self.context)
+                )
+                await asyncio.wait_for(search_started.wait(), timeout=1)
+
+                await callbacks.on_cancel(cancel_update, self.context)
+
+                self.assertTrue(message_task.done())
+                with self.assertRaises(asyncio.CancelledError):
+                    await message_task
+                await asyncio.wait_for(search_closed.wait(), timeout=1)
+                self.assertNotIn(url, state.inflight_parsing)
+        finally:
+            if message_task is not None and not message_task.done():
+                message_task.cancel()
+                await asyncio.gather(message_task, return_exceptions=True)
 
     async def test_tiktok_api_failure_assigns_synthetic_cache_value(self):
         """TikTok fallback must not read the local ``cached`` before assignment."""

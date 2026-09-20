@@ -1,6 +1,7 @@
 # mypy: ignore-errors
 from unittest.mock import AsyncMock
 import asyncio
+import time
 import unittest
 
 
@@ -182,6 +183,101 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         cancel_owner.assert_awaited_once_with(token)
         args, _ = self.update.callback_query.edit_message_text.call_args
         self.assertIn("Загрузка отменена", args[0])
+
+    async def test_on_cancel_stops_hanging_http_download_and_releases_queue(self):
+        from app.core.download_queue import DownloadQueue
+        from app.core.models import DownloadContext
+        from app.services.orchestrator import DownloadOrchestrator
+
+        token = "http_cancel_token"
+        connected = asyncio.Event()
+        disconnected = asyncio.Event()
+        client_writers: list[asyncio.StreamWriter] = []
+
+        async def hanging_response(reader, writer):
+            try:
+                await reader.readuntil(b"\r\n\r\n")
+                writer.write(
+                    b"HTTP/1.1 200 OK\r\n"
+                    b"Content-Length: 1000000\r\n"
+                    b"Connection: close\r\n\r\n"
+                )
+                await writer.drain()
+                connected.set()
+                await reader.read()
+            finally:
+                disconnected.set()
+                writer.close()
+                await writer.wait_closed()
+
+        server = await asyncio.start_server(hanging_response, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        url = f"http://127.0.0.1:{port}/video"
+        queue = DownloadQueue(asyncio.Semaphore(1))
+        request_task = None
+
+        async def hanging_download(_page_url):
+            reader, writer = await asyncio.open_connection("127.0.0.1", port)
+            client_writers.append(writer)
+            try:
+                writer.write(f"GET {url} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".encode())
+                await writer.drain()
+                await reader.readexactly(1_000_000)
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        send_file = AsyncMock()
+        try:
+            with (
+                patch.object(state, "media_pipeline", None),
+                patch.object(state, "api_queue", queue),
+                patch(
+                    "app.services.orchestrator.TikWMService.download_video",
+                    side_effect=hanging_download,
+                ),
+                patch("app.services.orchestrator.MediaSender.send_file", send_file),
+            ):
+                request_task = asyncio.create_task(
+                    DownloadOrchestrator.process_download(
+                        token=token,
+                        chat_id=99999,
+                        bot=self.context.bot,
+                        payload=DownloadContext(
+                            page_url="https://example.invalid/video",
+                            format_id="tikwm_fallback",
+                        ),
+                        fmt_size=None,
+                        update_ui=AsyncMock(),
+                        kb_error=None,
+                    )
+                )
+                await asyncio.wait_for(connected.wait(), timeout=1)
+
+                self.update.callback_query.data = f"cancel|{token}"
+                started = time.monotonic()
+                await callbacks.on_cancel(self.update, self.context)
+
+                self.assertLess(time.monotonic() - started, 2)
+                self.assertTrue(request_task.done())
+                with self.assertRaises(asyncio.CancelledError):
+                    await request_task
+                await asyncio.wait_for(disconnected.wait(), timeout=1)
+                self.assertTrue(client_writers[0].is_closing())
+                send_file.assert_not_awaited()
+
+                lease = await asyncio.wait_for(queue.acquire(AsyncMock()), timeout=0.5)
+                await lease.release()
+        finally:
+            if request_task is not None and not request_task.done():
+                request_task.cancel()
+                await asyncio.gather(request_task, return_exceptions=True)
+            for writer in client_writers:
+                if not writer.is_closing():
+                    writer.close()
+                    await writer.wait_closed()
+            server.close()
+            await server.wait_closed()
 
     async def test_on_send_rate_limit(self):
         self.update.callback_query.data = "send|token123"

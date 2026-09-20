@@ -21,6 +21,12 @@ from telegram import (
 )
 from telegram.error import BadRequest, NetworkError, RetryAfter
 
+from app.core.job_store import (
+    DeliveryOutcome,
+    begin_current_delivery,
+    current_delivery_outcome,
+    record_current_delivery,
+)
 from app.core.policy import DECIMAL_MB
 
 from .models import (
@@ -170,30 +176,66 @@ class TelegramDelivery:
             "thumbnail": thumbnail,
             "file_name": file_name,
         }
-        results: list[DeliveredItem] = []
-        units = _delivery_units(assets)
+        results: dict[str, DeliveredItem] = {}
+        pending_assets: list[DeliveryAsset] = []
+        for asset in assets:
+            item_key = _durable_item_key(target, asset)
+            prior = await current_delivery_outcome(item_key)
+            if prior is DeliveryOutcome.SUCCESS:
+                results[item_key] = DeliveredItem(
+                    item=asset.item,
+                    status=DeliveryStatus.DELIVERED,
+                    telegram_type=asset.item.kind,
+                    item_index=asset.item_index or 0,
+                )
+            elif prior is DeliveryOutcome.UNCERTAIN:
+                results[item_key] = DeliveredItem(
+                    item=asset.item,
+                    status=DeliveryStatus.UNCERTAIN,
+                    telegram_type=asset.item.kind,
+                    item_index=asset.item_index or 0,
+                    error="Telegram send outcome was uncertain before restart",
+                    error_category="recovered_unknown_outcome",
+                )
+            else:
+                pending_assets.append(asset)
+
+        units = _delivery_units(tuple(pending_assets))
         for unit_index, unit in enumerate(units):
+            await begin_current_delivery(
+                tuple(_durable_item_key(target, asset) for asset in unit)
+            )
             group_options = dict(options)
-            if unit_index:
+            if unit_index or results:
                 group_options["caption"] = ""
                 group_options["parse_mode"] = None
                 group_options["reply_parameters"] = None
+            delivered: tuple[DeliveredItem, ...]
             if len(unit) == 1:
-                results.append(
+                delivered = (
                     await self._deliver_one(
                         unit[0], target, request=request, options=group_options
-                    )
+                    ),
                 )
             else:
-                results.extend(
-                    await self._deliver_group(
-                        unit,
-                        target,
-                        request=request,
-                        options=group_options,
-                    )
+                delivered = await self._deliver_group(
+                    unit,
+                    target,
+                    request=request,
+                    options=group_options,
                 )
-        return self._receipt(target, tuple(results))
+            for asset, item in zip(unit, delivered, strict=True):
+                item_key = _durable_item_key(target, asset)
+                await record_current_delivery(
+                    item_key,
+                    _durable_outcome(item.status),
+                    delivery_id=item.delivery_id,
+                )
+                results[item_key] = item
+        return self._receipt(
+            target,
+            tuple(results[_durable_item_key(target, asset)] for asset in assets),
+        )
 
     async def retry_failed(
         self,
@@ -690,6 +732,18 @@ def _send_method(kind: MediaKind) -> tuple[str, str]:
         return methods[kind]
     except KeyError as error:
         raise ValueError(f"unsupported Telegram media kind: {kind}") from error
+
+
+def _durable_item_key(target: DeliveryTarget, asset: DeliveryAsset) -> str:
+    return f"{target.destination}:{asset.item_index or 0}:{asset.item.media_id}"
+
+
+def _durable_outcome(status: DeliveryStatus) -> DeliveryOutcome:
+    if status in {DeliveryStatus.SUCCESS, DeliveryStatus.DELIVERED}:
+        return DeliveryOutcome.SUCCESS
+    if status is DeliveryStatus.UNCERTAIN:
+        return DeliveryOutcome.UNCERTAIN
+    return DeliveryOutcome.FAILED
 
 
 def _input_media(

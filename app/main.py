@@ -1,12 +1,14 @@
 import asyncio
 import html
 import logging
+import os
 import traceback
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request
+from telegram import Update
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -15,15 +17,27 @@ from telegram.ext import (
     filters,
 )
 
+from app.api.routes import configure_job_store
 from app.api.routes import router as api_router
 from app.bot import callbacks, commands, messages
 from app.core import config, state
+from app.core.drain import DrainController, DurableUpdateWorker
+from app.core.job_store import JobStore, mark_current_job_failed
 from app.core.logging import set_correlation_id, setup_logging
 from app.tasks.auto_updater import auto_updater_loop
 from app.tasks.janitor import janitor_loop
 
 setup_logging()
 logger = logging.getLogger("app.main")
+
+
+async def stop_telegram_ingress(bot_app: Any, *, webhook_enabled: bool) -> None:
+    """Stop polling while preserving a webhook across routine deployments."""
+
+    if webhook_enabled:
+        return
+    assert bot_app.updater is not None
+    await bot_app.updater.stop()
 
 
 def _build_telegram_application_builder() -> Any:
@@ -49,6 +63,7 @@ def _build_telegram_application_builder() -> Any:
 
 
 async def _global_error_handler(update, context):
+    mark_current_job_failed(context.error)
     logger.error(
         "Unhandled exception in handler",
         exc_info=context.error,
@@ -127,6 +142,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     if state.redis_client:
         await state.redis_client.ping()
         logger.info("Redis connected ✅")
+
+    job_store = JobStore()
+    await job_store.initialize()
+    drain_controller = DrainController(job_store)
 
     stop_event = asyncio.Event()
     janitor_task = asyncio.create_task(janitor_loop(stop_event))
@@ -253,6 +272,18 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await bot_app.start()
     state.bot_app = bot_app
 
+    async def process_durable_update(payload: dict[str, Any]) -> None:
+        update = Update.de_json(payload, bot_app.bot)
+        await bot_app.process_update(update)
+
+    durable_worker = DurableUpdateWorker(
+        job_store,
+        drain_controller,
+        process_durable_update,
+    )
+    configure_job_store(job_store)
+    await durable_worker.start()
+
     if config.WEBHOOK_URL:
         await bot_app.bot.set_webhook(
             url=f"{config.WEBHOOK_URL}/webhook",
@@ -269,18 +300,20 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     yield
 
     logger.info("Shutting down...")
+    await drain_controller.drain(
+        deadline_seconds=float(os.getenv("DRAIN_TIMEOUT_SECONDS", "30"))
+    )
+    await durable_worker.stop()
     stop_event.set()
     await janitor_task
     await updater_task
-    if config.WEBHOOK_URL:
-        await bot_app.bot.delete_webhook()
-    else:
-        assert bot_app.updater is not None
-        await bot_app.updater.stop()
+    await stop_telegram_ingress(bot_app, webhook_enabled=bool(config.WEBHOOK_URL))
 
     await bot_app.stop()
     await bot_app.shutdown()
     state.media_pipeline = None
+    configure_job_store(None)
+    await job_store.close()
 
     # Redis lifecycle: clean close connection pool
     if state.redis_client:

@@ -2,11 +2,12 @@ import asyncio
 import hmac
 import logging
 import re
+from collections.abc import Awaitable, Mapping
+from typing import Any, Protocol
 from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import PlainTextResponse, StreamingResponse
-from telegram import Update
 
 from app.constants import AUDIO_FORMAT_ID, CHUNK_SIZE, GIF_FORMAT_ID
 from app.core import state
@@ -19,6 +20,20 @@ from app.core.process import run_subprocess
 logger = logging.getLogger("app.api")
 router = APIRouter()
 _HTTP_LEASE_RENEW_SECONDS = 5 * 60
+
+
+class DurableUpdateStore(Protocol):
+    def accept_update(self, payload: Mapping[str, Any]) -> Awaitable[object]: ...
+
+
+_job_store: DurableUpdateStore | None = None
+
+
+def configure_job_store(store: DurableUpdateStore | None) -> None:
+    """Install the lifespan-owned durable inbox used by the webhook route."""
+
+    global _job_store
+    _job_store = store
 
 
 @router.get("/health")
@@ -295,13 +310,28 @@ async def telegram_webhook(request: Request) -> dict[str, bool]:
     if ip and not await state.limiter.allow_ip(ip):
         raise HTTPException(429, "Too many requests")
 
-    if state.bot_app:
-        try:
-            update = Update.de_json(await request.json(), state.bot_app.bot)
-            # Fire-and-forget: return 200 to Telegram immediately so it
-            # keeps delivering updates for other users while this one
-            # is being processed in the background.
-            asyncio.create_task(state.bot_app.process_update(update))
-        except Exception as e:
-            logger.error("Webhook update error", extra={"error": str(e)})
+    store = _job_store
+    if store is None:
+        # A server cannot receive traffic before its lifespan has completed.
+        # This branch keeps import-only route tests side-effect free.
+        if state.bot_app is None:
+            return {"ok": True}
+        raise HTTPException(
+            503, "Durable inbox is unavailable", headers={"Retry-After": "1"}
+        )
+    try:
+        payload = await request.json()
+        if not isinstance(payload, dict):
+            raise TypeError("Telegram update must be a JSON object")
+        await store.accept_update(payload)
+    except Exception as error:
+        logger.error(
+            "Webhook persistence failed",
+            extra={"error_type": type(error).__name__},
+        )
+        raise HTTPException(
+            503,
+            "Durable inbox write failed",
+            headers={"Retry-After": "1"},
+        ) from error
     return {"ok": True}

@@ -62,14 +62,14 @@ not emulated and not described as a successful Compose runtime check.
 [`tests/fixtures/youtube-acceptance.json`](../tests/fixtures/youtube-acceptance.json)
 contains exactly 12 Shorts and 12 ordinary-video candidates. Their public
 metadata and recorded traits were checked without downloading the media, but
-the file intentionally retains `approval.status = "pending"`. A populated
-pending file cannot be mistaken for approved or production-IP evidence.
+that metadata check is not production-IP evidence. The independently reviewed
+set is checked in with `approval.status = "approved"` so the controlled Task 14
+runner can use it; approval selects test material and does not claim delivery.
 
-Before Task 14, a reviewer must verify that all 24 candidate URLs remain public,
-that their traits are suitable for the controlled run, and that the media is
-safe to exercise. The reviewer then sets `approved_by`, `approved_at`, and
-`status = "approved"`. CI never promotes a pending fixture automatically. The
-schema is [`youtube-acceptance.schema.json`](../tests/fixtures/youtube-acceptance.schema.json).
+Before every Task 14 run, the operator must still verify that all 24 candidate
+URLs remain public, that their traits remain suitable, and that the media is
+safe to exercise. CI never changes approval fields automatically. The schema is
+[`youtube-acceptance.schema.json`](../tests/fixtures/youtube-acceptance.schema.json).
 The acceptance validator also requires unique URLs and aggregate coverage of:
 
 - vertical and horizontal media;

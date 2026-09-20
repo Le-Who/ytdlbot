@@ -410,15 +410,18 @@ def test_youtube_acceptance_manifest_reserves_12_shorts_and_12_videos() -> None:
 
 def test_pending_or_incomplete_manifest_cannot_be_used_for_live_acceptance() -> None:
     manifest = _load_json(YOUTUBE_MANIFEST)
+    _require_approved_manifest(manifest)
+
+    pending = copy.deepcopy(manifest)
+    pending["approval"] = {
+        "status": "pending",
+        "approved_by": None,
+        "approved_at": None,
+    }
     with pytest.raises(AssertionError, match="explicitly approved"):
-        _require_approved_manifest(manifest)
+        _require_approved_manifest(pending)
 
     incomplete = copy.deepcopy(manifest)
-    incomplete["approval"] = {
-        "status": "approved",
-        "approved_by": "reviewer",
-        "approved_at": "2026-09-20T00:00:00Z",
-    }
     incomplete["shorts"][0]["url"] = None
     with pytest.raises((AssertionError, ValidationError)):
         _require_approved_manifest(incomplete)

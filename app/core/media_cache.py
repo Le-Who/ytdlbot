@@ -8,7 +8,7 @@ import json
 import math
 import secrets
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 
@@ -34,8 +34,16 @@ return 0
 """.strip()
 
 RecordType = Literal["metadata", "signed-url", "file-id"]
-_SENSITIVE_HEADERS = frozenset(
-    {"authorization", "cookie", "proxy-authorization", "x-api-key"}
+_CACHEABLE_MEDIA_HEADERS = frozenset(
+    {
+        "accept",
+        "accept-encoding",
+        "accept-language",
+        "origin",
+        "range",
+        "referer",
+        "user-agent",
+    }
 )
 
 
@@ -85,11 +93,11 @@ class StableMediaMetadata:
 class CachedSignedURL:
     """Short-lived transport data kept apart from stable metadata."""
 
-    url: str
+    url: str = field(repr=False)
     provider: str
     expires_at: float
     variant_id: str = "default"
-    headers: tuple[tuple[str, str], ...] = ()
+    headers: tuple[tuple[str, str], ...] = field(default=(), repr=False)
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.url)
@@ -101,11 +109,27 @@ class CachedSignedURL:
             raise ValueError("signed URL requires provider and variant identity")
         if not math.isfinite(self.expires_at):
             raise ValueError("signed URL expiry must be finite")
-        for name, value in self.headers:
-            if name.lower() in _SENSITIVE_HEADERS:
-                raise ValueError("credentials must not be persisted with signed URLs")
-            if "\r" in name or "\n" in name or "\r" in value or "\n" in value:
+        canonical_headers: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        for raw_name, raw_value in self.headers:
+            if not isinstance(raw_name, str) or not isinstance(raw_value, str):
+                raise TypeError("cached media headers must be text")
+            if (
+                "\r" in raw_name
+                or "\n" in raw_name
+                or "\r" in raw_value
+                or "\n" in raw_value
+            ):
                 raise ValueError("cached media headers must not contain newlines")
+            name = raw_name.strip().lower()
+            value = raw_value.strip()
+            if name not in _CACHEABLE_MEDIA_HEADERS:
+                raise ValueError("media header is not safe to cache")
+            if name in seen:
+                raise ValueError("duplicate media header is not safe to cache")
+            seen.add(name)
+            canonical_headers.append((name, value))
+        object.__setattr__(self, "headers", tuple(canonical_headers))
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,44 +215,48 @@ class MemoryLeaseManager:
         self._leases: dict[str, _MemoryLease] = {}
         self._lock = asyncio.Lock()
 
+    @property
+    def entry_count(self) -> int:
+        return len(self._leases)
+
     async def acquire(self, key: str, *, ttl: float) -> str | None:
         _positive_ttl(ttl)
         async with self._lock:
+            now = self._clock()
+            self._prune_expired(now)
             current = self._leases.get(key)
-            if current is not None and current.expires_at > self._clock():
+            if current is not None:
                 return None
             owner = secrets.token_urlsafe(24)
-            self._leases[key] = _MemoryLease(owner, self._clock() + ttl)
+            self._leases[key] = _MemoryLease(owner, now + ttl)
             return owner
 
     async def renew(self, key: str, owner: str, *, ttl: float) -> bool:
         _positive_ttl(ttl)
         async with self._lock:
+            now = self._clock()
+            self._prune_expired(now)
             current = self._leases.get(key)
-            if (
-                current is None
-                or current.owner != owner
-                or current.expires_at <= self._clock()
-            ):
-                if current is not None and current.expires_at <= self._clock():
-                    self._leases.pop(key, None)
+            if current is None or current.owner != owner:
                 return False
-            current.expires_at = self._clock() + ttl
+            current.expires_at = now + ttl
             return True
 
     async def release(self, key: str, owner: str) -> bool:
         async with self._lock:
+            self._prune_expired(self._clock())
             current = self._leases.get(key)
-            if (
-                current is None
-                or current.owner != owner
-                or current.expires_at <= self._clock()
-            ):
-                if current is not None and current.expires_at <= self._clock():
-                    self._leases.pop(key, None)
+            if current is None or current.owner != owner:
                 return False
             self._leases.pop(key, None)
             return True
+
+    def _prune_expired(self, now: float) -> None:
+        expired = [
+            key for key, lease in self._leases.items() if lease.expires_at <= now
+        ]
+        for key in expired:
+            self._leases.pop(key, None)
 
 
 class MediaCache:

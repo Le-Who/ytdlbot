@@ -10,6 +10,7 @@ from app.core.media_cache import (
     CachedDelivery,
     CachedSignedURL,
     MediaCache,
+    MemoryLeaseManager,
     RedisLeaseManager,
     StableMediaMetadata,
 )
@@ -284,3 +285,78 @@ async def test_memory_lease_fallback_matches_owner_and_expiry_semantics():
     assert second not in {None, first}
     assert await cache.release_lease("materialize:key", first) is False
     assert await cache.release_lease("materialize:key", second) is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["acquire", "renew", "release"])
+async def test_memory_lease_operations_prune_expired_unique_keys(operation: str):
+    """Catches expired owner leases accumulating forever under unique keys."""
+    clock = Clock()
+    leases = MemoryLeaseManager(clock=clock)
+    for index in range(100):
+        assert await leases.acquire(f"expired-{index}", ttl=1) is not None
+    clock.advance(2)
+
+    if operation == "acquire":
+        assert await leases.acquire("fresh", ttl=10) is not None
+        expected_entries = 1
+    elif operation == "renew":
+        assert await leases.renew("missing", "wrong-owner", ttl=10) is False
+        expected_entries = 0
+    else:
+        assert await leases.release("missing", "wrong-owner") is False
+        expected_entries = 0
+
+    assert leases.entry_count == expected_entries
+
+
+@pytest.mark.parametrize(
+    "header_name",
+    [
+        "Cookie",
+        "cOoKiE",
+        "Set-Cookie",
+        "Authorization",
+        "Proxy-Authorization",
+        "Api-Key",
+        "X-API-Key",
+        "X-Auth-Token",
+        "X-Provider-Secret",
+    ],
+)
+def test_signed_url_cache_rejects_secret_and_unknown_headers_without_leaking_value(
+    header_name: str,
+):
+    """Catches blacklist gaps that persist arbitrary provider credentials."""
+    secret = "must-not-appear"
+
+    with pytest.raises(ValueError) as caught:
+        CachedSignedURL(
+            url="https://cdn.example/video.mp4?signature=redacted",
+            provider="provider",
+            expires_at=2_000_000,
+            headers=((header_name, secret),),
+        )
+
+    assert secret not in str(caught.value)
+
+
+def test_signed_url_cache_canonicalizes_only_transport_safe_headers():
+    """Catches case/whitespace variants bypassing the strict header policy."""
+    record = CachedSignedURL(
+        url="https://cdn.example/video.mp4?signature=redacted",
+        provider="provider",
+        expires_at=2_000_000,
+        headers=(
+            (" User-Agent ", " agent/1.0 "),
+            ("RANGE", " bytes=0-1023 "),
+            ("Referer", " https://origin.example/watch "),
+        ),
+    )
+
+    assert record.headers == (
+        ("user-agent", "agent/1.0"),
+        ("range", "bytes=0-1023"),
+        ("referer", "https://origin.example/watch"),
+    )
+    assert "agent/1.0" not in repr(record)

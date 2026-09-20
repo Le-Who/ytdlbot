@@ -815,6 +815,19 @@ def test_manifest_must_match_exact_sha_image_project_and_compose(
     assert fake_host.commands() == []
 
 
+def test_candidate_compose_preflight_uses_production_project_directory() -> None:
+    script = (ROOT / "scripts" / "preflight-production.sh").read_text(
+        encoding="utf-8"
+    )
+    normalized = " ".join(script.replace("\\\n", " ").split())
+
+    assert (
+        'docker compose -p "$COMPOSE_PROJECT" '
+        '--project-directory "$PROJECT_ROOT" '
+        '-f "$RELEASE_DIR/docker-compose.yml"' in normalized
+    )
+
+
 def test_webhook_verification_failure_rolls_back(fake_host: FakeHost) -> None:
     result = fake_host.run(FAKE_WEBHOOK_FAILURE="1")
 

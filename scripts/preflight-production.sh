@@ -159,7 +159,8 @@ tg_api_volume=$(docker inspect --format \
 BOOTSTRAP_MODE=check "$RELEASE_DIR/scripts/bootstrap-production.sh"
 
 BOT_IMAGE="$BOT_IMAGE" APP_RELEASE="$RELEASE_SHA" \
-  docker compose -p "$COMPOSE_PROJECT" -f "$RELEASE_DIR/docker-compose.yml" \
+  docker compose -p "$COMPOSE_PROJECT" --project-directory "$PROJECT_ROOT" \
+  -f "$RELEASE_DIR/docker-compose.yml" \
   config --quiet >/dev/null
 
 printf 'Production preflight passed for %s (%s).\n' \

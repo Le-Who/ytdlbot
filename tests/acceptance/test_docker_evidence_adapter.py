@@ -51,6 +51,7 @@ def _metrics(*, complete: bool, legacy: bool = False) -> dict[str, Any]:
         "file_id_hits": 0,
         "providers": {"ytdlp": 1} if complete else {},
         "provider_attempts": {"ytdlp": 1} if complete else {},
+        "provider_attempts_present": not legacy,
         "active_downloads": 0,
         "queue_depth": 0,
         "legacy": {
@@ -61,6 +62,7 @@ def _metrics(*, complete: bool, legacy: bool = False) -> dict[str, Any]:
             for name, value in legacy_values.items()
         },
         "legacy_results": {
+            "total": 1 if complete and legacy else 0,
             "success": 1 if complete and legacy else 0,
             "failed": 0,
         },
@@ -77,6 +79,7 @@ class FakeRuntime:
         self.snapshot_count = 0
         self.log_count = 0
         self.submitted = False
+        self.telegram_connections = 0
 
     def identity(self) -> Any:
         return self.module.DockerIdentity(
@@ -84,6 +87,7 @@ class FakeRuntime:
             image_id="sha256:" + "b" * 64,
             configured_image="ghcr.io/example/bot@sha256:" + "c" * 64,
             memory_limit_bytes=self.module.EXPECTED_MEMORY_BYTES,
+            host_pid=1234,
         )
 
     def container_call(
@@ -116,6 +120,11 @@ class FakeRuntime:
                     ["legacy-inf", "media-cache"] if candidate else ["legacy-inf"]
                 ),
                 "bounded_cancel_supported": False,
+                "process_fence_supported": True,
+                "provider_attempts_present": candidate,
+                "provider_attempt_capability": (
+                    "exact-metric" if candidate else "unavailable"
+                ),
             }
         if action == "evict-case":
             return {
@@ -166,34 +175,24 @@ class FakeRuntime:
             ),
             "cpu_seconds": 3.25 if complete else 3.0,
             "rss_bytes": 12_000 if complete else 10_000,
+            "media_child_processes": 0,
+            "process_fence_supported": True,
             "job": job,
         }
+
+    def telegram_connection_count(self) -> int:
+        return self.telegram_connections
+
+    def logs_since(self, *, since: str) -> str:
+        del since
+        self.log_count += 1
+        if self.profile == "legacy-baseline":
+            return 'INFO: 127.0.0.1 - "POST /webhook HTTP/1.1" 200 OK'
+        return ""
 
     def correlated_logs(self, *, since: str, correlation_id: str) -> str:
         del since
         self.log_count += 1
-        if self.profile == "legacy-baseline":
-            if self.log_count == 1:
-                return f"{correlation_id} webhook accepted"
-            return "\n".join(
-                (
-                    json.dumps(
-                        {
-                            "correlation_id": correlation_id,
-                            "timestamp": 100.2,
-                            "event": "first_byte",
-                        }
-                    ),
-                    f"{correlation_id} sendVideo status=200 telegram-success",
-                    json.dumps(
-                        {
-                            "correlation_id": correlation_id,
-                            "event": "delivery",
-                            "delivered_file_size_bytes": 900,
-                        }
-                    ),
-                )
-            )
         return f"{correlation_id} sendVideo status=200"
 
 
@@ -298,7 +297,7 @@ def test_multiple_task11_first_byte_samples_fail_closed_without_directory_guess(
     assert "artifact_size_samples" not in result
 
 
-def test_legacy_profile_uses_exact_inf_eviction_and_correlated_terminal_logs(
+def test_legacy_profile_uses_real_baseline_counters_without_invented_success_log(
     adapter_module: Any,
 ) -> None:
     runtime = FakeRuntime(adapter_module, profile="legacy-baseline")
@@ -312,6 +311,7 @@ def test_legacy_profile_uses_exact_inf_eviction_and_correlated_terminal_logs(
             "image_id": "sha256:" + "b" * 64,
         },
         clock=lambda: 100.0,
+        sleep=lambda _: None,
     )
     case = {
         "case_id": "video-01",
@@ -337,14 +337,15 @@ def test_legacy_profile_uses_exact_inf_eviction_and_correlated_terminal_logs(
     assert result["attribution_confirmed"] is True
     assert result["job_state"] == "completed"
     assert result["delivery_outcomes"] == ["success"]
-    assert result["phase_metrics"]["first_byte"]["after_sum"] == pytest.approx(0.2)
     assert result["phase_metrics"]["materialize"]["after_sum"] == pytest.approx(0.25)
     assert result["measurement"]["downloaded_bytes"] == {
-        "availability": "measured",
-        "method": "legacy-correlated-delivered-size",
-        "value": 900,
+        "availability": "unavailable",
+        "method": "unavailable",
+        "value": None,
     }
-    assert runtime.log_count >= 2
+    assert result["measurement"]["first_byte"]["availability"] == "unavailable"
+    assert runtime.log_count >= 1
+    assert result["independent_route"]["capability"] == "unavailable"
 
 
 def test_embedded_eviction_has_no_global_or_pattern_delete(adapter_module: Any) -> None:
@@ -410,13 +411,18 @@ def test_configured_provider_is_not_attempted_without_exact_attempt_delta(
         external_free_providers=frozenset({"external"}),
     )
     assert adapter._route_outcome({}, {}, {}, {}, "", cache_hit=False) == {
-        "attempted": False,
-        "succeeded": False,
+        "capability": "unavailable",
+        "provenance": "unavailable",
+        "attempted": None,
+        "succeeded": None,
         "route_class": None,
     }
     assert adapter._route_outcome(
-        {}, {"external": 1}, {}, {"external": 1}, "", cache_hit=False
+        {}, {"external": 1}, {}, {"external": 1}, "", cache_hit=False,
+        attempt_metric_available=True,
     ) == {
+        "capability": "available",
+        "provenance": "exact-metric",
         "attempted": True,
         "succeeded": True,
         "route_class": "external-free",
@@ -481,7 +487,31 @@ def test_legacy_requires_zero_active_downloads_for_quiet_grace(
     assert not any(action == "submit" for action, _ in runtime.calls)
 
 
-def test_legacy_polls_through_ack_and_records_correlated_terminal_failure(
+def test_legacy_preflight_requires_process_and_tg_api_network_fences(
+    adapter_module: Any,
+) -> None:
+    runtime = FakeRuntime(adapter_module, profile="legacy-baseline")
+    runtime.telegram_connections = 1
+    adapter = adapter_module.ProductionDockerAdapter(
+        runtime,
+        expected_release="e" * 40,
+        expected_image_id="sha256:" + "b" * 64,
+        runtime_profile="legacy-baseline",
+        legacy_attestation={
+            "deployment_sha": "e" * 40,
+            "image_id": "sha256:" + "b" * 64,
+        },
+        sleep=lambda _: None,
+    )
+
+    with pytest.raises(adapter_module.AdapterError, match="pipeline is not quiescent"):
+        adapter.observe(
+            update=_update(), correlation_id="proof:legacy-network", timeout_seconds=10
+        )
+    assert not any(action == "submit" for action, _ in runtime.calls)
+
+
+def test_legacy_predelivery_403_failure_finishes_from_real_failed_counter(
     adapter_module: Any,
 ) -> None:
     class FailingRuntime(FakeRuntime):
@@ -491,17 +521,22 @@ def test_legacy_polls_through_ack_and_records_correlated_terminal_failure(
             result = super().container_call(action, payload, timeout=timeout)
             if action == "snapshot" and self.submitted:
                 result["metrics"]["legacy_results"] = {
+                    "total": 1,
                     "success": 0,
                     "failed": 1,
                 }
+                for phase in (
+                    "ytdlbot_download_duration_seconds",
+                    "ytdlbot_conversion_duration_seconds",
+                    "ytdlbot_upload_duration_seconds",
+                ):
+                    result["metrics"]["legacy"][phase] = {"count": 0, "sum": 0.0}
             return result
 
-        def correlated_logs(self, *, since: str, correlation_id: str) -> str:
+        def logs_since(self, *, since: str) -> str:
             del since
             self.log_count += 1
-            if self.log_count == 1:
-                return f"{correlation_id} webhook accepted"
-            return f"{correlation_id} sendVideo telegram-failed"
+            return "yt-dlp download failed: HTTP Error 403: Forbidden"
 
     runtime = FailingRuntime(adapter_module, profile="legacy-baseline")
     adapter = adapter_module.ProductionDockerAdapter(
@@ -525,6 +560,84 @@ def test_legacy_polls_through_ack_and_records_correlated_terminal_failure(
     assert result["attribution_confirmed"] is True
     assert result["job_state"] == "failed"
     assert result["delivery_outcomes"] == ["failed"]
+    assert result["http_failures"] == [{"status": 403, "cause": "forbidden"}]
+    assert result["phase_metrics"]["deliver"]["after_count"] == 0
+
+
+def test_legacy_waits_for_post_terminal_child_and_upload_network_quiet(
+    adapter_module: Any,
+) -> None:
+    class SettlingRuntime(FakeRuntime):
+        def container_call(
+            self, action: str, payload: dict[str, Any], *, timeout: float
+        ) -> dict[str, Any]:
+            result = super().container_call(action, payload, timeout=timeout)
+            if action == "snapshot" and self.submitted and self.snapshot_count < 5:
+                result["media_child_processes"] = 1
+            return result
+
+        def telegram_connection_count(self) -> int:
+            if self.submitted and self.snapshot_count < 6:
+                return 1
+            return 0
+
+    runtime = SettlingRuntime(adapter_module, profile="legacy-baseline")
+    adapter = adapter_module.ProductionDockerAdapter(
+        runtime,
+        expected_release="e" * 40,
+        expected_image_id="sha256:" + "b" * 64,
+        runtime_profile="legacy-baseline",
+        legacy_attestation={
+            "deployment_sha": "e" * 40,
+            "image_id": "sha256:" + "b" * 64,
+        },
+        clock=lambda: 100.0,
+        sleep=lambda _: None,
+    )
+
+    result = adapter.observe(
+        update=_update(), correlation_id="proof:settling", timeout_seconds=10
+    )
+
+    assert result["job_state"] == "completed"
+    assert runtime.snapshot_count >= 6
+
+
+def test_candidate_missing_attempt_telemetry_is_explicitly_unavailable(
+    adapter_module: Any,
+) -> None:
+    class MissingAttemptRuntime(FakeRuntime):
+        def container_call(
+            self, action: str, payload: dict[str, Any], *, timeout: float
+        ) -> dict[str, Any]:
+            result = super().container_call(action, payload, timeout=timeout)
+            if action == "preflight":
+                result["provider_attempts_present"] = False
+            elif action == "snapshot":
+                result["metrics"]["provider_attempts_present"] = False
+                result["metrics"]["provider_attempts"] = {}
+            return result
+
+    runtime = MissingAttemptRuntime(adapter_module, profile="candidate")
+    adapter = adapter_module.ProductionDockerAdapter(
+        runtime,
+        expected_release="d" * 40,
+        expected_image_id="sha256:" + "b" * 64,
+        runtime_profile="candidate",
+        external_free_providers=frozenset({"external"}),
+    )
+
+    assert adapter.preflight()["provider_attempt_capability"] == "unavailable"
+    result = adapter.observe(
+        update=_update(), correlation_id="proof:no-attempts", timeout_seconds=10
+    )
+    assert result["independent_route"] == {
+        "capability": "unavailable",
+        "provenance": "unavailable",
+        "attempted": None,
+        "succeeded": None,
+        "route_class": None,
+    }
 
 
 def test_container_helper_uses_process_rss_not_cgroup_memory_current(
@@ -553,7 +666,7 @@ def test_fake_docker_commands_are_project_scoped_and_keep_url_off_argv(
             stdout = json.dumps(
                 [
                     {
-                        "State": {"Running": True},
+                        "State": {"Running": True, "Pid": 1234},
                         "Config": {
                             "Labels": {
                                 "com.docker.compose.project": "verified-project",
@@ -566,6 +679,8 @@ def test_fake_docker_commands_are_project_scoped_and_keep_url_off_argv(
                     }
                 ]
             )
+        elif command and command[0] == "nsenter":
+            stdout = "0 0 127.0.0.1:40000 127.0.0.1:8081\n"
         elif "ps" in command:
             stdout = "a" * 64
         else:
@@ -584,8 +699,9 @@ def test_fake_docker_commands_are_project_scoped_and_keep_url_off_argv(
     result = runtime.container_call("evict-case", {"url": raw_url}, timeout=3.0)
 
     assert identity.container_id == "a" * 64
+    assert runtime.telegram_connection_count() == 1
     assert result == {"safe": True}
     flattened_commands = "\n".join(" ".join(command) for command, _ in commands)
     assert "verified-project" in flattened_commands
     assert raw_url not in flattened_commands
-    assert raw_url in (commands[-1][1] or "")
+    assert any(raw_url in (input_text or "") for _, input_text in commands)

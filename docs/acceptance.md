@@ -180,9 +180,13 @@ printf '{}\n' | python3 scripts/media-acceptance-docker-adapter.py \
 
 The legacy gate records the actual health/media policy instead of pretending it
 has candidate readiness or a 2,000 MB upload limit. A webhook HTTP 200 is only
-asynchronous acceptance. Legacy observation continues until a correlated
-terminal `sendVideo`/`sendDocument` outcome and matching metric/log evidence;
-without those signals it stops rather than fabricating completion.
+asynchronous acceptance. The legacy image has no correlation-aware success log:
+observation therefore accepts exactly one download total plus one success/failed
+delta only while the whole pipeline is isolated. A download failure may finish
+before delivery; a download success is not terminal until the upload-duration
+counter records an HTTP attempt. The adapter then waits another quiet grace with
+stable terminal counters, no yt-dlp/ffmpeg child, and no established Bot API
+`:8081` connection. Missing fence capability stops the run.
 
 One invocation collects or resumes one window. Use the actual tested release SHA
 and a different real UTC period for each fixed window (the example shows
@@ -263,15 +267,16 @@ Prometheus counters and per-phase sums/counts, follows sanitized correlated job
 and delivery events, reads cgroup CPU usage, and sums `VmRSS` for every PID in
 the container cgroup. It must return
 `attribution_confirmed=true` only when the deltas belong to that case and a
-terminal Telegram response is confirmed: candidate runs require a finalized
-successful JobStore delivery with its returned message ID plus the success
-metric; legacy runs require the correlated `sendVideo`/`sendDocument` success log
-plus unambiguous legacy metric deltas. Before every run, candidate must have no
-accepted/running/checkpointed jobs and no active media work; legacy must have
-zero active downloads. Relevant global counters must remain unchanged for a
-quiet grace interval. The collector rejects any phase/result delta or unrelated
-job that reveals concurrent pipeline activity, including work accepted before
-the evidence case. HTTP details are reduced to
+terminal outcome is confirmed: candidate runs require a finalized successful
+JobStore delivery with its returned message ID plus the success metric; legacy
+runs use the real download result and upload-duration counters under the process
+and Bot API network fences described above. Before every run, candidate must
+have no accepted/running/checkpointed jobs and no active media work; legacy must
+also have zero active downloads, no media child process, and no active Bot API
+upload connection. Relevant global counters must remain unchanged for a quiet
+grace interval. The collector rejects any phase/result delta or unrelated job
+that reveals concurrent pipeline activity, including work accepted before the
+evidence case. HTTP details are reduced to
 status 403/429 plus the schema's cause enum, and provider data is reduced to the
 independent route class. `cancel` attempts only an exact correlation-owned
 application cancellation. The current runtime exposes no such hook, so a timeout
@@ -304,9 +309,11 @@ For each case and cache state, collect:
 - downloaded and wasted bytes;
 - measured process CPU seconds and peak resident memory as `peak_rss_bytes`;
   keep wall-clock transform workload separate when process CPU is unavailable;
-- whether an independent route was attempted and whether it succeeded. Provider
-  configuration alone is not an attempt: this requires a positive exact
-  provider-attempt metric delta or a correlated structured attempt event.
+- whether independent-route attempt telemetry is available, its exact-metric or
+  correlated-event provenance, and—only then—whether the route was attempted and
+  succeeded. Provider configuration alone is not an attempt. If neither signal
+  exists (legitimate for the legacy image), all route outcomes are explicitly
+  unavailable and the comparison fails closed.
 
 Every available latency value must be finite and non-negative. A successful
 delivery may record first-byte as `null` only with explicit `unavailable`

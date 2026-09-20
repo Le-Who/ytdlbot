@@ -302,14 +302,29 @@ def _safe_http_failures(raw: Any) -> list[dict[str, Any]]:
 
 def _safe_route(raw: Any) -> dict[str, Any]:
     if not isinstance(raw, dict) or set(raw) != {
+        "capability",
+        "provenance",
         "attempted",
         "succeeded",
         "route_class",
     }:
         raise ObservationError("independent_route has an invalid shape")
+    capability = raw["capability"]
+    provenance = raw["provenance"]
     attempted = raw["attempted"]
     succeeded = raw["succeeded"]
     route_class = raw["route_class"]
+    if capability == "unavailable":
+        if provenance != "unavailable" or any(
+            value is not None for value in (attempted, succeeded, route_class)
+        ):
+            raise ObservationError("unavailable route evidence must have null outcomes")
+        return dict(raw)
+    if capability != "available" or provenance not in {
+        "exact-metric",
+        "correlated-event",
+    }:
+        raise ObservationError("independent route capability is invalid")
     if not isinstance(attempted, bool) or not isinstance(succeeded, bool):
         raise ObservationError("independent route flags must be boolean")
     if not attempted and (succeeded or route_class is not None):
@@ -319,6 +334,8 @@ def _safe_route(raw: Any) -> dict[str, Any]:
     if succeeded and not attempted:
         raise ObservationError("successful independent route must be attempted")
     return {
+        "capability": capability,
+        "provenance": provenance,
         "attempted": attempted,
         "succeeded": succeeded,
         "route_class": route_class,
@@ -872,7 +889,7 @@ def _summary(
     attempted = [
         run["independent_route"]
         for run in cohort
-        if run["independent_route"]["attempted"]
+        if run["independent_route"]["attempted"] is True
     ]
     peak_max = max(rss_values)
     return {
@@ -905,6 +922,10 @@ def _summary(
             sum(route["succeeded"] for route in attempted) / len(attempted)
             if attempted
             else None
+        ),
+        "independent_route_measurement_complete": all(
+            run["independent_route"]["capability"] == "available"
+            for run in cohort
         ),
     }
 

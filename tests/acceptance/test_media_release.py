@@ -209,6 +209,8 @@ def _validate_evidence(evidence: dict[str, Any], case_kinds: dict[str, str]) -> 
                 for failure in run["http_failures"]
             )
             assert set(run["independent_route"]) == {
+                "capability",
+                "provenance",
                 "attempted",
                 "succeeded",
                 "route_class",
@@ -314,6 +316,17 @@ def _validate_evidence(evidence: dict[str, Any], case_kinds: dict[str, str]) -> 
             else None
         )
         actual_rate = summary["independent_route_success_rate"]
+        expected_route_complete = all(
+            run["independent_route"]["capability"] == "available" for run in cohort
+        )
+        assert (
+            summary["independent_route_measurement_complete"]
+            is expected_route_complete
+        )
+        assert summary["independent_route_measurement_complete"], (
+            "release comparison fails closed when provider-attempt telemetry "
+            "is unavailable"
+        )
         if expected_rate is None:
             assert actual_rate is None
         else:
@@ -372,6 +385,8 @@ def _valid_evidence(case_kinds: dict[str, str]) -> dict[str, Any]:
                     "process_cpu_seconds": 0.0,
                     "peak_rss_bytes": 134_217_728,
                     "independent_route": {
+                        "capability": "available",
+                        "provenance": "exact-metric",
                         "attempted": False,
                         "succeeded": False,
                         "route_class": None,
@@ -413,6 +428,7 @@ def _valid_evidence(case_kinds: dict[str, str]) -> dict[str, Any]:
                     },
                     "within_current_memory_limit": True,
                     "independent_route_success_rate": None,
+                    "independent_route_measurement_complete": True,
                 }
             )
     return {
@@ -548,6 +564,29 @@ def test_unavailable_measurement_is_schema_valid_but_fails_release_criterion() -
     _validate_schema(evidence, EVIDENCE_SCHEMA)
 
     with pytest.raises(AssertionError, match="fails closed"):
+        _validate_evidence(evidence, case_kinds)
+
+
+def test_unavailable_provider_attempt_telemetry_fails_release_criterion() -> None:
+    case_kinds = _require_approved_manifest(_approved_manifest())
+    evidence = _valid_evidence(case_kinds)
+    run = evidence["windows"][0]["runs"][0]
+    run["independent_route"] = {
+        "capability": "unavailable",
+        "provenance": "unavailable",
+        "attempted": None,
+        "succeeded": None,
+        "route_class": None,
+    }
+    summary = next(
+        item
+        for item in evidence["summaries"]
+        if item["kind"] == run["kind"] and item["cache_state"] == run["cache_state"]
+    )
+    summary["independent_route_measurement_complete"] = False
+    _validate_schema(evidence, EVIDENCE_SCHEMA)
+
+    with pytest.raises(AssertionError, match="provider-attempt telemetry"):
         _validate_evidence(evidence, case_kinds)
 
 

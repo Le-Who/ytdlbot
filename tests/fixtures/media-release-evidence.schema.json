@@ -112,37 +112,61 @@
     "independentRoute": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["attempted", "succeeded", "route_class"],
+      "required": ["capability", "provenance", "attempted", "succeeded", "route_class"],
       "properties": {
-        "attempted": {"type": "boolean"},
-        "succeeded": {"type": "boolean"},
+        "capability": {"enum": ["available", "unavailable"]},
+        "provenance": {"enum": ["exact-metric", "correlated-event", "unavailable"]},
+        "attempted": {"type": ["boolean", "null"]},
+        "succeeded": {"type": ["boolean", "null"]},
         "route_class": {
           "enum": ["external-free", "external-configured", null]
         }
       },
       "allOf": [
         {
-          "if": {"properties": {"attempted": {"const": false}}},
+          "if": {"properties": {"capability": {"const": "unavailable"}}},
           "then": {
             "properties": {
-              "succeeded": {"const": false},
+              "provenance": {"const": "unavailable"},
+              "attempted": {"const": null},
+              "succeeded": {"const": null},
               "route_class": {"const": null}
             }
           }
         },
         {
-          "if": {"properties": {"attempted": {"const": true}}},
+          "if": {"properties": {"capability": {"const": "available"}}},
           "then": {
+            "required": ["attempted", "succeeded"],
             "properties": {
-              "route_class": {
-                "enum": ["external-free", "external-configured"]
+              "provenance": {"enum": ["exact-metric", "correlated-event"]},
+              "attempted": {"type": "boolean"},
+              "succeeded": {"type": "boolean"}
+            },
+            "allOf": [
+              {
+                "if": {"properties": {"attempted": {"const": false}}},
+                "then": {
+                  "properties": {
+                    "succeeded": {"const": false},
+                    "route_class": {"const": null}
+                  }
+                }
+              },
+              {
+                "if": {"properties": {"attempted": {"const": true}}},
+                "then": {
+                  "properties": {
+                    "route_class": {"enum": ["external-free", "external-configured"]}
+                  }
+                }
+              },
+              {
+                "if": {"properties": {"succeeded": {"const": true}}},
+                "then": {"properties": {"attempted": {"const": true}}}
               }
-            }
+            ]
           }
-        },
-        {
-          "if": {"properties": {"succeeded": {"const": true}}},
-          "then": {"properties": {"attempted": {"const": true}}}
         }
       ]
     },
@@ -386,7 +410,8 @@
         "process_cpu_seconds",
         "peak_rss_bytes",
         "within_current_memory_limit",
-        "independent_route_success_rate"
+        "independent_route_success_rate",
+        "independent_route_measurement_complete"
       ],
       "properties": {
         "kind": {"enum": ["short", "video"]},
@@ -402,7 +427,8 @@
         "process_cpu_seconds": {"type": "number", "minimum": 0},
         "peak_rss_bytes": {"$ref": "#/$defs/memorySummary"},
         "within_current_memory_limit": {"type": "boolean"},
-        "independent_route_success_rate": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+        "independent_route_success_rate": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "independent_route_measurement_complete": {"type": "boolean"}
       }
     }
   }

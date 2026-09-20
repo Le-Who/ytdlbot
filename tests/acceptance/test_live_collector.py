@@ -83,6 +83,8 @@ def _observation(*, successful: bool = True, cache_hit: bool = False) -> dict[st
         "delivery_outcomes": ["success"] if successful else ["failed"],
         "http_failures": [],
         "independent_route": {
+            "capability": "available",
+            "provenance": "exact-metric",
             "attempted": False,
             "succeeded": False,
             "route_class": None,
@@ -383,6 +385,30 @@ def test_unavailable_measurements_are_null_and_make_summary_incomplete(
     )
     assert summary["measurement_complete"] is False
     assert summary["bytes_downloaded"] is None
+
+
+def test_unavailable_provider_attempt_capability_is_preserved_and_fails_summary(
+    collector: Any,
+) -> None:
+    observation = _observation()
+    observation["independent_route"] = {
+        "capability": "unavailable",
+        "provenance": "unavailable",
+        "attempted": None,
+        "succeeded": None,
+        "route_class": None,
+    }
+    run = collector._run_from_observation(
+        case=collector.CaseSpec("video-01", "video", "https://invalid.example"),
+        cache_state="cold",
+        observation=observation,
+    )
+
+    assert run["independent_route"]["attempted"] is None
+    summary = collector._summary(
+        [run], kind="video", cache_state="cold", memory_limit=536_870_912
+    )
+    assert summary["independent_route_measurement_complete"] is False
 
 
 def test_refuses_unattested_host_and_unsafe_correlated_log_values(

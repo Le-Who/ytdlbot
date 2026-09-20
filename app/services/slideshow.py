@@ -1,7 +1,6 @@
 """Slideshow download and cleanup service."""
 
 import os
-import asyncio
 import logging
 import shutil
 from typing import Any, Optional, Tuple, TYPE_CHECKING
@@ -33,8 +32,8 @@ class SlideshowPipeline:
         cookies_path = state.ytdlp.cookies_path
         proxy = state.ytdlp.tiktok_proxy
 
-        result, error = await asyncio.to_thread(
-            GalleryDlService.download_slideshow, page_url, cookies_path, proxy
+        result, error = await GalleryDlService.download_slideshow(
+            page_url, cookies_path, proxy
         )
 
         return result, error

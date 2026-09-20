@@ -8,12 +8,12 @@ Supports both slideshow (image) and video downloads.
 import json
 import logging
 import os
-import subprocess
 import uuid
 from dataclasses import dataclass, field
 from typing import Optional
 
 from app.core.config import TEMP_DIR
+from app.core.process import process_supervisor
 
 __all__ = ["GalleryDlService", "SlideshowResult"]
 
@@ -35,7 +35,7 @@ class GalleryDlService:
     TIMEOUT = 120  # seconds
 
     @staticmethod
-    def download_slideshow(
+    async def download_slideshow(
         url: str,
         cookies_path: Optional[str] = None,
         proxy: Optional[str] = None,
@@ -68,15 +68,14 @@ class GalleryDlService:
         cmd.extend(["--", url])
 
         try:
-            result = subprocess.run(
+            result = await process_supervisor.run(
                 cmd,
-                capture_output=True,
-                text=True,
                 timeout=GalleryDlService.TIMEOUT,
+                cleanup_paths=(output_dir,),
             )
 
             if result.returncode != 0:
-                stderr = result.stderr.strip()
+                stderr = result.stderr.decode("utf-8", errors="ignore").strip()
                 logger.error("gallery-dl failed", extra={"stderr": stderr})
 
                 if "login" in stderr.lower() or "cookie" in stderr.lower():
@@ -86,7 +85,7 @@ class GalleryDlService:
         except FileNotFoundError:
             logger.error("[GALLERY-DL] gallery-dl not found in PATH")
             return None, "⚠️ gallery-dl не установлен."
-        except subprocess.TimeoutExpired:
+        except TimeoutError:
             logger.error("[GALLERY-DL] Download timed out")
             return None, "⚠️ Время ожидания загрузки истекло."
         except Exception as e:
@@ -99,7 +98,7 @@ class GalleryDlService:
         return GalleryDlService._collect_files(output_dir)
 
     @staticmethod
-    def download_video(
+    async def download_video(
         url: str,
         cookies_path: Optional[str] = None,
         proxy: Optional[str] = None,
@@ -134,22 +133,21 @@ class GalleryDlService:
         logger.info("Attempting TikTok video download", extra={"url": url})
 
         try:
-            result = subprocess.run(
+            result = await process_supervisor.run(
                 cmd,
-                capture_output=True,
-                text=True,
                 timeout=GalleryDlService.TIMEOUT,
+                cleanup_paths=(output_dir,),
             )
 
             if result.returncode != 0:
-                stderr = result.stderr.strip()
+                stderr = result.stderr.decode("utf-8", errors="ignore").strip()
                 logger.error("Video download failed", extra={"stderr": stderr})
                 return None, f"gallery-dl error: {stderr[:200]}"
 
         except FileNotFoundError:
             logger.error("[GALLERY-DL] gallery-dl not found in PATH")
             return None, "gallery-dl not installed"
-        except subprocess.TimeoutExpired:
+        except TimeoutError:
             logger.error("[GALLERY-DL] Video download timed out")
             return None, "gallery-dl timeout"
         except Exception as e:

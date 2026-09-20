@@ -1,34 +1,11 @@
-"""
-Fair, position-aware download queue.
+"""Fair, cancellation-safe leases for bounded downloads."""
 
-Replaces the blunt ``semaphore.locked() → reject`` pattern with a proper
-wait queue.  When all semaphore slots are busy, new arrivals are put into
-an asyncio.Queue, receive live position updates, and are naturally scheduled
-when a slot frees up.
-
-Usage (drop-in at every former `sem.locked()` guard):
-
-    acquired = await state.download_queue.enqueue(update_ui)
-    if not acquired:
-        return          # timed out, user was notified
-    try:
-        ...do work...
-    finally:
-        state.download_queue.release()
-
-Design notes:
-- One ``DownloadQueue`` wraps one ``asyncio.Semaphore``.
-- Hard cap on queue depth (``max_queue_size``) → still rejects when truly overloaded.
-- Per-waiter ``asyncio.Event`` signals when it's their turn.
-- On every release, all waiters get a position-update edit (best-effort).
-- Timeout: waiters that exceed ``timeout_seconds`` are silently dropped.
-"""
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable
-from typing import Optional
+from collections.abc import Awaitable, Callable, Generator
+from typing import Self
 
 from app.core.texts import Texts
 
@@ -36,35 +13,78 @@ logger = logging.getLogger("app.core.download_queue")
 
 
 def _fmt_eta(seconds: float) -> str:
-    """Human-readable ETA string, e.g. '45 сек' or '2 мин'."""
     if seconds < 90:
         return f"{int(seconds)} сек"
     return f"{int(seconds / 60)} мин"
 
 
-class _Waiter:
-    """Represents one task waiting in the queue."""
+class QueueUnavailable(RuntimeError):
+    """Raised when an ``acquire`` lease cannot be granted."""
 
-    __slots__ = ("event", "update_ui", "position")
+
+class _Waiter:
+    __slots__ = ("future", "position", "state", "update_ui")
 
     def __init__(
         self,
-        update_ui: Callable[[str, Optional[object]], Awaitable[None]],
+        update_ui: Callable[[str, object | None], Awaitable[None]],
     ) -> None:
-        self.event: asyncio.Event = asyncio.Event()
+        self.future: asyncio.Future[None] = asyncio.get_running_loop().create_future()
         self.update_ui = update_ui
-        self.position: int = 0  # 1-based, updated on each shift
+        self.position = 0
+        self.state = "waiting"
+
+
+class DownloadLease:
+    """One idempotently releasable queue slot.
+
+    A lease is both awaitable and an asynchronous context manager, allowing
+    ``lease = await queue.acquire(...)`` and ``async with queue.acquire(...)``.
+    """
+
+    def __init__(
+        self,
+        queue: DownloadQueue,
+        update_ui: Callable[[str, object | None], Awaitable[None]],
+        kb_error: object | None,
+    ) -> None:
+        self._queue = queue
+        self._update_ui = update_ui
+        self._kb_error = kb_error
+        self._acquired = False
+        self._released = False
+
+    def __await__(self) -> Generator[object, None, DownloadLease]:
+        return self._enter().__await__()
+
+    async def _enter(self) -> Self:
+        if self._released:
+            raise RuntimeError("download lease has already been released")
+        if not self._acquired:
+            acquired = await self._queue._acquire(
+                self._update_ui, kb_error=self._kb_error
+            )
+            if not acquired:
+                raise QueueUnavailable("download queue did not grant a slot")
+            self._acquired = True
+        return self
+
+    async def __aenter__(self) -> Self:
+        return await self._enter()
+
+    async def __aexit__(self, *_exc_info: object) -> None:
+        await self.release()
+
+    async def release(self) -> None:
+        """Return this lease once; repeated and concurrent calls are harmless."""
+        if not self._acquired or self._released:
+            return
+        self._released = True
+        await self._queue._release_slot()
 
 
 class DownloadQueue:
-    """Fair wait-queue backed by an asyncio.Semaphore.
-
-    Args:
-        semaphore:       The underlying semaphore (controls real concurrency).
-        max_queue_size:  Max number of tasks that may wait before hard-rejecting.
-        timeout_seconds: Max seconds a task may wait in queue.
-        avg_task_seconds: Rough average task duration used for ETA estimation.
-    """
+    """Fair queue layered on the public ``asyncio.Semaphore`` API."""
 
     def __init__(
         self,
@@ -77,100 +97,126 @@ class DownloadQueue:
         self._max_queue = max_queue_size
         self._timeout = timeout_seconds
         self._avg_duration = avg_task_seconds
-        # Ordered list of active waiters (index 0 = next in line).
         self._waiters: list[_Waiter] = []
-        self._lock = asyncio.Lock()  # guards _waiters mutations
+        self._lock = asyncio.Lock()
+        self._legacy_leases: dict[asyncio.Task[object], DownloadLease] = {}
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    def acquire(
+        self,
+        update_ui: Callable[[str, object | None], Awaitable[None]],
+        *,
+        kb_error: object | None = None,
+    ) -> DownloadLease:
+        return DownloadLease(self, update_ui, kb_error)
 
     async def enqueue(
         self,
-        update_ui: Callable[[str, Optional[object]], Awaitable[None]],
+        update_ui: Callable[[str, object | None], Awaitable[None]],
         *,
-        kb_error: Optional[object] = None,
+        kb_error: object | None = None,
     ) -> bool:
-        """Try to acquire a semaphore slot, queuing if busy.
+        """Backward-compatible boolean acquisition for existing handlers."""
+        task = asyncio.current_task()
+        if task is None:
+            raise RuntimeError("DownloadQueue.enqueue requires an asyncio task")
+        lease = self.acquire(update_ui, kb_error=kb_error)
+        try:
+            await lease
+        except QueueUnavailable:
+            return False
+        self._legacy_leases[task] = lease
+        return True
 
-        Returns:
-            True  — slot acquired, caller may proceed (must call release()).
-            False — hard-rejected (queue full / timed out / maintenance).
-        """
-        import app.core.state as _state  # avoid circular import at module level
+    def release(self) -> None:
+        """Backward-compatible idempotent release for the current task."""
+        task = asyncio.current_task()
+        if task is None:
+            return
+        lease = self._legacy_leases.pop(task, None)
+        if lease is not None:
+            asyncio.get_running_loop().create_task(lease.release())
 
-        # ── Maintenance mode guard ─────────────────────────────────────────
+    async def _acquire(
+        self,
+        update_ui: Callable[[str, object | None], Awaitable[None]],
+        *,
+        kb_error: object | None,
+    ) -> bool:
+        import app.core.state as _state
+
         if _state.disk_critical:
             await update_ui(Texts.MAINTENANCE_MODE, kb_error)
             return False
 
-        # ── Fast path: slot immediately available ──────────────────────────
-        if self._sem._value > 0:  # type: ignore[attr-defined]
-            await self._sem.acquire()
-            return True
-
-        # ── Slow path: all slots busy, try to queue ────────────────────────
         async with self._lock:
+            # locked() is public. The queue lock serializes this check with all
+            # grants; acquire() completes immediately while a slot is available.
+            if not self._sem.locked():
+                await self._sem.acquire()
+                return True
             if len(self._waiters) >= self._max_queue:
                 await update_ui(Texts.QUEUE_FULL, kb_error)
                 return False
-
             waiter = _Waiter(update_ui)
             self._waiters.append(waiter)
-            waiter.position = len(self._waiters)  # 1-based
-
-        # Send initial position message
-        await self._send_position(waiter)
+            waiter.position = len(self._waiters)
 
         try:
-            await asyncio.wait_for(waiter.event.wait(), timeout=float(self._timeout))
-        except asyncio.TimeoutError:
-            # Remove from queue and notify user
-            async with self._lock:
-                try:
-                    self._waiters.remove(waiter)
-                except ValueError:
-                    pass  # already removed by a concurrent release
+            await self._send_position(waiter)
+            await asyncio.wait_for(
+                asyncio.shield(waiter.future), timeout=float(self._timeout)
+            )
+            return True
+        except TimeoutError:
+            await self._withdraw(waiter)
             await update_ui(Texts.QUEUE_TIMEOUT, kb_error)
             logger.warning("Queue waiter timed out after %ds", self._timeout)
             return False
+        except BaseException:
+            # If release granted the slot at the same instant cancellation won,
+            # atomically forward that grant instead of losing capacity.
+            await asyncio.shield(self._withdraw(waiter))
+            raise
 
-        # Waiter was unblocked by release() — slot is already acquired for us.
-        return True
-
-    def release(self) -> None:
-        """Release the semaphore slot and wake the next waiter."""
-        # Schedule _do_release as a fire-and-forget coroutine so release()
-        # can remain synchronous (matching asyncio.Semaphore.release() convention).
-        asyncio.get_event_loop().create_task(self._do_release())
-
-    # ── Internal ───────────────────────────────────────────────────────────────
-
-    async def _do_release(self) -> None:
+    async def _withdraw(self, waiter: _Waiter) -> None:
         async with self._lock:
-            if self._waiters:
-                # Pop the first waiter and grant them the slot directly
-                # (we do NOT call sem.release() + sem.acquire() to avoid races).
-                next_waiter = self._waiters.pop(0)
-                # Update positions for remaining waiters
-                for idx, w in enumerate(self._waiters, start=1):
-                    w.position = idx
-                # Signal the next waiter — they already hold the slot conceptually.
-                next_waiter.event.set()
-                # Fire-and-forget position updates for remaining waiters
-                for w in self._waiters:
-                    asyncio.get_event_loop().create_task(self._send_position(w))
-            else:
-                # No one waiting — release back to semaphore normally
-                self._sem.release()
+            if waiter.state == "waiting":
+                waiter.state = "cancelled"
+                try:
+                    self._waiters.remove(waiter)
+                except ValueError:
+                    pass
+                self._reposition_locked()
+            elif waiter.state == "granted":
+                waiter.state = "cancelled"
+                self._handoff_locked()
+
+    async def _release_slot(self) -> None:
+        async with self._lock:
+            self._handoff_locked()
+
+    def _handoff_locked(self) -> None:
+        while self._waiters:
+            waiter = self._waiters.pop(0)
+            if waiter.state != "waiting" or waiter.future.cancelled():
+                waiter.state = "cancelled"
+                continue
+            waiter.state = "granted"
+            self._reposition_locked()
+            waiter.future.set_result(None)
+            return
+        self._sem.release()
+
+    def _reposition_locked(self) -> None:
+        for index, waiter in enumerate(self._waiters, start=1):
+            waiter.position = index
+            asyncio.get_running_loop().create_task(self._send_position(waiter))
 
     async def _send_position(self, waiter: _Waiter) -> None:
-        """Send (or edit) the queue position message for a waiter."""
-        total = len(self._waiters)
-        # ETA = position * avg_duration (rough but honest)
-        eta_secs = waiter.position * self._avg_duration
         text = Texts.QUEUE_POSITION.format(
             pos=waiter.position,
-            total=total,
-            eta=_fmt_eta(eta_secs),
+            total=len(self._waiters),
+            eta=_fmt_eta(waiter.position * self._avg_duration),
         )
         try:
             await waiter.update_ui(text, None)
@@ -179,5 +225,4 @@ class DownloadQueue:
 
     @property
     def queue_depth(self) -> int:
-        """Number of tasks currently waiting (not including active ones)."""
         return len(self._waiters)

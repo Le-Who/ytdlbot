@@ -117,7 +117,7 @@ class TestCallbacksExceptions(unittest.IsolatedAsyncioTestCase):
         """on_cancel with valid data sets the cancel flag and shows cancelled message."""
         self.update.callback_query.data = "cancel|abc123"
         await callbacks.on_cancel(self.update, self.context)
-        self.assertTrue(state.cancel_cache.get("abc123"))
+        self.assertTrue(await state.cancel_cache.get("abc123"))
         args, _ = self.update.callback_query.edit_message_text.call_args
         self.assertEqual(args[0], "❌ Загрузка отменена пользователем.")
 

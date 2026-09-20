@@ -14,12 +14,14 @@ from app.core.utils import safe_remove
 from app.core.policy import size_allowed
 from app.core.texts import Texts
 from app.core.models import DownloadContext
+from app.core.process import process_supervisor
 from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 from app.services.downloader import MediaSender
 from app.services.tikwm import TikWMService
 from app.services.gallery_dl.service import GalleryDlService
 from app.services.pinterest import PinterestNativeService
 from app.services.converter import (
+    MediaConverter,
     compress_video_to_size,
     find_thumbnail,
     split_video_stream_copy,
@@ -86,12 +88,12 @@ async def extract_video_meta(
             "-show_streams",
             file_path,
         ]
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+        process_result = await process_supervisor.run(
+            cmd,
+            stderr_pipe=False,
+            timeout=10.0,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+        stdout = process_result.stdout
         if stdout:
             probe = json.loads(stdout)
             fmt = probe.get("format", {})
@@ -174,17 +176,17 @@ async def ensure_telegram_compatible(
     ]
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
+        process_result = await process_supervisor.run(
+            cmd,
+            stdout_pipe=False,
+            timeout=300.0,
+            cleanup_paths=(re_encoded,),
         )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=300.0)
 
-        if proc.returncode != 0:
+        if process_result.returncode != 0:
             logger.error(
                 "H.264 re-encode failed: %s",
-                stderr.decode("utf-8", errors="ignore")[-500:],
+                process_result.stderr.decode("utf-8", errors="ignore")[-500:],
             )
             safe_remove(re_encoded)
             return file_path  # fall back to original
@@ -254,11 +256,11 @@ def _detect_opus_from_webm(file_path: str) -> bool:
 
 
 async def _maybe_rename_webm_to_ogg(file_path: str) -> str:
-    """If the file is a WebM with Opus audio, rename it to .ogg for Telegram.
+    """If the file is WebM+Opus, remux it into a real Ogg container.
 
     Telegram's sendVoice/sendAudio accepts .ogg (Opus) natively.
-    For WebM containers with Opus tracks, a simple rename (no re-encode)
-    is sufficient — Telegram clients parse the Opus packets directly.
+    FFmpeg stream-copies the Opus packets, so this is lossless but does not
+    mislabel WebM container bytes with an ``.ogg`` suffix.
 
     Returns the (possibly renamed) file path.
     """
@@ -266,13 +268,11 @@ async def _maybe_rename_webm_to_ogg(file_path: str) -> str:
         return file_path
 
     if _detect_opus_from_webm(file_path):
-        ogg_path = file_path[:-5] + ".ogg"
-        try:
-            os.rename(file_path, ogg_path)
-            logger.info("OPT-3 Opus fast-path: renamed %s → %s", file_path, ogg_path)
+        ogg_path = await MediaConverter.remux_webm_opus(file_path)
+        if ogg_path is not None:
+            logger.info("OPT-3 Opus fast-path: remuxed %s → %s", file_path, ogg_path)
             return ogg_path
-        except OSError as e:
-            logger.warning("OPT-3 Opus rename failed: %s", e)
+        logger.warning("OPT-3 Opus remux failed: %s", file_path)
 
     return file_path
 
@@ -369,8 +369,8 @@ class DownloadOrchestrator:
                         ),
                         caption="🎵" if request.kind.value == "audio" else "📹",
                     )
-                except MediaPipelineError as error:
-                    await update_ui(str(error), kb_error)
+                except MediaPipelineError as pipeline_error:
+                    await update_ui(str(pipeline_error), kb_error)
                     return False
                 if not receipt.success:
                     error_text = next(
@@ -454,8 +454,7 @@ class DownloadOrchestrator:
                     state.file_cache[token] = file_path
 
             elif payload.format_id == "gallerydl_fallback":
-                file_path, error = await asyncio.to_thread(
-                    GalleryDlService.download_video,
+                file_path, error = await GalleryDlService.download_video(
                     payload.page_url,
                     state.ytdlp.cookies_path,
                     state.ytdlp.tiktok_proxy,
@@ -527,9 +526,14 @@ class DownloadOrchestrator:
                     logger.info("OPT-1 Thumbnail injected: %s", thumbnail_path)
 
             # ── OPT-3: Native Opus Audio Bypass ───────────────────────────────
-            # WebM files containing Opus audio just need a rename → .ogg; zero FFmpeg.
+            # Strict audio callbacks request MP3, so materialize actual MP3 bytes.
             if isinstance(file_path, str) and is_audio:
-                file_path = await _maybe_rename_webm_to_ogg(file_path)
+                if not file_path.lower().endswith(".mp3"):
+                    mp3_path = await MediaConverter.convert_to_mp3(file_path)
+                    if mp3_path is None:
+                        await update_ui(Texts.GENERIC_ERROR_SHORT, kb_error)
+                        return False
+                    file_path = mp3_path
 
             # ── Re-encode pass: non-H.264 videos for Telegram compatibility ───
             # (TikTok CDN often serves HEVC which Telegram can't play)

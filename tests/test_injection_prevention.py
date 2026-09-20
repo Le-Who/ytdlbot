@@ -7,7 +7,7 @@ SEC-3 (URL separator in gallery-dl), and URL prefix validation.
 
 import sys
 import unittest
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.modules.setdefault("yt_dlp", MagicMock())
 
@@ -90,21 +90,23 @@ class TestURLSeparatorInjection(unittest.TestCase):
         )
 
 
-class TestGalleryDlSeparator(unittest.TestCase):
+class TestGalleryDlSeparator(unittest.IsolatedAsyncioTestCase):
     """SEC-3: gallery-dl commands must have '--' before URL, cookies before '--'."""
 
-    def test_gallery_dl_cookies_before_separator(self):
+    async def test_gallery_dl_cookies_before_separator(self):
         """Verify '--cookies' is placed before '--' in gallery-dl command."""
-        import subprocess
         from app.services.gallery_dl.service import GalleryDlService
 
         service = GalleryDlService()
         url = "https://tiktok.com/@user/video/123"
 
-        with patch.object(subprocess, "run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+        with patch(
+            "app.services.gallery_dl.service.process_supervisor.run",
+            new_callable=AsyncMock,
+        ) as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
             try:
-                service.download_slideshow(url, cookies_path="/tmp/cookies.txt")
+                await service.download_slideshow(url, cookies_path="/tmp/cookies.txt")
             except Exception:
                 pass  # We just need to capture the command
 

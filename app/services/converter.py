@@ -10,6 +10,7 @@ from typing import Optional
 
 from app.core import state
 from app.core.config import TEMP_DIR
+from app.core.process import process_supervisor
 from app.core.utils import safe_remove
 
 logger = logging.getLogger("app.services.converter")
@@ -101,7 +102,9 @@ async def split_video_stream_copy(
     meta = await _probe_full_meta(input_path)
     duration_s = meta.get("duration_s")
     if not duration_s or duration_s <= 0:
-        logger.error("split_video_stream_copy: cannot probe duration for %s", input_path)
+        logger.error(
+            "split_video_stream_copy: cannot probe duration for %s", input_path
+        )
         return None
 
     # Estimate segment duration proportionally
@@ -129,18 +132,17 @@ async def split_video_stream_copy(
     ]
 
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
+        process_result = await process_supervisor.run(
+            cmd,
+            stdout_pipe=False,
+            timeout=120.0,
         )
-        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=120.0)
 
-        if proc.returncode != 0:
+        if process_result.returncode != 0:
             logger.error(
                 "split_video_stream_copy failed (rc=%d): %s",
-                proc.returncode,
-                stderr.decode("utf-8", errors="ignore")[-500:],
+                process_result.returncode,
+                process_result.stderr.decode("utf-8", errors="ignore")[-500:],
             )
             return None
 
@@ -163,7 +165,7 @@ async def split_video_stream_copy(
         )
         return valid
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error("split_video_stream_copy: ffmpeg timed out")
         return None
     except Exception as exc:
@@ -190,12 +192,12 @@ async def _probe_full_meta(video_path: str) -> dict:
         video_path,
     ]
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+        process_result = await process_supervisor.run(
+            cmd,
+            stderr_pipe=False,
+            timeout=_FFPROBE_TIMEOUT,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_FFPROBE_TIMEOUT)
+        stdout = process_result.stdout
         if not stdout:
             return result
         probe = json.loads(stdout)
@@ -344,22 +346,18 @@ async def compress_video_to_size(
     ]
 
     async def _run(cmd: list[str], label: str) -> tuple[int, str]:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
         try:
-            _, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=_FFMPEG_TIMEOUT
+            process_result = await process_supervisor.run(
+                cmd,
+                stdout_pipe=False,
+                timeout=_FFMPEG_TIMEOUT,
+                cleanup_paths=(output_path,) if label == "pass2" else (),
             )
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+        except TimeoutError:
             return -1, "timeout"
-        return proc.returncode or 0, stderr.decode("utf-8", errors="ignore")
+        return process_result.returncode, process_result.stderr.decode(
+            "utf-8", errors="ignore"
+        )
 
     try:
         async with state.conversion_sem:
@@ -425,13 +423,13 @@ async def _probe_video_codec(video_path: str) -> Optional[str]:
         video_path,
     ]
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
+        process_result = await process_supervisor.run(
+            cmd,
+            stderr_pipe=False,
+            timeout=_FFPROBE_TIMEOUT,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=_FFPROBE_TIMEOUT)
-        if proc.returncode == 0 and stdout:
+        stdout = process_result.stdout
+        if process_result.returncode == 0 and stdout:
             return stdout.decode().strip().lower()
     except Exception as exc:
         logger.debug("ffprobe failed: %s", exc)
@@ -485,6 +483,88 @@ class MediaConverter:
     """Handles ffmpeg-based media conversions."""
 
     @staticmethod
+    async def remux_webm_opus(file_path: str) -> Optional[str]:
+        """Put an Opus stream in a real Ogg container without re-encoding."""
+        if not file_path.lower().endswith(".webm") or not os.path.exists(file_path):
+            return None
+        output_path = file_path[:-5] + ".ogg"
+        command = [
+            "ffmpeg",
+            "-nostdin",
+            "-y",
+            "-i",
+            file_path,
+            "-map",
+            "0:a:0",
+            "-vn",
+            "-c:a",
+            "copy",
+            "-f",
+            "ogg",
+            output_path,
+        ]
+        try:
+            result = await process_supervisor.run(
+                command,
+                stdout_pipe=False,
+                timeout=_FFMPEG_TIMEOUT,
+                cleanup_paths=(output_path,),
+            )
+        except (OSError, TimeoutError):
+            return None
+        if (
+            result.returncode != 0
+            or not os.path.exists(output_path)
+            or os.path.getsize(output_path) <= 0
+        ):
+            safe_remove(output_path)
+            return None
+        safe_remove(file_path)
+        return output_path
+
+    @staticmethod
+    async def convert_to_mp3(file_path: str) -> Optional[str]:
+        """Satisfy a strict MP3 request with MP3 bytes, never an alias."""
+        if not file_path or not os.path.exists(file_path):
+            return None
+        if file_path.lower().endswith(".mp3"):
+            return file_path
+        output_path = file_path.rsplit(".", 1)[0] + ".mp3"
+        command = [
+            "ffmpeg",
+            "-nostdin",
+            "-y",
+            "-i",
+            file_path,
+            "-vn",
+            "-c:a",
+            "libmp3lame",
+            "-q:a",
+            "2",
+            "-f",
+            "mp3",
+            output_path,
+        ]
+        try:
+            result = await process_supervisor.run(
+                command,
+                stdout_pipe=False,
+                timeout=_FFMPEG_TIMEOUT,
+                cleanup_paths=(output_path,),
+            )
+        except (OSError, TimeoutError):
+            return None
+        if (
+            result.returncode != 0
+            or not os.path.exists(output_path)
+            or os.path.getsize(output_path) <= 0
+        ):
+            safe_remove(output_path)
+            return None
+        safe_remove(file_path)
+        return output_path
+
+    @staticmethod
     async def _run_gif_ffmpeg(
         video_path: str,
         gif_path: str,
@@ -523,24 +603,19 @@ class MediaConverter:
             gif_path,
         ]
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-        )
         try:
-            _, stderr = await asyncio.wait_for(
-                proc.communicate(),
+            process_result = await process_supervisor.run(
+                cmd,
+                stdout_pipe=False,
                 timeout=_FFMPEG_TIMEOUT,
+                cleanup_paths=(gif_path,),
             )
-        except asyncio.TimeoutError:
-            try:
-                proc.kill()
-            except Exception:
-                pass
+        except TimeoutError:
             return -1, "timeout"
 
-        return proc.returncode or 0, stderr.decode("utf-8", errors="ignore")
+        return process_result.returncode, process_result.stderr.decode(
+            "utf-8", errors="ignore"
+        )
 
     @staticmethod
     async def convert_to_gif_ffmpeg(video_path: str) -> Optional[str]:
@@ -669,22 +744,18 @@ class MediaConverter:
         ]
 
         async def _run(cmd: list[str]) -> tuple[int, str]:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
             try:
-                _, stderr = await asyncio.wait_for(
-                    proc.communicate(), timeout=_FFMPEG_TIMEOUT
+                process_result = await process_supervisor.run(
+                    cmd,
+                    stdout_pipe=False,
+                    timeout=_FFMPEG_TIMEOUT,
+                    cleanup_paths=(cmd[-1],),
                 )
-            except asyncio.TimeoutError:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
+            except TimeoutError:
                 return -1, "timeout"
-            return proc.returncode or 0, stderr.decode("utf-8", errors="ignore")
+            return process_result.returncode, process_result.stderr.decode(
+                "utf-8", errors="ignore"
+            )
 
         try:
             from app.core import state as _state
@@ -829,27 +900,21 @@ class MediaConverter:
 
             async with state.conversion_sem:
                 with _m.conversion_duration.time(type="slideshow"):
-                    proc = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
                     try:
-                        _, stderr = await asyncio.wait_for(
-                            proc.communicate(), timeout=300.0
+                        process_result = await process_supervisor.run(
+                            cmd,
+                            stdout_pipe=False,
+                            timeout=300.0,
+                            cleanup_paths=(output_path,),
                         )
-                    except asyncio.TimeoutError:
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
+                    except TimeoutError:
                         logger.error("FFmpeg slideshow conversion timed out")
                         return None
 
-            if proc.returncode != 0:
+            if process_result.returncode != 0:
                 logger.error(
                     "FFmpeg slideshow failed: %s",
-                    stderr.decode("utf-8", errors="ignore"),
+                    process_result.stderr.decode("utf-8", errors="ignore"),
                 )
                 return None
 

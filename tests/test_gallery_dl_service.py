@@ -4,25 +4,28 @@ import json
 import os
 import tempfile
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.services.gallery_dl.service import GalleryDlService, SlideshowResult
 
 
-class TestGalleryDlService(unittest.TestCase):
+class TestGalleryDlService(unittest.IsolatedAsyncioTestCase):
     """Tests for GalleryDlService."""
 
-    @patch("app.services.gallery_dl.service.subprocess.run")
-    def test_download_success_command_construction(self, mock_run):
+    @patch(
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
+    )
+    async def test_download_success_command_construction(self, mock_run):
         """Verify gallery-dl command includes correct flags."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        mock_run.return_value = MagicMock(returncode=0, stderr=b"")
 
         with patch.object(GalleryDlService, "_collect_files") as mock_collect:
             mock_collect.return_value = (
                 SlideshowResult(images=["/tmp/a.jpg"], title="Test"),
                 None,
             )
-            result, error = GalleryDlService.download_slideshow(
+            result, error = await GalleryDlService.download_slideshow(
                 "https://tiktok.com/@user/video/123",
                 cookies_path="/tmp/cookies.txt",
             )
@@ -39,17 +42,20 @@ class TestGalleryDlService(unittest.TestCase):
         self.assertIn("--no-mtime", cmd)
         self.assertIn("https://tiktok.com/@user/video/123", cmd)
 
-    @patch("app.services.gallery_dl.service.subprocess.run")
-    def test_download_without_cookies(self, mock_run):
+    @patch(
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
+    )
+    async def test_download_without_cookies(self, mock_run):
         """Command should not include --cookies when no cookies path."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        mock_run.return_value = MagicMock(returncode=0, stderr=b"")
 
         with patch.object(GalleryDlService, "_collect_files") as mock_collect:
             mock_collect.return_value = (
                 SlideshowResult(images=["/tmp/a.jpg"]),
                 None,
             )
-            GalleryDlService.download_slideshow(
+            await GalleryDlService.download_slideshow(
                 "https://tiktok.com/@user/video/123",
                 cookies_path=None,
             )
@@ -57,50 +63,56 @@ class TestGalleryDlService(unittest.TestCase):
         cmd = mock_run.call_args[0][0]
         self.assertNotIn("--cookies", cmd)
 
-    @patch("app.services.gallery_dl.service.subprocess.run")
-    def test_download_failure_returns_error(self, mock_run):
+    @patch(
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
+    )
+    async def test_download_failure_returns_error(self, mock_run):
         """Non-zero return code should return error message."""
         mock_run.return_value = MagicMock(
-            returncode=1, stderr="Error: something went wrong"
+            returncode=1, stderr=b"Error: something went wrong"
         )
-        result, error = GalleryDlService.download_slideshow(
+        result, error = await GalleryDlService.download_slideshow(
             "https://tiktok.com/@user/video/123",
         )
         self.assertIsNone(result)
         self.assertIn("Ошибка", error)
 
-    @patch("app.services.gallery_dl.service.subprocess.run")
-    def test_download_login_required_error(self, mock_run):
+    @patch(
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
+    )
+    async def test_download_login_required_error(self, mock_run):
         """Login-related error should return auth error message."""
-        mock_run.return_value = MagicMock(returncode=1, stderr="Error: login required")
-        result, error = GalleryDlService.download_slideshow(
+        mock_run.return_value = MagicMock(returncode=1, stderr=b"Error: login required")
+        result, error = await GalleryDlService.download_slideshow(
             "https://tiktok.com/@user/video/123",
         )
         self.assertIsNone(result)
         self.assertIn("авторизация", error.lower())
 
     @patch(
-        "app.services.gallery_dl.service.subprocess.run",
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
         side_effect=FileNotFoundError,
     )
-    def test_gallery_dl_not_installed(self, mock_run):
+    async def test_gallery_dl_not_installed(self, mock_run):
         """FileNotFoundError should return 'not installed' error."""
-        result, error = GalleryDlService.download_slideshow(
+        result, error = await GalleryDlService.download_slideshow(
             "https://tiktok.com/@user/video/123",
         )
         self.assertIsNone(result)
         self.assertIn("gallery-dl", error)
 
     @patch(
-        "app.services.gallery_dl.service.subprocess.run",
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
         side_effect=TimeoutError,
     )
-    def test_download_timeout(self, mock_run):
+    async def test_download_timeout(self, mock_run):
         """Subprocess timeout should return timeout error."""
-        import subprocess
-
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="gallery-dl", timeout=120)
-        result, error = GalleryDlService.download_slideshow(
+        mock_run.side_effect = TimeoutError
+        result, error = await GalleryDlService.download_slideshow(
             "https://tiktok.com/@user/video/123",
         )
         self.assertIsNone(result)
@@ -207,10 +219,13 @@ class TestGalleryDlService(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.title, "Fallback title")
 
-    @patch("app.services.gallery_dl.service.subprocess.run")
-    def test_download_video_success(self, mock_run):
+    @patch(
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
+    )
+    async def test_download_video_success(self, mock_run):
         """Verify download_video success and file finding."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        mock_run.return_value = MagicMock(returncode=0, stderr=b"")
 
         with (
             patch("app.services.gallery_dl.service.os.makedirs"),
@@ -220,7 +235,7 @@ class TestGalleryDlService(unittest.TestCase):
             mock_walk.return_value = [("/tmp/fake_dir", [], ["video.mp4"])]
             mock_getsize.return_value = 1048576 * 5  # 5 MB
 
-            result, error = GalleryDlService.download_video(
+            result, error = await GalleryDlService.download_video(
                 "https://tiktok.com/@user/video/123",
                 cookies_path="/tmp/cookies.txt",
                 proxy="http://proxy:8080",
@@ -238,10 +253,13 @@ class TestGalleryDlService(unittest.TestCase):
         self.assertIn("--proxy", cmd)
         self.assertIn("http://proxy:8080", cmd)
 
-    @patch("app.services.gallery_dl.service.subprocess.run")
-    def test_download_video_not_found(self, mock_run):
+    @patch(
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
+    )
+    async def test_download_video_not_found(self, mock_run):
         """Verify download_video handles no video found after success."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        mock_run.return_value = MagicMock(returncode=0, stderr=b"")
 
         with (
             patch("app.services.gallery_dl.service.os.makedirs"),
@@ -249,22 +267,25 @@ class TestGalleryDlService(unittest.TestCase):
         ):
             mock_walk.return_value = [("/tmp/fake_dir", [], ["image.jpg"])]
 
-            result, error = GalleryDlService.download_video(
+            result, error = await GalleryDlService.download_video(
                 "https://tiktok.com/@user/video/123"
             )
 
         self.assertIsNone(result)
         self.assertEqual(error, "No video file found")
 
-    @patch("app.services.gallery_dl.service.subprocess.run")
-    def test_download_video_failure(self, mock_run):
+    @patch(
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
+    )
+    async def test_download_video_failure(self, mock_run):
         """Verify download_video handles subprocess failure."""
         mock_run.return_value = MagicMock(
-            returncode=1, stderr="Error: something went wrong"
+            returncode=1, stderr=b"Error: something went wrong"
         )
 
         with patch("app.services.gallery_dl.service.os.makedirs"):
-            result, error = GalleryDlService.download_video(
+            result, error = await GalleryDlService.download_video(
                 "https://tiktok.com/@user/video/123"
             )
 
@@ -272,27 +293,29 @@ class TestGalleryDlService(unittest.TestCase):
         self.assertTrue(error.startswith("gallery-dl error:"))
 
     @patch(
-        "app.services.gallery_dl.service.subprocess.run", side_effect=FileNotFoundError
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
+        side_effect=FileNotFoundError,
     )
-    def test_download_video_not_installed(self, mock_run):
+    async def test_download_video_not_installed(self, mock_run):
         """Verify download_video handles missing gallery-dl."""
         with patch("app.services.gallery_dl.service.os.makedirs"):
-            result, error = GalleryDlService.download_video(
+            result, error = await GalleryDlService.download_video(
                 "https://tiktok.com/@user/video/123"
             )
 
         self.assertIsNone(result)
         self.assertEqual(error, "gallery-dl not installed")
 
-    @patch("app.services.gallery_dl.service.subprocess.run", side_effect=TimeoutError)
-    def test_download_video_timeout(self, mock_run):
+    @patch(
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
+        side_effect=TimeoutError,
+    )
+    async def test_download_video_timeout(self, mock_run):
         """Verify download_video handles subprocess timeout."""
-        import subprocess
-
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd="gallery-dl", timeout=120)
-
         with patch("app.services.gallery_dl.service.os.makedirs"):
-            result, error = GalleryDlService.download_video(
+            result, error = await GalleryDlService.download_video(
                 "https://tiktok.com/@user/video/123"
             )
 
@@ -300,27 +323,31 @@ class TestGalleryDlService(unittest.TestCase):
         self.assertEqual(error, "gallery-dl timeout")
 
     @patch(
-        "app.services.gallery_dl.service.subprocess.run",
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
         side_effect=Exception("Unexpected"),
     )
-    def test_download_video_unexpected_error(self, mock_run):
+    async def test_download_video_unexpected_error(self, mock_run):
         """Verify download_video handles unexpected exceptions."""
         with patch("app.services.gallery_dl.service.os.makedirs"):
-            result, error = GalleryDlService.download_video(
+            result, error = await GalleryDlService.download_video(
                 "https://tiktok.com/@user/video/123"
             )
 
         self.assertIsNone(result)
         self.assertEqual(error, "Unexpected")
 
-    @patch("app.services.gallery_dl.service.subprocess.run")
-    def test_download_slideshow_with_proxy(self, mock_run):
+    @patch(
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
+    )
+    async def test_download_slideshow_with_proxy(self, mock_run):
         """Verify slideshow download command includes proxy."""
-        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        mock_run.return_value = MagicMock(returncode=0, stderr=b"")
 
         with patch.object(GalleryDlService, "_collect_files") as mock_collect:
             mock_collect.return_value = (SlideshowResult(), None)
-            GalleryDlService.download_slideshow(
+            await GalleryDlService.download_slideshow(
                 "https://tiktok.com/@user/video/123", proxy="http://proxy:8080"
             )
 
@@ -329,17 +356,42 @@ class TestGalleryDlService(unittest.TestCase):
         self.assertIn("http://proxy:8080", cmd)
 
     @patch(
-        "app.services.gallery_dl.service.subprocess.run",
+        "app.services.gallery_dl.service.process_supervisor.run",
+        new_callable=AsyncMock,
         side_effect=Exception("Unexpected"),
     )
-    def test_download_slideshow_unexpected_error(self, mock_run):
+    async def test_download_slideshow_unexpected_error(self, mock_run):
         """Verify download_slideshow handles unexpected exceptions."""
-        result, error = GalleryDlService.download_slideshow(
+        result, error = await GalleryDlService.download_slideshow(
             "https://tiktok.com/@user/video/123"
         )
 
         self.assertIsNone(result)
         self.assertEqual(error, "⚠️ Внутренняя ошибка при загрузке.")
+
+
+class TestGalleryDlAsyncService(unittest.IsolatedAsyncioTestCase):
+    @patch("app.core.process.process_supervisor.run", new_callable=AsyncMock)
+    async def test_download_video_uses_async_supervised_process(self, run):
+        """Catches gallery-dl falling back to blocking ``subprocess.run``."""
+        run.return_value = MagicMock(returncode=0, stderr=b"")
+        with (
+            patch("app.services.gallery_dl.service.os.makedirs"),
+            patch(
+                "app.services.gallery_dl.service.os.walk",
+                return_value=[("/tmp/fake_dir", [], ["video.mp4"])],
+            ),
+            patch("app.services.gallery_dl.service.os.path.getsize", return_value=1),
+        ):
+            result, error = await GalleryDlService.download_video(
+                "https://tiktok.com/@user/video/123"
+            )
+
+        self.assertEqual(result, os.path.join("/tmp/fake_dir", "video.mp4"))
+        self.assertIsNone(error)
+        command = run.await_args.args[0]
+        self.assertEqual(command[0], "gallery-dl")
+        self.assertIn("https://tiktok.com/@user/video/123", command)
 
 
 if __name__ == "__main__":

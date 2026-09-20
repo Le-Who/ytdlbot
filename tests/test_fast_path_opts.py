@@ -131,16 +131,22 @@ class TestNativeAudioBypass(unittest.TestCase):
         self.assertEqual(result, "/tmp/audio.ogg")
 
     def test_maybe_rename_webm_with_opus_header(self):
+        from app.services.converter import MediaConverter
         from app.services.orchestrator import _maybe_rename_webm_to_ogg
         with tempfile.TemporaryDirectory() as d:
             webm_path = os.path.join(d, "audio.webm")
             with open(webm_path, "wb") as f:
                 f.write(b"\x1a\x45\xdf\xa3" + b"\x00" * 50 + b"OpusHead" + b"\x00" * 50)
 
-            result = asyncio.run(_maybe_rename_webm_to_ogg(webm_path))
             expected = os.path.join(d, "audio.ogg")
+            with patch.object(
+                MediaConverter,
+                "remux_webm_opus",
+                new=AsyncMock(return_value=expected),
+            ) as remux:
+                result = asyncio.run(_maybe_rename_webm_to_ogg(webm_path))
             self.assertEqual(result, expected)
-            self.assertTrue(os.path.exists(expected))
+            remux.assert_awaited_once_with(webm_path)
 
     def test_maybe_rename_webm_no_opus_unchanged(self):
         from app.services.orchestrator import _maybe_rename_webm_to_ogg

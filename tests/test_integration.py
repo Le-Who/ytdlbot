@@ -246,7 +246,7 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
 
         await callbacks.on_cancel(update, context)
 
-        self.assertTrue(state.cancel_cache.get(token))
+        self.assertTrue(await state.cancel_cache.get(token))
         args, _ = update.callback_query.edit_message_text.call_args
         self.assertIn("Загрузка отменена", args[0])
 

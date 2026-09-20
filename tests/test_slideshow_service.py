@@ -70,7 +70,7 @@ class TestDownloadSlideshow(unittest.IsolatedAsyncioTestCase):
 
         mock_result = MagicMock()
         with patch(
-            "app.services.slideshow.asyncio.to_thread",
+            "app.services.gallery_dl.service.GalleryDlService.download_slideshow",
             new_callable=AsyncMock,
             return_value=(mock_result, None),
         ):
@@ -90,7 +90,7 @@ class TestDownloadSlideshow(unittest.IsolatedAsyncioTestCase):
         state.ytdlp.tiktok_proxy = None
 
         with patch(
-            "app.services.slideshow.asyncio.to_thread",
+            "app.services.gallery_dl.service.GalleryDlService.download_slideshow",
             new_callable=AsyncMock,
             return_value=(None, "gallery-dl failed"),
         ):

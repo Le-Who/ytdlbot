@@ -1,12 +1,12 @@
-
 import asyncio
-import sys
 import os
+import sys
 
 # Add repo root to path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.services.ytdlp.service import YtDlpService
+
 
 async def debug_youtube():
     service = YtDlpService()
@@ -17,6 +17,7 @@ async def debug_youtube():
         print(f"SUCCESS: Found {len(formats)} formats for '{title}'")
     except Exception as e:
         print(f"FAILURE: {e}")
+
 
 if __name__ == "__main__":
     asyncio.run(debug_youtube())

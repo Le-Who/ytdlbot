@@ -1,26 +1,85 @@
-name: Deploy to VPS
+name: Verify and Deploy Immutable Release
 
 on:
   push:
     branches:
       - vps
 
+permissions:
+  contents: read
+
 env:
   REGISTRY: ghcr.io
 
 jobs:
-  build-and-push:
+  verify:
+    name: Verify exact release SHA
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7.4.11-alpine@sha256:520775a41a63e77e06c73e35d2fd9cc15921a609516818796b4ecbb813078bc7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout exact pushed SHA
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run full test and release contract gates
+        env:
+          BOT_TOKEN: test_token
+          WEBHOOK_URL: https://example.com
+          TELEGRAM_SECRET_TOKEN: ci-secret
+          REDIS_URL: redis://localhost:6379/0
+          APP_RELEASE: ${{ github.sha }}
+          BOT_IMAGE: ghcr.io/example/ytdlbot@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
+          TELEGRAM_API_ID: "1"
+          TELEGRAM_API_HASH: test
+        run: |
+          python -m pytest tests -q
+          python -m pytest tests/deploy/test_release_scripts.py --no-cov -q
+          bash -n scripts/deploy-release.sh scripts/preflight-production.sh scripts/rollback-release.sh
+          docker compose config --quiet
+
+  build:
+    name: Build once and publish SHA image
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-
+    outputs:
+      image: ${{ steps.image.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
-      - name: Checkout repository
+      - name: Checkout tested SHA
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
-      - name: Set lowercase repository name
-        run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
+      - name: Resolve lowercase image name
+        id: image
+        shell: bash
+        run: echo "image=${REGISTRY}/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -29,174 +88,116 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v5
+      - name: Build and push the tested SHA once
+        id: build
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
           push: true
-          tags: ${{ env.REGISTRY }}/${{ env.REPO }}:latest
+          tags: ${{ steps.image.outputs.image }}:${{ github.sha }}
 
   deploy:
-    needs: build-and-push
+    name: Activate bot by immutable digest
+    needs: [verify, build]
     runs-on: ubuntu-latest
     environment: production
-
+    concurrency:
+      group: ytdlbot-production
+      cancel-in-progress: false
+    env:
+      COMPOSE_PROJECT: ${{ vars.COMPOSE_PROJECT || 'ytdlbot' }}
+      PROJECT_ROOT: ${{ secrets.VPS_PROJECT_PATH }}
+      PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
+      BOT_IMAGE: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
     steps:
-      - name: Checkout repository
+      - name: Checkout tested SHA
         uses: actions/checkout@v4
-
-      - name: Set lowercase repository name
-        run: echo "REPO=${GITHUB_REPOSITORY,,}" >> $GITHUB_ENV
-
-      - name: Ensure deploy directory exists
-        uses: appleboy/ssh-action@v1.0.3
         with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USERNAME }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || '22' }}
-          script: mkdir -p /opt/ytdlbot
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
-      - name: Copy docker-compose.yml to VPS
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USERNAME }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          port: ${{ secrets.VPS_PORT || '22' }}
-          source: "docker-compose.yml"
-          target: "/opt/ytdlbot"
-
-      - name: Deploy to VPS via SSH
-        uses: appleboy/ssh-action@v1.0.3
+      - name: Recheck vps branch freshness
+        id: freshness
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ env.REPO }}
-          REGISTRY: ${{ env.REGISTRY }}
-          # --- Bot secrets ---
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
-          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-          ADMIN_CHAT_ID: ${{ secrets.ADMIN_CHAT_ID }}
-          # --- Platform cookies ---
-          YTDLP_COOKIES_B64: ${{ secrets.YTDLP_COOKIES_B64 }}
-          FACEBOOK_COOKIES_B64: ${{ secrets.FACEBOOK_COOKIES_B64 }}
-          TIKTOK_COOKIES_B64: ${{ secrets.TIKTOK_COOKIES_B64 }}
-          VK_COOKIES_B64: ${{ secrets.VK_COOKIES_B64 }}
-          VK_PROXY: ${{ secrets.VK_PROXY }}
-          IG_SESSIONS_B64: ${{ secrets.IG_SESSIONS_B64 }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/vps" --jq '.object.sha')"
+          test -n "$branch_sha"
+          echo "branch_sha=$branch_sha" >> "$GITHUB_OUTPUT"
+          if [[ "$branch_sha" == "$GITHUB_SHA" ]]; then
+            echo "should_deploy=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Skipping stale release $GITHUB_SHA; vps is now $branch_sha."
+            echo "should_deploy=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Validate protected deployment inputs
+        if: steps.freshness.outputs.should_deploy == 'true'
+        shell: bash
+        env:
+          VPS_HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          [[ "$PROJECT_ROOT" =~ ^/[A-Za-z0-9._/-]+$ ]]
+          [[ "$PROJECT_ROOT" != "/" && "$PROJECT_ROOT" != *"//"* ]]
+          [[ "$COMPOSE_PROJECT" =~ ^[A-Za-z0-9_.-]+$ ]]
+          [[ "$PUBLIC_BASE_URL" =~ ^https://[^/[:space:]]+$ ]]
+          [[ "$BOT_IMAGE" =~ ^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]]
+          [[ "$VPS_HOST_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]
+
+      - name: Assemble allowlisted release payload
+        if: steps.freshness.outputs.should_deploy == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-payload/scripts
+          install -m 0644 docker-compose.yml release-payload/docker-compose.yml
+          install -m 0755 scripts/deploy-release.sh release-payload/scripts/deploy-release.sh
+          install -m 0755 scripts/preflight-production.sh release-payload/scripts/preflight-production.sh
+          install -m 0755 scripts/rollback-release.sh release-payload/scripts/rollback-release.sh
+          compose_sha="$(sha256sum release-payload/docker-compose.yml | awk '{print $1}')"
+          {
+            printf 'RELEASE_SHA=%s\n' "$GITHUB_SHA"
+            printf 'BOT_IMAGE=%s\n' "$BOT_IMAGE"
+            printf 'COMPOSE_PROJECT=%s\n' "$COMPOSE_PROJECT"
+            printf 'COMPOSE_SHA256=%s\n' "$compose_sha"
+          } > release-payload/release.manifest
+
+      - name: Upload only allowlisted release files
+        if: steps.freshness.outputs.should_deploy == 'true'
+        uses: appleboy/scp-action@8a92fcdb1eb4ffbf538b2fa286739760aac8a95b
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USERNAME }}
           key: ${{ secrets.VPS_SSH_KEY }}
           port: ${{ secrets.VPS_PORT || '22' }}
-          envs: GITHUB_TOKEN,REPO,REGISTRY,BOT_TOKEN,TELEGRAM_API_ID,TELEGRAM_API_HASH,ADMIN_CHAT_ID,YTDLP_COOKIES_B64,FACEBOOK_COOKIES_B64,TIKTOK_COOKIES_B64,VK_COOKIES_B64,VK_PROXY,IG_SESSIONS_B64
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          source: "release-payload/docker-compose.yml,release-payload/release.manifest,release-payload/scripts/deploy-release.sh,release-payload/scripts/preflight-production.sh,release-payload/scripts/rollback-release.sh"
+          target: "${{ secrets.VPS_PROJECT_PATH }}/releases/${{ github.sha }}"
+          strip_components: 1
+          rm: false
+
+      - name: Activate immutable release over verified SSH
+        if: steps.freshness.outputs.should_deploy == 'true'
+        uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17
+        env:
+          PROJECT_ROOT: ${{ secrets.VPS_PROJECT_PATH }}
+          RELEASE_SHA: ${{ github.sha }}
+          EXPECTED_BRANCH_SHA: ${{ steps.freshness.outputs.branch_sha }}
+          BOT_IMAGE: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
+          COMPOSE_PROJECT: ${{ vars.COMPOSE_PROJECT || 'ytdlbot' }}
+          PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          port: ${{ secrets.VPS_PORT || '22' }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          command_timeout: 20m
+          envs: PROJECT_ROOT,RELEASE_SHA,EXPECTED_BRANCH_SHA,BOT_IMAGE,COMPOSE_PROJECT,PUBLIC_BASE_URL
           script: |
-            set -e
-
-            DEPLOY_DIR=/opt/ytdlbot
-            cd "$DEPLOY_DIR"
-
-            # ── Авторизация в GHCR ────────────────────────────────────────
-            echo "$GITHUB_TOKEN" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
-
-            # ── Обновляем образ ───────────────────────────────────────────
-            # docker-compose.yml уже скопирован на VPS через SCP-шаг выше
-            docker pull "$REGISTRY/$REPO:latest"
-
-            # ── Перезаписываем .env ───────────────────────────────────────
-            umask 077
-            cat > .env << EOF
-            # === GHCR image path ===
-            GHCR_REPO=$REPO
-
-            # === Секреты из GitHub Actions ===
-            BOT_TOKEN=$BOT_TOKEN
-            TELEGRAM_API_ID=$TELEGRAM_API_ID
-            TELEGRAM_API_HASH=$TELEGRAM_API_HASH
-            ADMIN_CHAT_ID=$ADMIN_CHAT_ID
-
-            # Платформенные куки
-            YTDLP_COOKIES_B64=$YTDLP_COOKIES_B64
-            FACEBOOK_COOKIES_B64=$FACEBOOK_COOKIES_B64
-            TIKTOK_COOKIES_B64=$TIKTOK_COOKIES_B64
-            VK_COOKIES_B64=$VK_COOKIES_B64
-            VK_PROXY=$VK_PROXY
-            IG_SESSIONS_B64=$IG_SESSIONS_B64
-
-            # === Фиксированные настройки сервера ===
-            BASE_URL=https://vid.tri.mom
-            TZ=Europe/Kyiv
-            WEBHOOK_URL=http://bot:8000
-            TELEGRAM_SECRET_TOKEN=133769
-
-            # --- Настройки скачивания/загрузки ---
-            ENABLE_TELEGRAM_UPLOAD=1
-            MAX_TG_UPLOAD_MB=900
-            MAX_DL_MB=1000
-            MAX_CONCURRENT_TASKS=4
-            MAX_API_TASKS=20
-            YTDLP_CONCURRENT_FRAGMENTS=10
-            DL_TIMEOUT_TELEGRAM=1200
-            DL_TIMEOUT_HTTP=1800
-            YOUTUBE_PIPE_MODE=0
-
-            # --- Очистка и система ---
-            TMPDIR=/tmp
-            MAX_TEMP_AGE_SECONDS=3600
-            JANITOR_INTERVAL_SECONDS=300
-
-            # --- Лимиты ---
-            LIMITER_USER_CAPACITY=5
-            LIMITER_USER_REFILL_PER_SEC=0.5
-            LIMITER_CHAT_CAPACITY=20
-            LIMITER_CHAT_REFILL_PER_SEC=1
-            LIMITER_IP_CAPACITY=15
-            LIMITER_IP_REFILL_PER_SEC=1
-            LIMITER_TOKEN_CAPACITY=3
-            LIMITER_TOKEN_REFILL_PER_SEC=0.25
-            LIMITER_IG_CAPACITY=15
-
-            # --- Внешние API ---
-            COBALT_API_URL=https://api.cobalt.tools
-            ENABLE_COBALT_TIKTOK=0
-            EOF
-
-            # ── Поднимаем стек через GHCR-образ (без локальной сборки) ──
-            export GHCR_REPO="$REPO"
-            docker compose pull
-            docker compose up -d --remove-orphans
-
-            # ── Регистрация маршрута в хостовом Caddy (idempotent) ───────
-            CADDY_SITE=/etc/caddy/sites-enabled/ytdlbot.caddy
-            if [ ! -f "$CADDY_SITE" ] || ! grep -q "vid.tri.mom" "$CADDY_SITE"; then
-              mkdir -p /etc/caddy/sites-enabled
-              cat > "$CADDY_SITE" << 'CADDYEOF'
-            vid.tri.mom {
-              reverse_proxy 127.0.0.1:8000
-            }
-            CADDYEOF
-              caddy reload --config /etc/caddy/Caddyfile
-              echo ">>> Caddy route for vid.tri.mom registered."
-            else
-              echo ">>> Caddy route already exists, skipping."
-            fi
-
-            # ── Portainer — один на весь хост (idempotent) ───────────────
-            if ! docker inspect portainer > /dev/null 2>&1; then
-              docker run -d \
-                --name portainer \
-                --restart unless-stopped \
-                -p 9443:9443 \
-                -v /var/run/docker.sock:/var/run/docker.sock \
-                -v portainer_data:/data \
-                portainer/portainer-ce:latest
-              echo ">>> Portainer started."
-            else
-              echo ">>> Portainer already running, skipping."
-            fi
-
-            docker image prune -f
-            echo ">>> Deploy complete."
-
+            set -eu
+            sh "$PROJECT_ROOT/releases/$RELEASE_SHA/scripts/deploy-release.sh"

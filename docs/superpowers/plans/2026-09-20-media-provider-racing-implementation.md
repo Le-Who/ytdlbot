@@ -212,6 +212,7 @@ Commit: `feat(media): add youtube-first yt-dlp provider`
 - Create: `app/services/media/providers/snapsave.py`
 - Modify: `app/services/cobalt.py`
 - Modify: `app/services/tikwm.py`
+- Modify: `app/services/pinterest.py`
 - Test: `tests/media/providers/test_http_providers.py`
 - Test: `tests/test_cobalt_service.py`
 - Test: `tests/test_tikwm_service.py`
@@ -235,7 +236,7 @@ async def test_credentials_are_not_forwarded_to_different_origin():
     assert "Authorization" not in transport.requests[1].headers
 ```
 
-For every adapter cover success, 429/`Retry-After`, timeout, HTML instead of JSON, challenge page, expired CDN URL, video/photo/animation/ordered album, and lower-quality metadata. FxTwitter uses `/2/status/{id}`. SSSTik extracts the live session token from a fixture rather than a fixed regex. SnapSave stays disabled unless the upstream-ready-link fixture passes; upstream-render jobs are represented distinctly. Remove TikWM's `hd_size < size` codec claim.
+For every adapter cover success, 429/`Retry-After`, timeout, HTML instead of JSON, challenge page, expired CDN URL, video/photo/animation/ordered album, and lower-quality metadata. FxTwitter uses `/2/status/{id}`. SSSTik extracts the live session token from a fixture rather than a fixed regex. SnapSave stays disabled unless the upstream-ready-link fixture passes; upstream-render jobs are represented distinctly. Wrap the existing Pinterest native service under the provider contract. Remove TikWM's `hd_size < size` codec claim.
 
 - [ ] **Step 2: Verify RED**
 
@@ -267,6 +268,7 @@ Commit: `feat(media): add isolated HTTP provider adapters`
 - Create: `app/core/resource_budget.py`
 - Modify: `app/services/cobalt.py`
 - Modify: `app/services/tikwm.py`
+- Modify: `app/tasks/janitor.py`
 - Test: `tests/media/test_transport.py`
 - Test: `tests/core/test_resource_budget.py`
 
@@ -289,7 +291,7 @@ async def test_stream_aborts_at_decimal_2000_mb_limit_without_buffering_body():
     assert not output_path.exists()
 ```
 
-Cover original/redirect/nested URLs, DNS rebinding checks, cross-origin credential stripping, Range signature probe, declared and actual byte caps, disk reservation, active lease protection, 1.5 s first-byte and 3 s stall failover, 20 MB dual-download rule, partial cleanup, and redacted URLs in logs.
+Cover original/redirect/nested URLs, DNS rebinding checks, cross-origin credential stripping, Range signature probe, declared and actual byte caps, disk reservation, active lease protection, 1.5 s first-byte and 3 s stall failover, 20 MB dual-download rule, partial cleanup, and redacted URLs in logs. The janitor must skip every file with an active media lease and may reclaim expired, unowned partials.
 
 - [ ] **Step 2: Verify RED**
 
@@ -337,7 +339,7 @@ async def test_cancelling_one_subscriber_keeps_shared_work_for_other_subscriber(
     assert materialize.await_count == 1
 ```
 
-Cover key isolation for clip/quality/kind/audio/auth/album order/transform version, 30-day sliding TTL, invalid file_id eviction, resolve/materialize singleflight, safe Redis lease release by owner token, and no slot leaks.
+Cover key isolation for clip/quality/kind/audio/auth/album order/transform version, 30-day sliding TTL, invalid file_id eviction, resolve/materialize singleflight, safe Redis lease release by owner token, and no slot leaks. Store stable metadata, short-lived signed CDN URLs, and Telegram file IDs as separate record types with separate TTLs; durable metadata never points at a temporary `info.json` path.
 
 - [ ] **Step 2: Verify RED**
 
@@ -443,7 +445,7 @@ async def test_every_entrypoint_builds_the_same_media_request(entrypoint):
     assert captured.clip == ClipInterval(10, 20)
 ```
 
-Cover fast/exact modes, MP3/clips across routes, no hidden fallback, mixed albums preserving order, no default slideshow conversion, one editable status message, and the pre-existing TikTok cached-assignment error path.
+Cover fast/exact modes, MP3/clips across routes, no hidden fallback, mixed albums preserving order, no default slideshow conversion, one editable status message, and the pre-existing TikTok cached-assignment error path. Keep provider-specific `AccessDeniedError` text and update the stale baseline assertion that expected a generic string. Add a versioned callback decoder that accepts the previous callback shape for its existing TTL while emitting only the new version.
 
 - [ ] **Step 2: Verify RED**
 
@@ -461,6 +463,8 @@ class MediaPipeline:
 ```
 
 Do not create a parallel pipeline under `app/core`.
+
+Register the exact route matrix: TikTok races TikWM + SSSTik, then a healthy Cobalt endpoint and one local extractor; X races FxTwitter + healthy Cobalt, then yt-dlp; public Instagram/Facebook use only a contract-verified SnapSave + healthy Cobalt before gallery-dl/yt-dlp, with configured Instagram sessions isolated as authorized scope; Pinterest races native + healthy Cobalt before gallery-dl/yt-dlp; YouTube starts yt-dlp/Deno/EJS/PO-token and any configured, contract-verified independent free endpoint immediately after file_id miss; VK/RuTube/other platforms use yt-dlp unless an adapter explicitly declares support. Missing or disabled providers contribute no artificial timeout.
 
 - [ ] **Step 4: Verify GREEN and commit**
 
@@ -503,7 +507,7 @@ async def test_request_cancel_leaves_no_process_socket_or_partial_after_two_seco
     assert list(media_dir.glob("*.part")) == []
 ```
 
-Also reproduce timeout/grant/cancel races repeatedly without reading `Semaphore._value`; verify gallery-dl uses async supervised subprocess; change WebM+Opus rename to ffmpeg `-c:a copy`; strict MP3 creates MP3.
+Also reproduce timeout/grant/cancel races repeatedly without reading `Semaphore._value`; verify gallery-dl uses async supervised subprocess; change WebM+Opus rename to ffmpeg `-c:a copy`; strict MP3 creates MP3. Fix the three baseline tests that call async `cancel_cache.get()` without awaiting it, so the complete suite has no coroutine warnings.
 
 - [ ] **Step 2: Verify RED**
 
@@ -690,7 +694,7 @@ def test_youtube_acceptance_manifest_requires_12_shorts_and_12_videos():
     assert len(manifest["videos"]) == 12
 ```
 
-Offline tests cover contract fixtures, provider race, cache bypass, cancellation, Local API boundaries, durable recovery, and deploy rollback. Live tests remain opt-in and record p50/p95, full-delivery rate, 403/429 causes, bytes, CPU, independent-route success, cold/warm cache, and three time windows from the production IP.
+Offline tests cover contract fixtures, provider race, cache bypass, cancellation, Local API boundaries, durable recovery, deploy rollback, cache-schema versioning, and legacy callback decoding for the prior TTL. Live tests remain opt-in and record p50/p95, full-delivery rate, 403/429 causes, bytes, CPU, independent-route success, cold/warm cache, and three time windows from the production IP.
 
 - [ ] **Step 2: Verify RED**
 

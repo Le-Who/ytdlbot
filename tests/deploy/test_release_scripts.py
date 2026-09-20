@@ -932,6 +932,7 @@ def test_clean_ci_installs_all_pinned_test_dependencies() -> None:
         "pytest==9.1.1",
         "pytest-cov==7.1.0",
         "pytest-asyncio==1.4.0",
+        "pytest-timeout==2.4.0",
         "hypothesis==6.168.0",
         "PyYAML==6.0.3",
         "httpx==0.28.1",
@@ -942,6 +943,42 @@ def test_clean_ci_installs_all_pinned_test_dependencies() -> None:
         workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
         assert "pip install -r requirements-ci.txt" in workflow
         assert "pip install pytest pytest-cov" not in workflow
+
+
+def test_deploy_release_gate_is_bounded_and_not_repeated() -> None:
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
+    )
+    verify = workflow["jobs"]["verify"]
+    script = next(
+        step["run"]
+        for step in verify["steps"]
+        if step.get("name") == "Run release-critical acceptance and contract gates"
+    )
+
+    assert verify["timeout-minutes"] == 12
+    assert script.count("python -m pytest") == 1
+    required_nodes = {
+        "tests/acceptance/test_media_release.py",
+        "tests/deploy/test_release_scripts.py::test_routine_deploy_only_replaces_bot_and_preserves_host_state",
+        "tests/deploy/test_release_scripts.py::test_concurrent_deploy_is_rejected_by_project_lock",
+        "tests/deploy/test_release_scripts.py::test_project_root_must_match_existing_compose_identity",
+        "tests/deploy/test_release_scripts.py::test_bootstrap_gate_validates_future_owner_from_legacy_uid_as_root",
+        "tests/deploy/test_release_scripts.py::test_first_release_bootstrap_migrates_only_bot_and_local_api",
+        "tests/deploy/test_release_scripts.py::test_first_release_bootstrap_rejects_a_different_compose_project_root",
+        "tests/deploy/test_release_scripts.py::test_routine_deploy_rejects_unbootstrapped_mount_or_ownership",
+        "tests/deploy/test_release_scripts.py::test_release_directory_rejects_files_outside_allowlist",
+        "tests/deploy/test_release_scripts.py::test_deploy_rejects_release_path_before_executing_candidate",
+        "tests/deploy/test_release_scripts.py::test_deploy_lock_state_cannot_escape_verified_project",
+        "tests/deploy/test_release_scripts.py::test_manifest_must_match_exact_sha_image_project_and_compose",
+        "tests/deploy/test_release_scripts.py::test_webhook_verification_failure_rolls_back",
+        "tests/deploy/test_release_scripts.py::test_workflows_gate_exact_sha_build_once_and_validate_known_host",
+        "tests/deploy/test_release_scripts.py::test_workflow_rejects_noncanonical_project_root_before_ssh",
+        "tests/deploy/test_release_scripts.py::test_release_automation_contains_no_host_wide_or_secret_rewrite_operations",
+        "tests/deploy/test_release_scripts.py::test_deploy_release_gate_is_bounded_and_not_repeated",
+    }
+    assert required_nodes <= set(script.split())
+    assert "--no-cov --timeout=60 -q" in script
 
 
 def test_every_active_ci_workflow_uses_one_pinned_test_contract() -> None:

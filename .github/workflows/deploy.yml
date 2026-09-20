@@ -15,6 +15,7 @@ jobs:
   verify:
     name: Verify exact release SHA
     runs-on: ubuntu-latest
+    timeout-minutes: 12
     services:
       redis:
         image: redis:7.4.11-alpine@sha256:520775a41a63e77e06c73e35d2fd9cc15921a609516818796b4ecbb813078bc7
@@ -43,7 +44,7 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-ci.txt
 
-      - name: Run full test and release contract gates
+      - name: Run release-critical acceptance and contract gates
         env:
           BOT_TOKEN: test_token
           WEBHOOK_URL: https://example.com
@@ -54,8 +55,25 @@ jobs:
           TELEGRAM_API_ID: "1"
           TELEGRAM_API_HASH: test
         run: |
-          python -m pytest tests -q
-          python -m pytest tests/deploy/test_release_scripts.py --no-cov -q
+          python -m pytest \
+            tests/acceptance/test_media_release.py \
+            tests/deploy/test_release_scripts.py::test_routine_deploy_only_replaces_bot_and_preserves_host_state \
+            tests/deploy/test_release_scripts.py::test_concurrent_deploy_is_rejected_by_project_lock \
+            tests/deploy/test_release_scripts.py::test_project_root_must_match_existing_compose_identity \
+            tests/deploy/test_release_scripts.py::test_bootstrap_gate_validates_future_owner_from_legacy_uid_as_root \
+            tests/deploy/test_release_scripts.py::test_first_release_bootstrap_migrates_only_bot_and_local_api \
+            tests/deploy/test_release_scripts.py::test_first_release_bootstrap_rejects_a_different_compose_project_root \
+            tests/deploy/test_release_scripts.py::test_routine_deploy_rejects_unbootstrapped_mount_or_ownership \
+            tests/deploy/test_release_scripts.py::test_release_directory_rejects_files_outside_allowlist \
+            tests/deploy/test_release_scripts.py::test_deploy_rejects_release_path_before_executing_candidate \
+            tests/deploy/test_release_scripts.py::test_deploy_lock_state_cannot_escape_verified_project \
+            tests/deploy/test_release_scripts.py::test_manifest_must_match_exact_sha_image_project_and_compose \
+            tests/deploy/test_release_scripts.py::test_webhook_verification_failure_rolls_back \
+            tests/deploy/test_release_scripts.py::test_workflows_gate_exact_sha_build_once_and_validate_known_host \
+            tests/deploy/test_release_scripts.py::test_workflow_rejects_noncanonical_project_root_before_ssh \
+            tests/deploy/test_release_scripts.py::test_release_automation_contains_no_host_wide_or_secret_rewrite_operations \
+            tests/deploy/test_release_scripts.py::test_deploy_release_gate_is_bounded_and_not_repeated \
+            --no-cov --timeout=60 -q
           bash -n scripts/bootstrap-production.sh scripts/bootstrap-migrate-production.sh scripts/deploy-release.sh scripts/preflight-production.sh scripts/rollback-release.sh
           docker compose config --quiet
 

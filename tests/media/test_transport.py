@@ -87,6 +87,27 @@ class DelayedCloseResponse(FakeResponse):
         self.closed = True
 
 
+class CancellationResistantCloseResponse(FakeResponse):
+    """A close operation that ignores cancellation until externally released."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.close_started = asyncio.Event()
+        self.close_finished = asyncio.Event()
+        self.release_close = asyncio.Event()
+        self.cancellations = 0
+
+    async def close(self) -> None:
+        self.close_started.set()
+        while not self.release_close.is_set():
+            try:
+                await self.release_close.wait()
+            except asyncio.CancelledError:
+                self.cancellations += 1
+        self.closed = True
+        self.close_finished.set()
+
+
 class FakeClient:
     def __init__(self, responses: Iterable[FakeResponse]) -> None:
         self.responses = list(responses)
@@ -178,12 +199,15 @@ def transport(
     process_runner: object | None = None,
     capacity_bytes: int | None = None,
     transform_poll_interval: float | None = None,
+    cleanup_timeout: float | None = None,
 ) -> tuple[MediaTransport, FakeClient]:
     client = FakeClient(responses)
     policy = URLPolicy(resolver=resolver or Resolver({}))
     options: dict[str, object] = {}
     if transform_poll_interval is not None:
         options["transform_poll_interval"] = transform_poll_interval
+    if cleanup_timeout is not None:
+        options["cleanup_timeout"] = cleanup_timeout
     return (
         MediaTransport(
             output_dir=tmp_path,
@@ -344,6 +368,28 @@ async def test_request_deadline_bounds_slow_initial_dns_validation(
 
 
 @pytest.mark.asyncio
+async def test_deadline_limited_dns_timeout_is_classified_from_its_budget(
+    tmp_path: Path,
+) -> None:
+    async def slow_resolver(host: str, port: int) -> tuple[str, ...]:
+        del host, port
+        await asyncio.sleep(0.05)
+        return ("93.184.216.34",)
+
+    fixed_clock = lambda: 100.0
+    media = MediaTransport(
+        output_dir=tmp_path,
+        client=FakeClient([]),
+        url_policy=URLPolicy(resolver=slow_resolver),
+        disk_budget=DiskBudget(tmp_path, capacity_bytes=1_000),
+        clock=fixed_clock,
+    )
+
+    with pytest.raises(TransferTimeout):
+        await media.materialize(request(deadline=100.01), [source_candidate()])
+
+
+@pytest.mark.asyncio
 async def test_cross_origin_redirect_strips_credentials_but_keeps_range(
     tmp_path: Path,
 ) -> None:
@@ -489,6 +535,36 @@ async def test_cancellation_waits_for_response_cleanup_then_propagates(
     with pytest.raises(asyncio.CancelledError):
         await cleanup
 
+    assert response.closed
+
+
+@pytest.mark.asyncio
+async def test_cancellation_resistant_response_cleanup_has_hard_bound(
+    tmp_path: Path,
+) -> None:
+    response = CancellationResistantCloseResponse()
+    media, _ = transport(tmp_path, [], cleanup_timeout=0.02)
+    cleanup = asyncio.create_task(
+        media._close_response(response, time.monotonic() + 10)
+    )
+    await response.close_started.wait()
+    release_handle = asyncio.get_running_loop().call_later(
+        0.2, response.release_close.set
+    )
+    started = time.monotonic()
+
+    try:
+        cleanup.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cleanup
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.1
+    finally:
+        response.release_close.set()
+        release_handle.cancel()
+        await asyncio.wait_for(response.close_finished.wait(), timeout=0.3)
+
+    assert response.cancellations == 1
     assert response.closed
 
 
@@ -655,6 +731,28 @@ class RecordingProcessRunner:
                 self.cancelled = True
                 raise
         return self.return_code
+
+
+class CancellationResistantProcessRunner:
+    """An injected runner that ignores cancellation until externally released."""
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.finished = asyncio.Event()
+        self.release = asyncio.Event()
+        self.cancellations = 0
+
+    async def __call__(self, command: list[str], timeout: float) -> int:
+        del timeout
+        Path(command[-1]).write_bytes(b"\x00\x00\x00\x18ftyp")
+        self.started.set()
+        while not self.release.is_set():
+            try:
+                await self.release.wait()
+            except asyncio.CancelledError:
+                self.cancellations += 1
+        self.finished.set()
+        return 1
 
 
 def _append_bytes(path: Path, data: bytes) -> None:
@@ -868,6 +966,40 @@ async def test_transform_cancellation_cleans_inputs_output_and_lease(
     assert runner.cancelled
     assert not list(tmp_path.glob("media_*"))
     assert not list(tmp_path.glob("*.lease"))
+
+
+@pytest.mark.asyncio
+async def test_cancellation_resistant_process_cleanup_has_hard_bound(
+    tmp_path: Path,
+) -> None:
+    runner = CancellationResistantProcessRunner()
+    media, _ = transport(
+        tmp_path,
+        [],
+        process_runner=runner,
+        cleanup_timeout=0.02,
+    )
+    partial = tmp_path / "transform.mp4.part"
+    transform = asyncio.create_task(
+        media._run_transform(["ffmpeg", str(partial)], partial, time.monotonic() + 10)
+    )
+    await runner.started.wait()
+    release_handle = asyncio.get_running_loop().call_later(0.2, runner.release.set)
+    started = time.monotonic()
+
+    try:
+        transform.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await transform
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.1
+    finally:
+        runner.release.set()
+        release_handle.cancel()
+        await asyncio.wait_for(runner.finished.wait(), timeout=0.3)
+        partial.unlink(missing_ok=True)
+
+    assert runner.cancellations == 1
 
 
 @pytest.mark.asyncio

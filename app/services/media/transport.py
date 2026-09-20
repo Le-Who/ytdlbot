@@ -295,6 +295,7 @@ class MediaTransport:
         self.cleanup_timeout = cleanup_timeout
         self.clock = clock
         self.process_runner = process_runner or _run_process
+        self._detached_cleanup_tasks: set[asyncio.Future[Any]] = set()
 
     async def probe(
         self,
@@ -686,8 +687,9 @@ class MediaTransport:
             return
         task.cancel()
         _, pending = await asyncio.wait({task}, timeout=self.cleanup_timeout)
-        for unfinished in pending:
-            unfinished.cancel()
+        if pending:
+            self._detach_cleanup_task(task)
+            return
         await asyncio.gather(task, return_exceptions=True)
 
     async def _stream_source(
@@ -876,12 +878,13 @@ class MediaTransport:
 
     async def _validate_url(self, url: str, deadline: float) -> None:
         remaining = self._remaining(deadline)
+        deadline_limited = remaining <= self.dns_timeout
         try:
             await asyncio.wait_for(
                 self.url_policy.resolve(url), timeout=min(self.dns_timeout, remaining)
             )
         except TimeoutError as error:
-            if self.clock() >= deadline:
+            if deadline_limited:
                 raise TransferTimeout("materialization deadline exceeded") from error
             raise UnsafeMediaURL("media host resolution timed out") from error
 
@@ -944,9 +947,23 @@ class MediaTransport:
         pending: set[asyncio.Task[None]] = {task} if not task.done() else set()
         if allow_grace and pending:
             _, pending = await asyncio.wait(pending, timeout=self.cleanup_timeout)
-        for unfinished in pending:
-            unfinished.cancel()
+        if pending:
+            task.cancel()
+            self._detach_cleanup_task(task)
+            return
         await asyncio.gather(task, return_exceptions=True)
+
+    def _detach_cleanup_task(self, task: asyncio.Future[Any]) -> None:
+        """Keep stubborn cleanup alive while consuming its eventual outcome."""
+        self._detached_cleanup_tasks.add(task)
+
+        def consume_result(finished: asyncio.Future[Any]) -> None:
+            self._detached_cleanup_tasks.discard(finished)
+            if finished.cancelled():
+                return
+            finished.exception()
+
+        task.add_done_callback(consume_result)
 
     def _download_sources(self, candidate: MediaCandidate) -> tuple[MediaSource, ...]:
         if candidate.sources:

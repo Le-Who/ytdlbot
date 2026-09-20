@@ -10,7 +10,12 @@ from app.core.config import (
     MEDIA_DIR,
     TEMP_DIR,
 )
-from app.core.resource_budget import is_active_media_lease, media_lease_path
+from app.core.resource_budget import (
+    LeaseOwnershipError,
+    is_active_media_lease,
+    media_lease_lock,
+    media_lease_path,
+)
 from app.core.utils import safe_remove
 
 logger = logging.getLogger("app.tasks.janitor")
@@ -24,26 +29,16 @@ def cleanup_temp_dir(root: str | None = None) -> tuple[int, int]:
     if not os.path.isdir(target_dir):
         return deleted, orphan
 
-    names = os.listdir(target_dir)
-    locked_targets = _active_lease_lock_targets(target_dir, names, now)
-    for name in names:
+    for name in os.listdir(target_dir):
         path = os.path.join(target_dir, name)
 
         if _is_lease_auxiliary(name):
-            try:
-                age = now - os.path.getmtime(path)
-            except OSError:
-                continue
-            if age > MAX_TEMP_AGE_SECONDS:
-                safe_remove(path)
+            _cleanup_lease_auxiliary(target_dir, name, now)
             continue
 
         if name.endswith(".lease"):
             target = path.removesuffix(".lease")
-            if target in locked_targets:
-                continue
-            if not is_active_media_lease(target):
-                safe_remove(path)
+            _cleanup_inactive_lease(target)
             continue
 
         # Clean slideshow directories (slideshow_* subdirs)
@@ -73,16 +68,8 @@ def cleanup_temp_dir(root: str | None = None) -> tuple[int, int]:
             continue
         if not os.path.isfile(path):
             continue
-        try:
-            age = now - os.path.getmtime(path)
-        except OSError:
-            continue
-        if age > MAX_TEMP_AGE_SECONDS:
-            if path in locked_targets or is_active_media_lease(path):
-                continue
+        if _delete_media_target(path, now=now, require_old=True):
             orphan += 1
-            safe_remove(path)
-            media_lease_path(path).unlink(missing_ok=True)
             deleted += 1
 
     return deleted, orphan
@@ -104,18 +91,14 @@ def _aggressive_purge_temp(root: str | None = None) -> int:
     deleted = 0
     if not os.path.isdir(target_dir):
         return deleted
-    names = os.listdir(target_dir)
-    locked_targets = _active_lease_lock_targets(target_dir, names, time.time())
-    for name in names:
+    for name in os.listdir(target_dir):
         path = os.path.join(target_dir, name)
         if _is_lease_auxiliary(name):
+            _cleanup_lease_auxiliary(target_dir, name, time.time())
             continue
         if name.endswith(".lease"):
             target = path.removesuffix(".lease")
-            if target in locked_targets:
-                continue
-            if not is_active_media_lease(target):
-                safe_remove(path)
+            _cleanup_inactive_lease(target)
             continue
         if name.startswith("slideshow_") and os.path.isdir(path):
             try:
@@ -133,11 +116,9 @@ def _aggressive_purge_temp(root: str | None = None) -> int:
             or name.startswith("media_")
         ):
             continue
-        if os.path.isfile(path):
-            if path in locked_targets or is_active_media_lease(path):
-                continue
-            safe_remove(path)
-            media_lease_path(path).unlink(missing_ok=True)
+        if os.path.isfile(path) and _delete_media_target(
+            path, now=time.time(), require_old=False
+        ):
             deleted += 1
     return deleted
 
@@ -149,28 +130,61 @@ def _aggressive_purge_media_dirs() -> int:
 
 
 def _is_lease_auxiliary(name: str) -> bool:
-    return name.endswith(".lease.lock") or (
-        ".lease." in name and name.endswith(".tmp")
+    return name.endswith(".lease.lock") or (".lease." in name and name.endswith(".tmp"))
+
+
+def _cleanup_lease_auxiliary(target_dir: str, name: str, now: float) -> None:
+    path = os.path.join(target_dir, name)
+    target_name = (
+        name.removesuffix(".lease.lock")
+        if name.endswith(".lease.lock")
+        else name.split(".lease.", 1)[0]
     )
+    target = os.path.join(target_dir, target_name)
+    try:
+        with media_lease_lock(target, stale_after=MAX_TEMP_AGE_SECONDS):
+            if name.endswith(".lease.lock"):
+                return
+            try:
+                age = now - os.path.getmtime(path)
+            except OSError:
+                return
+            if age > MAX_TEMP_AGE_SECONDS:
+                safe_remove(path)
+    except LeaseOwnershipError:
+        return
 
 
-def _active_lease_lock_targets(
-    target_dir: str, names: list[str], now: float
-) -> set[str]:
-    active: set[str] = set()
-    for name in names:
-        if not name.endswith(".lease.lock"):
-            continue
-        lock_path = os.path.join(target_dir, name)
-        try:
-            age = now - os.path.getmtime(lock_path)
-        except OSError:
-            continue
-        if age > MAX_TEMP_AGE_SECONDS:
-            safe_remove(lock_path)
-            continue
-        active.add(lock_path.removesuffix(".lease.lock"))
-    return active
+def _cleanup_inactive_lease(target: str) -> None:
+    try:
+        with media_lease_lock(target, stale_after=MAX_TEMP_AGE_SECONDS):
+            if not is_active_media_lease(target):
+                media_lease_path(target).unlink(missing_ok=True)
+    except LeaseOwnershipError:
+        return
+
+
+def _delete_media_target(path: str, *, now: float, require_old: bool) -> bool:
+    try:
+        with media_lease_lock(path, stale_after=MAX_TEMP_AGE_SECONDS):
+            if not os.path.isfile(path):
+                return False
+            if require_old:
+                try:
+                    age = now - os.path.getmtime(path)
+                except OSError:
+                    return False
+                if age <= MAX_TEMP_AGE_SECONDS:
+                    return False
+            if is_active_media_lease(path):
+                return False
+            safe_remove(path)
+            if os.path.exists(path):
+                return False
+            media_lease_path(path).unlink(missing_ok=True)
+            return True
+    except LeaseOwnershipError:
+        return False
 
 
 # 0 = ok, 1 = warning sent, 2 = critical sent

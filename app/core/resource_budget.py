@@ -25,6 +25,22 @@ def media_lease_path(path: str | os.PathLike[str]) -> Path:
     return Path(f"{Path(path)}.lease")
 
 
+@contextmanager
+def media_lease_lock(
+    path: str | os.PathLike[str],
+    *,
+    stale_after: float | None = None,
+    wall_clock: Callable[[], float] = time.time,
+) -> Iterator[None]:
+    """Acquire the atomic lock used for every mutation of a target's lease."""
+    with _marker_lock(
+        media_lease_path(path),
+        stale_after=stale_after,
+        wall_clock=wall_clock,
+    ):
+        yield
+
+
 def is_active_media_lease(
     path: str | os.PathLike[str], *, wall_clock: Callable[[], float] = time.time
 ) -> bool:
@@ -223,14 +239,58 @@ def _marker_identity(marker: Path) -> tuple[str | None, float]:
 
 
 @contextmanager
-def _marker_lock(marker: Path) -> Iterator[None]:
+def _marker_lock(
+    marker: Path,
+    *,
+    stale_after: float | None = None,
+    wall_clock: Callable[[], float] = time.time,
+) -> Iterator[None]:
     lock_path = Path(f"{marker}.lock")
+    token = uuid.uuid4().hex
+    descriptor: int | None = None
+    for attempt in range(2):
+        try:
+            descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError as error:
+            if stale_after is None or attempt:
+                raise LeaseOwnershipError("media lease is being updated") from error
+            try:
+                age = wall_clock() - lock_path.stat().st_mtime
+            except FileNotFoundError:
+                continue
+            except OSError as stat_error:
+                raise LeaseOwnershipError(
+                    "media lease lock is unreadable"
+                ) from stat_error
+            if age <= stale_after:
+                raise LeaseOwnershipError("media lease is being updated") from error
+            try:
+                lock_path.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError as unlink_error:
+                raise LeaseOwnershipError(
+                    "media lease lock is unavailable"
+                ) from unlink_error
+            continue
+        try:
+            os.write(descriptor, token.encode("ascii"))
+            os.fsync(descriptor)
+        except BaseException:
+            os.close(descriptor)
+            descriptor = None
+            lock_path.unlink(missing_ok=True)
+            raise
+        break
+    if descriptor is None:
+        raise LeaseOwnershipError("media lease is being updated")
     try:
-        descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError as error:
-        raise LeaseOwnershipError("media lease is being updated") from error
-    try:
-        os.close(descriptor)
         yield
     finally:
-        lock_path.unlink(missing_ok=True)
+        os.close(descriptor)
+        try:
+            owned = lock_path.read_text(encoding="ascii") == token
+        except OSError:
+            owned = False
+        if owned:
+            lock_path.unlink(missing_ok=True)

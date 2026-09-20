@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -13,6 +14,7 @@ from app.core.resource_budget import (
     InsufficientDiskSpace,
     LeaseOwnershipError,
     is_active_media_lease,
+    media_lease_lock,
 )
 from app.tasks import janitor
 
@@ -214,3 +216,46 @@ def test_aggressive_janitor_reclaims_target_with_expired_orphan_lock(
     assert deleted == 1
     assert not target.exists()
     assert not lock.exists()
+
+
+def test_janitor_acquires_target_lock_after_enumeration_before_deleting(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "media_racing.mp4.part"
+    target.write_bytes(b"in-progress")
+    old = time.time() - 100
+    os.utime(target, (old, old))
+    lock_acquired = threading.Event()
+    release_lock = threading.Event()
+    holder: threading.Thread | None = None
+    real_listdir = os.listdir
+
+    def hold_binder_lock() -> None:
+        with media_lease_lock(target):
+            lock_acquired.set()
+            release_lock.wait(timeout=1)
+
+    def enumerate_then_bind(path: str | os.PathLike[str]) -> list[str]:
+        nonlocal holder
+        names = real_listdir(path)
+        if holder is None:
+            holder = threading.Thread(target=hold_binder_lock)
+            holder.start()
+            assert lock_acquired.wait(timeout=1)
+        return names
+
+    try:
+        with (
+            patch("app.tasks.janitor.TEMP_DIR", str(tmp_path)),
+            patch("app.tasks.janitor.MAX_TEMP_AGE_SECONDS", 10),
+            patch("app.tasks.janitor.os.listdir", side_effect=enumerate_then_bind),
+        ):
+            deleted, orphan = janitor.cleanup_temp_dir()
+    finally:
+        release_lock.set()
+        if holder is not None:
+            holder.join(timeout=1)
+
+    assert (deleted, orphan) == (0, 0)
+    assert target.exists()
+    assert not Path(f"{target}.lease.lock").exists()

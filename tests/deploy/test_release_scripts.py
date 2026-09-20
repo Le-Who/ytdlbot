@@ -1032,13 +1032,55 @@ def test_workflow_smokes_immutable_image_and_promotes_trusted_staging() -> None:
 
     assert "Smoke immutable built image" in workflow
     assert 'docker pull "$SMOKE_IMAGE"' in workflow
-    assert 'docker run --rm --entrypoint python "$SMOKE_IMAGE"' in workflow
+    assert (
+        "docker run --rm --env BOT_TOKEN=test_token --entrypoint python "
+        '"$SMOKE_IMAGE"' in workflow
+    )
     assert "health_live" in workflow
     assert "Prepare trusted fresh staging directory" in workflow
     assert "readlink -f" in workflow
     assert 'test ! -L "$staging_dir"' in workflow
     assert "/.incoming/" in workflow
     assert 'mv "$staging_dir" "$release_dir"' in workflow
+
+
+def test_remote_registry_auth_is_ephemeral_and_read_only() -> None:
+    workflow = yaml.load(
+        (ROOT / ".github" / "workflows" / "deploy.yml").read_text(
+            encoding="utf-8"
+        ),
+        Loader=yaml.BaseLoader,
+    )
+    deploy = workflow["jobs"]["deploy"]
+    activate = next(
+        step
+        for step in deploy["steps"]
+        if step.get("name") == "Activate immutable release over verified SSH"
+    )
+    script = activate["with"]["script"]
+
+    assert deploy["permissions"]["packages"] == "read"
+    assert activate["env"]["GHCR_USERNAME"] == "${{ github.actor }}"
+    assert activate["env"]["GHCR_TOKEN"] == "${{ github.token }}"
+    assert "GHCR_USERNAME" in activate["with"]["envs"].split(",")
+    assert "GHCR_TOKEN" in activate["with"]["envs"].split(",")
+    assert 'mktemp -d "$PROJECT_ROOT/.deploy/registry-auth.XXXXXX"' in script
+    assert 'export DOCKER_CONFIG="$registry_config"' in script
+    assert (
+        'printf \'%s\' "$GHCR_TOKEN" | docker login ghcr.io '
+        '--username "$GHCR_USERNAME" --password-stdin >/dev/null' in script
+    )
+    assert "unset GHCR_TOKEN" in script
+    assert (
+        "docker logout ghcr.io >/dev/null 2>&1 || cleanup_status=$?"
+        in script
+    )
+    assert (
+        'rm -f -- "$registry_config/config.json" || cleanup_status=$?' in script
+    )
+    assert 'rmdir -- "$registry_config" || cleanup_status=$?' in script
+    assert 'test ! -e "$registry_config" || cleanup_status=1' in script
+    assert "|| true" not in script
 
 
 @pytest.mark.parametrize("initial_failure", ["interrupted-promotion", "activation"])

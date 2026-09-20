@@ -123,7 +123,7 @@ jobs:
         run: |
           set -euo pipefail
           docker pull "$SMOKE_IMAGE"
-          docker run --rm --entrypoint python "$SMOKE_IMAGE" -c 'import asyncio; from app.api.routes import health_live; assert asyncio.run(health_live()) == {"ok": True}'
+          docker run --rm --env BOT_TOKEN=test_token --entrypoint python "$SMOKE_IMAGE" -c 'import asyncio; from app.api.routes import health_live; assert asyncio.run(health_live()) == {"ok": True}'
           docker image inspect --format '{{json .Config.Healthcheck.Test}}' "$SMOKE_IMAGE" | grep -F '/health/ready'
 
   deploy:
@@ -131,6 +131,9 @@ jobs:
     needs: [verify, build]
     runs-on: ubuntu-latest
     environment: production
+    permissions:
+      contents: read
+      packages: read
     concurrency:
       group: ytdlbot-production
       cancel-in-progress: false
@@ -263,6 +266,8 @@ jobs:
           COMPOSE_PROJECT: ${{ vars.COMPOSE_PROJECT || 'ytdlbot' }}
           PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL || secrets.BASE_URL }}
           DEPLOY_UPLOAD_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          GHCR_USERNAME: ${{ github.actor }}
+          GHCR_TOKEN: ${{ github.token }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USERNAME }}
@@ -270,9 +275,32 @@ jobs:
           port: ${{ secrets.VPS_PORT || '22' }}
           fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
           command_timeout: 20m
-          envs: PROJECT_ROOT,RELEASE_SHA,EXPECTED_BRANCH_SHA,BOT_IMAGE,COMPOSE_PROJECT,PUBLIC_BASE_URL,DEPLOY_UPLOAD_ID
+          envs: PROJECT_ROOT,RELEASE_SHA,EXPECTED_BRANCH_SHA,BOT_IMAGE,COMPOSE_PROJECT,PUBLIC_BASE_URL,DEPLOY_UPLOAD_ID,GHCR_USERNAME,GHCR_TOKEN
           script: |
             set -eu
+            test -d "$PROJECT_ROOT/.deploy"
+            test ! -L "$PROJECT_ROOT/.deploy"
+            registry_config=$(mktemp -d "$PROJECT_ROOT/.deploy/registry-auth.XXXXXX")
+            cleanup_registry_auth() {
+              registry_status=$?
+              cleanup_status=0
+              trap - EXIT HUP INT TERM
+              DOCKER_CONFIG="$registry_config" docker logout ghcr.io >/dev/null 2>&1 || cleanup_status=$?
+              rm -f -- "$registry_config/config.json" || cleanup_status=$?
+              rmdir -- "$registry_config" || cleanup_status=$?
+              test ! -e "$registry_config" || cleanup_status=1
+              if test "$registry_status" -ne 0; then
+                exit "$registry_status"
+              fi
+              exit "$cleanup_status"
+            }
+            trap cleanup_registry_auth EXIT
+            trap 'exit 129' HUP
+            trap 'exit 130' INT
+            trap 'exit 143' TERM
+            export DOCKER_CONFIG="$registry_config"
+            printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GHCR_USERNAME" --password-stdin >/dev/null
+            unset GHCR_TOKEN
             staging_dir="$PROJECT_ROOT/.incoming/$DEPLOY_UPLOAD_ID"
             releases_root="$PROJECT_ROOT/releases"
             release_dir="$releases_root/$RELEASE_SHA"

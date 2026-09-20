@@ -3,15 +3,18 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests" / "fixtures"
@@ -38,18 +41,60 @@ OFFLINE_ACCEPTANCE_NODES = (
     "tests/core/test_media_cache.py::test_file_id_key_isolates_every_output_equivalence_field_and_version",
     "tests/core/test_download_queue_cancellation.py::test_cancelled_waiter_removed_before_grant_and_slot_is_reusable",
     "tests/media/test_delivery.py::test_cloud_limit_uses_decimal_boundary_before_open_or_send",
+    "tests/media/test_delivery.py::test_materialized_local_path_returns_confirmed_video_receipt",
+    "tests/media/test_delivery.py::test_local_path_is_confined_and_external_path_uses_streaming_multipart",
+    "tests/test_compose_contract.py::test_compose_mounts_shared_media_and_separate_durable_state",
+    "tests/media/test_race.py::test_caller_cancellation_awaits_provider_cleanup_and_delay_tasks",
+    "tests/media/test_transport.py::test_cancellation_closes_stream_and_removes_partial_and_lease",
+    "tests/core/test_process_supervisor.py::test_request_cancel_leaves_no_process_socket_or_partial_after_two_seconds",
     "tests/test_health_readiness.py::test_ready_reports_release_limit_store_and_required_local_api",
+    "tests/core/test_job_store.py::test_update_id_is_deduplicated_and_payload_keeps_only_telegram_update",
+    "tests/core/test_job_store.py::test_recovery_skips_success_and_uncertain_but_retries_failed_delivery",
     "tests/core/test_job_store.py::test_checkpointed_job_is_recovered_after_worker_restart",
+    "tests/test_webhook_durability.py::test_delivery_outcome_is_persisted_before_completion_and_not_replayed",
+    "tests/test_webhook_durability.py::test_crash_during_telegram_send_is_recovered_as_uncertain_without_replay",
+    "tests/deploy/test_release_scripts.py::test_readiness_failure_restores_previous_image_and_config",
     "tests/deploy/test_release_scripts.py::test_interrupted_activation_runs_rollback",
+    "tests/deploy/test_release_scripts.py::test_same_sha_promotion_reuses_only_an_identical_immutable_release",
     "tests/test_pipeline_entrypoints.py::test_callback_codec_emits_v2_and_accepts_previous_shape",
 )
+
+REQUIRED_OFFLINE_ACCEPTANCE_NODES = {
+    "tests/media/test_delivery.py::test_materialized_local_path_returns_confirmed_video_receipt",
+    "tests/media/test_delivery.py::test_local_path_is_confined_and_external_path_uses_streaming_multipart",
+    "tests/test_compose_contract.py::test_compose_mounts_shared_media_and_separate_durable_state",
+    "tests/media/test_race.py::test_caller_cancellation_awaits_provider_cleanup_and_delay_tasks",
+    "tests/media/test_transport.py::test_cancellation_closes_stream_and_removes_partial_and_lease",
+    "tests/core/test_process_supervisor.py::test_request_cancel_leaves_no_process_socket_or_partial_after_two_seconds",
+    "tests/core/test_job_store.py::test_update_id_is_deduplicated_and_payload_keeps_only_telegram_update",
+    "tests/core/test_job_store.py::test_recovery_skips_success_and_uncertain_but_retries_failed_delivery",
+    "tests/test_webhook_durability.py::test_delivery_outcome_is_persisted_before_completion_and_not_replayed",
+    "tests/test_webhook_durability.py::test_crash_during_telegram_send_is_recovered_as_uncertain_without_replay",
+    "tests/deploy/test_release_scripts.py::test_readiness_failure_restores_previous_image_and_config",
+    "tests/deploy/test_release_scripts.py::test_same_sha_promotion_reuses_only_an_identical_immutable_release",
+}
 
 
 def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _require_approved_manifest(manifest: dict[str, Any]) -> set[str]:
+def _validate_schema(instance: dict[str, Any], schema_path: Path) -> None:
+    schema = _load_json(schema_path)
+    Draft202012Validator.check_schema(schema)
+    validator = Draft202012Validator(schema, format_checker=FormatChecker())
+    validator.validate(instance)
+
+
+def _nearest_rank(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    return ordered[max(0, math.ceil(percentile * len(ordered)) - 1)]
+
+
+def _require_approved_manifest(manifest: dict[str, Any]) -> dict[str, str]:
+    _validate_schema(manifest, YOUTUBE_SCHEMA)
     assert manifest["approval"]["status"] == "approved", (
         "the 24-link live manifest must be explicitly approved before Task 14"
     )
@@ -66,12 +111,21 @@ def _require_approved_manifest(manifest: dict[str, Any]) -> set[str]:
         for url in urls
     )
     assert len(set(urls)) == 24
+    expected_shorts = {f"short-{index:02d}" for index in range(1, 13)}
+    expected_videos = {f"video-{index:02d}" for index in range(1, 13)}
+    assert {case["case_id"] for case in manifest["shorts"]} == expected_shorts
+    assert {case["case_id"] for case in manifest["videos"]} == expected_videos
     traits = {trait for case in cases for trait in case["traits"]}
     assert REQUIRED_TRAITS <= traits
-    return {case["case_id"] for case in cases}
+    return {
+        case["case_id"]: kind
+        for kind, bucket in (("short", "shorts"), ("video", "videos"))
+        for case in manifest[bucket]
+    }
 
 
-def _validate_evidence(evidence: dict[str, Any], case_ids: set[str]) -> None:
+def _validate_evidence(evidence: dict[str, Any], case_kinds: dict[str, str]) -> None:
+    _validate_schema(evidence, EVIDENCE_SCHEMA)
     assert re.fullmatch(r"[0-9a-f]{40}", evidence["release_sha"])
     assert re.fullmatch(r"[0-9a-f]{64}", evidence["manifest_sha256"])
     assert evidence["source"] == "production-vps"
@@ -85,13 +139,16 @@ def _validate_evidence(evidence: dict[str, Any], case_ids: set[str]) -> None:
     windows = evidence["windows"]
     assert len(windows) == 3
     assert len({window["window_id"] for window in windows}) == 3
+    assert len({window["started_at"] for window in windows}) == 3
     expected_runs = {
-        (case_id, cache) for case_id in case_ids for cache in ("cold", "warm")
+        (case_id, cache) for case_id in case_kinds for cache in ("cold", "warm")
     }
     for window in windows:
-        actual_runs = {(run["case_id"], run["cache_state"]) for run in window["runs"]}
-        assert actual_runs == expected_runs
+        actual_runs = [(run["case_id"], run["cache_state"]) for run in window["runs"]]
+        assert len(actual_runs) == len(expected_runs)
+        assert set(actual_runs) == expected_runs
         for run in window["runs"]:
+            assert run["kind"] == case_kinds[run["case_id"]]
             assert set(run["latency_seconds"]) == {
                 "resolve",
                 "first_byte",
@@ -112,9 +169,14 @@ def _validate_evidence(evidence: dict[str, Any], case_ids: set[str]) -> None:
                 "route_class",
             }
     summaries = evidence["summaries"]
-    assert {(item["kind"], item["cache_state"]) for item in summaries} == {
+    expected_summaries = {
         (kind, cache) for kind in ("short", "video") for cache in ("cold", "warm")
     }
+    assert len(summaries) == len(expected_summaries)
+    assert {(item["kind"], item["cache_state"]) for item in summaries} == (
+        expected_summaries
+    )
+    all_runs = [run for window in windows for run in window["runs"]]
     for summary in summaries:
         assert set(summary["latency_seconds"]) == {
             "resolve",
@@ -126,6 +188,164 @@ def _validate_evidence(evidence: dict[str, Any], case_ids: set[str]) -> None:
             set(percentiles) == {"p50", "p95"}
             for percentiles in summary["latency_seconds"].values()
         )
+        cohort = [
+            run
+            for run in all_runs
+            if run["kind"] == summary["kind"]
+            and run["cache_state"] == summary["cache_state"]
+        ]
+        assert summary["sample_count"] == len(cohort)
+        assert math.isclose(
+            summary["full_delivery_rate"],
+            sum(run["full_delivery"] for run in cohort) / len(cohort),
+        )
+        for status, field in ((403, "http_403_causes"), (429, "http_429_causes")):
+            causes = Counter(
+                failure["cause"]
+                for run in cohort
+                for failure in run["http_failures"]
+                if failure["status"] == status
+            )
+            assert summary[field] == {cause: causes[cause] for cause in summary[field]}
+        assert summary["bytes_downloaded"] == sum(
+            run["bytes_downloaded"] for run in cohort
+        )
+        assert summary["bytes_wasted"] == sum(run["bytes_wasted"] for run in cohort)
+        assert math.isclose(
+            summary["process_cpu_seconds"],
+            sum(run["process_cpu_seconds"] for run in cohort),
+        )
+        for stage, percentiles in summary["latency_seconds"].items():
+            values = [
+                run["latency_seconds"][stage]
+                for run in cohort
+                if run["latency_seconds"][stage] is not None
+            ]
+            for label, percentile in (("p50", 0.50), ("p95", 0.95)):
+                expected = _nearest_rank(values, percentile)
+                actual = percentiles[label]
+                if expected is None:
+                    assert actual is None
+                else:
+                    assert actual is not None
+                    assert math.isclose(actual, expected)
+        attempted = [
+            run["independent_route"]
+            for run in cohort
+            if run["independent_route"]["attempted"]
+        ]
+        expected_rate = (
+            sum(route["succeeded"] for route in attempted) / len(attempted)
+            if attempted
+            else None
+        )
+        actual_rate = summary["independent_route_success_rate"]
+        if expected_rate is None:
+            assert actual_rate is None
+        else:
+            assert actual_rate is not None
+            assert math.isclose(actual_rate, expected_rate)
+
+
+def _approved_manifest() -> dict[str, Any]:
+    manifest = copy.deepcopy(_load_json(YOUTUBE_MANIFEST))
+    manifest["approval"] = {
+        "status": "approved",
+        "approved_by": "release-owner",
+        "approved_at": "2026-09-20T12:00:00Z",
+    }
+    cases = [*manifest["shorts"], *manifest["videos"]]
+    for index, case in enumerate(cases):
+        video_id = f"case{index:07d}"
+        if case["case_id"].startswith("short-"):
+            case["url"] = f"https://www.youtube.com/shorts/{video_id}"
+        else:
+            case["url"] = f"https://www.youtube.com/watch?v={video_id}"
+    cases[0]["traits"] = sorted(REQUIRED_TRAITS)
+    return manifest
+
+
+def _valid_evidence(case_kinds: dict[str, str]) -> dict[str, Any]:
+    runs = []
+    for case_id, kind in case_kinds.items():
+        for cache_state in ("cold", "warm"):
+            runs.append(
+                {
+                    "case_id": case_id,
+                    "kind": kind,
+                    "cache_state": cache_state,
+                    "latency_seconds": {
+                        "resolve": 1.0,
+                        "first_byte": 1.0,
+                        "materialize": 1.0,
+                        "deliver": 1.0,
+                    },
+                    "full_delivery": True,
+                    "failure_stage": None,
+                    "http_failures": [],
+                    "bytes_downloaded": 1,
+                    "bytes_wasted": 0,
+                    "process_cpu_seconds": 0.0,
+                    "independent_route": {
+                        "attempted": False,
+                        "succeeded": False,
+                        "route_class": None,
+                    },
+                }
+            )
+    empty_causes = {
+        "rate-limited": 0,
+        "forbidden": 0,
+        "expired-signature": 0,
+        "geo-blocked": 0,
+        "bot-detection": 0,
+        "upstream-policy": 0,
+        "unknown": 0,
+    }
+    summaries = []
+    for kind in ("short", "video"):
+        for cache_state in ("cold", "warm"):
+            summaries.append(
+                {
+                    "kind": kind,
+                    "cache_state": cache_state,
+                    "sample_count": 36,
+                    "full_delivery_rate": 1.0,
+                    "latency_seconds": {
+                        phase: {"p50": 1.0, "p95": 1.0}
+                        for phase in ("resolve", "first_byte", "materialize", "deliver")
+                    },
+                    "http_403_causes": empty_causes.copy(),
+                    "http_429_causes": empty_causes.copy(),
+                    "bytes_downloaded": 36,
+                    "bytes_wasted": 0,
+                    "process_cpu_seconds": 0.0,
+                    "independent_route_success_rate": None,
+                }
+            )
+    return {
+        "schema_version": 1,
+        "release_sha": "a" * 40,
+        "manifest_sha256": "b" * 64,
+        "collected_at": "2026-09-20T15:00:00Z",
+        "source": "production-vps",
+        "production_ip_attested": True,
+        "redaction": {
+            "urls_hashed": True,
+            "tokens_removed": True,
+            "signed_queries_removed": True,
+            "cookies_removed": True,
+        },
+        "windows": [
+            {
+                "window_id": f"window-{index}",
+                "started_at": f"2026-09-2{index}T15:00:00Z",
+                "runs": copy.deepcopy(runs),
+            }
+            for index in range(1, 4)
+        ],
+        "summaries": summaries,
+    }
 
 
 def test_youtube_acceptance_manifest_reserves_12_shorts_and_12_videos() -> None:
@@ -156,7 +376,7 @@ def test_pending_or_incomplete_manifest_cannot_be_used_for_live_acceptance() -> 
         "approved_by": "reviewer",
         "approved_at": "2026-09-20T00:00:00Z",
     }
-    with pytest.raises(AssertionError):
+    with pytest.raises((AssertionError, ValidationError)):
         _require_approved_manifest(incomplete)
 
 
@@ -187,6 +407,100 @@ def test_evidence_schema_requires_redacted_three_window_stage_results() -> None:
         "process_cpu_seconds",
         "independent_route",
     } <= run_required
+
+
+def test_ci_pins_draft_2020_schema_validator_with_format_support() -> None:
+    requirements = (ROOT / "requirements-ci.txt").read_text(encoding="utf-8")
+    assert "jsonschema[format]==4.26.0" in requirements.splitlines()
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda manifest: manifest.update({"token": "secret"}),
+        lambda manifest: manifest["approval"].update({"approved_at": "not-a-date"}),
+        lambda manifest: manifest["shorts"][0].update({"case_id": "video-01"}),
+        lambda manifest: manifest["videos"][0].update(
+            {"url": "https://example.com/watch?v=case0000012"}
+        ),
+    ),
+)
+def test_approved_manifest_rejects_schema_and_bucket_violations(mutate) -> None:
+    manifest = _approved_manifest()
+    mutate(manifest)
+
+    with pytest.raises((AssertionError, ValidationError)):
+        _require_approved_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda evidence: evidence.update({"raw_url": "https://secret.example/x"}),
+        lambda evidence: evidence["windows"][0]["runs"].append(
+            copy.deepcopy(evidence["windows"][0]["runs"][0])
+        ),
+        lambda evidence: evidence["windows"][0]["runs"][0]["independent_route"].update(
+            {"attempted": False, "succeeded": True, "route_class": "paid"}
+        ),
+        lambda evidence: evidence["windows"][0]["runs"][0]["http_failures"].append(
+            {"status": 403, "cause": "token=https://secret.example"}
+        ),
+        lambda evidence: evidence["windows"][1].update(
+            {"started_at": evidence["windows"][0]["started_at"]}
+        ),
+        lambda evidence: evidence["summaries"][0].update(
+            {"sample_count": 999, "full_delivery_rate": 0.5}
+        ),
+    ),
+)
+def test_live_evidence_rejects_duplicates_secrets_and_inconsistent_summaries(
+    mutate,
+) -> None:
+    manifest = _approved_manifest()
+    _require_approved_manifest(manifest)
+    case_kinds = {
+        case["case_id"]: kind
+        for kind, bucket in (("short", "shorts"), ("video", "videos"))
+        for case in manifest[bucket]
+    }
+    evidence = _valid_evidence(case_kinds)
+    mutate(evidence)
+
+    with pytest.raises((AssertionError, ValidationError)):
+        _validate_evidence(evidence, case_kinds)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda evidence: evidence["summaries"][0]["latency_seconds"]["resolve"].update(
+            {"p95": 9.0}
+        ),
+        lambda evidence: evidence["windows"][0]["runs"][0].update(
+            {"full_delivery": True, "failure_stage": "deliver"}
+        ),
+        lambda evidence: (
+            evidence["windows"][0]["runs"][0].update(
+                {"full_delivery": False, "failure_stage": None}
+            ),
+            evidence["summaries"][0].update({"full_delivery_rate": 35 / 36}),
+        ),
+    ),
+)
+def test_live_evidence_rejects_inconsistent_latency_and_delivery_semantics(
+    mutate,
+) -> None:
+    case_kinds = _require_approved_manifest(_approved_manifest())
+    evidence = _valid_evidence(case_kinds)
+    mutate(evidence)
+
+    with pytest.raises((AssertionError, ValidationError)):
+        _validate_evidence(evidence, case_kinds)
+
+
+def test_offline_acceptance_includes_cross_boundary_release_regressions() -> None:
+    assert REQUIRED_OFFLINE_ACCEPTANCE_NODES <= set(OFFLINE_ACCEPTANCE_NODES)
 
 
 def test_offline_acceptance_aggregates_release_critical_contracts() -> None:

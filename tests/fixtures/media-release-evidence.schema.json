@@ -64,7 +64,17 @@
       "required": ["status", "cause"],
       "properties": {
         "status": {"enum": [403, 429]},
-        "cause": {"type": "string", "minLength": 1}
+        "cause": {
+          "enum": [
+            "rate-limited",
+            "forbidden",
+            "expired-signature",
+            "geo-blocked",
+            "bot-detection",
+            "upstream-policy",
+            "unknown"
+          ]
+        }
       }
     },
     "independentRoute": {
@@ -74,8 +84,35 @@
       "properties": {
         "attempted": {"type": "boolean"},
         "succeeded": {"type": "boolean"},
-        "route_class": {"type": ["string", "null"]}
-      }
+        "route_class": {
+          "enum": ["external-free", "external-configured", null]
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"attempted": {"const": false}}},
+          "then": {
+            "properties": {
+              "succeeded": {"const": false},
+              "route_class": {"const": null}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"attempted": {"const": true}}},
+          "then": {
+            "properties": {
+              "route_class": {
+                "enum": ["external-free", "external-configured"]
+              }
+            }
+          }
+        },
+        {
+          "if": {"properties": {"succeeded": {"const": true}}},
+          "then": {"properties": {"attempted": {"const": true}}}
+        }
+      ]
     },
     "run": {
       "type": "object",
@@ -94,27 +131,77 @@
         "independent_route"
       ],
       "properties": {
-        "case_id": {"type": "string"},
+        "case_id": {
+          "type": "string",
+          "pattern": "^(short|video)-(0[1-9]|1[0-2])$"
+        },
         "kind": {"enum": ["short", "video"]},
         "cache_state": {"enum": ["cold", "warm"]},
         "latency_seconds": {"$ref": "#/$defs/latency"},
         "full_delivery": {"type": "boolean"},
-        "failure_stage": {"type": ["string", "null"]},
+        "failure_stage": {
+          "enum": [
+            "resolve",
+            "first_byte",
+            "materialize",
+            "deliver",
+            "validation",
+            "cancelled",
+            null
+          ]
+        },
         "http_failures": {"type": "array", "items": {"$ref": "#/$defs/httpFailure"}},
         "bytes_downloaded": {"type": "integer", "minimum": 0},
         "bytes_wasted": {"type": "integer", "minimum": 0},
         "process_cpu_seconds": {"type": "number", "minimum": 0},
         "independent_route": {"$ref": "#/$defs/independentRoute"}
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"full_delivery": {"const": true}},
+            "required": ["full_delivery"]
+          },
+          "then": {"properties": {"failure_stage": {"const": null}}}
+        },
+        {
+          "if": {
+            "properties": {"full_delivery": {"const": false}},
+            "required": ["full_delivery"]
+          },
+          "then": {
+            "properties": {
+              "failure_stage": {
+                "enum": [
+                  "resolve",
+                  "first_byte",
+                  "materialize",
+                  "deliver",
+                  "validation",
+                  "cancelled"
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     "window": {
       "type": "object",
       "additionalProperties": false,
       "required": ["window_id", "started_at", "runs"],
       "properties": {
-        "window_id": {"type": "string", "minLength": 1},
+        "window_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
         "started_at": {"type": "string", "format": "date-time"},
-        "runs": {"type": "array", "items": {"$ref": "#/$defs/run"}}
+        "runs": {
+          "type": "array",
+          "minItems": 48,
+          "maxItems": 48,
+          "items": {"$ref": "#/$defs/run"}
+        }
       }
     },
     "percentiles": {
@@ -135,6 +222,28 @@
         "first_byte": {"$ref": "#/$defs/percentiles"},
         "materialize": {"$ref": "#/$defs/percentiles"},
         "deliver": {"$ref": "#/$defs/percentiles"}
+      }
+    },
+    "causeCounts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rate-limited",
+        "forbidden",
+        "expired-signature",
+        "geo-blocked",
+        "bot-detection",
+        "upstream-policy",
+        "unknown"
+      ],
+      "properties": {
+        "rate-limited": {"type": "integer", "minimum": 0},
+        "forbidden": {"type": "integer", "minimum": 0},
+        "expired-signature": {"type": "integer", "minimum": 0},
+        "geo-blocked": {"type": "integer", "minimum": 0},
+        "bot-detection": {"type": "integer", "minimum": 0},
+        "upstream-policy": {"type": "integer", "minimum": 0},
+        "unknown": {"type": "integer", "minimum": 0}
       }
     },
     "summary": {
@@ -159,8 +268,8 @@
         "sample_count": {"type": "integer", "minimum": 0},
         "full_delivery_rate": {"type": "number", "minimum": 0, "maximum": 1},
         "latency_seconds": {"$ref": "#/$defs/summaryLatency"},
-        "http_403_causes": {"type": "object"},
-        "http_429_causes": {"type": "object"},
+        "http_403_causes": {"$ref": "#/$defs/causeCounts"},
+        "http_429_causes": {"$ref": "#/$defs/causeCounts"},
         "bytes_downloaded": {"type": "integer", "minimum": 0},
         "bytes_wasted": {"type": "integer", "minimum": 0},
         "process_cpu_seconds": {"type": "number", "minimum": 0},

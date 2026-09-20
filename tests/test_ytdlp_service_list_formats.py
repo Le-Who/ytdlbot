@@ -1,19 +1,13 @@
-from unittest.mock import AsyncMock
 import unittest
-import sys
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-# Mock yt_dlp before importing app
-sys.modules["yt_dlp"] = MagicMock()
-
-# Add repo root to path so we can import app
-from app.services.ytdlp.service import YtDlpService
 from app.services.ytdlp.exceptions import (
     AccessDeniedError,
-    VideoNotFoundError,
-    LiveStreamError,
     ExtractionError,
+    LiveStreamError,
+    VideoNotFoundError,
 )
+from app.services.ytdlp.service import YtDlpService
 
 
 class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):

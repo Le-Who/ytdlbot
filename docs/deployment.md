@@ -51,12 +51,24 @@ affected ytdlbot dependency container, but must preserve the existing Telegram
 session and Redis volume. It must not touch neighboring Compose projects or host
 services.
 
-After the migration is healthy, record the live topology with
-[`scripts/bootstrap-production.sh`](../scripts/bootstrap-production.sh) in
-`BOOTSTRAP_MODE=record`. The exact command and verification performed by that
-gate are documented in [bootstrap-production.md](bootstrap-production.md).
-Every routine preflight reruns it in `BOOTSTRAP_MODE=check`; a missing or changed
-mount, owner, project label, or initializer result blocks activation.
+Use the candidate release's
+[`scripts/bootstrap-migrate-production.sh`](../scripts/bootstrap-migrate-production.sh)
+for this one-time transaction. It takes the same project lock as a release,
+captures the current Compose file and exact running bot/Local API/Redis image
+IDs, creates only the project-scoped media and state volumes, runs the candidate
+`volume-init`, and recreates only `tg-api` and `bot` on the captured images. It
+does not restart Redis or any neighboring project. It verifies the previous
+bot's bounded health contract before and after migration, then atomically records
+the topology through `bootstrap-production.sh`.
+
+The rollback trap is armed before the active Compose file changes. A failed
+initializer, service activation, health probe, or handled termination restores
+the captured Compose file and exact prior bot/Local API images; the project
+volumes are retained for inspection rather than deleted. The operator
+must then investigate before retrying. Exact invocation and evidence are
+documented in [bootstrap-production.md](bootstrap-production.md). Every routine
+preflight reruns `bootstrap-production.sh` in `BOOTSTRAP_MODE=check`; a missing
+or changed mount, owner, project label, or initializer result blocks activation.
 
 ## Required configuration
 
@@ -134,6 +146,7 @@ The uploaded release directory contains exactly:
 ```text
 docker-compose.yml
 release.manifest
+scripts/bootstrap-migrate-production.sh
 scripts/bootstrap-production.sh
 scripts/deploy-release.sh
 scripts/preflight-production.sh

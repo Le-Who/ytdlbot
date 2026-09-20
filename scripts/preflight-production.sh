@@ -83,6 +83,7 @@ actual_files=$(
 expected_files=$(printf '%s\n' \
   './docker-compose.yml' \
   './release.manifest' \
+  './scripts/bootstrap-migrate-production.sh' \
   './scripts/bootstrap-production.sh' \
   './scripts/deploy-release.sh' \
   './scripts/preflight-production.sh' \

@@ -1,21 +1,9 @@
-import unittest
-import sys
 import os
-from unittest.mock import MagicMock
-
-# Add repo root to path
-# Mock dependencies before importing app code (setdefault to avoid corrupting real packages)
-sys.modules.setdefault("dotenv", MagicMock())
-sys.modules.setdefault("cachetools", MagicMock())
-sys.modules.setdefault("yt_dlp", MagicMock())
-sys.modules.setdefault("telegram", MagicMock())
-sys.modules.setdefault("telegram.ext", MagicMock())
-sys.modules.setdefault("fastapi", MagicMock())
+import unittest
 
 # Set env vars
 os.environ["BOT_TOKEN"] = "test_token"
 
-# Now import
 from app.core.utils import extract_supported_url
 
 

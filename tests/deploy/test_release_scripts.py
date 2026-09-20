@@ -86,6 +86,7 @@ fi
 """,
     )
     for name in (
+        "bootstrap-migrate-production.sh",
         "bootstrap-production.sh",
         "preflight-production.sh",
         "rollback-release.sh",
@@ -182,6 +183,7 @@ def fake_host(tmp_path: Path) -> FakeHost:
         encoding="utf-8",
     )
     for name in (
+        "bootstrap-migrate-production.sh",
         "bootstrap-production.sh",
         "deploy-release.sh",
         "preflight-production.sh",
@@ -210,6 +212,11 @@ if [ "$1" = pull ]; then
   exit
 fi
 
+if [ "$1" = volume ] && [ "$2" = create ]; then
+  printf '%s\n' "$3"
+  exit
+fi
+
 if [ "$1" = inspect ]; then
   case "$*" in
     *com.docker.compose.project.working_dir*bot-id) printf '%s\n' "${FAKE_PROJECT_WORKING_DIR:-$PROJECT_ROOT}" ;;
@@ -220,6 +227,8 @@ if [ "$1" = inspect ]; then
     *State.Status*volume-init-id) printf 'exited|0\n' ;;
     *Config.Image*bot-id) cat "$FAKE_RUNTIME_IMAGE" ;;
     *'{{.Image}}'*bot-id) cat "$FAKE_RUNTIME_IMAGE" ;;
+    *'{{.Image}}'*tg-api-id) printf 'sha256:%s\n' "$(printf 'e%.0s' $(seq 1 64))" ;;
+    *'{{.Image}}'*redis-id) printf 'sha256:%s\n' "$(printf 'f%.0s' $(seq 1 64))" ;;
     *Config.Env*bot-id) printf 'APP_RELEASE=%s\n' "$(cat "$FAKE_RUNTIME_RELEASE")" ;;
     *'/srv/ytdlbot/media'*bot-id) printf '%s\n' "${FAKE_BOT_MEDIA_MOUNT:-${COMPOSE_PROJECT}_media|true}" ;;
     *'/srv/ytdlbot/state'*bot-id) printf '%s\n' "${FAKE_BOT_STATE_MOUNT:-${COMPOSE_PROJECT}_state|true}" ;;
@@ -247,6 +256,15 @@ if [ "$1" = compose ]; then
       printf '%s' "$BOT_IMAGE" > "$FAKE_RUNTIME_IMAGE"
       exit
       ;;
+    *'--exit-code-from volume-init volume-init') exit ;;
+    *'up -d --no-deps --no-build tg-api bot')
+      if [ "${BOOTSTRAP_ROLLBACK:-0}" = 1 ]; then
+        rm -f "$FAKE_STATE_DIR/bootstrap-activated"
+      else
+        : > "$FAKE_STATE_DIR/bootstrap-activated"
+      fi
+      exit
+      ;;
     *'exec -T bot python'*getWebhookInfo*) [ "${FAKE_WEBHOOK_FAILURE:-0}" != 1 ]; exit ;;
     *'exec -T bot python'*) [ "${FAKE_OWNERSHIP_FAILURE:-0}" != 1 ]; exit ;;
   esac
@@ -262,6 +280,9 @@ printf 'curl' >> "$FAKE_COMMAND_LOG"
 for arg in "$@"; do printf ' %s' "$arg" >> "$FAKE_COMMAND_LOG"; done
 printf '\n' >> "$FAKE_COMMAND_LOG"
 release=$(cat "$FAKE_RUNTIME_RELEASE")
+if [ "${FAKE_BOOTSTRAP_HEALTH_FAILURE:-0}" = 1 ] && [ -e "$FAKE_STATE_DIR/bootstrap-activated" ]; then
+  exit 22
+fi
 case "$*" in
   *'/health')
     printf '{"ok":true}\n'
@@ -340,6 +361,8 @@ fi
             "MV_BIN": _bash_path(fake_bin / "mv"),
             "DEPLOY_HEALTH_ATTEMPTS": "1",
             "DEPLOY_HEALTH_INTERVAL_SECONDS": "0",
+            "BOOTSTRAP_HEALTH_ATTEMPTS": "1",
+            "BOOTSTRAP_HEALTH_INTERVAL_SECONDS": "0",
             "DEPLOY_MIN_FREE_BYTES": "4096",
             "FAKE_COMMAND_LOG": _bash_path(command_log),
             "FAKE_RUNTIME_RELEASE": _bash_path(runtime_release),
@@ -480,6 +503,59 @@ def test_bootstrap_gate_records_only_verified_existing_topology(
     assert "STATE_VOLUME=verified-project_state" in evidence.read_text()
     assert "TG_API_VOLUME=verified-project_tg-api-data" in evidence.read_text()
     assert "REDIS_VOLUME=verified-project_redis-data" in evidence.read_text()
+    assert not any(" up " in command for command in fake_host.commands())
+
+
+def test_first_release_bootstrap_migrates_only_bot_and_local_api(
+    fake_host: FakeHost,
+) -> None:
+    evidence = fake_host.root / ".deploy" / "bootstrap.manifest"
+    evidence.unlink()
+
+    result = fake_host.run("bootstrap-migrate-production.sh")
+
+    assert result.returncode == 0, result.stderr
+    commands = fake_host.commands()
+    assert "docker volume create verified-project_media" in commands
+    assert "docker volume create verified-project_state" in commands
+    assert any(command.endswith(" volume-init") for command in commands)
+    assert any(command.endswith(" tg-api bot") for command in commands)
+    assert not any(" up " in command and " redis" in command for command in commands)
+    assert evidence.exists()
+
+
+def test_failed_first_release_bootstrap_restores_config_and_old_services(
+    fake_host: FakeHost,
+) -> None:
+    evidence = fake_host.root / ".deploy" / "bootstrap.manifest"
+    evidence.unlink()
+
+    result = fake_host.run(
+        "bootstrap-migrate-production.sh", FAKE_BOOTSTRAP_HEALTH_FAILURE="1"
+    )
+
+    assert result.returncode != 0
+    assert (fake_host.root / "docker-compose.yml").read_text() == fake_host.old_compose
+    assert not evidence.exists()
+    commands = fake_host.commands()
+    assert sum(command.endswith(" tg-api bot") for command in commands) == 2
+    assert not any(" up " in command and " redis" in command for command in commands)
+
+
+def test_first_release_bootstrap_rejects_a_different_compose_project_root(
+    fake_host: FakeHost,
+) -> None:
+    evidence = fake_host.root / ".deploy" / "bootstrap.manifest"
+    evidence.unlink()
+
+    result = fake_host.run(
+        "bootstrap-migrate-production.sh",
+        FAKE_PROJECT_WORKING_DIR="/opt/different-project",
+    )
+
+    assert result.returncode != 0
+    assert "project root" in result.stderr.lower()
+    assert not any(" volume create " in command for command in fake_host.commands())
     assert not any(" up " in command for command in fake_host.commands())
 
 
@@ -686,6 +762,7 @@ def test_workflows_gate_exact_sha_build_once_and_validate_known_host() -> None:
     assert "vps" in test_workflow
     assert 'python-version: ["3.12"]' in test_workflow
     assert "docker compose config" in test_workflow
+    assert "scripts/bootstrap-migrate-production.sh" in test_workflow
     assert "bash -n scripts/bootstrap-production.sh" in test_workflow
     assert "scripts/deploy-release.sh" in test_workflow
     assert "scripts/preflight-production.sh" in test_workflow
@@ -699,6 +776,7 @@ def test_workflows_gate_exact_sha_build_once_and_validate_known_host() -> None:
     assert "fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}" in deploy_workflow
     assert "release-payload/docker-compose.yml" in deploy_workflow
     assert "release-payload/release.manifest" in deploy_workflow
+    assert "release-payload/scripts/bootstrap-migrate-production.sh" in deploy_workflow
     assert "release-payload/scripts/deploy-release.sh" in deploy_workflow
     assert 'source: "release-payload/*"' not in deploy_workflow
 
@@ -712,6 +790,7 @@ def test_clean_ci_installs_all_pinned_test_dependencies() -> None:
         "hypothesis==6.168.0",
         "PyYAML==6.0.3",
         "httpx==0.28.1",
+        "jsonschema[format]==4.26.0",
     }
     assert expected <= set(ci_requirements)
     for workflow_name in ("test.yml", "deploy.yml"):
@@ -829,6 +908,7 @@ def test_release_automation_contains_no_host_wide_or_secret_rewrite_operations()
         path.read_text(encoding="utf-8")
         for path in (
             ROOT / "scripts" / "deploy-release.sh",
+            ROOT / "scripts" / "bootstrap-migrate-production.sh",
             ROOT / "scripts" / "preflight-production.sh",
             ROOT / "scripts" / "rollback-release.sh",
             ROOT / ".github" / "workflows" / "deploy.yml",

@@ -4,10 +4,6 @@ import sys
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-# Mock yt_dlp before importing app
-sys.modules["yt_dlp"] = MagicMock()
-
-# Add repo root to path so we can import app
 import pytest
 
 from app.constants import GIF_FORMAT_ID
@@ -183,7 +179,6 @@ def test_selector_runs_in_real_ytdlp_without_downgrade_or_silent_video(
             "acodec": "none",
         }
     )
-    # Other legacy tests replace sys.modules['yt_dlp']; isolate the real selector.
     script = """
 import json, sys, yt_dlp
 data = json.load(sys.stdin)

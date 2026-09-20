@@ -4,3 +4,4 @@ pytest-asyncio==1.4.0
 hypothesis==6.168.0
 PyYAML==6.0.3
 httpx==0.28.1
+jsonschema[format]==4.26.0

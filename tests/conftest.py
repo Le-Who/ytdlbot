@@ -1,54 +1,17 @@
 from unittest.mock import AsyncMock
 
-"""
-conftest.py — runs before any test module is collected.
-Mocks FastAPI if not genuinely installed so tests that import app.api.routes
-or app.main can collect without ImportError.
-
-Also provides shared fixtures to DRY up test setup boilerplate.
-"""
+"""Shared fixtures and deterministic test environment defaults."""
 
 import os
 import sys
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 # Ensure project root is on sys.path (centralised — no need in individual test files)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from telegram import Message
-
-
-class MockHTTPException(Exception):
-    """Real Exception subclass standing in for fastapi.HTTPException."""
-
-    def __init__(self, status_code: int = 500, detail: str = ""):
-        self.status_code = status_code
-        self.detail = detail
-        super().__init__(detail)
-
-
-def _is_real_fastapi() -> bool:
-    try:
-        import fastapi
-
-        return hasattr(fastapi, "__file__") and fastapi.__file__ is not None
-    except ImportError:
-        return False
-
-
-if not _is_real_fastapi():
-    _mock = MagicMock()
-    _mock.HTTPException = MockHTTPException
-    _mock.Request = MagicMock
-
-    _mock_router = MagicMock()
-    _mock.APIRouter.return_value = _mock_router
-    _mock.FastAPI = MagicMock
-
-    sys.modules["fastapi"] = _mock
-    sys.modules["fastapi.responses"] = MagicMock()
-    sys.modules["fastapi.testclient"] = MagicMock()
 
 # Ensure default env vars
 os.environ.setdefault("BOT_TOKEN", "test_token")

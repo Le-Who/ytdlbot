@@ -59,7 +59,7 @@ jobs:
           TELEGRAM_API_ID: "1"
           TELEGRAM_API_HASH: test
         run: |
-          bash -n scripts/bootstrap-production.sh scripts/deploy-release.sh scripts/preflight-production.sh scripts/rollback-release.sh
+          bash -n scripts/bootstrap-production.sh scripts/bootstrap-migrate-production.sh scripts/deploy-release.sh scripts/preflight-production.sh scripts/rollback-release.sh
           docker compose config --quiet
           python -m pytest tests/deploy/test_release_scripts.py --no-cov -q
 

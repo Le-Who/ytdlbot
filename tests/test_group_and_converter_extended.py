@@ -3,7 +3,6 @@ from unittest.mock import AsyncMock
 """Extended tests for group_logic.py on_group_slideshow callback and converter subprocess paths."""
 
 import asyncio
-import sys
 import unittest
 
 
@@ -20,13 +19,6 @@ class AsyncMockCache(dict):
 
 from unittest.mock import MagicMock, patch
 
-# Pre-mock curl_cffi so that tikwm.py can be imported without the real package
-if "curl_cffi" not in sys.modules:
-    _mock_curl = MagicMock()
-    _mock_curl.__spec__ = None  # satisfy importlib.util.find_spec()
-    sys.modules["curl_cffi"] = _mock_curl
-    sys.modules["curl_cffi.requests"] = _mock_curl.requests
-
 from app.core import state
 from app.core.texts import Texts
 
@@ -38,7 +30,9 @@ class TestOnGroupSlideshowExtended(unittest.IsolatedAsyncioTestCase):
         state.link_cache = AsyncMockCache()
         state.file_cache = AsyncMockCache()
         import asyncio
+
         from app.core.download_queue import DownloadQueue
+
         state.download_sem = asyncio.Semaphore(5)
         state.api_sem = asyncio.Semaphore(10)
         state.download_queue = DownloadQueue(state.download_sem, max_queue_size=15)
@@ -218,9 +212,10 @@ class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
 
     async def test_gif_conversion_success(self):
         """Successful ffmpeg conversion returns gif path."""
-        from app.services.converter import MediaConverter
-        import tempfile
         import os
+        import tempfile
+
+        from app.services.converter import MediaConverter
 
         # Create a fake video file
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
@@ -262,9 +257,10 @@ class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
 
     async def test_gif_conversion_ffmpeg_failure(self):
         """ffmpeg returncode != 0 returns None."""
-        from app.services.converter import MediaConverter
-        import tempfile
         import os
+        import tempfile
+
+        from app.services.converter import MediaConverter
 
         tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
         tmp.write(b"fake video")
@@ -272,9 +268,7 @@ class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
 
         from app.core.process import ProcessResult
 
-        process_result = ProcessResult(
-            returncode=1, stdout=b"", stderr=b"error output"
-        )
+        process_result = ProcessResult(returncode=1, stdout=b"", stderr=b"error output")
 
         mock_sem = asyncio.Semaphore(1)
         mock_metrics = MagicMock()

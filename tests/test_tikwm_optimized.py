@@ -1,19 +1,6 @@
 import os
-import sys
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
-
-# Mocking all missing dependencies
-sys.modules["dotenv"] = MagicMock()
-sys.modules["curl_cffi"] = MagicMock()
-sys.modules["curl_cffi.requests"] = MagicMock()
-sys.modules["cachetools"] = MagicMock()
-
-# Mock curl_cffi BEFORE importing TikWMService
-mock_curl = MagicMock()
-mock_curl.requests.AsyncSession = AsyncMock
-sys.modules["curl_cffi"] = mock_curl
-sys.modules["curl_cffi.requests"] = mock_curl.requests
 
 from app.services.tikwm import TikWMResult, TikWMService
 
@@ -22,7 +9,32 @@ class TestTikWMDownloadVideoOptimized(unittest.IsolatedAsyncioTestCase):
     """Test TikWMService.download_video with optimized async I/O."""
 
     def test_collection_does_not_replace_installed_telegram_module(self):
-        self.assertNotIsInstance(sys.modules["telegram"], MagicMock)
+        import telegram
+
+        self.assertNotIsInstance(telegram, MagicMock)
+
+    def test_collection_preserves_real_dependency_modules_and_session_symbol(self):
+        import cachetools
+        import curl_cffi
+        import dotenv
+        import fastapi
+        import telegram
+        import yt_dlp
+        from curl_cffi.requests import AsyncSession as RealAsyncSession
+
+        from app.services import tikwm
+
+        for module in (
+            dotenv,
+            cachetools,
+            curl_cffi,
+            fastapi,
+            telegram,
+            yt_dlp,
+        ):
+            self.assertNotIsInstance(module, MagicMock)
+            self.assertIsNotNone(module.__spec__)
+        self.assertIs(tikwm.AsyncSession, RealAsyncSession)
 
     async def test_download_success_writes_file_async(self):
         import tempfile

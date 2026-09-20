@@ -5,15 +5,12 @@ Tests for SEC-1 (URL separator in yt-dlp), SEC-2 (stream byte limit),
 SEC-3 (URL separator in gallery-dl), and URL prefix validation.
 """
 
-import sys
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-sys.modules.setdefault("yt_dlp", MagicMock())
-
+from app.constants import GIF_FORMAT_ID
 from app.core.utils import is_supported_url
 from app.services.ytdlp.service import YtDlpService
-from app.constants import GIF_FORMAT_ID
 
 
 class TestURLSeparatorInjection(unittest.TestCase):

@@ -28,10 +28,14 @@ copying its assertions:
 | File-ID cache bypass | a cached Telegram `file_id` is delivered before resolver or transport work |
 | Cache schema/equivalence | output kind, quality, clip, audio, auth, album order, and schema version remain isolated |
 | Cancellation | a cancelled queue waiter returns its slot and leaves the queue reusable |
+| Cancellation cleanup | race losers, HTTP streams, subprocess trees, leases, sockets, and partial files are bounded and released |
+| Delivery boundaries | confined shared-volume paths use Local Bot API path delivery; external paths use streaming multipart |
+| Shared topology | bot and Local Bot API share only the named media volume, while durable state remains bot-only |
 | Local Bot API limit | the degraded cloud profile uses the exact decimal byte boundary before opening or sending |
 | Readiness | release, 2,000 MB policy, durable store, and required Local Bot API state are exposed |
-| Durable recovery | a checkpointed job is recovered after worker restart |
-| Deploy rollback | interrupted activation restores the captured release state |
+| Durable admission/recovery | Telegram update IDs deduplicate; checkpointed and failed jobs recover without replaying successful or uncertain sends |
+| Deploy rollback | readiness failure and interrupted activation restore the captured release state |
+| Immutable retry | an interrupted same-SHA promotion is reusable only when every allowlisted payload byte matches |
 | Callback compatibility | v2 is emitted while the previous callback shape still decodes for the existing link-cache TTL |
 
 The previous callback shape must remain accepted for at least
@@ -45,8 +49,9 @@ The full local verification checkpoint for this task is:
 python -m pytest tests -q
 ruff check app tests
 mypy app
-bash -n scripts/bootstrap-production.sh scripts/deploy-release.sh \
-  scripts/preflight-production.sh scripts/rollback-release.sh
+bash -n scripts/bootstrap-production.sh scripts/bootstrap-migrate-production.sh \
+  scripts/deploy-release.sh scripts/preflight-production.sh \
+  scripts/rollback-release.sh
 ```
 
 Run `docker compose config` when Docker is installed. Lack of Docker is reported,
@@ -132,7 +137,9 @@ one favorable period cannot hide a later provider block.
 
 The machine-readable contract is
 [`media-release-evidence.schema.json`](../tests/fixtures/media-release-evidence.schema.json).
-It requires:
+The acceptance gate validates both files with the pinned Draft 2020-12
+`jsonschema` validator and format checks before applying cross-record semantic
+checks. It requires:
 
 - exact release SHA and SHA-256 of the approved manifest;
 - `source = "production-vps"` and an explicit production-IP attestation;
@@ -143,6 +150,14 @@ It requires:
 - four Shorts/video × cold/warm summaries with p50/p95;
 - affirmative redaction flags for URL hashing and removal of tokens, signed query
   strings, and cookies.
+
+HTTP failure causes and independent-route classes are closed enums, so a raw URL,
+token, or arbitrary provider response cannot be smuggled into a nominally
+redacted field. Each window must contain exactly one cold and one warm run for
+all 24 cases. `full_delivery` and `failure_stage` must agree, summary counts and
+rates must equal their underlying runs, and p50/p95 use nearest-rank values over
+the non-null stage samples in the corresponding Shorts/video and cold/warm
+cohort.
 
 The integration-marked evidence validator remains excluded by default. It runs
 only when explicitly selected and given `YOUTUBE_ACCEPTANCE_MANIFEST` plus

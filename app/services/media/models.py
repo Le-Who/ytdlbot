@@ -119,6 +119,30 @@ class MediaItem:
 
 
 @dataclass(frozen=True, slots=True)
+class MediaSource:
+    """One provider-local stream. Signed URLs/headers are transient, never cache keys."""
+
+    format_id: str
+    url: str
+    video_codec: str | None = None
+    audio_codec: str | None = None
+    container: str | None = None
+    filesize_bytes: int | None = None
+    expires_at: float | None = None
+    http_headers: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class RefreshDescriptor:
+    """Credential-free identity; transport owns the single refresh attempt budget."""
+
+    provider: str
+    media_id: str
+    variant_id: str
+    max_attempts: int = 1
+
+
+@dataclass(frozen=True, slots=True)
 class MediaCandidate:
     candidate_id: str
     url: str
@@ -130,6 +154,11 @@ class MediaCandidate:
     audio_languages: tuple[str, ...] = ()
     container: str | None = None
     filesize_bytes: int | None = None
+    duration_seconds: float | None = None
+    sources: tuple[MediaSource, ...] = ()
+    complete: bool = True
+    mux_mode: str | None = None
+    refresh: RefreshDescriptor | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,7 +262,10 @@ def _first_query_value(query: dict[str, list[str]], *names: str) -> str | None:
 
 
 def _is_valid_youtube_id(media_id: str) -> bool:
-    return bool(media_id) and all(character.isascii() and (character.isalnum() or character in "-_") for character in media_id)
+    return bool(media_id) and all(
+        character.isascii() and (character.isalnum() or character in "-_")
+        for character in media_id
+    )
 
 
 def _parse_time(value: str | None) -> float | None:

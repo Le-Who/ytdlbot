@@ -1,38 +1,38 @@
-import shutil
 import json
-import os
-import sys
 import logging
-from typing import Dict, Any, List, Optional
+import os
+import shutil
+import sys
+from typing import Any
 
 __all__ = ["YtDlpService"]
 
-from app.core.config import TIKTOK_PROXY, VK_PROXY, TEMP_DIR
-from .models import FormatItem, FormatMetadata, ExtractionResult
-from .cookies import PlatformCookiesManager
+from app.core.config import TEMP_DIR, TIKTOK_PROXY, VK_PROXY
+from app.core.texts import Texts
+
 from .builders import YtDlpCLIBuilder
-from .parsers import (
-    parse_format_metadata,
-    create_format_item,
-    deduplicate_formats,
-    _format_duration,
-    get_special_format,
-    _is_tiktok,
-    _is_vk,
-    _is_youtube,
-    _is_pinterest,
-    detect_tiktok_slideshow,
-    classify_tiktok_content,
-    BITRATE_COEFFICIENT,
-)
+from .cookies import PlatformCookiesManager
 from .exceptions import (
     AccessDeniedError,
-    VideoNotFoundError,
-    LiveStreamError,
     ExtractionError,
+    LiveStreamError,
+    VideoNotFoundError,
     map_ytdlp_error,
 )
-from app.core.texts import Texts
+from .models import ExtractionResult, FormatItem, FormatMetadata
+from .parsers import (
+    BITRATE_COEFFICIENT,
+    _format_duration,
+    _is_pinterest,
+    _is_tiktok,
+    _is_vk,
+    classify_tiktok_content,
+    create_format_item,
+    deduplicate_formats,
+    detect_tiktok_slideshow,
+    get_special_format,
+    parse_format_metadata,
+)
 
 logger = logging.getLogger("ytdlp_service")
 
@@ -57,13 +57,13 @@ class YtDlpService:
             logger.info("🔒 VK proxy configured: %s", self.vk_proxy)
 
     @property
-    def cookies_path(self) -> Optional[str]:
+    def cookies_path(self) -> str | None:
         """Backward-compat: return TikTok cookies (used by slideshow etc.)"""
         return self.cookies_manager.tiktok_cookies_path
 
     async def extract(
         self, url: str, for_list_formats: bool = False, fallback_clients: bool = False
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Извлекает метаданные видео через subprocess yt-dlp (async isolation)."""
         from app.core.process import run_subprocess
 
@@ -72,7 +72,9 @@ class YtDlpService:
             url = url.replace("vk.com", "m.vk.com")
 
         cookies = self.cookies_manager.get_cookies_path(url)
-        proxy = self.tiktok_proxy if _is_tiktok(url) else (self.vk_proxy if is_vk else None)
+        proxy = (
+            self.tiktok_proxy if _is_tiktok(url) else (self.vk_proxy if is_vk else None)
+        )
 
         cmd = self.builder.build_extraction_cmd(
             url=url,
@@ -112,7 +114,7 @@ class YtDlpService:
 
     async def list_formats(self, url: str, max_items: int = 12) -> ExtractionResult:
         """Извлекает форматы видео с обработкой ошибок."""
-        info: Optional[Dict[str, Any]] = None
+        info: dict[str, Any] | None = None
 
         # TikTok pre-routing: detect slideshows by URL pattern BEFORE extraction
         if _is_tiktok(url):
@@ -171,18 +173,8 @@ class YtDlpService:
 
         try:
             info = await self.extract(url, for_list_formats=True)
-        except AccessDeniedError as e:
-            if _is_youtube(url):
-                logger.warning(
-                    "YouTube extraction failed with 403. Retrying with ios,android fallback clients: %s",
-                    url,
-                )
-                info = await self.extract(
-                    url, for_list_formats=True, fallback_clients=True
-                )
-                youtube_fallback = True
-            else:
-                raise e
+        except AccessDeniedError:
+            raise
         except VideoNotFoundError:
             raise
         except Exception as e:
@@ -200,7 +192,7 @@ class YtDlpService:
         title = info.get("title") or Texts.SVC_DEFAULT_TITLE
         duration_sec = info.get("duration")
         duration_str = _format_duration(duration_sec)
-        thumbnail_url: Optional[str] = info.get("thumbnail")
+        thumbnail_url: str | None = info.get("thumbnail")
 
         duration_factor = None
         if duration_sec:
@@ -211,7 +203,7 @@ class YtDlpService:
 
         raw_formats = info.get("formats", [])
         is_tiktok_url = _is_tiktok(url)
-        formats_meta: List[FormatMetadata] = []
+        formats_meta: list[FormatMetadata] = []
         for raw_fmt in raw_formats:
             fmt = parse_format_metadata(raw_fmt, duration_factor, is_tiktok_url)
             if fmt:
@@ -224,7 +216,7 @@ class YtDlpService:
         formats = [create_format_item(f, is_tiktok_url) for f in formats_meta]
         is_slideshow = detect_tiktok_slideshow(info, url)
 
-        info_json_path: Optional[str] = None
+        info_json_path: str | None = None
         if info:
             try:
                 import uuid as _uuid
@@ -254,15 +246,17 @@ class YtDlpService:
         self,
         page_url: str,
         format_id: str,
-        height: Optional[int],
+        height: int | None,
         output: str,
-        max_filesize: Optional[int] = None,
+        max_filesize: int | None = None,
         use_aria2: bool = False,
-        info_json_path: Optional[str] = None,
+        info_json_path: str | None = None,
         fallback_clients: bool = False,
         pipe_mode: bool = False,
-        section: Optional[str] = None,
-    ) -> List[str]:
+        section: str | None = None,
+        audio_language: str | None = None,
+        audio_format: str | None = None,
+    ) -> list[str]:
         """Proxy to new CLI builder"""
         cookies = self.cookies_manager.get_cookies_path(page_url)
         is_tiktok = _is_tiktok(page_url)
@@ -279,7 +273,9 @@ class YtDlpService:
             output_path=output,
             height=height,
             cookies_path=cookies,
-            proxy=self.tiktok_proxy if is_tiktok else (self.vk_proxy if is_vk else None),
+            proxy=self.tiktok_proxy
+            if is_tiktok
+            else (self.vk_proxy if is_vk else None),
             user_agent="" if is_vk else None,
             max_filesize_mb=max_filesize,
             use_aria2=use_aria2 and self.has_aria2,
@@ -287,6 +283,8 @@ class YtDlpService:
             fallback_clients=fallback_clients,
             pipe_mode=pipe_mode,
             section=section,
+            audio_language=audio_language,
+            audio_format=audio_format,
         )
 
         # Always use exact python executable to avoid environment path issues

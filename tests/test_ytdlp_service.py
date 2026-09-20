@@ -1,13 +1,66 @@
-import unittest
+import json
+import subprocess
 import sys
-from unittest.mock import MagicMock, patch, AsyncMock
+import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Mock yt_dlp before importing app
 sys.modules["yt_dlp"] = MagicMock()
 
 # Add repo root to path so we can import app
-from app.services.ytdlp.service import YtDlpService
+import pytest
+
 from app.constants import GIF_FORMAT_ID
+from app.services.ytdlp.builders import YtDlpCLIBuilder
+from app.services.ytdlp.exceptions import AccessDeniedError
+from app.services.ytdlp.service import YtDlpService
+
+
+@pytest.mark.parametrize("height", [720, 1080])
+def test_every_video_fallback_preserves_quality_and_sound(height):
+    cmd = YtDlpCLIBuilder().build_download_cmd(
+        "https://youtu.be/example", "137", "out.mp4", height=height
+    )
+    fmt = cmd[cmd.index("--format") + 1]
+    for branch in fmt.split("/"):
+        assert f"height<={height}" in branch or f"width<={height}" in branch
+        assert "+bestaudio" in branch or "[acodec!=none]" in branch
+
+
+@pytest.mark.parametrize("info_path", [None, "info.json"])
+def test_clip_options_precede_source_arguments(info_path):
+    cmd = YtDlpCLIBuilder().build_download_cmd(
+        "https://youtu.be/example",
+        "137",
+        "out.mp4",
+        height=1080,
+        section="*10-20",
+        info_json_path=info_path,
+    )
+    source_index = cmd.index("--load-info-json") if info_path else cmd.index("--")
+    assert cmd.index("--download-sections") < source_index
+
+
+def test_strict_mp3_command_selects_language_and_transcodes():
+    cmd = YtDlpCLIBuilder().build_download_cmd(
+        "https://youtu.be/example", "audio", "out.mp3", audio_language="uk"
+    )
+    assert "--extract-audio" in cmd
+    assert cmd[cmd.index("--audio-format") + 1] == "mp3"
+    assert all(
+        "[language=uk]" in branch
+        for branch in cmd[cmd.index("--format") + 1].split("/")
+    )
+
+
+async def test_youtube_403_list_formats_propagates_without_retry():
+    service = YtDlpService()
+    with patch.object(
+        service, "extract", AsyncMock(side_effect=AccessDeniedError("403"))
+    ) as extract:
+        with pytest.raises(AccessDeniedError):
+            await service.list_formats("https://youtu.be/example")
+        assert extract.await_count == 1
 
 
 class TestYtDlpService(unittest.IsolatedAsyncioTestCase):
@@ -29,7 +82,9 @@ class TestYtDlpService(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("yt-dlp" in arg or "yt_dlp" in arg for arg in cmd))
         # Check format string construction
         # We check substring
-        self.assertTrue(any("137+140" in arg for arg in cmd))
+        fmt = cmd[cmd.index("--format") + 1]
+        self.assertIn("137[height<=1080]", fmt)
+        self.assertIn("+140", fmt)
         self.assertIn("/tmp/out.mp4", cmd)
         self.assertIn("--", cmd)
         self.assertIn("https://www.tiktok.com/@user/video/123", cmd)
@@ -88,3 +143,113 @@ class TestYtDlpService(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@pytest.mark.parametrize(
+    "width,height,edge,has_audio,expected",
+    [
+        (1920, 1080, 1080, True, "v+a"),
+        (1280, 720, 720, True, "v+a"),
+        (1080, 1920, 1080, True, "v+a"),
+        (640, 360, 1080, True, None),
+        (1920, 1080, 1080, False, None),
+    ],
+)
+def test_selector_runs_in_real_ytdlp_without_downgrade_or_silent_video(
+    width, height, edge, has_audio, expected
+):
+    cmd = YtDlpCLIBuilder().build_download_cmd(
+        "https://youtu.be/example", "absent", "out.mp4", height=edge
+    )
+    formats = []
+    if has_audio:
+        formats.append(
+            {
+                "format_id": "a",
+                "url": "https://cdn.example/a",
+                "ext": "m4a",
+                "vcodec": "none",
+                "acodec": "mp4a.40.2",
+            }
+        )
+    formats.append(
+        {
+            "format_id": "v",
+            "url": "https://cdn.example/v",
+            "ext": "mp4",
+            "width": width,
+            "height": height,
+            "vcodec": "avc1.640028",
+            "acodec": "none",
+        }
+    )
+    # Other legacy tests replace sys.modules['yt_dlp']; isolate the real selector.
+    script = """
+import json, sys, yt_dlp
+data = json.load(sys.stdin)
+with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+    selected = list(ydl.build_format_selector(data['selector'])({'formats': data['formats'], 'incomplete_formats': False}))
+print(json.dumps(selected[0]['format_id'] if selected else None))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input=json.dumps(
+            {"selector": cmd[cmd.index("--format") + 1], "formats": formats}
+        ),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(result.stdout) == expected
+
+
+def test_muxed_selected_id_cannot_override_requested_audio_language():
+    cmd = YtDlpCLIBuilder().build_download_cmd(
+        "https://youtu.be/example", "muxed", "out.mp4", height=1080, audio_language="uk"
+    )
+    formats = [
+        {
+            "format_id": "uk",
+            "url": "https://cdn.example/uk",
+            "ext": "m4a",
+            "vcodec": "none",
+            "acodec": "mp4a",
+            "language": "uk",
+        },
+        {
+            "format_id": "video",
+            "url": "https://cdn.example/video",
+            "ext": "mp4",
+            "vcodec": "avc1",
+            "acodec": "none",
+            "width": 1920,
+            "height": 1080,
+        },
+        {
+            "format_id": "muxed",
+            "url": "https://cdn.example/en",
+            "ext": "mp4",
+            "vcodec": "avc1",
+            "acodec": "mp4a",
+            "language": "en",
+            "width": 1920,
+            "height": 1080,
+        },
+    ]
+    script = """
+import json, sys, yt_dlp
+data = json.load(sys.stdin)
+with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
+    selected = list(ydl.build_format_selector(data['selector'])({'formats': data['formats'], 'incomplete_formats': False}))
+print(json.dumps(selected[0]['format_id'] if selected else None))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        input=json.dumps(
+            {"selector": cmd[cmd.index("--format") + 1], "formats": formats}
+        ),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert json.loads(result.stdout) == "video+uk"

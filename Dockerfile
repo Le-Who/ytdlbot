@@ -10,14 +10,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Deno (needed at runtime for YouTube n-parameter challenge)
-RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh
+ARG DENO_VERSION=v2.9.5
+RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s -- ${DENO_VERSION}
 
 # Install Python deps into a venv for clean copy
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt yt-dlp-ejs bgutil-ytdlp-pot-provider
+RUN pip install --no-cache-dir -r requirements.txt
 
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────

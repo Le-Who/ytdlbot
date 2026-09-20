@@ -1,6 +1,7 @@
-from typing import List, Optional
+import re
+
 from app.constants import GIF_FORMAT_ID
-from app.core.config import CONCURRENT_FRAGMENTS, POT_PROVIDER_URL, YOUTUBE_OAUTH2
+from app.core.config import CONCURRENT_FRAGMENTS, POT_PROVIDER_URL
 
 # Shared browser User-Agent for all yt-dlp requests.
 # Must match across extraction and download to satisfy VK's anti-bot fingerprinting.
@@ -30,12 +31,12 @@ class YtDlpCLIBuilder:
     def build_extraction_cmd(
         self,
         url: str,
-        cookies_path: Optional[str] = None,
-        proxy: Optional[str] = None,
-        user_agent: Optional[str] = None,
+        cookies_path: str | None = None,
+        proxy: str | None = None,
+        user_agent: str | None = None,
         timeout: int = 120,
         fallback_clients: bool = False,
-    ) -> List[str]:
+    ) -> list[str]:
         """Build args for dumping JSON info"""
         cmd = self._base_args.copy()
         cmd.extend(
@@ -51,14 +52,14 @@ class YtDlpCLIBuilder:
         # TikTok specific edge case applied generically for strict JSON extraction
         cmd.extend(["--extractor-args", "tiktok:app_info="])
 
-        if fallback_clients and _is_youtube_url(url):
-            cmd.extend(["--extractor-args", "youtube:player_client=ios,android"])
-
-        # POT provider and OAuth2 for YouTube bot-check bypass
+        # Optional configured PO-token service; yt-dlp chooses its supported clients.
         self._append_youtube_bypasses(cmd, url)
 
         self._append_network_opts(
-            cmd, cookies_path, proxy, user_agent if user_agent is not None else _BROWSER_UA
+            cmd,
+            cookies_path,
+            proxy,
+            user_agent if user_agent is not None else _BROWSER_UA,
         )
         cmd.extend(["--", url])
         return cmd
@@ -68,39 +69,58 @@ class YtDlpCLIBuilder:
         url: str,
         format_id: str,
         output_path: str,
-        height: Optional[int] = None,
-        cookies_path: Optional[str] = None,
-        proxy: Optional[str] = None,
-        user_agent: Optional[str] = None,
-        max_filesize_mb: Optional[int] = None,
+        height: int | None = None,
+        cookies_path: str | None = None,
+        proxy: str | None = None,
+        user_agent: str | None = None,
+        max_filesize_mb: int | None = None,
         use_aria2: bool = False,
-        info_json_path: Optional[str] = None,
+        info_json_path: str | None = None,
         fallback_clients: bool = False,
         pipe_mode: bool = False,
-        section: Optional[str] = None,
-    ) -> List[str]:
+        section: str | None = None,
+        audio_language: str | None = None,
+        audio_format: str | None = None,
+    ) -> list[str]:
         """Build args for downloading media"""
         cmd = self._base_args.copy()
 
         # Format resolution logic
         is_gif_format = format_id == GIF_FORMAT_ID
+        is_audio = format_id in ("bestaudio/best", "audio") or audio_format is not None
+        if audio_language and not re.fullmatch(r"[\w-]+", audio_language):
+            raise ValueError("invalid audio language")
+        language = f"[language={audio_language}]" if audio_language else ""
         if is_gif_format:
             final_fmt = "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
-        elif format_id in ("bestaudio/best", "best", "audio"):
-            final_fmt = "bestaudio/best" if format_id == "audio" else format_id
+        elif is_audio:
+            final_fmt = f"bestaudio{language}/best{language}"
+            cmd.extend(["--extract-audio", "--audio-format", audio_format or "mp3"])
         else:
-            height_cap = height or 1080
-            # Prefer H.264 (avc1) for Telegram compatibility; fallback to any
-            fallback = (
-                f"bestvideo[height<={height_cap}][filesize<?50M][vcodec^=avc]+bestaudio[acodec^=mp4a]/"
-                f"bestvideo[height<={height_cap}][filesize<?50M]+bestaudio/bestvideo+bestaudio/best"
-            )
-            final_fmt = f"{format_id}/{fallback}"
+            # Short display edge, including portrait Shorts. Every alternative
+            # enforces the same exact requested quality and requires audio.
+            cap = height or 1080
+            floor = f"[width>={cap}][height>={cap}]" if height else ""
+            caps = (f"[height<={cap}]{floor}", f"[width<={cap}]{floor}")
+            branches = []
+            if format_id != "best":
+                video_id, _, audio_id = format_id.partition("+")
+                for limit in caps:
+                    branches.append(
+                        f"{video_id}{limit}[acodec=none]+{audio_id or 'bestaudio'}{language}"
+                    )
+                    if not audio_id:
+                        branches.append(f"{video_id}{limit}[acodec!=none]{language}")
+            for limit in caps:
+                branches.extend(
+                    [
+                        f"bestvideo{limit}[vcodec^=avc]+bestaudio[acodec^=mp4a]{language}",
+                        f"bestvideo{limit}+bestaudio{language}",
+                        f"best{limit}[acodec!=none]{language}",
+                    ]
+                )
+            final_fmt = "/".join(branches)
 
-        if fallback_clients and _is_youtube_url(url):
-            cmd.extend(["--extractor-args", "youtube:player_client=ios,android"])
-
-        # POT provider and OAuth2 for YouTube bot-check bypass
         self._append_youtube_bypasses(cmd, url)
 
         cmd.extend(
@@ -144,7 +164,7 @@ class YtDlpCLIBuilder:
 
         # Write thumbnail alongside download for zero-cost Telegram preview injection.
         # Skipped for: pipe mode (no file path), audio (irrelevant), GIF (no preview needed).
-        if not pipe_mode and not is_gif_format and format_id not in ("bestaudio/best", "audio"):
+        if not pipe_mode and not is_gif_format and not is_audio:
             cmd.extend(["--write-thumbnail", "--convert-thumbnails", "jpg"])
 
         if output_path != "-" and use_aria2:
@@ -161,28 +181,31 @@ class YtDlpCLIBuilder:
             cmd.extend(["--max-filesize", f"{max_filesize_mb}M"])
 
         self._append_network_opts(
-            cmd, cookies_path, proxy, user_agent if user_agent is not None else _BROWSER_UA
+            cmd,
+            cookies_path,
+            proxy,
+            user_agent if user_agent is not None else _BROWSER_UA,
         )
 
         # We use info_json cache for all platforms to avoid redundant extraction.
-        # This is especially critical for VK because extracting the same URL twice 
+        # This is especially critical for VK because extracting the same URL twice
         # in 10 seconds triggers their anti-bot protection (badbrowser.php redirect).
+        if section:
+            cmd.extend(["--download-sections", section])
+
         if info_json_path:
             cmd.extend(["--load-info-json", info_json_path])
         else:
             cmd.extend(["--", url])
 
-        if section:
-            cmd.extend(["--download-sections", section])
-
         return cmd
 
     def _append_network_opts(
         self,
-        cmd: List[str],
-        cookies_path: Optional[str],
-        proxy: Optional[str],
-        user_agent: Optional[str],
+        cmd: list[str],
+        cookies_path: str | None,
+        proxy: str | None,
+        user_agent: str | None,
     ) -> None:
         if cookies_path:
             cmd.extend(["--cookies", cookies_path])
@@ -192,17 +215,15 @@ class YtDlpCLIBuilder:
             cmd.extend(["--user-agent", user_agent])
 
     @staticmethod
-    def _append_youtube_bypasses(cmd: List[str], url: str) -> None:
-        """Inject POT provider and OAuth2 args for YouTube URLs."""
+    def _append_youtube_bypasses(cmd: list[str], url: str) -> None:
+        """Inject the optional configured PO-token HTTP service for YouTube."""
         if not _is_youtube_url(url):
             return
 
         if POT_PROVIDER_URL:
-            cmd.extend([
-                "--extractor-args",
-                f"youtubepot-bgutilhttp:base_url={POT_PROVIDER_URL}",
-            ])
-
-        if YOUTUBE_OAUTH2:
-            cmd.extend(["--username", "oauth2", "--password", ""])
-
+            cmd.extend(
+                [
+                    "--extractor-args",
+                    f"youtubepot-bgutilhttp:base_url={POT_PROVIDER_URL}",
+                ]
+            )

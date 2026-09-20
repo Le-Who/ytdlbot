@@ -4,6 +4,7 @@ import hashlib
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -222,6 +223,7 @@ def fake_host(tmp_path: Path) -> FakeHost:
         source = ROOT / "scripts" / name
         target = script_dir / name
         target.write_bytes(source.read_bytes() if source.exists() else b"#!/bin/sh\n")
+        target.chmod(0o755)
 
     command_log = state_dir / "commands.log"
     runtime_release = state_dir / "runtime-release"
@@ -420,6 +422,16 @@ fi
         old_compose,
         env,
     )
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="Windows filesystems do not expose POSIX execute bits"
+)
+def test_fake_host_release_scripts_are_executable(fake_host: FakeHost) -> None:
+    scripts = fake_host.release_dir / "scripts"
+
+    for script in scripts.iterdir():
+        assert script.stat().st_mode & stat.S_IXUSR, script.name
 
 
 def test_routine_deploy_only_replaces_bot_and_preserves_host_state(

@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 
 class MediaKind(StrEnum):
+    AUTO = "auto"
     VIDEO = "video"
     AUDIO = "audio"
     PHOTO = "photo"
@@ -59,7 +60,7 @@ class MediaRequest:
     canonical_url: str
     platform: str
     media_id: str
-    kind: MediaKind = MediaKind.VIDEO
+    kind: MediaKind = MediaKind.AUTO
     quality: QualityPolicy = field(default_factory=QualityPolicy)
     audio_format: str | None = None
     audio_language: str | None = None
@@ -76,7 +77,7 @@ class MediaRequest:
         cls,
         url: str,
         *,
-        kind: MediaKind = MediaKind.VIDEO,
+        kind: MediaKind = MediaKind.AUTO,
         quality: QualityPolicy | None = None,
         audio_format: str | None = None,
         audio_language: str | None = None,

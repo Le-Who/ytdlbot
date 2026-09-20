@@ -68,11 +68,13 @@ def test_exact_incomplete_album_is_rejected_but_fast_mode_can_offer_it():
     )
 
     exact = validate_candidate(request_fixture(kind=MediaKind.ALBUM), candidate)
+    auto_exact = validate_candidate(request_fixture(), candidate)
     fast = validate_candidate(
         request_fixture(kind=MediaKind.ALBUM, exact=False), candidate
     )
 
     assert CandidateRejectionReason.ALBUM_INCOMPLETE in exact.reasons
+    assert CandidateRejectionReason.ALBUM_INCOMPLETE in auto_exact.reasons
     assert fast.usable
 
 
@@ -94,12 +96,69 @@ def test_exact_no_watermark_request_rejects_watermarked_candidate_only():
     assert fast.usable
 
 
+def test_auto_request_accepts_each_provider_discovered_visual_kind():
+    """Catches an omitted kind being treated as an explicit video request."""
+    discovered = (
+        candidate_fixture(kind=MediaKind.VIDEO),
+        candidate_fixture(
+            kind=MediaKind.PHOTO,
+            has_video=False,
+            has_audio=False,
+        ),
+        candidate_fixture(
+            kind=MediaKind.ANIMATION,
+            has_audio=False,
+        ),
+        candidate_fixture(
+            kind=MediaKind.ALBUM,
+            items=(MediaItem("abc123:0", MediaKind.PHOTO, "https://cdn/1.jpg"),),
+            has_video=False,
+            has_audio=False,
+        ),
+    )
+
+    assert request_fixture().kind is MediaKind.AUTO
+    assert all(validate_candidate(request_fixture(), candidate).usable for candidate in discovered)
+
+
+def test_audio_request_accepts_audio_native_and_video_backed_candidates():
+    """Catches MP3 extraction losing valid audio-only or video-backed sources."""
+    audio_native = candidate_fixture(
+        kind=MediaKind.AUDIO,
+        has_video=False,
+        has_audio=True,
+    )
+    video_backed = candidate_fixture(
+        kind=MediaKind.VIDEO,
+        has_video=True,
+        has_audio=True,
+    )
+
+    request = request_fixture(kind=MediaKind.AUDIO)
+    assert validate_candidate(request, audio_native).usable
+    assert validate_candidate(request, video_backed).usable
+
+
+def test_audio_request_rejects_visual_candidate_without_audio_source():
+    """Catches visual-only media being offered for an audio extraction request."""
+    request = request_fixture(kind=MediaKind.AUDIO)
+
+    for kind in (MediaKind.PHOTO, MediaKind.ANIMATION, MediaKind.ALBUM):
+        result = validate_candidate(
+            request,
+            candidate_fixture(kind=kind, has_audio=False),
+        )
+        assert not result.usable
+        assert CandidateRejectionReason.AUDIO_UNAVAILABLE in result.reasons
+
+
 def test_explicit_media_kind_mismatch_is_rejected_in_exact_and_fast_modes():
-    """Catches photo/audio/video requests accepting another explicit media kind."""
+    """Catches explicit visual requests accepting another discovered media kind."""
     mismatches = (
         (MediaKind.PHOTO, MediaKind.VIDEO),
-        (MediaKind.AUDIO, MediaKind.VIDEO),
         (MediaKind.VIDEO, MediaKind.PHOTO),
+        (MediaKind.ANIMATION, MediaKind.VIDEO),
+        (MediaKind.ALBUM, MediaKind.PHOTO),
     )
     for requested, offered in mismatches:
         for exact in (True, False):
@@ -114,4 +173,14 @@ def test_legacy_candidate_without_explicit_kind_remains_video_compatible():
     """Protects providers created before explicit kind metadata was introduced."""
     assert validate_candidate(
         request_fixture(kind=MediaKind.VIDEO), candidate_fixture(kind=None)
+    ).usable
+
+
+def test_legacy_candidate_without_explicit_kind_remains_auto_and_audio_compatible():
+    """Protects old providers that expose capabilities but no explicit kind."""
+    candidate = candidate_fixture(kind=None, has_audio=True)
+
+    assert validate_candidate(request_fixture(), candidate).usable
+    assert validate_candidate(
+        request_fixture(kind=MediaKind.AUDIO), candidate
     ).usable

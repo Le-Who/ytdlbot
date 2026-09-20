@@ -194,10 +194,63 @@ async def test_exact_watermarked_candidate_cannot_beat_watermark_free_candidate(
     )
 
 
+async def test_default_auto_request_allows_pinterest_photo_to_win():
+    """Catches default requests rejecting provider-discovered Pinterest photos."""
+    clock = ManualClock()
+    request = MediaRequest.from_url("https://youtu.be/abc")
+    photo = replace(
+        GOOD,
+        candidate_id="pinterest-photo",
+        kind=MediaKind.PHOTO,
+        has_video=False,
+        has_audio=False,
+        audio_languages=(),
+    )
+
+    result = await result_of(
+        start(clock, [Provider("pinterest", clock, candidates=[photo])], request=request)
+    )
+
+    assert result.winner is not None
+    assert result.winner.provider == "pinterest"
+    assert result.winner.candidate.kind is MediaKind.PHOTO
+
+
+async def test_auto_request_allows_mixed_fxtwitter_album_to_win():
+    """Catches mixed provider-discovered albums being rejected as non-video."""
+    clock = ManualClock()
+    request = MediaRequest.from_url("https://youtu.be/abc")
+    album = replace(
+        GOOD,
+        candidate_id="fxtwitter-album",
+        kind=MediaKind.ALBUM,
+        items=(
+            MediaItem("abc:0", MediaKind.PHOTO, "https://cdn.example/one.jpg"),
+            MediaItem("abc:1", MediaKind.VIDEO, "https://cdn.example/two.mp4"),
+            MediaItem("abc:2", MediaKind.ANIMATION, "https://cdn.example/three.mp4"),
+        ),
+        complete=True,
+        has_video=True,
+        has_audio=True,
+        audio_languages=(),
+    )
+
+    result = await result_of(
+        start(clock, [Provider("fxtwitter", clock, candidates=[album])], request=request)
+    )
+
+    assert result.winner is not None
+    assert result.winner.provider == "fxtwitter"
+    assert tuple(item.kind for item in result.winner.candidate.items) == (
+        MediaKind.PHOTO,
+        MediaKind.VIDEO,
+        MediaKind.ANIMATION,
+    )
+
+
 async def test_explicit_kind_mismatch_cannot_win_race():
     clock = ManualClock()
-    request = replace(REQUEST, kind=MediaKind.PHOTO, audio_language=None)
-    video = replace(GOOD, kind=MediaKind.VIDEO)
+    request = replace(REQUEST, kind=MediaKind.VIDEO, audio_language=None)
     photo = replace(
         GOOD,
         candidate_id="photo",
@@ -205,9 +258,10 @@ async def test_explicit_kind_mismatch_cannot_win_race():
         has_video=False,
         has_audio=False,
     )
+    video = replace(GOOD, candidate_id="video", kind=MediaKind.VIDEO)
     task = start(
         clock,
-        [Provider("video", clock, 0.1, [video]), Provider("photo", clock, 0.2, [photo])],
+        [Provider("photo", clock, 0.1, [photo]), Provider("video", clock, 0.2, [video])],
         request=request,
     )
 
@@ -215,10 +269,25 @@ async def test_explicit_kind_mismatch_cannot_win_race():
     await clock.advance(0.1)
     result = await result_of(task)
 
-    assert result.winner.candidate.candidate_id == "photo"
-    assert result.rejections[0].validation.reasons == (
-        CandidateRejectionReason.KIND_MISMATCH,
+    assert result.winner.candidate.candidate_id == "video"
+    assert (
+        CandidateRejectionReason.KIND_MISMATCH
+        in result.rejections[0].validation.reasons
     )
+
+
+async def test_audio_request_can_win_with_video_backed_candidate():
+    """Catches the race discarding video sources that can be converted to audio."""
+    clock = ManualClock()
+    request = replace(REQUEST, kind=MediaKind.AUDIO, audio_language=None)
+    video = replace(GOOD, kind=MediaKind.VIDEO, has_audio=True)
+
+    result = await result_of(
+        start(clock, [Provider("video-audio", clock, candidates=[video])], request=request)
+    )
+
+    assert result.winner is not None
+    assert result.winner.provider == "video-audio"
 
 
 async def test_later_candidate_from_same_provider_can_win():

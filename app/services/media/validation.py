@@ -31,17 +31,7 @@ def validate_candidate(
 ) -> CandidateValidationResult:
     reasons: list[CandidateRejectionReason] = []
 
-    kind_mismatch = (
-        candidate.kind is not None and candidate.kind is not request.kind
-    ) or (
-        candidate.kind is None
-        and request.kind in {
-            MediaKind.PHOTO,
-            MediaKind.ANIMATION,
-            MediaKind.ALBUM,
-        }
-    )
-    if kind_mismatch:
+    if not _kind_is_compatible(request, candidate):
         reasons.append(CandidateRejectionReason.KIND_MISMATCH)
 
     if (
@@ -78,3 +68,19 @@ def validate_candidate(
         reasons.append(CandidateRejectionReason.AUDIO_LANGUAGE_UNAVAILABLE)
 
     return CandidateValidationResult(usable=not reasons, reasons=tuple(reasons))
+
+
+def _kind_is_compatible(request: MediaRequest, candidate: MediaCandidate) -> bool:
+    offered = candidate.kind
+    if offered is None:
+        return request.kind in {MediaKind.AUTO, MediaKind.VIDEO, MediaKind.AUDIO}
+    if request.kind is MediaKind.AUTO:
+        return offered in {
+            MediaKind.VIDEO,
+            MediaKind.PHOTO,
+            MediaKind.ANIMATION,
+            MediaKind.ALBUM,
+        }
+    if request.kind is MediaKind.AUDIO:
+        return offered in {MediaKind.AUDIO, MediaKind.VIDEO}
+    return offered is request.kind

@@ -71,6 +71,17 @@ def metadata(*, vertical=False, audio=True):
     return {"id": "example", "title": "Example", "duration": 60, "formats": formats}
 
 
+async def test_auto_request_uses_normal_video_resolution_path():
+    """Catches the heavy fallback dropping requests whose kind was omitted."""
+    provider = YtDlpProvider(extract=AsyncMock(return_value=metadata()))
+    request = MediaRequest.from_url(URL, quality=QualityPolicy(1080))
+
+    assert request.kind is MediaKind.AUTO
+    assert provider.supports(request)
+    candidate = (await provider.resolve(request))[0]
+    assert candidate.has_video
+
+
 @pytest.mark.parametrize("edge,variant", [(720, "136+140"), (1080, "137+140")])
 async def test_split_streams_offer_exact_quality_with_audio(edge, variant):
     provider = YtDlpProvider(extract=AsyncMock(return_value=metadata()))

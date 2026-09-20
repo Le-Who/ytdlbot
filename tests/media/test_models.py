@@ -4,11 +4,23 @@ import pytest
 
 from app.services.media import (
     ClipInterval,
+    MediaKind,
     MediaRequest,
     QualityPolicy,
     UnsupportedMediaUrlError,
     canonicalize_media_url,
 )
+
+
+def test_omitted_kind_is_auto_and_differs_from_explicit_video_in_cache():
+    """Catches default requests silently imposing an explicit video constraint."""
+    automatic = MediaRequest.from_url("https://youtu.be/abc123")
+    explicit_video = MediaRequest.from_url(
+        "https://youtu.be/abc123", kind=MediaKind.VIDEO
+    )
+
+    assert automatic.kind.value == "auto"
+    assert automatic.cache_key != explicit_video.cache_key
 
 
 def test_youtube_url_forms_share_identity_but_preserve_clip():

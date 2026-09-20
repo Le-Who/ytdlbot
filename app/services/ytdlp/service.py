@@ -62,7 +62,12 @@ class YtDlpService:
         return self.cookies_manager.tiktok_cookies_path
 
     async def extract(
-        self, url: str, for_list_formats: bool = False, fallback_clients: bool = False
+        self,
+        url: str,
+        for_list_formats: bool = False,
+        fallback_clients: bool = False,
+        *,
+        use_cookies: bool = True,
     ) -> dict[str, Any]:
         """Извлекает метаданные видео через subprocess yt-dlp (async isolation)."""
         from app.core.process import run_subprocess
@@ -71,7 +76,8 @@ class YtDlpService:
         if is_vk:
             url = url.replace("vk.com", "m.vk.com")
 
-        cookies = self.cookies_manager.get_cookies_path(url)
+        # Legacy callers retain configured cookies; policy-aware providers opt out.
+        cookies = self.cookies_manager.get_cookies_path(url) if use_cookies else None
         proxy = (
             self.tiktok_proxy if _is_tiktok(url) else (self.vk_proxy if is_vk else None)
         )

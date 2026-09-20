@@ -1,7 +1,10 @@
 import asyncio
+import base64
 import json
 import time
+from contextlib import asynccontextmanager
 from dataclasses import asdict
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -12,6 +15,7 @@ from app.services.media.race import RaceConfig, race_candidates
 from app.services.media.registry import FailureKind, ProviderError, ProviderRoute
 from app.services.media.validation import validate_candidate
 from app.services.ytdlp.exceptions import AccessDeniedError
+from app.services.ytdlp.service import YtDlpService
 
 URL = "https://www.youtube.com/watch?v=example"
 
@@ -214,3 +218,83 @@ async def test_muxed_wrong_language_is_not_advertised_as_requested_language():
         URL, quality=QualityPolicy(1080), audio_language="uk"
     )
     assert await provider.resolve(request) == []
+
+
+@pytest.fixture
+def extraction_commands_with_global_cookies(monkeypatch, tmp_path):
+    cookie_text = "# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tsynthetic-test-value\n"
+    monkeypatch.setenv(
+        "YTDLP_COOKIES_B64", base64.b64encode(cookie_text.encode()).decode()
+    )
+    # Exercise the real cookie manager, with its temporary files owned by pytest.
+    monkeypatch.setattr("app.services.ytdlp.cookies.tempfile.tempdir", str(tmp_path))
+    commands = []
+
+    @asynccontextmanager
+    async def run_subprocess(cmd, **kwargs):
+        commands.append(cmd)
+        yield SimpleNamespace(
+            proc=SimpleNamespace(
+                stdout=SimpleNamespace(
+                    read=AsyncMock(return_value=json.dumps(metadata()).encode())
+                ),
+                returncode=0,
+            ),
+            wait=AsyncMock(),
+            stderr_data=[],
+        )
+
+    # Replace only process I/O: provider, service, cookie lookup and CLI builder are real.
+    monkeypatch.setattr("app.core.process.run_subprocess", run_subprocess)
+    return commands
+
+
+async def test_public_provider_omits_configured_global_cookies(
+    extraction_commands_with_global_cookies,
+):
+    request = MediaRequest.from_url(URL)
+    candidates = await YtDlpProvider().resolve(request)
+    assert candidates
+    assert "--cookies" not in extraction_commands_with_global_cookies[0]
+
+
+async def test_public_provider_refresh_also_omits_global_cookies(
+    extraction_commands_with_global_cookies,
+):
+    provider = YtDlpProvider()
+    request = MediaRequest.from_url(URL)
+    candidate = (await provider.resolve(request))[0]
+    assert candidate.refresh is not None
+    await provider.refresh(
+        request, candidate.refresh, attempt=0, deadline=time.monotonic() + 2
+    )
+    assert len(extraction_commands_with_global_cookies) == 2
+    assert all(
+        "--cookies" not in cmd for cmd in extraction_commands_with_global_cookies
+    )
+
+
+async def test_nonpublic_scope_does_not_implicitly_authorize_global_cookies(
+    extraction_commands_with_global_cookies,
+):
+    request = MediaRequest.from_url(URL, auth_scope="user:alice")
+    await YtDlpProvider().resolve(request)
+    assert "--cookies" not in extraction_commands_with_global_cookies[0]
+
+
+@pytest.mark.parametrize(
+    "scope,expected", [("public", False), ("user:alice", True), ("user:bob", False)]
+)
+async def test_only_explicitly_allowed_nonpublic_scope_uses_cookies(
+    extraction_commands_with_global_cookies, scope, expected
+):
+    provider = YtDlpProvider(cookie_auth_scopes=frozenset({"public", "user:alice"}))
+    await provider.resolve(MediaRequest.from_url(URL, auth_scope=scope))
+    assert ("--cookies" in extraction_commands_with_global_cookies[0]) is expected
+
+
+async def test_legacy_service_extract_preserves_configured_cookie_behavior(
+    extraction_commands_with_global_cookies,
+):
+    await YtDlpService().extract(URL)
+    assert "--cookies" in extraction_commands_with_global_cookies[0]

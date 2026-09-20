@@ -37,8 +37,17 @@ class YtDlpProvider:
     backend_family = "local-ytdlp"
     is_heavy = True
 
-    def __init__(self, *, extract: Extractor | None = None) -> None:
-        self._extract = extract if extract is not None else YtDlpService().extract
+    def __init__(
+        self,
+        *,
+        extract: Extractor | None = None,
+        cookie_auth_scopes: frozenset[str] = frozenset(),
+    ) -> None:
+        self._extract = extract
+        self._service = YtDlpService() if extract is None else None
+        # Scopes are explicitly authorized by the provider's composition root.
+        # Merely supplying a non-public request scope does not authorize cookies.
+        self._cookie_auth_scopes = cookie_auth_scopes - {"public"}
 
     def supports(self, request: MediaRequest) -> bool:
         # yt-dlp's generic extractor also handles embedded media on arbitrary sites.
@@ -50,7 +59,14 @@ class YtDlpProvider:
         if not self.supports(request):
             return []
         try:
-            info = await self._extract(request.canonical_url)
+            if self._service is not None:
+                info = await self._service.extract(
+                    request.canonical_url,
+                    use_cookies=request.auth_scope in self._cookie_auth_scopes,
+                )
+            else:
+                assert self._extract is not None
+                info = await self._extract(request.canonical_url)
         except AccessDeniedError as error:
             kind = (
                 FailureKind.TRANSIENT

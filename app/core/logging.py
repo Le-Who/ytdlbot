@@ -66,6 +66,10 @@ def setup_logging(level: int = logging.INFO) -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level)
+    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uvicorn_logger = logging.getLogger(name)
+        uvicorn_logger.handlers.clear()
+        uvicorn_logger.propagate = True
 
 
 def set_correlation_id(value: str | None = None) -> str:

@@ -4,7 +4,7 @@ import json
 import logging
 from datetime import datetime
 
-from app.core.logging import JsonFormatter, set_correlation_id
+from app.core.logging import JsonFormatter, set_correlation_id, setup_logging
 
 
 def test_json_formatter_emits_shared_loki_contract(monkeypatch) -> None:
@@ -60,3 +60,33 @@ def test_json_formatter_uses_safe_local_defaults(monkeypatch) -> None:
     assert payload["environment"] == "development"
     assert payload["release"] == "dev"
     assert payload["event"] == "log"
+
+
+def test_setup_logging_routes_uvicorn_records_through_json_formatter() -> None:
+    root = logging.getLogger()
+    names = ("uvicorn", "uvicorn.error", "uvicorn.access")
+    named = [logging.getLogger(name) for name in names]
+    root_state = (list(root.handlers), root.level)
+    named_state = [
+        (logger, list(logger.handlers), logger.propagate, logger.level)
+        for logger in named
+    ]
+    try:
+        for logger in named:
+            logger.handlers[:] = [logging.StreamHandler()]
+            logger.propagate = False
+
+        setup_logging()
+
+        assert len(root.handlers) == 1
+        assert isinstance(root.handlers[0].formatter, JsonFormatter)
+        for logger in named:
+            assert logger.handlers == []
+            assert logger.propagate is True
+    finally:
+        root.handlers[:] = root_state[0]
+        root.setLevel(root_state[1])
+        for logger, handlers, propagate, level in named_state:
+            logger.handlers[:] = handlers
+            logger.propagate = propagate
+            logger.setLevel(level)

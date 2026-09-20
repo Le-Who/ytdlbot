@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -816,3 +818,97 @@ def test_legacy_timeout_cleanup_failure_is_fail_closed(
     assert state["alive"] is True
     assert len(commands) == 2
     assert "secret" not in str(raised.value)
+
+
+def _run_cleanup_shell(
+    adapter_module: Any,
+    tmp_path: Path,
+    *,
+    docker_mode: str,
+) -> subprocess.CompletedProcess[str]:
+    bash = shutil.which("bash")
+    if bash is None and os.name == "nt":
+        candidate = Path("C:/Program Files/Git/bin/bash.exe")
+        bash = str(candidate) if candidate.is_file() else None
+    if bash is None:
+        pytest.skip("bash is required for the production cleanup-shell contract")
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    docker = fake_bin / "docker"
+    docker.write_text(
+        """#!/usr/bin/env bash
+set -euo pipefail
+if [ "${FAKE_DOCKER_MODE}" = "daemon-failure" ]; then
+  exit 1
+fi
+if [ "$1" = "ps" ]; then
+  [ "$2" = "-aq" ]
+  [ "$3" = "--filter" ]
+  [ "$4" = "name=^/ytdlbot-media-evidence-proof$" ]
+  exit 0
+fi
+exit 1
+""",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    flock = fake_bin / "flock"
+    flock.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    flock.chmod(0o755)
+    if os.name == "nt":
+        converted = subprocess.run(
+            [bash, "-lc", 'cygpath -u "$1"', "--", str(fake_bin)],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+        lock_path = subprocess.run(
+            [bash, "-lc", 'cygpath -u "$1"', "--", str(tmp_path / "proof.lock")],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout.strip()
+    else:
+        converted = str(fake_bin)
+        lock_path = str(tmp_path / "proof.lock")
+    env = {
+        **os.environ,
+        "FAKE_DOCKER_MODE": docker_mode,
+        "PATH": f"{converted}:/usr/bin:/bin",
+    }
+    return subprocess.run(
+        [
+            bash,
+            "-c",
+            adapter_module._LEGACY_CLEANUP_SHELL,
+            "--",
+            lock_path,
+            "ytdlbot-media-evidence-proof",
+        ],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+        timeout=5,
+        env=env,
+    )
+
+
+def test_cleanup_docker_daemon_failure_is_not_treated_as_absence(
+    adapter_module: Any,
+    tmp_path: Path,
+) -> None:
+    result = _run_cleanup_shell(
+        adapter_module, tmp_path, docker_mode="daemon-failure"
+    )
+
+    assert result.returncode != 0
+
+
+def test_cleanup_successful_empty_exact_name_query_confirms_absence(
+    adapter_module: Any,
+    tmp_path: Path,
+) -> None:
+    result = _run_cleanup_shell(adapter_module, tmp_path, docker_mode="absent")
+
+    assert result.returncode == 0

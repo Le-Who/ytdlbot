@@ -49,13 +49,17 @@ exec 9>"$lock_path"
 flock -n 9 || exit 75
 
 container_absent() {
-  ! docker inspect "$container_name" >/dev/null 2>&1
+  exact_ids=$(docker ps -aq --filter "name=^/${container_name}$") || return 95
+  [ -z "$exact_ids" ]
 }
 
 remove_owned_container() {
   if container_absent; then
     return 0
+  else
+    absence_status=$?
   fi
+  [ "$absence_status" -eq 1 ] || return "$absence_status"
   label=$(docker inspect --format '{{index .Config.Labels "ytdlbot.media-evidence"}}' "$container_name" 2>/dev/null) || return 91
   [ "$label" = "legacy-isolated" ] || return 92
   docker rm -f "$container_name" >/dev/null 2>&1 || return 93
@@ -63,7 +67,10 @@ remove_owned_container() {
   while [ "$attempt" -lt 30 ]; do
     if container_absent; then
       return 0
+    else
+      absence_status=$?
     fi
+    [ "$absence_status" -eq 1 ] || return "$absence_status"
     attempt=$((attempt + 1))
     sleep 0.1
   done
@@ -116,17 +123,28 @@ container_name=$2
 exec 9>"$lock_path"
 flock -w 2 9 || exit 75
 
-if ! docker inspect "$container_name" >/dev/null 2>&1; then
+container_absent() {
+  exact_ids=$(docker ps -aq --filter "name=^/${container_name}$") || return 95
+  [ -z "$exact_ids" ]
+}
+
+if container_absent; then
   exit 0
+else
+  absence_status=$?
 fi
+[ "$absence_status" -eq 1 ] || exit "$absence_status"
 label=$(docker inspect --format '{{index .Config.Labels "ytdlbot.media-evidence"}}' "$container_name" 2>/dev/null) || exit 91
 [ "$label" = "legacy-isolated" ] || exit 92
 docker rm -f "$container_name" >/dev/null 2>&1 || exit 93
 attempt=0
 while [ "$attempt" -lt 30 ]; do
-  if ! docker inspect "$container_name" >/dev/null 2>&1; then
+  if container_absent; then
     exit 0
+  else
+    absence_status=$?
   fi
+  [ "$absence_status" -eq 1 ] || exit "$absence_status"
   attempt=$((attempt + 1))
   sleep 0.1
 done

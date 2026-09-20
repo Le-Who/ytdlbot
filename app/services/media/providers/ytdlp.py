@@ -178,7 +178,11 @@ class YtDlpProvider:
             complete=True,
             mux_mode="extract-mp3" if mp3 else ("copy" if audio is not None else None),
             refresh=RefreshDescriptor(self.name, request.media_id, variant),
+            provider=self.name,
+            backend_family=self.backend_family,
+            media_id=request.media_id,
             kind=MediaKind.AUDIO if is_audio else MediaKind.VIDEO,
+            auth_scope=request.auth_scope,
         )
 
     async def refresh(

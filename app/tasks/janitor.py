@@ -1,25 +1,40 @@
 import asyncio
+import logging
 import os
 import shutil
 import time
-import logging
 
-from app.core.config import TEMP_DIR, MAX_TEMP_AGE_SECONDS, JANITOR_INTERVAL_SECONDS
+from app.core.config import (
+    JANITOR_INTERVAL_SECONDS,
+    MAX_TEMP_AGE_SECONDS,
+    MEDIA_DIR,
+    TEMP_DIR,
+)
 from app.core.resource_budget import is_active_media_lease, media_lease_path
 from app.core.utils import safe_remove
 
 logger = logging.getLogger("app.tasks.janitor")
 
 
-def cleanup_temp_dir() -> tuple[int, int]:
+def cleanup_temp_dir(root: str | None = None) -> tuple[int, int]:
+    target_dir = root or TEMP_DIR
     now = time.time()
     deleted = 0
     orphan = 0
-    if not os.path.isdir(TEMP_DIR):
+    if not os.path.isdir(target_dir):
         return deleted, orphan
 
-    for name in os.listdir(TEMP_DIR):
-        path = os.path.join(TEMP_DIR, name)
+    for name in os.listdir(target_dir):
+        path = os.path.join(target_dir, name)
+
+        if _is_lease_auxiliary(name):
+            try:
+                age = now - os.path.getmtime(path)
+            except OSError:
+                continue
+            if age > MAX_TEMP_AGE_SECONDS:
+                safe_remove(path)
+            continue
 
         if name.endswith(".lease"):
             target = path.removesuffix(".lease")
@@ -69,13 +84,26 @@ def cleanup_temp_dir() -> tuple[int, int]:
     return deleted, orphan
 
 
-def _aggressive_purge_temp() -> int:
+def cleanup_media_dirs() -> tuple[int, int]:
+    """Clean legacy temporary files and the configured transport media root."""
+    deleted = orphan = 0
+    for root in dict.fromkeys((TEMP_DIR, MEDIA_DIR)):
+        root_deleted, root_orphan = cleanup_temp_dir(root)
+        deleted += root_deleted
+        orphan += root_orphan
+    return deleted, orphan
+
+
+def _aggressive_purge_temp(root: str | None = None) -> int:
     """Delete ALL bot-created files regardless of age. Used in critical disk state."""
+    target_dir = root or TEMP_DIR
     deleted = 0
-    if not os.path.isdir(TEMP_DIR):
+    if not os.path.isdir(target_dir):
         return deleted
-    for name in os.listdir(TEMP_DIR):
-        path = os.path.join(TEMP_DIR, name)
+    for name in os.listdir(target_dir):
+        path = os.path.join(target_dir, name)
+        if _is_lease_auxiliary(name):
+            continue
         if name.endswith(".lease"):
             target = path.removesuffix(".lease")
             if not is_active_media_lease(target):
@@ -106,6 +134,18 @@ def _aggressive_purge_temp() -> int:
     return deleted
 
 
+def _aggressive_purge_media_dirs() -> int:
+    return sum(
+        _aggressive_purge_temp(root) for root in dict.fromkeys((TEMP_DIR, MEDIA_DIR))
+    )
+
+
+def _is_lease_auxiliary(name: str) -> bool:
+    return name.endswith(".lease.lock") or (
+        ".lease." in name and name.endswith(".tmp")
+    )
+
+
 # 0 = ok, 1 = warning sent, 2 = critical sent
 _last_alert_level: int = 0
 
@@ -113,7 +153,10 @@ _last_alert_level: int = 0
 async def _notify_admin(message: str) -> None:
     """Send a disk alert to ADMIN_CHAT_ID (best-effort, never raises)."""
     try:
-        from app.core import config, state  # local import to avoid circular at module level
+        from app.core import (
+            config,
+            state,
+        )  # local import to avoid circular at module level
 
         if not config.ADMIN_CHAT_ID or not state.bot_app:
             return
@@ -133,27 +176,30 @@ async def check_disk_space() -> None:
     from app.core import config, state  # local import
 
     try:
-        usage = await asyncio.to_thread(shutil.disk_usage, TEMP_DIR)
+        usage = await asyncio.to_thread(shutil.disk_usage, MEDIA_DIR)
     except OSError as exc:
         logger.warning("disk_usage failed: %s", exc)
         return
 
     free_pct = (usage.free / usage.total) * 100
-    free_gb = usage.free / (1024 ** 3)
-    total_gb = usage.total / (1024 ** 3)
+    free_gb = usage.free / (1024**3)
+    total_gb = usage.total / (1024**3)
 
     logger.info(
         "Disk check: %.1f%% free (%.2f / %.2f GB)",
-        free_pct, free_gb, total_gb,
+        free_pct,
+        free_gb,
+        total_gb,
     )
 
     if free_pct <= config.DISK_CRITICAL_PCT:
         # ── Critical: aggressive purge + maintenance mode ────────────────
         state.disk_critical = True
-        purged = await asyncio.to_thread(_aggressive_purge_temp)
+        purged = await asyncio.to_thread(_aggressive_purge_media_dirs)
         logger.error(
             "DISK CRITICAL: %.1f%% free — aggressive purge removed %d files, maintenance mode ON",
-            free_pct, purged,
+            free_pct,
+            purged,
         )
         if _last_alert_level < 2:
             _last_alert_level = 2
@@ -180,7 +226,9 @@ async def check_disk_space() -> None:
         # ── Recovery ─────────────────────────────────────────────────────
         if state.disk_critical:
             state.disk_critical = False
-            logger.info("Disk space recovered to %.1f%% — maintenance mode OFF", free_pct)
+            logger.info(
+                "Disk space recovered to %.1f%% — maintenance mode OFF", free_pct
+            )
             await _notify_admin(
                 f"✅ <b>Disk Recovered</b>\n\n"
                 f"Свободно: <b>{free_pct:.1f}%</b> ({free_gb:.2f} ГБ)\n"
@@ -191,7 +239,7 @@ async def check_disk_space() -> None:
 
 async def janitor_loop(stop_event: asyncio.Event) -> None:
     while not stop_event.is_set():
-        deleted, orphan = await asyncio.to_thread(cleanup_temp_dir)
+        deleted, orphan = await asyncio.to_thread(cleanup_media_dirs)
         logger.info(
             "janitor run",
             extra={

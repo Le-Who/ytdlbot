@@ -2,6 +2,7 @@ import os
 import secrets
 import tempfile
 from typing import Optional
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,6 +10,8 @@ load_dotenv()
 # --- КОНФИГУРАЦИЯ ---
 TEMP_DIR = os.getenv("TMPDIR", tempfile.gettempdir())
 os.makedirs(TEMP_DIR, exist_ok=True)
+MEDIA_DIR = os.getenv("MEDIA_DIR", os.path.join(TEMP_DIR, "ytdlbot-media"))
+os.makedirs(MEDIA_DIR, exist_ok=True)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()

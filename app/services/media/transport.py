@@ -26,9 +26,11 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 from curl_cffi import CurlOpt
 from curl_cffi.requests import AsyncSession, Response
 
+from app.core.process import run_subprocess
 from app.core.resource_budget import DiskBudget, DiskReservation
 
 from .models import MediaCandidate, MediaRequest, MediaSource, RefreshDescriptor
+from .validation import validate_candidate
 
 logger = logging.getLogger("app.services.media.transport")
 
@@ -65,6 +67,7 @@ class DownloadFailed(MaterializationError):
 
 
 Resolver = Callable[[str, int], Awaitable[tuple[str, ...]]]
+ProcessRunner = Callable[[list[str], float], Awaitable[int]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -235,7 +238,7 @@ class MediaTransport:
     def __init__(
         self,
         *,
-        output_dir: str | os.PathLike[str] = "/srv/ytdlbot/media",
+        output_dir: str | os.PathLike[str] | None = None,
         client: StreamingClient | None = None,
         url_policy: URLPolicy | None = None,
         disk_budget: DiskBudget | None = None,
@@ -249,6 +252,7 @@ class MediaTransport:
         max_redirects: int = 3,
         materialization_timeout: float = 3600.0,
         clock: Callable[[], float] = time.monotonic,
+        process_runner: ProcessRunner | None = None,
     ) -> None:
         if max_bytes <= 0 or probe_bytes <= 0 or chunk_size <= 0:
             raise ValueError("transport byte limits must be positive")
@@ -265,6 +269,10 @@ class MediaTransport:
             raise ValueError("transport timeouts must be finite and positive")
         if max_redirects < 0:
             raise ValueError("redirect budget must not be negative")
+        if output_dir is None:
+            from app.core.config import MEDIA_DIR
+
+            output_dir = MEDIA_DIR
         self.output_dir = Path(output_dir).resolve()
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.client = client or CurlStreamingClient()
@@ -280,17 +288,28 @@ class MediaTransport:
         self.max_redirects = max_redirects
         self.materialization_timeout = materialization_timeout
         self.clock = clock
+        self.process_runner = process_runner or _run_process
 
     async def probe(
-        self, url: str, *, headers: Mapping[str, str] | None = None
+        self,
+        url: str,
+        *,
+        headers: Mapping[str, str] | None = None,
+        deadline: float | None = None,
     ) -> bytes:
+        operation_deadline = (
+            deadline if deadline is not None else self.clock() + self.request_timeout
+        )
+        self._remaining(operation_deadline)
         request_headers = {
             "Accept": "*/*",
             "Range": f"bytes=0-{self.probe_bytes - 1}",
             "User-Agent": "ytdlbot/2.0",
             **dict(headers or {}),
         }
-        opened = await self._request("GET", url, headers=request_headers)
+        opened = await self._request(
+            "GET", url, headers=request_headers, deadline=operation_deadline
+        )
         response = opened.response
         try:
             self._check_response(response, opened.url)
@@ -305,7 +324,10 @@ class MediaTransport:
                     chunk = await asyncio.wait_for(
                         anext(iterator),
                         timeout=(
-                            max(0, first_timeout) if first else self.stall_timeout
+                            min(
+                                self._remaining(operation_deadline),
+                                max(0, first_timeout) if first else self.stall_timeout,
+                            )
                         ),
                     )
                 except StopAsyncIteration:
@@ -319,7 +341,7 @@ class MediaTransport:
             self._check_signature(signature, response.headers)
             return signature
         finally:
-            await response.close()
+            await self._close_response(response, operation_deadline)
 
     async def materialize(
         self,
@@ -331,18 +353,20 @@ class MediaTransport:
     ) -> MaterializedItem:
         if not candidates:
             raise MaterializationError("no media candidates")
-        materialization_deadline = (
-            deadline
-            if deadline is not None
-            else self.clock() + self.materialization_timeout
-        )
-        await self._validate_url(request.canonical_url)
+        deadlines = [self.clock() + self.materialization_timeout]
+        if request.deadline is not None:
+            deadlines.append(request.deadline)
+        if deadline is not None:
+            deadlines.append(deadline)
+        materialization_deadline = min(deadlines)
+        self._remaining(materialization_deadline)
+        await self._validate_url(request.canonical_url, materialization_deadline)
         safe: list[MediaCandidate] = []
         errors: list[MaterializationError] = []
         for candidate in candidates:
             try:
                 self._check_declared_size(candidate)
-                await self._validate_candidate_urls(candidate)
+                await self._validate_candidate_urls(candidate, materialization_deadline)
             except MaterializationError as error:
                 errors.append(error)
             else:
@@ -352,15 +376,16 @@ class MediaTransport:
                 raise errors[0]
             raise MaterializationError("all candidates failed validation")
 
-        refresh_attempted: set[RefreshDescriptor] = set()
+        refresh_attempted = False
         refresh_lock = asyncio.Lock()
 
         async def attempt(candidate: MediaCandidate) -> MaterializedItem:
+            nonlocal refresh_attempted
             try:
                 return await self._download_candidate(
-                    candidate, materialization_deadline
+                    request, candidate, materialization_deadline
                 )
-            except (DownloadFailed, TransferTimeout) as error:
+            except (DownloadFailed, TransferTimeout):
                 descriptor = candidate.refresh
                 provider = (
                     refreshers.get(descriptor.provider)
@@ -370,22 +395,36 @@ class MediaTransport:
                 if provider is None or descriptor is None:
                     raise
                 async with refresh_lock:
-                    if descriptor in refresh_attempted:
+                    if refresh_attempted:
                         raise
-                    refresh_attempted.add(descriptor)
-                if self.clock() >= materialization_deadline:
+                    refresh_attempted = True
+                remaining = self._remaining(materialization_deadline)
+                try:
+                    fresh = await asyncio.wait_for(
+                        provider.refresh(
+                            request,
+                            descriptor,
+                            attempt=0,
+                            deadline=materialization_deadline,
+                        ),
+                        timeout=remaining,
+                    )
+                except asyncio.CancelledError:
+                    raise
+                except TimeoutError as refresh_error:
                     raise TransferTimeout(
-                        "materialization deadline exceeded"
-                    ) from error
-                fresh = await provider.refresh(
-                    request,
-                    descriptor,
-                    attempt=0,
-                    deadline=materialization_deadline,
+                        "provider refresh timed out"
+                    ) from refresh_error
+                except Exception as refresh_error:
+                    raise DownloadFailed("provider refresh failed") from refresh_error
+                self._validate_refreshed_candidate(
+                    request, candidate, descriptor, fresh
                 )
                 self._check_declared_size(fresh)
-                await self._validate_candidate_urls(fresh)
-                return await self._download_candidate(fresh, materialization_deadline)
+                await self._validate_candidate_urls(fresh, materialization_deadline)
+                return await self._download_candidate(
+                    request, fresh, materialization_deadline
+                )
 
         if len(safe) >= 2 and all(self._is_small(candidate) for candidate in safe[:2]):
             winner, parallel_errors = await self._race_small(
@@ -451,14 +490,22 @@ class MediaTransport:
         return winner, errors
 
     async def _download_candidate(
-        self, candidate: MediaCandidate, deadline: float
+        self, request: MediaRequest, candidate: MediaCandidate, deadline: float
     ) -> MaterializedItem:
+        self._remaining(deadline)
         sources = self._download_sources(candidate)
         declared = self._declared_size(candidate)
-        reservation = await self.disk_budget.reserve(
-            declared if declared is not None else self.max_bytes,
-            owner=uuid.uuid4().hex,
-        )
+        reserve_timeout = self._remaining(deadline)
+        try:
+            reservation = await asyncio.wait_for(
+                self.disk_budget.reserve(
+                    declared if declared is not None else self.max_bytes,
+                    owner=uuid.uuid4().hex,
+                ),
+                timeout=reserve_timeout,
+            )
+        except TimeoutError as error:
+            raise TransferTimeout("disk reservation timed out") from error
         completed: list[Path] = []
         total = 0
         try:
@@ -467,7 +514,11 @@ class MediaTransport:
                     raise TransferTimeout("materialization deadline exceeded")
                 if source.expires_at is not None and source.expires_at <= time.time():
                     raise DownloadFailed("media URL expired or denied")
-                await self.probe(source.url, headers=dict(source.http_headers))
+                await self.probe(
+                    source.url,
+                    headers=dict(source.http_headers),
+                    deadline=deadline,
+                )
                 path, written = await self._stream_source(
                     source,
                     reservation,
@@ -476,12 +527,130 @@ class MediaTransport:
                 )
                 completed.append(path)
                 total += written
-            return MaterializedItem(tuple(completed), total, candidate, reservation)
+            final_paths = await self._finalize_candidate(
+                request,
+                candidate,
+                completed,
+                reservation,
+                total,
+                deadline,
+            )
+            final_size = sum(path.stat().st_size for path in final_paths)
+            self._check_actual_size(final_size)
+            self._remaining(deadline)
+            return MaterializedItem(final_paths, final_size, candidate, reservation)
         except BaseException:
             for path in completed:
                 path.unlink(missing_ok=True)
             await reservation.release()
             raise
+
+    async def _finalize_candidate(
+        self,
+        request: MediaRequest,
+        candidate: MediaCandidate,
+        inputs: list[Path],
+        reservation: DiskReservation,
+        input_bytes: int,
+        deadline: float,
+    ) -> tuple[Path, ...]:
+        clip_requested = (
+            request.clip.start_seconds is not None
+            or request.clip.end_seconds is not None
+        )
+        mode = candidate.mux_mode
+        if mode is None and not clip_requested:
+            if len(inputs) > 1 and not candidate.items:
+                raise DownloadFailed("split media candidate omitted a mux plan")
+            return tuple(inputs)
+        if candidate.items and len(inputs) > 1:
+            raise DownloadFailed("album transforms require per-item plans")
+        if mode not in {None, "copy", "extract-mp3"}:
+            raise DownloadFailed("unsupported media transform plan")
+        if mode == "extract-mp3" and len(inputs) != 1:
+            raise DownloadFailed("MP3 extraction requires one source")
+
+        extension = ".mp3" if mode == "extract-mp3" else _candidate_extension(candidate)
+        final_path = self.output_dir / f"media_{uuid.uuid4().hex}{extension}"
+        partial_path = final_path.with_suffix(f"{final_path.suffix}.part")
+        # During a transform both inputs and the final artifact coexist.
+        reserve_timeout = self._remaining(deadline)
+        try:
+            await asyncio.wait_for(
+                reservation.ensure(
+                    input_bytes + min(max(input_bytes, 1), self.max_bytes)
+                ),
+                timeout=reserve_timeout,
+            )
+        except TimeoutError as error:
+            raise TransferTimeout("transform reservation timed out") from error
+        reservation.bind(partial_path)
+        command = self._build_transform_command(
+            inputs, partial_path, request, mode or "copy", extension
+        )
+        succeeded = False
+        try:
+            process_timeout = self._remaining(deadline)
+            return_code = await asyncio.wait_for(
+                self.process_runner(command, process_timeout),
+                timeout=process_timeout,
+            )
+            if return_code != 0:
+                raise DownloadFailed("media transform failed")
+            if not partial_path.is_file():
+                raise DownloadFailed("media transform produced no output")
+            output_size = partial_path.stat().st_size
+            if output_size <= 0:
+                raise DownloadFailed("media transform produced an empty output")
+            self._check_actual_size(output_size)
+            with partial_path.open("rb") as transformed:
+                signature = transformed.read(self.probe_bytes)
+            self._check_signature(signature, {})
+            self._remaining(deadline)
+            os.replace(partial_path, final_path)
+            reservation.rebind(partial_path, final_path)
+            for path in inputs:
+                path.unlink(missing_ok=True)
+                reservation.unbind(path)
+            succeeded = True
+            return (final_path,)
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError as error:
+            raise TransferTimeout("media transform timed out") from error
+        except MaterializationError:
+            raise
+        except Exception as error:
+            raise DownloadFailed("media transform failed") from error
+        finally:
+            partial_path.unlink(missing_ok=True)
+            if not succeeded:
+                final_path.unlink(missing_ok=True)
+                reservation.unbind(partial_path)
+                reservation.unbind(final_path)
+
+    def _build_transform_command(
+        self,
+        inputs: Sequence[Path],
+        output: Path,
+        request: MediaRequest,
+        mode: str,
+        extension: str,
+    ) -> list[str]:
+        command = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y"]
+        for path in inputs:
+            command.extend(("-i", str(path)))
+        command.extend(_clip_arguments(request))
+        if mode == "extract-mp3":
+            command.extend(("-vn", "-c:a", "libmp3lame", "-f", "mp3"))
+        else:
+            if len(inputs) == 2:
+                command.extend(("-map", "0:v:0", "-map", "1:a:0"))
+            else:
+                command.extend(("-map", "0"))
+            command.extend(("-c", "copy", "-f", _ffmpeg_format(extension)))
+        command.append(str(output))
+        return command
 
     async def _stream_source(
         self,
@@ -493,73 +662,100 @@ class MediaTransport:
     ) -> tuple[Path, int]:
         headers = {"Accept": "*/*", "User-Agent": "ytdlbot/2.0"}
         headers.update(dict(source.http_headers))
-        opened = await self._request("GET", source.url, headers=headers)
+        opened = await self._request(
+            "GET", source.url, headers=headers, deadline=deadline
+        )
         response = opened.response
         extension = _extension(source)
         final_path = self.output_dir / f"media_{uuid.uuid4().hex}{extension}"
         partial_path = final_path.with_suffix(f"{final_path.suffix}.part")
         written = 0
         try:
-            reservation.bind(partial_path)
-            self._check_response(response, opened.url)
-            declared_response = _content_length(response.headers)
-            if declared_response is not None:
-                self._check_actual_size(already_written + declared_response)
-                await reservation.ensure(already_written + declared_response)
-            iterator = response.iter_bytes(self.chunk_size)
-            # Opening the already-created local path is intentionally synchronous:
-            # cancellation cannot strand a file descriptor between a worker thread
-            # completing open() and handing its result back to this coroutine.
-            output = partial_path.open("wb")
             try:
-                first = True
-                signature = bytearray()
-                while True:
-                    remaining = deadline - self.clock()
-                    if remaining <= 0:
-                        raise TransferTimeout("materialization deadline exceeded")
-                    timeout = min(
-                        (
-                            max(
-                                0,
-                                self.first_byte_timeout
-                                - (self.clock() - opened.started_at),
-                            )
-                            if first
-                            else self.stall_timeout
-                        ),
-                        remaining,
-                    )
+                reservation.bind(partial_path)
+                self._check_response(response, opened.url)
+                declared_response = _content_length(response.headers)
+                if declared_response is not None:
+                    self._check_actual_size(already_written + declared_response)
+                    reserve_timeout = self._remaining(deadline)
                     try:
-                        chunk = await asyncio.wait_for(anext(iterator), timeout=timeout)
-                    except StopAsyncIteration:
-                        break
+                        await asyncio.wait_for(
+                            reservation.ensure(already_written + declared_response),
+                            timeout=reserve_timeout,
+                        )
                     except TimeoutError as error:
-                        phase = "first byte" if first else "stream progress"
-                        raise TransferTimeout(f"media {phase} timed out") from error
-                    first = False
-                    if not chunk:
-                        continue
-                    written += len(chunk)
-                    self._check_actual_size(already_written + written)
-                    await reservation.ensure(already_written + written)
-                    if len(signature) < self.probe_bytes:
-                        signature.extend(chunk[: self.probe_bytes - len(signature)])
-                    await asyncio.to_thread(output.write, chunk)
+                        raise TransferTimeout("disk reservation timed out") from error
+                iterator = response.iter_bytes(self.chunk_size)
+                # Opening the already-created local path is intentionally synchronous:
+                # cancellation cannot strand a descriptor between a worker thread
+                # completing open() and handing its result back to this coroutine.
+                output = partial_path.open("wb")
+                try:
+                    first = True
+                    signature = bytearray()
+                    while True:
+                        remaining = self._remaining(deadline)
+                        timeout = min(
+                            (
+                                max(
+                                    0,
+                                    self.first_byte_timeout
+                                    - (self.clock() - opened.started_at),
+                                )
+                                if first
+                                else self.stall_timeout
+                            ),
+                            remaining,
+                        )
+                        try:
+                            chunk = await asyncio.wait_for(
+                                anext(iterator), timeout=timeout
+                            )
+                        except StopAsyncIteration:
+                            break
+                        except TimeoutError as error:
+                            phase = "first byte" if first else "stream progress"
+                            raise TransferTimeout(f"media {phase} timed out") from error
+                        first = False
+                        if not chunk:
+                            continue
+                        written += len(chunk)
+                        self._check_actual_size(already_written + written)
+                        reserve_timeout = self._remaining(deadline)
+                        try:
+                            await asyncio.wait_for(
+                                reservation.ensure(already_written + written),
+                                timeout=reserve_timeout,
+                            )
+                        except TimeoutError as error:
+                            raise TransferTimeout(
+                                "disk reservation timed out"
+                            ) from error
+                        if len(signature) < self.probe_bytes:
+                            signature.extend(chunk[: self.probe_bytes - len(signature)])
+                        write_timeout = self._remaining(deadline)
+                        try:
+                            await asyncio.wait_for(
+                                asyncio.to_thread(output.write, chunk),
+                                timeout=write_timeout,
+                            )
+                        except TimeoutError as error:
+                            raise TransferTimeout("media write timed out") from error
+                finally:
+                    output.close()
+                if written == 0:
+                    raise DownloadFailed("media response was empty")
+                self._check_signature(bytes(signature), response.headers)
+                self._remaining(deadline)
+                os.replace(partial_path, final_path)
+                reservation.rebind(partial_path, final_path)
+                return final_path, written
             finally:
-                await asyncio.to_thread(output.close)
-            if written == 0:
-                raise DownloadFailed("media response was empty")
-            self._check_signature(bytes(signature), response.headers)
-            os.replace(partial_path, final_path)
-            reservation.rebind(partial_path, final_path)
-            return final_path, written
+                await self._close_response(response, deadline)
         except BaseException:
             partial_path.unlink(missing_ok=True)
             final_path.unlink(missing_ok=True)
             raise
-        finally:
-            await response.close()
 
     async def _request(
         self,
@@ -568,16 +764,28 @@ class MediaTransport:
         *,
         headers: Mapping[str, str] | None = None,
         body_sensitive: bool = False,
+        deadline: float | None = None,
     ) -> _Opened:
         started_at = self.clock()
+        operation_deadline = (
+            deadline if deadline is not None else started_at + self.request_timeout
+        )
+        self._remaining(operation_deadline)
         current_url = url
         current_method = method.upper()
         current_headers = dict(headers or {})
         for redirect_count in range(self.max_redirects + 1):
             try:
-                remaining = self.first_byte_timeout - (self.clock() - started_at)
+                remaining = min(
+                    self._remaining(operation_deadline),
+                    self.first_byte_timeout - (self.clock() - started_at),
+                )
                 resolved = await asyncio.wait_for(
                     self.url_policy.resolve(current_url), timeout=max(0, remaining)
+                )
+                request_remaining = min(
+                    self._remaining(operation_deadline),
+                    self.first_byte_timeout - (self.clock() - started_at),
                 )
                 response = await asyncio.wait_for(
                     self.client.open(
@@ -587,10 +795,7 @@ class MediaTransport:
                         resolved_ip=resolved.addresses[0],
                         timeout=self.request_timeout,
                     ),
-                    timeout=max(
-                        0,
-                        self.first_byte_timeout - (self.clock() - started_at),
-                    ),
+                    timeout=max(0, request_remaining),
                 )
             except (UnsafeMediaURL, MaterializationError):
                 raise
@@ -599,9 +804,9 @@ class MediaTransport:
             except Exception as error:
                 raise DownloadFailed("media connection failed") from error
             if response.status_code not in _REDIRECTS:
-                return _Opened(response, current_url, started_at)
+                return _Opened(response, current_url, self.clock())
             location = _header(response.headers, "location")
-            await response.close()
+            await self._close_response(response, operation_deadline)
             if not location or redirect_count >= self.max_redirects:
                 raise DownloadFailed("invalid media redirect")
             next_url = urljoin(current_url, location)
@@ -622,20 +827,67 @@ class MediaTransport:
             current_url = next_url
         raise DownloadFailed("too many media redirects")
 
-    async def _validate_candidate_urls(self, candidate: MediaCandidate) -> None:
+    async def _validate_candidate_urls(
+        self, candidate: MediaCandidate, deadline: float
+    ) -> None:
         urls = [candidate.url]
         urls.extend(source.url for source in candidate.sources)
         urls.extend(item.url for item in candidate.items)
         for url in dict.fromkeys(urls):
-            await self._validate_url(url)
+            await self._validate_url(url, deadline)
 
-    async def _validate_url(self, url: str) -> None:
+    async def _validate_url(self, url: str, deadline: float) -> None:
+        remaining = self._remaining(deadline)
         try:
             await asyncio.wait_for(
-                self.url_policy.resolve(url), timeout=self.dns_timeout
+                self.url_policy.resolve(url), timeout=min(self.dns_timeout, remaining)
             )
         except TimeoutError as error:
+            if self.clock() >= deadline:
+                raise TransferTimeout("materialization deadline exceeded") from error
             raise UnsafeMediaURL("media host resolution timed out") from error
+
+    def _validate_refreshed_candidate(
+        self,
+        request: MediaRequest,
+        original: MediaCandidate,
+        descriptor: RefreshDescriptor,
+        fresh: MediaCandidate,
+    ) -> None:
+        identity_matches = (
+            descriptor.max_attempts == 1
+            and descriptor.media_id == request.media_id
+            and original.provider == descriptor.provider
+            and original.media_id == descriptor.media_id
+            and original.candidate_id == descriptor.variant_id
+            and fresh.provider == descriptor.provider
+            and fresh.media_id == descriptor.media_id
+            and fresh.candidate_id == descriptor.variant_id
+            and fresh.auth_scope == request.auth_scope
+            and fresh.auth_scope == original.auth_scope
+            and fresh.refresh == descriptor
+        )
+        if not identity_matches or not validate_candidate(request, fresh).usable:
+            raise DownloadFailed("refreshed candidate contract mismatch")
+
+    def _remaining(self, deadline: float) -> float:
+        remaining = deadline - self.clock()
+        if remaining <= 0:
+            raise TransferTimeout("materialization deadline exceeded")
+        return remaining
+
+    async def _close_response(
+        self, response: StreamingResponse, deadline: float
+    ) -> None:
+        try:
+            remaining = max(0, deadline - self.clock())
+            await asyncio.wait_for(response.close(), timeout=remaining)
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError as error:
+            raise TransferTimeout("media response cleanup timed out") from error
+        except Exception as error:
+            raise DownloadFailed("media response cleanup failed") from error
 
     def _download_sources(self, candidate: MediaCandidate) -> tuple[MediaSource, ...]:
         if candidate.sources:
@@ -763,6 +1015,52 @@ def _extension(source: MediaSource) -> str:
     if suffix and suffix[1:].isalnum() and len(suffix) <= 9:
         return suffix
     return ".bin"
+
+
+def _candidate_extension(candidate: MediaCandidate) -> str:
+    container = (candidate.container or "mkv").lower().lstrip(".")
+    if not container.isalnum() or len(container) > 8:
+        raise DownloadFailed("invalid output container")
+    return f".{container}"
+
+
+def _ffmpeg_format(extension: str) -> str:
+    return {
+        ".m4a": "ipod",
+        ".mkv": "matroska",
+        ".mov": "mov",
+    }.get(extension, extension.lstrip("."))
+
+
+def _clip_arguments(request: MediaRequest) -> list[str]:
+    start = request.clip.start_seconds
+    end = request.clip.end_seconds
+    arguments: list[str] = []
+    if start is not None and start > 0:
+        arguments.extend(("-ss", _format_seconds(start)))
+    if end is not None:
+        duration = end - (start or 0)
+        if duration <= 0:
+            raise DownloadFailed("clip interval produced no media")
+        arguments.extend(("-t", _format_seconds(duration)))
+    return arguments
+
+
+def _format_seconds(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else f"{value:.6f}".rstrip("0")
+
+
+async def _run_process(command: list[str], timeout: float) -> int:
+    try:
+        async with run_subprocess(
+            command,
+            stdout_pipe=False,
+            stderr_pipe=True,
+            timeout=timeout,
+        ) as handle:
+            return await handle.wait()
+    except TimeoutError as error:
+        raise TransferTimeout("media transform timed out") from error
 
 
 def _has_media_signature(data: bytes) -> bool:

@@ -9,13 +9,13 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 
 from curl_cffi.requests import AsyncSession, Response
 
-from app.core.config import COBALT_API_URLS, COBALT_API_KEY, TEMP_DIR
+from app.core.config import COBALT_API_KEY, COBALT_API_URLS, TEMP_DIR
 
-__all__ = ["CobaltService", "CobaltResult", "CobaltPickerItem"]
+__all__ = ["CobaltPickerItem", "CobaltResult", "CobaltService"]
 
 logger = logging.getLogger("app.services.cobalt")
 
@@ -39,6 +39,14 @@ async def _stream_response(response: Response, output_path: str) -> int:
             await asyncio.to_thread(output.write, chunk)
     finally:
         await asyncio.to_thread(output.close)
+    declared = response.headers.get("content-length")
+    if isinstance(declared, (str, int)):
+        try:
+            expected = int(declared)
+        except ValueError:
+            expected = -1
+        if expected >= 0 and written != expected:
+            raise ValueError("truncated media response")
     return written
 
 

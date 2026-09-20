@@ -12,9 +12,11 @@ from app.services.media import MediaKind, MediaRequest, QualityPolicy
 from app.services.media.providers.cobalt import CobaltProvider
 from app.services.media.providers.fxtwitter import FxTwitterProvider
 from app.services.media.providers.http import (
+    CurlProviderTransport,
     HttpResponse,
     OriginPacer,
     ProviderEndpoint,
+    probe_candidate,
     request_response,
 )
 from app.services.media.providers.snapsave import (
@@ -27,6 +29,34 @@ from app.services.media.registry import FailureKind, ProviderError
 from app.services.pinterest import PinterestProvider
 
 FIXTURES = Path(__file__).parents[2] / "fixtures" / "providers"
+
+
+@pytest.mark.asyncio
+async def test_default_provider_probe_delegates_to_safe_streaming_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, dict[str, str] | None]] = []
+
+    async def safe_probe(self, url: str, *, headers=None, deadline=None):
+        del self, deadline
+        calls.append((url, headers))
+        return b"\x00\x00\x00\x18ftyp"
+
+    monkeypatch.setattr(
+        "app.services.media.transport.MediaTransport.probe", safe_probe
+    )
+
+    async def forbid_legacy_probe(*args, **kwargs):
+        del args, kwargs
+        raise AssertionError("legacy buffering probe used")
+
+    monkeypatch.setattr(CurlProviderTransport, "request", forbid_legacy_probe)
+
+    await probe_candidate(
+        CurlProviderTransport(), "https://cdn.example/video.mp4?token=secret"
+    )
+
+    assert calls == [("https://cdn.example/video.mp4?token=secret", None)]
 
 
 @dataclass(frozen=True)

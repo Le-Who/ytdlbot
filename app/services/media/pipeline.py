@@ -395,14 +395,16 @@ class MediaPipeline:
                 materialized.append(audio)
                 audio_path = str(audio.paths[0])
 
+            derived: MaterializedItem | None = None
+
             async def convert_validate_deliver() -> DeliveryReceipt:
+                nonlocal derived
                 output = await self.slideshow_converter(
                     [str(path) for path in images.paths], audio_path
                 )
                 if not output:
                     raise MediaPipelineError("slideshow video conversion failed")
                 video_path = Path(output)
-                derived: MaterializedItem | None = None
                 try:
                     if not video_path.is_file() or video_path.stat().st_size <= 0:
                         raise ArtifactValidationError(
@@ -471,14 +473,16 @@ class MediaPipeline:
                     return receipt
                 finally:
                     video_path.unlink(missing_ok=True)
-                    if derived is not None:
-                        await _await_preserving_cancellation(
-                            derived.release(delete=True)
-                        )
 
-            return await self._with_lease_renewals(
-                materialized, convert_validate_deliver()
-            )
+            try:
+                return await self._with_lease_renewals(
+                    materialized, convert_validate_deliver()
+                )
+            finally:
+                # _with_lease_renewals has stopped and joined its heartbeat
+                # before ownership markers are removed.
+                if derived is not None:
+                    await _await_preserving_cancellation(derived.release(delete=True))
 
     async def _with_lease_renewal(
         self,

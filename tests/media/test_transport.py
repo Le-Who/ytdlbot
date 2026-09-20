@@ -738,9 +738,26 @@ class RecordingProcessRunner:
 
 
 @pytest.mark.asyncio
-async def test_adopt_local_owns_and_clips_derived_artifact(tmp_path: Path) -> None:
+async def test_adopt_local_owns_and_clips_cross_filesystem_artifact(
+    tmp_path: Path,
+) -> None:
     runner = RecordingProcessRunner()
-    media, _ = transport(tmp_path, [], process_runner=runner)
+    move_calls = 0
+
+    def cross_device_move(source_path: Path, destination_path: Path) -> None:
+        del source_path, destination_path
+        nonlocal move_calls
+        move_calls += 1
+        raise OSError(18, "Invalid cross-device link")
+
+    media = MediaTransport(
+        output_dir=tmp_path,
+        client=FakeClient([]),
+        url_policy=URLPolicy(resolver=Resolver({})),
+        disk_budget=DiskBudget(tmp_path, capacity_bytes=6_000_000_000),
+        process_runner=runner,
+        file_mover=cross_device_move,
+    )
     source = tmp_path / "slideshow-source.mp4"
     source.write_bytes(b"\x00\x00\x00\x18ftypisomsource")
     candidate = replace(
@@ -767,9 +784,9 @@ async def test_adopt_local_owns_and_clips_derived_artifact(tmp_path: Path) -> No
         clip=ClipInterval(10, 20),
         output_variant="slideshow-video",
     )
-
     item = await media.adopt_local(clipped, source, candidate)
 
+    assert move_calls == 1
     assert not source.exists()
     assert len(item.paths) == 1
     assert item.paths[0].is_file()

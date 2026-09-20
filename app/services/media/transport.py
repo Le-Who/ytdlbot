@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import errno
 import ipaddress
 import logging
 import math
@@ -68,6 +69,7 @@ class DownloadFailed(MaterializationError):
 
 Resolver = Callable[[str, int], Awaitable[tuple[str, ...]]]
 ProcessRunner = Callable[[list[str], float], Awaitable[int]]
+FileMover = Callable[[Path, Path], Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -255,6 +257,7 @@ class MediaTransport:
         cleanup_timeout: float = 3.5,
         clock: Callable[[], float] = time.monotonic,
         process_runner: ProcessRunner | None = None,
+        file_mover: FileMover = os.replace,
     ) -> None:
         if max_bytes <= 0 or probe_bytes <= 0 or chunk_size <= 0:
             raise ValueError("transport byte limits must be positive")
@@ -295,6 +298,7 @@ class MediaTransport:
         self.cleanup_timeout = cleanup_timeout
         self.clock = clock
         self.process_runner = process_runner or _run_process
+        self.file_mover = file_mover
         self._detached_cleanup_tasks: set[asyncio.Future[Any]] = set()
 
     async def probe(
@@ -493,11 +497,26 @@ class MediaTransport:
         adopted = self.output_dir / (
             f"media_{uuid.uuid4().hex}{_candidate_extension(candidate)}"
         )
+        staging = adopted.with_suffix(f"{adopted.suffix}.part")
         completed: tuple[Path, ...] = ()
         succeeded = False
         try:
             reservation.bind(adopted)
-            await asyncio.to_thread(os.replace, source, adopted)
+            try:
+                await asyncio.to_thread(self.file_mover, source, adopted)
+            except OSError as error:
+                if (
+                    error.errno != errno.EXDEV
+                    and getattr(error, "winerror", None) != 17
+                ):
+                    raise
+                reservation.unbind(adopted)
+                reservation.bind(staging)
+                await self._copy_local_file(source, staging, materialization_deadline)
+                if staging.stat().st_size != source_size:
+                    raise DownloadFailed("local artifact copy was truncated")
+                reservation.promote(staging, adopted)
+                source.unlink(missing_ok=True)
             self._remaining(materialization_deadline)
             if adopted.stat().st_size != source_size:
                 raise DownloadFailed("local artifact move was truncated")
@@ -525,9 +544,25 @@ class MediaTransport:
         finally:
             if not succeeded:
                 adopted.unlink(missing_ok=True)
+                staging.unlink(missing_ok=True)
                 for item in completed:
                     item.unlink(missing_ok=True)
                 await reservation.release()
+
+    async def _copy_local_file(
+        self, source: Path, destination: Path, deadline: float
+    ) -> None:
+        """Copy across filesystems with cancellation bounded to one chunk."""
+        with source.open("rb") as input_stream, destination.open("xb") as output_stream:
+            while True:
+                self._remaining(deadline)
+                chunk = await _await_thread_io(
+                    asyncio.to_thread(input_stream.read, self.chunk_size)
+                )
+                if not chunk:
+                    break
+                await _await_thread_io(asyncio.to_thread(output_stream.write, chunk))
+            await _await_thread_io(asyncio.to_thread(output_stream.flush))
 
     async def _race_small(
         self,
@@ -1250,6 +1285,21 @@ def _reencode_arguments(candidate: MediaCandidate, extension: str) -> list[str]:
 
 def _format_seconds(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else f"{value:.6f}".rstrip("0")
+
+
+async def _await_thread_io(operation: Awaitable[Any]) -> Any:
+    """Finish one local I/O chunk, then restore caller cancellation."""
+    task: asyncio.Future[Any] = asyncio.ensure_future(operation)
+    cancellation: asyncio.CancelledError | None = None
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError as error:
+            cancellation = error
+    result = task.result()
+    if cancellation is not None:
+        raise cancellation
+    return result
 
 
 async def _run_process(command: list[str], timeout: float) -> int:

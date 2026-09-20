@@ -263,6 +263,21 @@ async def test_slideshow_video_uses_soundtrack_validation_delivery_and_lease_hea
     )
     reservations: list[_Reservation] = []
 
+    class DerivedReservation(_Reservation):
+        def __init__(self) -> None:
+            super().__init__()
+            self.release_started = False
+
+        def renew(self) -> None:
+            if self.release_started:
+                raise RuntimeError("heartbeat raced released derived artifact")
+            super().renew()
+
+        async def release(self) -> None:
+            self.release_started = True
+            await asyncio.sleep(0.025)
+            await super().release()
+
     class Transport:
         async def materialize(self, materialize_request, candidates, **kwargs):
             selected = candidates[0]
@@ -278,7 +293,7 @@ async def test_slideshow_video_uses_soundtrack_validation_delivery_and_lease_hea
         async def adopt_local(self, adopt_request, path, selected, *, deadline=None):
             del deadline
             assert adopt_request.clip == ClipInterval(10, 20)
-            reservation = _Reservation()
+            reservation = DerivedReservation()
             reservations.append(reservation)
             return MaterializedItem((path,), path.stat().st_size, selected, reservation)
 
@@ -334,7 +349,8 @@ async def test_slideshow_video_uses_soundtrack_validation_delivery_and_lease_hea
     assert derived_request.cache_key != normal_video_request.cache_key
     assert derived.candidate.kind is MediaKind.VIDEO
     assert derived.candidate.has_audio
-    assert all(reservation.renewed >= 3 for reservation in reservations)
+    assert all(reservation.renewed >= 3 for reservation in reservations[:2])
+    assert reservations[-1].renewed >= 2
     assert all(reservation.released == 1 for reservation in reservations)
     assert not video.exists()
 

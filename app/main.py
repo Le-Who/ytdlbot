@@ -93,6 +93,7 @@ async def shutdown_runtime(
     await attempt("Telegram application shutdown", bot_app.shutdown)
 
     state.media_pipeline = None
+    state.bot_app = None
     configure_job_store(None)
     await attempt("job store close", job_store.close)
     if redis_client:
@@ -198,18 +199,10 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.warning("Cookies: none configured ⚠️  (VK/FB/TT downloads will fail)")
 
-    # Redis lifecycle: verify connectivity at startup
-    if state.redis_client:
-        await state.redis_client.ping()
-        logger.info("Redis connected ✅")
-
     job_store = JobStore()
-    await job_store.initialize()
     drain_controller = DrainController(job_store)
-
     stop_event = asyncio.Event()
-    janitor_task = asyncio.create_task(janitor_loop(stop_event))
-    updater_task = asyncio.create_task(auto_updater_loop(stop_event))
+    background_tasks: tuple[asyncio.Task[None], ...] = ()
 
     app_builder = _build_telegram_application_builder()
 
@@ -325,13 +318,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     bot_app.add_error_handler(_global_error_handler)
 
-    await bot_app.initialize()
-    from app.services.media.pipeline import build_default_pipeline
-
-    state.media_pipeline = build_default_pipeline(bot_app.bot)
-    await bot_app.start()
-    state.bot_app = bot_app
-
     async def process_durable_update(payload: dict[str, Any]) -> None:
         update = Update.de_json(payload, bot_app.bot)
         await bot_app.process_update(update)
@@ -341,23 +327,41 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         drain_controller,
         process_durable_update,
     )
-    configure_job_store(job_store)
-    await durable_worker.start()
-
-    if config.WEBHOOK_URL:
-        await bot_app.bot.set_webhook(
-            url=f"{config.WEBHOOK_URL}/webhook",
-            secret_token=config.TELEGRAM_SECRET_TOKEN,
-            allowed_updates=["message", "callback_query"],
-        )
-    else:
-        await bot_app.bot.delete_webhook()
-        assert bot_app.updater is not None
-        await bot_app.updater.start_polling(
-            allowed_updates=["message", "callback_query"]
-        )
 
     try:
+        # Acquire runtime resources only after synchronous application setup so
+        # builder/handler failures cannot strand tasks or durable ownership.
+        if state.redis_client:
+            await state.redis_client.ping()
+            logger.info("Redis connected ✅")
+        await job_store.initialize()
+        janitor_task = asyncio.create_task(janitor_loop(stop_event))
+        background_tasks = (janitor_task,)
+        updater_task = asyncio.create_task(auto_updater_loop(stop_event))
+        background_tasks += (updater_task,)
+
+        await bot_app.initialize()
+        from app.services.media.pipeline import build_default_pipeline
+
+        state.media_pipeline = build_default_pipeline(bot_app.bot)
+        await bot_app.start()
+        state.bot_app = bot_app
+        configure_job_store(job_store)
+        await durable_worker.start()
+
+        if config.WEBHOOK_URL:
+            await bot_app.bot.set_webhook(
+                url=f"{config.WEBHOOK_URL}/webhook",
+                secret_token=config.TELEGRAM_SECRET_TOKEN,
+                allowed_updates=["message", "callback_query"],
+            )
+        else:
+            await bot_app.bot.delete_webhook()
+            assert bot_app.updater is not None
+            await bot_app.updater.start_polling(
+                allowed_updates=["message", "callback_query"]
+            )
+
         yield
     finally:
         logger.info("Shutting down...")
@@ -365,7 +369,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             drain_controller=drain_controller,
             durable_worker=durable_worker,
             stop_event=stop_event,
-            background_tasks=(janitor_task, updater_task),
+            background_tasks=background_tasks,
             bot_app=bot_app,
             webhook_enabled=bool(config.WEBHOOK_URL),
             job_store=job_store,

@@ -1,18 +1,19 @@
 import asyncio
 import logging
 import uuid
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ContextTypes
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
+from telegram.ext import ContextTypes
 
 from app.core import state
 from app.core.config import MAX_TG_UPLOAD_MB
-from app.core.utils import extract_url_from_update
-from app.services.downloader import MediaSender
 from app.core.models import DownloadContext
 from app.core.process import process_owner_scope
 from app.core.texts import Texts
-from app.services.ytdlp.parsers import _is_tiktok
+from app.core.utils import extract_url_from_update
+from app.services.downloader import MediaSender
+from app.services.media.models import DeliveryTarget
 from app.services.media.pipeline import (
     CallbackDataError,
     MediaPipelineError,
@@ -20,7 +21,7 @@ from app.services.media.pipeline import (
     decode_callback_payload,
     encode_callback_data,
 )
-from app.services.media.models import DeliveryTarget
+from app.services.ytdlp.parsers import _is_tiktok
 
 logger = logging.getLogger("app.bot.group_logic")
 
@@ -192,8 +193,8 @@ async def handle_group_message(
     api_source = None
 
     if is_tiktok_url:
-        from app.services.tikwm import TikWMService
         from app.core.config import ENABLE_COBALT_TIKTOK
+        from app.services.tikwm import TikWMService
 
         try:
             tikwm_res = await TikWMService.process(url)
@@ -329,7 +330,7 @@ async def handle_group_message(
 
             # Smart BVC2/HEVC Fallback Check
             if file_path and (not file_path.startswith("http")):
-                from app.services.orchestrator import extract_video_meta, TG_SAFE_CODECS
+                from app.services.orchestrator import TG_SAFE_CODECS, extract_video_meta
 
                 with process_owner_scope(token):
                     meta = await extract_video_meta(file_path)
@@ -434,6 +435,7 @@ async def handle_group_message(
             caption=caption,
             parse_mode="HTML",
             reply_markup=kb,
+            operation_key=f"group-media:{url}:{video_format}",
         )
     finally:
         _grp_queue.release()
@@ -569,9 +571,9 @@ async def on_group_slideshow(
             return
 
         if is_api and payload.api_json:
-            from app.services.gallery_dl.service import SlideshowResult
-
             from typing import Any
+
+            from app.services.gallery_dl.service import SlideshowResult
 
             image_paths: Any = []
             audio_path = None
@@ -630,6 +632,7 @@ async def on_group_slideshow(
                     caption=caption,
                     parse_mode="HTML",
                     reply_markup=kb,
+                    operation_key=f"group-slideshow:{page_url}:{mode}:fallback-video",
                 )
                 if success:
                     try:
@@ -663,6 +666,7 @@ async def on_group_slideshow(
                     result.images,
                     caption=caption,
                     parse_mode="HTML",
+                    operation_key=f"group-slideshow:{page_url}:{mode}:photos",
                 )
                 if success:
                     try:
@@ -706,6 +710,7 @@ async def on_group_slideshow(
                     caption=caption,
                     parse_mode="HTML",
                     reply_markup=kb,
+                    operation_key=f"group-slideshow:{page_url}:{mode}:video",
                 )
                 if success:
                     try:

@@ -14,32 +14,31 @@ import logging
 from datetime import datetime
 
 from telegram import (
-    Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    Update,
 )
-from telegram.ext import ContextTypes
 from telegram.constants import ChatAction
+from telegram.ext import ContextTypes
 
 from app.core import state
-from app.core.texts import Texts
 from app.core.models import DownloadContext
-from app.services.sender import TelegramSender
+from app.core.texts import Texts
+from app.services.media.models import (
+    DeliveryTarget,
+    MediaCandidate,
+    MediaItem,
+    MediaKind,
+    MediaSource,
+)
 from app.services.media.pipeline import (
     CallbackDataError,
     build_media_request,
     decode_callback_payload,
     encode_callback_data,
 )
-from app.services.media.models import (
-    DeliveryTarget,
-    MediaCandidate,
-    MediaItem,
-    MediaKind,
-    MediaRequest,
-    MediaSource,
-)
+from app.services.sender import TelegramSender
 
 logger = logging.getLogger("app.bot.ig_callbacks")
 
@@ -458,6 +457,7 @@ async def on_ig_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         is_audio=False,
         is_gif=False,
         caption=f"📷 {story.label}",
+        operation_key=f"instagram-story:{token}:{story.mediaid}",
     )
     if not success:
         try:
@@ -497,7 +497,7 @@ async def on_ig_download_all(
 
     await q.edit_message_text("⏳ Скачиваю все истории...")
 
-    from app.services.instagram import InstagramService, IGStoryItem
+    from app.services.instagram import IGStoryItem, InstagramService
 
     stories = [
         IGStoryItem(
@@ -560,6 +560,7 @@ async def on_ig_download_all(
             is_audio=False,
             is_gif=False,
             caption=f"📷 {item.label}",
+            operation_key=f"instagram-stories:{token}:{item.mediaid}",
         )
         if success:
             sent += 1
@@ -633,6 +634,7 @@ async def on_ig_hl_download(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         is_audio=False,
         is_gif=False,
         caption=f"📷 {story.label}",
+        operation_key=f"instagram-highlight:{cache_key}:{story.mediaid}",
     )
     if not success:
         try:
@@ -709,6 +711,7 @@ async def on_ig_hl_download_all(
                 is_audio=False,
                 is_gif=False,
                 caption=f"📷 {item.label}",
+                operation_key=f"instagram-highlight:{cache_key}:{item.mediaid}",
             )
             return receipt.success
 

@@ -62,6 +62,7 @@ class TelegramSender:
         has_spoiler: bool = False,
         thumbnail: str | io.BytesIO | None = None,
         file_name: str | None = None,
+        operation_key: str | None = None,
     ) -> DeliveryReceipt:
         from app.core.metrics import metrics
 
@@ -97,6 +98,11 @@ class TelegramSender:
             return await delivery.deliver(
                 DeliveryAsset(item=item, source=file_path_or_buffer),
                 DeliveryTarget(str(chat_id)),
+                operation_key=(
+                    f"compat-file:{kind.value}:{operation_key}"
+                    if operation_key is not None
+                    else None
+                ),
                 caption=caption,
                 parse_mode=parse_mode,
                 reply_markup=reply_markup,
@@ -119,6 +125,7 @@ class TelegramSender:
         reply_to_message_id: int | None = None,
         reply_parameters: Any = None,
         use_local_api: bool | None = None,
+        operation_key: str | None = None,
     ) -> DeliveryReceipt:
         reply_params = reply_parameters
         if reply_params is None and reply_to_message_id:
@@ -141,6 +148,11 @@ class TelegramSender:
         return await delivery.deliver(
             assets,
             DeliveryTarget(str(chat_id)),
+            operation_key=(
+                f"compat-slideshow-photos:{operation_key}"
+                if operation_key is not None
+                else None
+            ),
             caption=caption,
             parse_mode=parse_mode,
             reply_parameters=reply_params,

@@ -1,38 +1,40 @@
 import asyncio
-import logging
 import html
+import logging
 import uuid
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
-from telegram.constants import ChatAction
-
-from app.core import state
 from typing import Any
-from app.core.config import MAX_TG_UPLOAD_MB, ENABLE_COBALT_TIKTOK
-from app.core.user_prefs import get_prefs
-from app.core.models import DownloadContext
-from app.core.metrics import metrics as _m
-from app.core.process import process_owner_scope
-from app.bot.commands import cmd_mp3, _MP4_FORMAT as _fmt_pref, _fast_download
-from app.services.instagram import (
-    parse_instagram_url,
-    InstagramService,
-)
-from app.services.tikwm import TikWMService
-from app.services.cobalt import CobaltService
-from app.services.ytdlp.parsers import classify_tiktok_content
-from app.services.ytdlp.service import FormatItem
-from app.services.ytdlp.models import ExtractionResult
-from app.services.media.pipeline import encode_callback_data
-from app.core.utils import extract_url_from_update
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.constants import ChatAction
+from telegram.ext import ContextTypes
+
+from app.bot.commands import _MP4_FORMAT as _fmt_pref
+from app.bot.commands import _fast_download, cmd_mp3
 from app.bot.keyboards import build_format_keyboard, build_slideshow_keyboard
+from app.core import state
+from app.core.config import ENABLE_COBALT_TIKTOK, MAX_TG_UPLOAD_MB
+from app.core.metrics import metrics as _m
+from app.core.models import DownloadContext
+from app.core.process import process_owner_scope
 from app.core.texts import Texts
+from app.core.user_prefs import get_prefs
+from app.core.utils import extract_url_from_update
+from app.services.cobalt import CobaltService
+from app.services.instagram import (
+    InstagramService,
+    parse_instagram_url,
+)
+from app.services.media.pipeline import encode_callback_data
+from app.services.tikwm import TikWMService
 from app.services.ytdlp.exceptions import (
     AccessDeniedError,
-    VideoNotFoundError,
-    LiveStreamError,
     ExtractionError,
+    LiveStreamError,
+    VideoNotFoundError,
 )
+from app.services.ytdlp.models import ExtractionResult
+from app.services.ytdlp.parsers import classify_tiktok_content
+from app.services.ytdlp.service import FormatItem
 
 logger = logging.getLogger("app.bot.messages")
 
@@ -536,7 +538,7 @@ async def _complete_message_parse(
 
         # Smart BVC2/HEVC Fallback Check
         if file_path and (not file_path.startswith("http")):
-            from app.services.orchestrator import extract_video_meta, TG_SAFE_CODECS
+            from app.services.orchestrator import TG_SAFE_CODECS, extract_video_meta
 
             with process_owner_scope(parse_token):
                 meta = await extract_video_meta(file_path)
@@ -601,6 +603,7 @@ async def _complete_message_parse(
             caption=f"👤 {user.mention_html()}",
             parse_mode="HTML",
             reply_markup=kb,
+            operation_key=f"message-media:{text}:video",
         )
         if success:
             try:
@@ -706,6 +709,7 @@ async def _handle_instagram(
             is_gif=False,
             caption=f"📷 Instagram • {user.mention_html()}",
             parse_mode="HTML",
+            operation_key=f"instagram:{url}:post",
         )
         if success:
             try:
@@ -770,6 +774,7 @@ async def _handle_instagram(
             is_audio=False,
             is_gif=False,
             caption=f"📷 @{target} • {story.label}",
+            operation_key=f"instagram:{url}:story:{story.mediaid}",
         )
         if success:
             try:
@@ -958,8 +963,9 @@ async def _handle_twitter(
     user = update.effective_user
     chat = update.effective_chat
     assert msg is not None and user is not None and chat is not None
-    from app.services.sender import TelegramSender
     import os
+
+    from app.services.sender import TelegramSender
 
     status_msg = await msg.reply_text("⏳ Поиск в X (Twitter)...")
 
@@ -1007,6 +1013,7 @@ async def _handle_twitter(
                 is_gif=False,
                 caption=f"🐦 X (Twitter) • {user.mention_html()}",
                 parse_mode="HTML",
+                operation_key=f"x:{url}:video",
             )
 
             if success:
@@ -1072,6 +1079,7 @@ async def _handle_twitter(
                         is_gif=(item_type == "gif"),
                         caption=caption,
                         parse_mode="HTML",
+                        operation_key=f"x:{url}:item:{i}",
                     )
                     if success:
                         success_count += 1

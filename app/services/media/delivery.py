@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import logging
 import os
@@ -147,6 +148,7 @@ class TelegramDelivery:
         target: DeliveryTarget,
         *,
         request: MediaRequest | None = None,
+        operation_key: str | None = None,
         caption: str = "",
         parse_mode: str | None = None,
         reply_markup: Any = None,
@@ -179,7 +181,12 @@ class TelegramDelivery:
         results: dict[str, DeliveredItem] = {}
         pending_assets: list[DeliveryAsset] = []
         for asset in assets:
-            item_key = _durable_item_key(target, asset, request=request)
+            item_key = _durable_item_key(
+                target,
+                asset,
+                request=request,
+                operation_key=operation_key,
+            )
             prior = await current_delivery_outcome(item_key)
             if prior is DeliveryOutcome.SUCCESS:
                 results[item_key] = DeliveredItem(
@@ -204,7 +211,13 @@ class TelegramDelivery:
         for unit_index, unit in enumerate(units):
             await begin_current_delivery(
                 tuple(
-                    _durable_item_key(target, asset, request=request) for asset in unit
+                    _durable_item_key(
+                        target,
+                        asset,
+                        request=request,
+                        operation_key=operation_key,
+                    )
+                    for asset in unit
                 )
             )
             group_options = dict(options)
@@ -227,7 +240,12 @@ class TelegramDelivery:
                     options=group_options,
                 )
             for asset, item in zip(unit, delivered, strict=True):
-                item_key = _durable_item_key(target, asset, request=request)
+                item_key = _durable_item_key(
+                    target,
+                    asset,
+                    request=request,
+                    operation_key=operation_key,
+                )
                 await record_current_delivery(
                     item_key,
                     _durable_outcome(item.status),
@@ -237,7 +255,14 @@ class TelegramDelivery:
         return self._receipt(
             target,
             tuple(
-                results[_durable_item_key(target, asset, request=request)]
+                results[
+                    _durable_item_key(
+                        target,
+                        asset,
+                        request=request,
+                        operation_key=operation_key,
+                    )
+                ]
                 for asset in assets
             ),
         )
@@ -744,10 +769,16 @@ def _durable_item_key(
     asset: DeliveryAsset,
     *,
     request: MediaRequest | None,
+    operation_key: str | None,
 ) -> str:
     if request is not None:
         return (
             f"{target.destination}:request:{request.cache_key}:{asset.item_index or 0}"
+        )
+    if operation_key is not None:
+        operation_digest = hashlib.sha256(operation_key.encode()).hexdigest()
+        return (
+            f"{target.destination}:operation:{operation_digest}:{asset.item_index or 0}"
         )
     return f"{target.destination}:{asset.item_index or 0}:{asset.item.media_id}"
 

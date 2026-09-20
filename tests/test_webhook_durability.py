@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -12,6 +13,7 @@ from fastapi import FastAPI
 from telegram import Message
 from telegram.error import BadRequest, NetworkError
 
+from app import main as main_module
 from app.api import routes
 from app.bot import callbacks
 from app.core import state
@@ -21,7 +23,7 @@ from app.core.job_store import (
     JobStore,
     delivery_job_context,
 )
-from app.main import shutdown_runtime, stop_telegram_ingress
+from app.main import lifespan, shutdown_runtime, stop_telegram_ingress
 from app.services.media.delivery import DeliveryAsset, TelegramDelivery
 from app.services.media.models import (
     DeliveryStatus,
@@ -31,6 +33,7 @@ from app.services.media.models import (
     MediaRequest,
 )
 from app.services.media.pipeline import encode_callback_data
+from app.services.sender import TelegramSender
 
 AUTH = {"X-Telegram-Bot-Api-Secret-Token": "test-secret"}
 UPDATE = {
@@ -208,6 +211,137 @@ async def test_shutdown_cleanup_continues_after_drain_and_worker_failures(monkey
     redis_client.aclose.assert_awaited_once()
     assert state.media_pipeline is None
     assert routes._job_store is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_phase", ["builder", "worker", "webhook", "polling"])
+async def test_lifespan_cleans_partial_startup_failure(
+    tmp_path, monkeypatch, failure_phase
+):
+    class RecordingStore(JobStore):
+        close_calls = 0
+
+        async def close(self) -> None:
+            self.close_calls += 1
+            await super().close()
+
+    store = RecordingStore(tmp_path / "jobs.sqlite3")
+    created_workers = []
+    background_tasks = []
+    background_stops = []
+
+    class RecordingWorker(main_module.DurableUpdateWorker):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            created_workers.append(self)
+
+        async def start(self) -> None:
+            await super().start()
+            if failure_phase == "worker":
+                raise OSError("worker startup failed after acquiring lease")
+
+    async def background(stop_event: asyncio.Event) -> None:
+        background_tasks.append(asyncio.current_task())
+        background_stops.append(stop_event)
+        await stop_event.wait()
+
+    bot = SimpleNamespace(
+        set_webhook=AsyncMock(
+            side_effect=(
+                OSError("setWebhook unavailable")
+                if failure_phase == "webhook"
+                else None
+            )
+        ),
+        delete_webhook=AsyncMock(),
+    )
+    updater = SimpleNamespace(
+        start_polling=AsyncMock(
+            side_effect=(
+                OSError("polling unavailable") if failure_phase == "polling" else None
+            )
+        ),
+        stop=AsyncMock(),
+    )
+    bot_app = SimpleNamespace(
+        bot=bot,
+        updater=updater,
+        add_handler=MagicMock(),
+        add_error_handler=MagicMock(),
+        initialize=AsyncMock(),
+        start=AsyncMock(),
+        stop=AsyncMock(),
+        shutdown=AsyncMock(),
+        process_update=AsyncMock(),
+    )
+    builder = SimpleNamespace(build=lambda: bot_app)
+
+    def build_application():
+        if failure_phase == "builder":
+            raise OSError("application builder unavailable")
+        return builder
+
+    pipeline = object()
+    monkeypatch.setattr(main_module, "JobStore", lambda: store)
+    monkeypatch.setattr(main_module, "DurableUpdateWorker", RecordingWorker)
+    monkeypatch.setattr(main_module, "janitor_loop", background)
+    monkeypatch.setattr(main_module, "auto_updater_loop", background)
+    monkeypatch.setattr(
+        main_module, "_build_telegram_application_builder", build_application
+    )
+    monkeypatch.setattr(
+        main_module.config,
+        "WEBHOOK_URL",
+        "" if failure_phase == "polling" else "https://bot.example",
+    )
+    monkeypatch.setattr(main_module.config, "TELEGRAM_LOCAL_ENDPOINT", None)
+    monkeypatch.setattr(main_module.state, "redis_client", None)
+    monkeypatch.setattr(main_module.state, "bot_app", None)
+    monkeypatch.setattr(
+        "app.services.media.pipeline.build_default_pipeline",
+        lambda _: pipeline,
+    )
+
+    try:
+        with pytest.raises(OSError):
+            async with lifespan(FastAPI()):
+                raise AssertionError("startup failure must happen before yield")
+        await asyncio.sleep(0)
+
+        assert routes._job_store is None
+        if failure_phase == "builder":
+            assert created_workers == []
+            assert background_tasks == []
+            assert store._initialized is False
+            assert store.close_calls == 0
+        else:
+            worker = created_workers[0]
+            assert worker._task is None
+            assert background_tasks and all(task.done() for task in background_tasks)
+            assert store.close_calls == 1
+        assert await store.acquire_worker("worker-b") is True
+        await store.release_worker("worker-b")
+        if failure_phase == "builder":
+            bot_app.stop.assert_not_awaited()
+            bot_app.shutdown.assert_not_awaited()
+        else:
+            bot_app.stop.assert_awaited_once()
+            bot_app.shutdown.assert_awaited_once()
+        assert state.media_pipeline is None
+        assert state.bot_app is None
+    finally:
+        routes.configure_job_store(None)
+        for stop_event in background_stops:
+            stop_event.set()
+        await asyncio.gather(
+            *(task for task in background_tasks if task is not None),
+            return_exceptions=True,
+        )
+        for worker in created_workers:
+            if worker._task is not None:
+                await worker.stop()
+        state.media_pipeline = None
+        state.bot_app = None
 
 
 class RecordingBot:
@@ -493,3 +627,103 @@ async def test_rejected_cached_gif_is_recorded_failed_then_generated_once(
     assert await store.delivery_outcome("807", item_key=key) is DeliveryOutcome.SUCCESS
     assert bot.send_document.await_count == 2
     assert gifdoc_cache[f"gifdoc:{token}"] == "replacement-file-id"
+
+
+@pytest.mark.asyncio
+async def test_compatibility_sender_operation_key_survives_temp_path_change(tmp_path):
+    now = [1_700_000_000.0]
+    store = JobStore(tmp_path / "jobs.sqlite3", clock=lambda: now[0])
+    await store.accept_update({"update_id": 808})
+    claimed = await store.claim_next("worker-a", lease_seconds=1)
+    assert claimed is not None
+    first_path = tmp_path / "provider-a-uuid.mp4"
+    second_path = tmp_path / "provider-b-uuid.mp4"
+    first_path.write_bytes(b"first")
+    second_path.write_bytes(b"second")
+    bot = RecordingBot(error=NetworkError("upload disconnected"))
+
+    with delivery_job_context(store, claimed.id, owner_id="worker-a"):
+        first = await TelegramSender.send_file(
+            bot,
+            42,
+            str(first_path),
+            operation_key="youtube:https://youtu.be/stable:video",
+        )
+
+    assert first.status is DeliveryStatus.UNCERTAIN
+    operation_digest = hashlib.sha256(
+        b"compat-file:video:youtube:https://youtu.be/stable:video"
+    ).hexdigest()
+    assert (
+        await store.delivery_outcome(
+            "808", item_key=f"42:operation:{operation_digest}:0"
+        )
+        is DeliveryOutcome.UNCERTAIN
+    )
+    assert (
+        await store.delivery_outcome("808", item_key="42:0:provider-a-uuid.mp4") is None
+    )
+    now[0] += 2
+    recovered = await store.claim_next("worker-b")
+    assert recovered is not None
+    with delivery_job_context(store, recovered.id, owner_id="worker-b"):
+        replay = await TelegramSender.send_file(
+            bot,
+            42,
+            str(second_path),
+            operation_key="youtube:https://youtu.be/stable:video",
+        )
+
+    assert replay.status is DeliveryStatus.UNCERTAIN
+    assert bot.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_slideshow_operation_key_survives_generated_uuid_paths(tmp_path):
+    now = [1_700_000_000.0]
+    store = JobStore(tmp_path / "jobs.sqlite3", clock=lambda: now[0])
+    await store.accept_update({"update_id": 809})
+    claimed = await store.claim_next("worker-a", lease_seconds=1)
+    assert claimed is not None
+    first_images = []
+    second_images = []
+    for generation, paths in (("a", first_images), ("b", second_images)):
+        for index in range(2):
+            path = tmp_path / f"{generation}-uuid-{index}.jpg"
+            path.write_bytes(b"image")
+            paths.append(str(path))
+    bot = MagicMock()
+    bot.send_media_group = AsyncMock(side_effect=NetworkError("upload disconnected"))
+
+    with delivery_job_context(store, claimed.id, owner_id="worker-a"):
+        first = await TelegramSender.send_slideshow_photos(
+            bot,
+            42,
+            first_images,
+            operation_key="slideshow:https://example.test/post:photos",
+        )
+
+    assert first.status is DeliveryStatus.UNCERTAIN
+    operation_digest = hashlib.sha256(
+        b"compat-slideshow-photos:slideshow:https://example.test/post:photos"
+    ).hexdigest()
+    assert (
+        await store.delivery_outcome(
+            "809", item_key=f"42:operation:{operation_digest}:0"
+        )
+        is DeliveryOutcome.UNCERTAIN
+    )
+    assert await store.delivery_outcome("809", item_key="42:0:photo:0") is None
+    now[0] += 2
+    recovered = await store.claim_next("worker-b")
+    assert recovered is not None
+    with delivery_job_context(store, recovered.id, owner_id="worker-b"):
+        replay = await TelegramSender.send_slideshow_photos(
+            bot,
+            42,
+            second_images,
+            operation_key="slideshow:https://example.test/post:photos",
+        )
+
+    assert replay.status is DeliveryStatus.UNCERTAIN
+    assert bot.send_media_group.await_count == 1

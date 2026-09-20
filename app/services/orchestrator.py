@@ -1,31 +1,31 @@
 import asyncio
-import json
-import os
 import io
+import json
 import logging
-from typing import Optional, Callable, Awaitable, Union
+import os
+from typing import Awaitable, Callable, Optional, Union
 
-from telegram.constants import ChatAction
 from telegram import Bot
+from telegram.constants import ChatAction
 
-from app.core import state, config
+from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
+from app.core import config, state
 from app.core.config import MAX_TG_UPLOAD_MB
-from app.core.utils import safe_remove
-from app.core.policy import size_allowed
-from app.core.texts import Texts
 from app.core.models import DownloadContext
+from app.core.policy import size_allowed
 from app.core.process import process_owner_scope, process_supervisor
-from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
-from app.services.downloader import MediaSender
-from app.services.tikwm import TikWMService
-from app.services.gallery_dl.service import GalleryDlService
-from app.services.pinterest import PinterestNativeService
+from app.core.texts import Texts
+from app.core.utils import safe_remove
 from app.services.converter import (
     MediaConverter,
     compress_video_to_size,
     find_thumbnail,
     split_video_stream_copy,
 )
+from app.services.downloader import MediaSender
+from app.services.gallery_dl.service import GalleryDlService
+from app.services.pinterest import PinterestNativeService
+from app.services.tikwm import TikWMService
 
 logger = logging.getLogger("app.services.orchestrator")
 
@@ -615,6 +615,12 @@ class DownloadOrchestrator:
                                     width=part_meta.get("width"),
                                     height=part_meta.get("height"),
                                     thumbnail=_part_thumb_bytes,
+                                    operation_key=(
+                                        f"orchestrator:{payload.page_url}:"
+                                        f"{payload.format_id}:{payload.height}:"
+                                        f"{payload.section}:"
+                                        f"part:{idx}"
+                                    ),
                                 )
                                 _cleanup_extras.append(part_path)
                                 if not ok:
@@ -675,6 +681,10 @@ class DownloadOrchestrator:
                 height=video_meta.get("height"),
                 thumbnail=thumb_bytes,
                 reply_markup=_build_gif_reply_markup(token, is_gif),
+                operation_key=(
+                    f"orchestrator:{payload.page_url}:"
+                    f"{payload.format_id}:{payload.height}:{payload.section}:media"
+                ),
             )
 
             if not success:

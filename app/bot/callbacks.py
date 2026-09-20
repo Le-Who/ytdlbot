@@ -472,6 +472,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         reply_to_message_id=target_msg_id,
         caption="🎬 GIF",
         reply_markup=build_sent_gif_keyboard(token),
+        operation_key=f"callback-gif:{token}",
     )
 
     if not success:
@@ -691,6 +692,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     q.message.chat_id,
                     result.images,
                     caption=caption,
+                    operation_key=f"callback-slideshow:{page_url}:{mode}:photos",
                 )
 
                 if success:
@@ -717,6 +719,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                     q.message.chat_id,
                     video_path,
                     caption="🎬",
+                    operation_key=f"callback-slideshow:{page_url}:{mode}:video",
                 )
 
                 if success:

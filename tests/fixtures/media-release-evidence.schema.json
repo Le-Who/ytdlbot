@@ -1,0 +1,171 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://ytdlbot.local/schemas/media-release-evidence.schema.json",
+  "title": "Redacted production media release evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_sha",
+    "manifest_sha256",
+    "collected_at",
+    "source",
+    "production_ip_attested",
+    "redaction",
+    "windows",
+    "summaries"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "release_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "collected_at": {"type": "string", "format": "date-time"},
+    "source": {"const": "production-vps"},
+    "production_ip_attested": {"const": true},
+    "redaction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["urls_hashed", "tokens_removed", "signed_queries_removed", "cookies_removed"],
+      "properties": {
+        "urls_hashed": {"const": true},
+        "tokens_removed": {"const": true},
+        "signed_queries_removed": {"const": true},
+        "cookies_removed": {"const": true}
+      }
+    },
+    "windows": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"$ref": "#/$defs/window"}
+    },
+    "summaries": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {"$ref": "#/$defs/summary"}
+    }
+  },
+  "$defs": {
+    "latency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resolve", "first_byte", "materialize", "deliver"],
+      "properties": {
+        "resolve": {"type": ["number", "null"], "minimum": 0},
+        "first_byte": {"type": ["number", "null"], "minimum": 0},
+        "materialize": {"type": ["number", "null"], "minimum": 0},
+        "deliver": {"type": ["number", "null"], "minimum": 0}
+      }
+    },
+    "httpFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "cause"],
+      "properties": {
+        "status": {"enum": [403, 429]},
+        "cause": {"type": "string", "minLength": 1}
+      }
+    },
+    "independentRoute": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["attempted", "succeeded", "route_class"],
+      "properties": {
+        "attempted": {"type": "boolean"},
+        "succeeded": {"type": "boolean"},
+        "route_class": {"type": ["string", "null"]}
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "case_id",
+        "kind",
+        "cache_state",
+        "latency_seconds",
+        "full_delivery",
+        "failure_stage",
+        "http_failures",
+        "bytes_downloaded",
+        "bytes_wasted",
+        "process_cpu_seconds",
+        "independent_route"
+      ],
+      "properties": {
+        "case_id": {"type": "string"},
+        "kind": {"enum": ["short", "video"]},
+        "cache_state": {"enum": ["cold", "warm"]},
+        "latency_seconds": {"$ref": "#/$defs/latency"},
+        "full_delivery": {"type": "boolean"},
+        "failure_stage": {"type": ["string", "null"]},
+        "http_failures": {"type": "array", "items": {"$ref": "#/$defs/httpFailure"}},
+        "bytes_downloaded": {"type": "integer", "minimum": 0},
+        "bytes_wasted": {"type": "integer", "minimum": 0},
+        "process_cpu_seconds": {"type": "number", "minimum": 0},
+        "independent_route": {"$ref": "#/$defs/independentRoute"}
+      }
+    },
+    "window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["window_id", "started_at", "runs"],
+      "properties": {
+        "window_id": {"type": "string", "minLength": 1},
+        "started_at": {"type": "string", "format": "date-time"},
+        "runs": {"type": "array", "items": {"$ref": "#/$defs/run"}}
+      }
+    },
+    "percentiles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["p50", "p95"],
+      "properties": {
+        "p50": {"type": ["number", "null"], "minimum": 0},
+        "p95": {"type": ["number", "null"], "minimum": 0}
+      }
+    },
+    "summaryLatency": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["resolve", "first_byte", "materialize", "deliver"],
+      "properties": {
+        "resolve": {"$ref": "#/$defs/percentiles"},
+        "first_byte": {"$ref": "#/$defs/percentiles"},
+        "materialize": {"$ref": "#/$defs/percentiles"},
+        "deliver": {"$ref": "#/$defs/percentiles"}
+      }
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "cache_state",
+        "sample_count",
+        "full_delivery_rate",
+        "latency_seconds",
+        "http_403_causes",
+        "http_429_causes",
+        "bytes_downloaded",
+        "bytes_wasted",
+        "process_cpu_seconds",
+        "independent_route_success_rate"
+      ],
+      "properties": {
+        "kind": {"enum": ["short", "video"]},
+        "cache_state": {"enum": ["cold", "warm"]},
+        "sample_count": {"type": "integer", "minimum": 0},
+        "full_delivery_rate": {"type": "number", "minimum": 0, "maximum": 1},
+        "latency_seconds": {"$ref": "#/$defs/summaryLatency"},
+        "http_403_causes": {"type": "object"},
+        "http_429_causes": {"type": "object"},
+        "bytes_downloaded": {"type": "integer", "minimum": 0},
+        "bytes_wasted": {"type": "integer", "minimum": 0},
+        "process_cpu_seconds": {"type": "number", "minimum": 0},
+        "independent_route_success_rate": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+      }
+    }
+  }
+}

@@ -1,11 +1,10 @@
-import unittest
-from unittest.mock import patch, MagicMock, AsyncMock
 import os
 import sys
+import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Mocking all missing dependencies
 sys.modules["dotenv"] = MagicMock()
-sys.modules["telegram"] = MagicMock()
 sys.modules["curl_cffi"] = MagicMock()
 sys.modules["curl_cffi.requests"] = MagicMock()
 sys.modules["cachetools"] = MagicMock()
@@ -16,11 +15,14 @@ mock_curl.requests.AsyncSession = AsyncMock
 sys.modules["curl_cffi"] = mock_curl
 sys.modules["curl_cffi.requests"] = mock_curl.requests
 
-from app.services.tikwm import TikWMService, TikWMResult
+from app.services.tikwm import TikWMResult, TikWMService
 
 
 class TestTikWMDownloadVideoOptimized(unittest.IsolatedAsyncioTestCase):
     """Test TikWMService.download_video with optimized async I/O."""
+
+    def test_collection_does_not_replace_installed_telegram_module(self):
+        self.assertNotIsInstance(sys.modules["telegram"], MagicMock)
 
     async def test_download_success_writes_file_async(self):
         import tempfile
@@ -29,9 +31,11 @@ class TestTikWMDownloadVideoOptimized(unittest.IsolatedAsyncioTestCase):
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
+
         async def video_chunks(chunk_size):
             del chunk_size
             yield b"fake video data" * 1024
+
         mock_resp.aiter_content = video_chunks
 
         mock_session = AsyncMock()

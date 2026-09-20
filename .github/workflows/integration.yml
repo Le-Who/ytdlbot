@@ -1,8 +1,17 @@
-name: Integration Tests
+name: Media Acceptance
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, vps]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      run_live_diagnostics:
+        description: Run network diagnostics from the GitHub runner (not production-IP acceptance)
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   integration:
@@ -10,13 +19,13 @@ jobs:
 
     env:
       BOT_TOKEN: test_token
-      WEBHOOK_URL: https://example.com/webhook
+      WEBHOOK_URL: https://example.com
       TELEGRAM_SECRET_TOKEN: test_secret_token
       REDIS_URL: redis://localhost:6379/0
 
     services:
       redis:
-        image: redis:7-alpine
+        image: redis:7.4.11-alpine@sha256:520775a41a63e77e06c73e35d2fd9cc15921a609516818796b4ecbb813078bc7
         ports:
           - 6379:6379
         options: >-
@@ -26,36 +35,29 @@ jobs:
           --health-retries 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: "3.12"
+          cache: pip
 
-      - name: Install system deps
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg
 
-      - name: Install Python deps
+      - name: Install pinned Python dependencies
         run: |
           pip install -r requirements.txt
-          pip install pytest pytest-asyncio
+          pip install -r requirements-ci.txt
 
-      - name: Install yt-dlp
-        run: pip install yt-dlp
+      - name: Run offline acceptance
+        run: python -m pytest tests/acceptance/test_media_release.py --no-cov -q
 
-      - name: Run integration tests
+      - name: Run opt-in network diagnostics
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_live_diagnostics }}
         run: |
-          python -m pytest tests/test_integration_real.py \
-            -m integration \
-            --no-cov \
-            -v \
-            --timeout=120
-
-      - name: Run mutation tests
-        run: |
-          pip install mutmut
-          mutmut run || true
-          mutmut results
+          echo "::warning::This GitHub-runner diagnostic is not production-IP release evidence."
+          python -m pytest tests/test_integration_real.py -m integration --no-cov -v

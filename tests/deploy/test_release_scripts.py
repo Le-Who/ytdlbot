@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -13,13 +14,13 @@ import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
+_WINDOWS_BASH_CANDIDATES = (
+    Path(r"C:\Program Files\Git\bin\bash.exe"),
+    Path(r"C:\Program Files\Git\usr\bin\bash.exe"),
+)
 BASH = next(
-    path
-    for path in (
-        Path(r"C:\Program Files\Git\bin\bash.exe"),
-        Path(r"C:\Program Files\Git\usr\bin\bash.exe"),
-    )
-    if path.exists()
+    (path for path in _WINDOWS_BASH_CANDIDATES if path.exists()),
+    Path(shutil.which("bash") or "bash"),
 )
 RELEASE_SHA = "a" * 40
 PREVIOUS_RELEASE = "b" * 40

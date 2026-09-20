@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "approval": {
+    "status": "pending",
+    "approved_by": null,
+    "approved_at": null
+  },
+  "shorts": [
+    {"case_id": "short-01", "url": null, "traits": []},
+    {"case_id": "short-02", "url": null, "traits": []},
+    {"case_id": "short-03", "url": null, "traits": []},
+    {"case_id": "short-04", "url": null, "traits": []},
+    {"case_id": "short-05", "url": null, "traits": []},
+    {"case_id": "short-06", "url": null, "traits": []},
+    {"case_id": "short-07", "url": null, "traits": []},
+    {"case_id": "short-08", "url": null, "traits": []},
+    {"case_id": "short-09", "url": null, "traits": []},
+    {"case_id": "short-10", "url": null, "traits": []},
+    {"case_id": "short-11", "url": null, "traits": []},
+    {"case_id": "short-12", "url": null, "traits": []}
+  ],
+  "videos": [
+    {"case_id": "video-01", "url": null, "traits": []},
+    {"case_id": "video-02", "url": null, "traits": []},
+    {"case_id": "video-03", "url": null, "traits": []},
+    {"case_id": "video-04", "url": null, "traits": []},
+    {"case_id": "video-05", "url": null, "traits": []},
+    {"case_id": "video-06", "url": null, "traits": []},
+    {"case_id": "video-07", "url": null, "traits": []},
+    {"case_id": "video-08", "url": null, "traits": []},
+    {"case_id": "video-09", "url": null, "traits": []},
+    {"case_id": "video-10", "url": null, "traits": []},
+    {"case_id": "video-11", "url": null, "traits": []},
+    {"case_id": "video-12", "url": null, "traits": []}
+  ]
+}

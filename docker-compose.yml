@@ -13,8 +13,12 @@ services:
       - MEDIA_DIR=/srv/ytdlbot/media
       - YTDLBOT_JOB_DB=/srv/ytdlbot/state/jobs.sqlite3
       - APP_RELEASE=${APP_RELEASE}
+      - LOG_ENVIRONMENT=production
+      - LOG_SERVICE=ytdlbot
       - DRAIN_TIMEOUT_SECONDS=30
       - POT_PROVIDER_URL=http://bgutil-pot:4416
+    labels:
+      com.gemaibot.logs: "true"
     # Хостовый Caddy проксирует vid.tri.mom → 127.0.0.1:8000
     ports:
       - "127.0.0.1:8000:8000"

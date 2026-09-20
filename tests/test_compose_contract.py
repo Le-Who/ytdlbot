@@ -29,8 +29,10 @@ def test_compose_mounts_shared_media_and_separate_durable_state() -> None:
     assert "state:/srv/ytdlbot/state" in init["volumes"]
     assert "bot_cache:/home/botuser/.cache/yt-dlp" in init["volumes"]
     assert init["command"] == [
-        "chown -R 10001:10001 /srv/ytdlbot/media /srv/ytdlbot/state "
-        "/home/botuser/.cache/yt-dlp"
+        (
+            "chown -R 10001:10001 /srv/ytdlbot/media /srv/ytdlbot/state "
+            "/home/botuser/.cache/yt-dlp"
+        )
     ]
     assert services["bot"]["depends_on"]["volume-init"]["condition"] == (
         "service_completed_successfully"
@@ -79,6 +81,19 @@ def test_compose_stop_budget_exceeds_durable_drain_deadline() -> None:
 
     assert environment["DRAIN_TIMEOUT_SECONDS"] == "30"
     assert bot["stop_grace_period"] == "45s"
+
+
+def test_only_bot_is_discovered_by_shared_log_stack() -> None:
+    services = load_compose()["services"]
+    bot = services["bot"]
+    environment = dict(item.split("=", 1) for item in bot["environment"])
+
+    assert bot["labels"] == {"com.gemaibot.logs": "true"}
+    assert environment["LOG_ENVIRONMENT"] == "production"
+    assert environment["LOG_SERVICE"] == "ytdlbot"
+    for name, service in services.items():
+        if name != "bot":
+            assert "com.gemaibot.logs" not in service.get("labels", {})
 
 
 def test_runtime_dependencies_are_exactly_pinned_and_image_does_not_self_update() -> (

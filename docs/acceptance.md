@@ -109,9 +109,11 @@ proxy merely to produce a green report.
 
 ## Controlled Task 14 run
 
-The approved 24-link set is run from the production VPS in three distinct time
-windows. Every case is exercised once with a cold cache and once with a warm
-cache in each window. Shorts and ordinary videos are reported separately.
+The approved 24-link set is run from the production VPS in exactly three time
+windows identified by the fixed, non-secret ordinals `window-1`, `window-2`,
+and `window-3`. Free-form or token-shaped window identifiers are rejected.
+Every case is exercised once with a cold cache and once with a warm cache in
+each window. Shorts and ordinary videos are reported separately.
 
 A run counts as success only when the requested media is fully delivered through
 Telegram with the requested kind, quality/clip/audio policy, album completeness,
@@ -124,14 +126,24 @@ For each case and cache state, collect:
 - confirmed `full_delivery` and the failure stage when false;
 - categorized HTTP 403 and 429 causes (never raw signed URLs or response secrets);
 - downloaded and wasted bytes;
-- measured process CPU seconds; keep wall-clock transform workload separate when
-  process CPU is unavailable;
+- measured process CPU seconds and peak resident memory as `peak_rss_bytes`;
+  keep wall-clock transform workload separate when process CPU is unavailable;
 - whether an independent route was attempted and whether it succeeded.
+
+All four latency values on a successful (`full_delivery = true`) run are
+required and must be finite, non-negative numbers. Failed runs may use `null`
+for stages they did not reach, but every recorded numeric latency is subject to
+the same finite, non-negative constraint.
 
 Aggregate four cohorts: Shorts/cold, Shorts/warm, videos/cold, and videos/warm.
 For every stage report p50 and p95, sample count, full-delivery rate, 403/429 cause
-counts, bytes, CPU, and independent-route success rate. Keep per-window results so
-one favorable period cannot hide a later provider block.
+counts, bytes, CPU, peak-RSS p50/p95/max, and independent-route success rate.
+The evidence also records `current_memory_limit_bytes`; each cohort's
+`within_current_memory_limit` decision must equal whether its measured maximum
+RSS is at or below that limit and must be true for acceptance. This makes the
+same schema suitable for comparing baseline and candidate evidence without
+changing the current deployment limit. Keep per-window results so one favorable
+period cannot hide a later provider block.
 
 ## Redacted evidence format
 
@@ -143,11 +155,13 @@ checks. It requires:
 
 - exact release SHA and SHA-256 of the approved manifest;
 - `source = "production-vps"` and an explicit production-IP attestation;
-- exactly three named windows;
+- exactly the three windows `window-1`, `window-2`, and `window-3`;
 - one cold and one warm record for every approved case in every window;
-- the four stage latencies, full delivery, 403/429 causes, bytes, CPU, and
-  independent-route outcome;
-- four Shorts/video × cold/warm summaries with p50/p95;
+- the four stage latencies, full delivery, 403/429 causes, bytes, CPU, peak RSS,
+  and independent-route outcome;
+- the positive `current_memory_limit_bytes` used by the deployment;
+- four Shorts/video × cold/warm summaries with latency p50/p95, peak-RSS
+  p50/p95/max, and the derived within-limit decision;
 - affirmative redaction flags for URL hashing and removal of tokens, signed query
   strings, and cookies.
 
@@ -157,7 +171,9 @@ redacted field. Each window must contain exactly one cold and one warm run for
 all 24 cases. `full_delivery` and `failure_stage` must agree, summary counts and
 rates must equal their underlying runs, and p50/p95 use nearest-rank values over
 the non-null stage samples in the corresponding Shorts/video and cold/warm
-cohort.
+cohort. Peak-RSS summaries use the same nearest-rank p50/p95 rule, their `max`
+must equal the largest cohort run, and acceptance rejects both an inconsistent
+decision and a candidate that exceeds the current memory limit.
 
 The integration-marked evidence validator remains excluded by default. It runs
 only when explicitly selected and given `YOUTUBE_ACCEPTANCE_MANIFEST` plus

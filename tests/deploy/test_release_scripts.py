@@ -7,10 +7,12 @@ import shutil
 import subprocess
 import sys
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import tomllib
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -797,6 +799,45 @@ def test_clean_ci_installs_all_pinned_test_dependencies() -> None:
         workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
         assert "pip install -r requirements-ci.txt" in workflow
         assert "pip install pytest pytest-cov" not in workflow
+
+
+def test_every_active_ci_workflow_uses_one_pinned_test_contract() -> None:
+    workflow_paths = sorted(
+        path
+        for path in (ROOT / ".github" / "workflows").iterdir()
+        if path.suffix in {".yml", ".yaml"}
+    )
+    documents = {
+        path: yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        for path in workflow_paths
+    }
+    assert Counter(document["name"] for document in documents.values())["Tests"] == 1
+
+    pytest_options = tomllib.loads(
+        (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )["tool"]["pytest"]["ini_options"]["addopts"]
+    threshold_match = re.search(r"--cov-fail-under=(\d+)", pytest_options)
+    assert threshold_match is not None
+    configured_threshold = int(threshold_match.group(1))
+
+    for path, document in documents.items():
+        source = path.read_text(encoding="utf-8")
+        uses_lines = [line.strip() for line in source.splitlines() if "uses:" in line]
+        assert all(
+            re.fullmatch(r"-?\s*uses:\s*[^@\s]+@[0-9a-f]{40}", line)
+            for line in uses_lines
+        ), path.name
+        if "python -m pytest" not in source:
+            continue
+        assert "pip install -r requirements-ci.txt" in source, path.name
+        assert not re.search(
+            r"(?m)^\s*(?:python\s+-m\s+pip|pip)\s+install[^\n]*\bpytest(?:\b|-)",
+            source,
+        ), path.name
+        assert all(
+            int(value) == configured_threshold
+            for value in re.findall(r"--cov-fail-under=(\d+)", source)
+        ), path.name
 
 
 def test_workflow_smokes_immutable_image_and_promotes_trusted_staging() -> None:

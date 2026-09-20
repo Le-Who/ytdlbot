@@ -11,6 +11,7 @@
     "collected_at",
     "source",
     "production_ip_attested",
+    "current_memory_limit_bytes",
     "redaction",
     "windows",
     "summaries"
@@ -22,6 +23,7 @@
     "collected_at": {"type": "string", "format": "date-time"},
     "source": {"const": "production-vps"},
     "production_ip_attested": {"const": true},
+    "current_memory_limit_bytes": {"type": "integer", "minimum": 1},
     "redaction": {
       "type": "object",
       "additionalProperties": false,
@@ -128,6 +130,7 @@
         "bytes_downloaded",
         "bytes_wasted",
         "process_cpu_seconds",
+        "peak_rss_bytes",
         "independent_route"
       ],
       "properties": {
@@ -154,6 +157,7 @@
         "bytes_downloaded": {"type": "integer", "minimum": 0},
         "bytes_wasted": {"type": "integer", "minimum": 0},
         "process_cpu_seconds": {"type": "number", "minimum": 0},
+        "peak_rss_bytes": {"type": "integer", "minimum": 0},
         "independent_route": {"$ref": "#/$defs/independentRoute"}
       },
       "allOf": [
@@ -162,7 +166,19 @@
             "properties": {"full_delivery": {"const": true}},
             "required": ["full_delivery"]
           },
-          "then": {"properties": {"failure_stage": {"const": null}}}
+          "then": {
+            "properties": {
+              "failure_stage": {"const": null},
+              "latency_seconds": {
+                "properties": {
+                  "resolve": {"type": "number", "minimum": 0},
+                  "first_byte": {"type": "number", "minimum": 0},
+                  "materialize": {"type": "number", "minimum": 0},
+                  "deliver": {"type": "number", "minimum": 0}
+                }
+              }
+            }
+          }
         },
         {
           "if": {
@@ -192,8 +208,7 @@
       "required": ["window_id", "started_at", "runs"],
       "properties": {
         "window_id": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+          "enum": ["window-1", "window-2", "window-3"]
         },
         "started_at": {"type": "string", "format": "date-time"},
         "runs": {
@@ -222,6 +237,16 @@
         "first_byte": {"$ref": "#/$defs/percentiles"},
         "materialize": {"$ref": "#/$defs/percentiles"},
         "deliver": {"$ref": "#/$defs/percentiles"}
+      }
+    },
+    "memorySummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["p50", "p95", "max"],
+      "properties": {
+        "p50": {"type": "integer", "minimum": 0},
+        "p95": {"type": "integer", "minimum": 0},
+        "max": {"type": "integer", "minimum": 0}
       }
     },
     "causeCounts": {
@@ -260,6 +285,8 @@
         "bytes_downloaded",
         "bytes_wasted",
         "process_cpu_seconds",
+        "peak_rss_bytes",
+        "within_current_memory_limit",
         "independent_route_success_rate"
       ],
       "properties": {
@@ -273,6 +300,8 @@
         "bytes_downloaded": {"type": "integer", "minimum": 0},
         "bytes_wasted": {"type": "integer", "minimum": 0},
         "process_cpu_seconds": {"type": "number", "minimum": 0},
+        "peak_rss_bytes": {"$ref": "#/$defs/memorySummary"},
+        "within_current_memory_limit": {"type": "boolean"},
         "independent_route_success_rate": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
       }
     }

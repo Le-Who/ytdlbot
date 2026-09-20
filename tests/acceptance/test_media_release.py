@@ -136,9 +136,16 @@ def _validate_evidence(evidence: dict[str, Any], case_kinds: dict[str, str]) -> 
         "signed_queries_removed": True,
         "cookies_removed": True,
     }
+    memory_limit = evidence["current_memory_limit_bytes"]
+    assert isinstance(memory_limit, int) and not isinstance(memory_limit, bool)
+    assert memory_limit > 0
     windows = evidence["windows"]
     assert len(windows) == 3
-    assert len({window["window_id"] for window in windows}) == 3
+    assert {window["window_id"] for window in windows} == {
+        "window-1",
+        "window-2",
+        "window-3",
+    }
     assert len({window["started_at"] for window in windows}) == 3
     expected_runs = {
         (case_id, cache) for case_id in case_kinds for cache in ("cold", "warm")
@@ -149,16 +156,29 @@ def _validate_evidence(evidence: dict[str, Any], case_kinds: dict[str, str]) -> 
         assert set(actual_runs) == expected_runs
         for run in window["runs"]:
             assert run["kind"] == case_kinds[run["case_id"]]
-            assert set(run["latency_seconds"]) == {
+            latencies = run["latency_seconds"]
+            assert set(latencies) == {
                 "resolve",
                 "first_byte",
                 "materialize",
                 "deliver",
             }
+            for latency in latencies.values():
+                if latency is None:
+                    continue
+                assert isinstance(latency, (int, float))
+                assert not isinstance(latency, bool)
+                assert math.isfinite(latency) and latency >= 0
             assert isinstance(run["full_delivery"], bool)
+            if run["full_delivery"]:
+                assert all(latency is not None for latency in latencies.values())
             assert run["bytes_downloaded"] >= 0
             assert run["bytes_wasted"] >= 0
+            assert math.isfinite(run["process_cpu_seconds"])
             assert run["process_cpu_seconds"] >= 0
+            assert isinstance(run["peak_rss_bytes"], int)
+            assert not isinstance(run["peak_rss_bytes"], bool)
+            assert run["peak_rss_bytes"] >= 0
             assert all(
                 failure["status"] in (403, 429) and failure["cause"]
                 for failure in run["http_failures"]
@@ -215,6 +235,17 @@ def _validate_evidence(evidence: dict[str, Any], case_kinds: dict[str, str]) -> 
             summary["process_cpu_seconds"],
             sum(run["process_cpu_seconds"] for run in cohort),
         )
+        assert math.isfinite(summary["process_cpu_seconds"])
+        rss_values = [run["peak_rss_bytes"] for run in cohort]
+        expected_rss = {
+            "p50": _nearest_rank(rss_values, 0.50),
+            "p95": _nearest_rank(rss_values, 0.95),
+            "max": max(rss_values),
+        }
+        assert summary["peak_rss_bytes"] == expected_rss
+        expected_within_limit = expected_rss["max"] <= memory_limit
+        assert summary["within_current_memory_limit"] is expected_within_limit
+        assert expected_within_limit
         for stage, percentiles in summary["latency_seconds"].items():
             values = [
                 run["latency_seconds"][stage]
@@ -224,6 +255,10 @@ def _validate_evidence(evidence: dict[str, Any], case_kinds: dict[str, str]) -> 
             for label, percentile in (("p50", 0.50), ("p95", 0.95)):
                 expected = _nearest_rank(values, percentile)
                 actual = percentiles[label]
+                if actual is not None:
+                    assert isinstance(actual, (int, float))
+                    assert not isinstance(actual, bool)
+                    assert math.isfinite(actual) and actual >= 0
                 if expected is None:
                     assert actual is None
                 else:
@@ -286,6 +321,7 @@ def _valid_evidence(case_kinds: dict[str, str]) -> dict[str, Any]:
                     "bytes_downloaded": 1,
                     "bytes_wasted": 0,
                     "process_cpu_seconds": 0.0,
+                    "peak_rss_bytes": 134_217_728,
                     "independent_route": {
                         "attempted": False,
                         "succeeded": False,
@@ -320,6 +356,12 @@ def _valid_evidence(case_kinds: dict[str, str]) -> dict[str, Any]:
                     "bytes_downloaded": 36,
                     "bytes_wasted": 0,
                     "process_cpu_seconds": 0.0,
+                    "peak_rss_bytes": {
+                        "p50": 134_217_728,
+                        "p95": 134_217_728,
+                        "max": 134_217_728,
+                    },
+                    "within_current_memory_limit": True,
                     "independent_route_success_rate": None,
                 }
             )
@@ -330,6 +372,7 @@ def _valid_evidence(case_kinds: dict[str, str]) -> dict[str, Any]:
         "collected_at": "2026-09-20T15:00:00Z",
         "source": "production-vps",
         "production_ip_attested": True,
+        "current_memory_limit_bytes": 2_147_483_648,
         "redaction": {
             "urls_hashed": True,
             "tokens_removed": True,
@@ -414,6 +457,84 @@ def test_ci_pins_draft_2020_schema_validator_with_format_support() -> None:
     assert "jsonschema[format]==4.26.0" in requirements.splitlines()
 
 
+def test_live_evidence_accepts_complete_memory_and_latency_contract() -> None:
+    case_kinds = _require_approved_manifest(_approved_manifest())
+
+    _validate_evidence(_valid_evidence(case_kinds), case_kinds)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda evidence: evidence["windows"][0]["runs"][0].update(
+            {"peak_rss_bytes": -1}
+        ),
+        lambda evidence: evidence["summaries"][0]["peak_rss_bytes"].update({"p95": 1}),
+        lambda evidence: evidence["summaries"][0]["peak_rss_bytes"].update({"max": 1}),
+        lambda evidence: evidence["summaries"][0].update(
+            {"within_current_memory_limit": False}
+        ),
+        lambda evidence: evidence.update(
+            {"current_memory_limit_bytes": 64 * 1024 * 1024}
+        ),
+        lambda evidence: (
+            evidence.update({"current_memory_limit_bytes": 64 * 1024 * 1024}),
+            [
+                summary.update({"within_current_memory_limit": False})
+                for summary in evidence["summaries"]
+            ],
+        ),
+    ),
+)
+def test_live_evidence_rejects_inconsistent_memory_summaries_and_limit(
+    mutate,
+) -> None:
+    case_kinds = _require_approved_manifest(_approved_manifest())
+    evidence = _valid_evidence(case_kinds)
+    _validate_evidence(evidence, case_kinds)
+    mutate(evidence)
+
+    with pytest.raises((AssertionError, ValidationError)):
+        _validate_evidence(evidence, case_kinds)
+
+
+@pytest.mark.parametrize("invalid_latency", (None, math.inf, math.nan))
+def test_full_delivery_rejects_missing_or_nonfinite_stage_latency(
+    invalid_latency,
+) -> None:
+    case_kinds = _require_approved_manifest(_approved_manifest())
+    evidence = _valid_evidence(case_kinds)
+    _validate_evidence(evidence, case_kinds)
+    evidence["windows"][0]["runs"][0]["latency_seconds"]["resolve"] = invalid_latency
+
+    with pytest.raises((AssertionError, ValidationError)):
+        _validate_evidence(evidence, case_kinds)
+
+
+def test_all_success_null_stage_latencies_are_rejected() -> None:
+    case_kinds = _require_approved_manifest(_approved_manifest())
+    evidence = _valid_evidence(case_kinds)
+    _validate_evidence(evidence, case_kinds)
+    for window in evidence["windows"]:
+        for run in window["runs"]:
+            run["latency_seconds"] = {
+                "resolve": None,
+                "first_byte": None,
+                "materialize": None,
+                "deliver": None,
+            }
+    for summary in evidence["summaries"]:
+        summary["latency_seconds"] = {
+            "resolve": {"p50": None, "p95": None},
+            "first_byte": {"p50": None, "p95": None},
+            "materialize": {"p50": None, "p95": None},
+            "deliver": {"p50": None, "p95": None},
+        }
+
+    with pytest.raises((AssertionError, ValidationError)):
+        _validate_evidence(evidence, case_kinds)
+
+
 @pytest.mark.parametrize(
     "mutate",
     (
@@ -448,6 +569,9 @@ def test_approved_manifest_rejects_schema_and_bucket_violations(mutate) -> None:
         ),
         lambda evidence: evidence["windows"][1].update(
             {"started_at": evidence["windows"][0]["started_at"]}
+        ),
+        lambda evidence: evidence["windows"][0].update(
+            {"window_id": "window-1-token-abc123"}
         ),
         lambda evidence: evidence["summaries"][0].update(
             {"sample_count": 999, "full_delivery_rate": 0.5}

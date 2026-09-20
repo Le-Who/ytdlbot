@@ -9,7 +9,7 @@ import sys
 import time
 from collections import Counter
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
 import tomllib
@@ -32,9 +32,31 @@ PREVIOUS_IMAGE = "sha256:" + "d" * 64
 
 def _bash_path(path: Path) -> str:
     resolved = path.resolve()
+    if not re.fullmatch(r"[A-Za-z]:", resolved.drive):
+        return resolved.as_posix()
     drive = resolved.drive.removesuffix(":").lower()
     tail = resolved.as_posix().split(":", 1)[1]
     return f"/{drive}{tail}"
+
+
+def test_bash_path_preserves_posix_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        Path,
+        "resolve",
+        lambda self: PurePosixPath("/tmp/release fixture"),
+    )
+
+    assert _bash_path(Path("ignored")) == "/tmp/release fixture"
+
+
+def test_bash_path_preserves_windows_unc_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        Path,
+        "resolve",
+        lambda self: PureWindowsPath(r"\\server\share\release fixture"),
+    )
+
+    assert _bash_path(Path("ignored")) == "//server/share/release fixture"
 
 
 def _write_executable(path: Path, body: str) -> None:
@@ -540,8 +562,7 @@ def test_bootstrap_gate_validates_future_owner_from_legacy_uid_as_root(
     assert result.returncode == 0, result.stderr
     assert evidence.exists()
     assert any(
-        "exec -T --user 0:0 bot python" in command
-        for command in fake_host.commands()
+        "exec -T --user 0:0 bot python" in command for command in fake_host.commands()
     )
 
 

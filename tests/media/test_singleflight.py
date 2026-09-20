@@ -3,10 +3,17 @@ from __future__ import annotations
 import asyncio
 import sys
 import textwrap
+from pathlib import Path
 
 import pytest
 
 from app.services.media.singleflight import SingleFlightGroup, SingleFlightReentryError
+
+
+async def _wait_for_file(path: Path) -> None:
+    async with asyncio.timeout(2):
+        while not path.exists():
+            await asyncio.sleep(0.01)
 
 
 @pytest.mark.asyncio
@@ -37,6 +44,113 @@ async def test_cancelling_one_subscriber_keeps_shared_work_for_other_subscriber(
     assert await second == "media-path"
     assert calls == 1
     assert group.inflight_count == 0
+
+
+@pytest.mark.asyncio
+async def test_owner_cancel_does_not_kill_another_subscribers_shared_process(
+    tmp_path: Path,
+):
+    from app.core import state
+    from app.core.process import process_owner_scope, process_supervisor
+
+    group: SingleFlightGroup[str, str] = SingleFlightGroup()
+    ready = tmp_path / "shared-ready"
+    release = tmp_path / "shared-release"
+    calls = 0
+    baseline_processes = set(state.active_processes)
+
+    async def materialize() -> str:
+        nonlocal calls
+        calls += 1
+        result = await process_supervisor.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import pathlib,time;"
+                    f"ready=pathlib.Path({str(ready)!r});"
+                    f"release=pathlib.Path({str(release)!r});"
+                    "ready.touch();"
+                    "\nwhile not release.exists(): time.sleep(0.01)"
+                    "\nprint('shared-result')"
+                ),
+            ]
+        )
+        return result.stdout.decode().strip()
+
+    async def subscribe(token: str) -> str:
+        with process_owner_scope(token):
+            return await group.do("shared-key", materialize)
+
+    first = asyncio.create_task(subscribe("singleflight-first"))
+    second = asyncio.create_task(subscribe("singleflight-second"))
+    try:
+        await _wait_for_file(ready)
+        while group.subscriber_count < 2:
+            await asyncio.sleep(0)
+
+        await process_supervisor.cancel_owner("singleflight-first")
+        with pytest.raises(asyncio.CancelledError):
+            await first
+
+        release.touch()
+        assert await asyncio.wait_for(second, timeout=2) == "shared-result"
+        assert calls == 1
+        assert group.inflight_count == group.subscriber_count == 0
+        assert process_supervisor.processes_for("singleflight-first") == ()
+        assert set(state.active_processes) == baseline_processes
+    finally:
+        release.touch()
+        for task in (first, second):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(first, second, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_last_owner_cancel_cleans_shared_factory_process(tmp_path: Path):
+    from app.core import state
+    from app.core.process import process_owner_scope, process_supervisor
+
+    group: SingleFlightGroup[str, str] = SingleFlightGroup()
+    ready = tmp_path / "last-ready"
+    partial = tmp_path / "last-output.part"
+    baseline_processes = set(state.active_processes)
+
+    async def materialize() -> str:
+        await process_supervisor.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import pathlib,time;"
+                    f"pathlib.Path({str(partial)!r}).touch();"
+                    f"pathlib.Path({str(ready)!r}).touch();"
+                    "time.sleep(60)"
+                ),
+            ],
+            cleanup_paths=(partial,),
+        )
+        return "unreachable"
+
+    async def subscribe() -> str:
+        with process_owner_scope("singleflight-last"):
+            return await group.do("last-key", materialize)
+
+    subscriber = asyncio.create_task(subscribe())
+    try:
+        await _wait_for_file(ready)
+        await process_supervisor.cancel_owner("singleflight-last")
+
+        with pytest.raises(asyncio.CancelledError):
+            await subscriber
+        assert not partial.exists()
+        assert group.inflight_count == group.subscriber_count == 0
+        assert set(state.active_processes) == baseline_processes
+    finally:
+        if not subscriber.done():
+            subscriber.cancel()
+        await asyncio.gather(subscriber, return_exceptions=True)
 
 
 @pytest.mark.asyncio

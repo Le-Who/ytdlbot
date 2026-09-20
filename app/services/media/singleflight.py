@@ -19,6 +19,14 @@ class _FactoryMarker:
     active: bool = True
 
 
+@dataclass(eq=False, frozen=True, slots=True)
+class _FactoryOwner:
+    """Opaque process owner for one shared factory, independent of subscribers."""
+
+    group_id: int
+    key: Hashable
+
+
 _ACTIVE_FACTORIES: ContextVar[tuple[_FactoryMarker, ...]] = ContextVar(
     "singleflight_active_factories", default=()
 )
@@ -62,7 +70,8 @@ class SingleFlightGroup(Generic[K, T]):
             flight = self._flights.get(key)
             if flight is None:
                 marker = _FactoryMarker(id(self), key)
-                flight = _Flight(asyncio.create_task(_invoke(work, marker)))
+                owner = _FactoryOwner(id(self), key)
+                flight = _Flight(asyncio.create_task(_invoke(work, marker, owner)))
                 self._flights[key] = flight
             elif flight.task is asyncio.current_task():
                 raise SingleFlightReentryError(
@@ -110,11 +119,20 @@ class SingleFlightGroup(Generic[K, T]):
             await asyncio.gather(cleanup, return_exceptions=True)
 
 
-async def _invoke(work: Callable[[], Awaitable[T]], marker: _FactoryMarker) -> T:
+async def _invoke(
+    work: Callable[[], Awaitable[T]],
+    marker: _FactoryMarker,
+    owner: _FactoryOwner,
+) -> T:
+    # Import lazily: core.process imports global state, whose typing-only media
+    # pipeline reference would otherwise make initialization order fragile.
+    from app.core.process import process_owner_scope
+
     inherited = tuple(item for item in _ACTIVE_FACTORIES.get() if item.active)
     token = _ACTIVE_FACTORIES.set((*inherited, marker))
     try:
-        return await work()
+        with process_owner_scope(owner):
+            return await work()
     finally:
         marker.active = False
         _ACTIVE_FACTORIES.reset(token)

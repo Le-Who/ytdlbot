@@ -15,7 +15,7 @@ from app.core import state
 
 @dataclass
 class HealthyStore:
-    version: int = 3
+    version: int = 4
 
     async def schema_version(self) -> int:
         return self.version
@@ -72,7 +72,7 @@ def test_ready_reports_release_limit_store_and_required_local_api(
         },
         "durable_store": {
             "ready": True,
-            "schema_version": 3,
+            "schema_version": 4,
             "journal_mode": "wal",
             "busy_timeout_ms": 5_000,
             "writable": True,
@@ -207,3 +207,90 @@ def test_ready_bounds_live_authenticated_local_api_probe(
 
     assert response.status_code == 503
     assert response.json()["local_bot_api"]["functional_probe"] is False
+
+
+def test_ready_reuses_fresh_local_api_probe_result(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class CountingBot:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_me(self) -> object:
+            self.calls += 1
+            return object()
+
+    bot = CountingBot()
+    monkeypatch.setattr(state, "bot_app", SimpleNamespace(bot=bot))
+
+    assert client.get("/health/ready").status_code == 200
+    assert client.get("/health/ready").status_code == 200
+    assert bot.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_local_api_probe_coalesces_concurrent_callers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BlockingBot:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.started = asyncio.Event()
+            self.release = asyncio.Event()
+
+        async def get_me(self) -> object:
+            self.calls += 1
+            self.started.set()
+            await self.release.wait()
+            return object()
+
+    bot = BlockingBot()
+    monkeypatch.setattr(
+        routes.config, "TELEGRAM_LOCAL_ENDPOINT", "http://tg-api:8081"
+    )
+    monkeypatch.setattr(state, "bot_app", SimpleNamespace(bot=bot))
+    callers = [
+        asyncio.create_task(routes._local_bot_api_functional()) for _ in range(8)
+    ]
+    await asyncio.wait_for(bot.started.wait(), timeout=1)
+    await asyncio.sleep(0)
+    bot.release.set()
+
+    assert await asyncio.gather(*callers) == [True] * 8
+    assert bot.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_local_api_probe_expires_success_and_caches_current_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [100.0]
+
+    class ChangingBot:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def get_me(self) -> object:
+            self.calls += 1
+            if self.calls > 1:
+                raise OSError("token-bearing failure must stay private")
+            return object()
+
+    bot = ChangingBot()
+    monkeypatch.setattr(
+        routes.config, "TELEGRAM_LOCAL_ENDPOINT", "http://tg-api:8081"
+    )
+    monkeypatch.setattr(state, "bot_app", SimpleNamespace(bot=bot))
+    monkeypatch.setattr(
+        routes, "_LOCAL_API_PROBE_FRESHNESS_SECONDS", 10.0, raising=False
+    )
+    monkeypatch.setattr(routes, "_local_probe_clock", lambda: now[0], raising=False)
+
+    assert await routes._local_bot_api_functional() is True
+    now[0] += 9
+    assert await routes._local_bot_api_functional() is True
+    assert bot.calls == 1
+    now[0] += 2
+    assert await routes._local_bot_api_functional() is False
+    assert await routes._local_bot_api_functional() is False
+    assert bot.calls == 2

@@ -95,7 +95,7 @@ _T = TypeVar("_T")
 class JobStore:
     """A small one-process durable queue with explicit recovery semantics."""
 
-    CURRENT_SCHEMA_VERSION = 3
+    CURRENT_SCHEMA_VERSION = 4
     DEFAULT_PATH = Path(os.getenv("YTDLBOT_JOB_DB", "/srv/ytdlbot/state/jobs.sqlite3"))
 
     def __init__(
@@ -407,6 +407,9 @@ class JobStore:
                     if version < 3:
                         self._migrate_to_v3(connection)
                         version = 3
+                    if version < 4:
+                        self._migrate_to_v4(connection)
+                        version = 4
                     connection.execute(f"PRAGMA user_version = {version}")
                     connection.commit()
                 except BaseException:
@@ -493,6 +496,20 @@ class JobStore:
             """
         )
 
+    @staticmethod
+    def _migrate_to_v4(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS health_probe (
+                singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                generation INTEGER NOT NULL CHECK (generation >= 0)
+            )
+            """
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO health_probe(singleton, generation) VALUES (1, 0)"
+        )
+
     def _pragma_int(self, name: str) -> int:
         connection = self._connect()
         try:
@@ -513,15 +530,24 @@ class JobStore:
             probe_timeout_ms = min(self.busy_timeout_ms, 500)
             connection.execute(f"PRAGMA busy_timeout = {probe_timeout_ms}")
             connection.execute("BEGIN IMMEDIATE")
-            updated = connection.execute(
-                "UPDATE worker_lease SET expires_at = expires_at "
+            lease = connection.execute(
+                "SELECT 1 FROM worker_lease "
                 "WHERE singleton = 1 AND expires_at > ?",
                 (now,),
+            ).fetchone()
+            if lease is None:
+                raise RuntimeError("durable worker lease is not live")
+            updated = connection.execute(
+                "UPDATE health_probe SET generation = generation + 1 "
+                "WHERE singleton = 1"
             )
             if updated.rowcount != 1:
-                raise RuntimeError("durable worker lease is not live")
-        finally:
+                raise RuntimeError("durable health probe state is missing")
+            connection.commit()
+        except BaseException:
             connection.rollback()
+            raise
+        finally:
             connection.close()
 
     def _accept_update_sync(

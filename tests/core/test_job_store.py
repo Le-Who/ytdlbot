@@ -33,12 +33,19 @@ async def test_store_uses_wal_busy_timeout_and_explicit_schema_version(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_write_probe_rolls_back_without_retaining_changes(tmp_path):
+async def test_write_probe_commits_only_dedicated_health_state(tmp_path):
     path = tmp_path / "jobs.sqlite3"
     store = JobStore(path)
+    await store.accept_update(update_payload(11))
     assert await store.acquire_worker("worker-ready", lease_seconds=30)
     connection = sqlite3.connect(path)
-    before = tuple(
+    job_before = tuple(
+        connection.execute(
+            "SELECT state, owner_id, checkpoint, error, payload "
+            "FROM jobs WHERE job_id = '11'"
+        ).fetchone()
+    )
+    lease_before = tuple(
         connection.execute(
             "SELECT owner_id, expires_at FROM worker_lease WHERE singleton = 1"
         ).fetchone()
@@ -48,13 +55,76 @@ async def test_write_probe_rolls_back_without_retaining_changes(tmp_path):
     await store.write_probe()
 
     connection = sqlite3.connect(path)
-    after = tuple(
+    job_after = tuple(
+        connection.execute(
+            "SELECT state, owner_id, checkpoint, error, payload "
+            "FROM jobs WHERE job_id = '11'"
+        ).fetchone()
+    )
+    lease_after = tuple(
         connection.execute(
             "SELECT owner_id, expires_at FROM worker_lease WHERE singleton = 1"
         ).fetchone()
     )
+    generation = connection.execute(
+        "SELECT generation FROM health_probe WHERE singleton = 1"
+    ).fetchone()[0]
     connection.close()
-    assert after == before
+    assert job_after == job_before
+    assert lease_after == lease_before
+    assert generation == 1
+
+
+@pytest.mark.asyncio
+async def test_write_probe_propagates_commit_failure_and_rolls_back(tmp_path, monkeypatch):
+    path = tmp_path / "jobs.sqlite3"
+    store = JobStore(path)
+    await store.accept_update(update_payload(12))
+    assert await store.acquire_worker("worker-ready", lease_seconds=30)
+    real_connect = store._connect
+    connection = sqlite3.connect(
+        path,
+        isolation_level=None,
+        check_same_thread=False,
+    )
+    connection.row_factory = sqlite3.Row
+
+    class CommitFailureConnection:
+        rolled_back = False
+        closed = False
+
+        def execute(self, *args, **kwargs):
+            return connection.execute(*args, **kwargs)
+
+        def commit(self) -> None:
+            raise sqlite3.OperationalError("database or disk is full")
+
+        def rollback(self) -> None:
+            self.rolled_back = True
+            connection.rollback()
+
+        def close(self) -> None:
+            self.closed = True
+            connection.close()
+
+    failing = CommitFailureConnection()
+    monkeypatch.setattr(store, "_connect", lambda: failing)
+
+    with pytest.raises(sqlite3.OperationalError, match="disk is full"):
+        await store.write_probe()
+
+    assert failing.rolled_back is True
+    assert failing.closed is True
+    monkeypatch.setattr(store, "_connect", real_connect)
+    persisted = await store.get_update(12)
+    assert persisted is not None
+    assert persisted.state is JobState.ACCEPTED
+    connection = sqlite3.connect(path)
+    generation = connection.execute(
+        "SELECT generation FROM health_probe WHERE singleton = 1"
+    ).fetchone()[0]
+    connection.close()
+    assert generation == 0
 
 
 @pytest.mark.asyncio

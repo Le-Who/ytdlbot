@@ -2,7 +2,10 @@ import asyncio
 import hmac
 import logging
 import re
-from collections.abc import Awaitable, Mapping
+import threading
+import time
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, Protocol
 from urllib.parse import quote, urlsplit
 
@@ -23,7 +26,22 @@ logger = logging.getLogger("app.api")
 router = APIRouter()
 _HTTP_LEASE_RENEW_SECONDS = 5 * 60
 _LOCAL_API_PROBE_TIMEOUT_SECONDS = 2.0
+_LOCAL_API_PROBE_FRESHNESS_SECONDS = 10.0
 _DURABLE_STORE_PROBE_TIMEOUT_SECONDS = 1.0
+_local_probe_clock: Callable[[], float] = time.monotonic
+
+
+@dataclass(slots=True)
+class _LocalApiProbeState:
+    bot: object | None = None
+    result: bool = False
+    checked_at: float = 0.0
+    has_result: bool = False
+    task: asyncio.Task[bool] | None = None
+
+
+_local_probe_state = _LocalApiProbeState()
+_local_probe_lock = threading.Lock()
 
 
 class DurableUpdateStore(Protocol):
@@ -68,21 +86,60 @@ def _delivery_profile() -> tuple[str, int]:
     )
 
 
-async def _local_bot_api_functional() -> bool:
-    if not config.TELEGRAM_LOCAL_ENDPOINT or state.bot_app is None:
-        return False
+async def _run_local_bot_api_probe(bot: Any) -> bool:
+    completed = False
+    result = False
+    current = asyncio.current_task()
     try:
         await asyncio.wait_for(
-            state.bot_app.bot.get_me(),
+            bot.get_me(),
             timeout=_LOCAL_API_PROBE_TIMEOUT_SECONDS,
         )
+        result = True
+        completed = True
     except Exception as error:  # noqa: BLE001 - dependency readiness boundary
         logger.warning(
             "Authenticated Local Bot API readiness probe failed",
             extra={"error_type": type(error).__name__},
         )
+        completed = True
+    finally:
+        with _local_probe_lock:
+            if _local_probe_state.bot is bot and _local_probe_state.task is current:
+                if completed:
+                    _local_probe_state.result = result
+                    _local_probe_state.checked_at = _local_probe_clock()
+                    _local_probe_state.has_result = True
+                _local_probe_state.task = None
+    return result
+
+
+async def _local_bot_api_functional() -> bool:
+    if not config.TELEGRAM_LOCAL_ENDPOINT or state.bot_app is None:
+        with _local_probe_lock:
+            _local_probe_state.bot = None
+            _local_probe_state.has_result = False
+            _local_probe_state.task = None
         return False
-    return True
+    bot = state.bot_app.bot
+    loop = asyncio.get_running_loop()
+    now = _local_probe_clock()
+    with _local_probe_lock:
+        if _local_probe_state.bot is not bot:
+            _local_probe_state.bot = bot
+            _local_probe_state.has_result = False
+            _local_probe_state.task = None
+        age = now - _local_probe_state.checked_at
+        if (
+            _local_probe_state.has_result
+            and 0 <= age <= _LOCAL_API_PROBE_FRESHNESS_SECONDS
+        ):
+            return _local_probe_state.result
+        task = _local_probe_state.task
+        if task is None or task.done() or task.get_loop() is not loop:
+            task = loop.create_task(_run_local_bot_api_probe(bot))
+            _local_probe_state.task = task
+    return await asyncio.shield(task)
 
 
 async def _durable_store_health() -> dict[str, object]:

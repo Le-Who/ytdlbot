@@ -664,7 +664,17 @@ class MediaTransport:
             self._check_actual_size(final_size)
             self._remaining(deadline)
             return MaterializedItem(final_paths, final_size, candidate, reservation)
-        except BaseException:
+        except BaseException as error:
+            if total > 0:
+                metrics.race_wasted_bytes.inc(
+                    total,
+                    stage="completed_sources",
+                    outcome=(
+                        "cancelled"
+                        if isinstance(error, asyncio.CancelledError)
+                        else "failed"
+                    ),
+                )
             for path in completed:
                 path.unlink(missing_ok=True)
             await reservation.release()

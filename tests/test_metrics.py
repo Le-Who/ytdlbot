@@ -134,6 +134,62 @@ def _candidate() -> MediaCandidate:
     )
 
 
+def _multi_source_candidate() -> MediaCandidate:
+    return MediaCandidate(
+        candidate_id="metrics-mux",
+        url="https://cdn.example/video.mp4",
+        has_video=True,
+        has_audio=True,
+        container="mp4",
+        provider="metric-provider",
+        backend_family="metric",
+        media_id="metrics01",
+        kind=MediaKind.VIDEO,
+        mux_mode="copy",
+        sources=(
+            MediaSource(
+                format_id="video",
+                url="https://cdn.example/video.mp4",
+                container="mp4",
+            ),
+            MediaSource(
+                format_id="audio",
+                url="https://cdn.example/audio.mp3",
+                container="mp3",
+            ),
+        ),
+    )
+
+
+class _ChunkResponse:
+    status_code = 200
+
+    def __init__(
+        self,
+        chunk: bytes,
+        content_type: str,
+        *,
+        fail: bool = False,
+        waiting: asyncio.Event | None = None,
+    ) -> None:
+        self.chunk = chunk
+        self.headers = {"content-type": content_type}
+        self.fail = fail
+        self.waiting = waiting
+
+    async def iter_bytes(self, chunk_size: int):
+        del chunk_size
+        yield self.chunk
+        if self.fail:
+            raise OSError("second source failed")
+        if self.waiting is not None:
+            self.waiting.set()
+            await asyncio.Event().wait()
+
+    async def close(self) -> None:
+        pass
+
+
 def test_media_pipeline_metrics_render_all_operational_series() -> None:
     collector = MetricsCollector()
     collector.pipeline_duration.observe(0.25, phase="resolve")
@@ -509,4 +565,135 @@ async def test_cancelled_stream_counts_partial_wasted_bytes_before_cleanup(
 
     assert collector.race_wasted_bytes.collect() == [
         ({"outcome": "cancelled", "stage": "stream"}, float(len(chunk)))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_second_source_failure_counts_completed_and_partial_bytes_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collector = MetricsCollector()
+    monkeypatch.setattr(transport_module, "metrics", collector)
+    transport = MediaTransport(output_dir=tmp_path, max_bytes=1_024)
+    monkeypatch.setattr(transport, "probe", AsyncMock(return_value=b"ok"))
+    video = b"\x00\x00\x00\x18ftypisom"
+    audio_partial = b"ID3partial"
+    opened = (
+        SimpleNamespace(
+            response=_ChunkResponse(video, "video/mp4"),
+            url="https://cdn.example/video.mp4",
+            started_at=transport.clock(),
+        ),
+        SimpleNamespace(
+            response=_ChunkResponse(
+                audio_partial,
+                "audio/mpeg",
+                fail=True,
+            ),
+            url="https://cdn.example/audio.mp3",
+            started_at=transport.clock(),
+        ),
+    )
+    monkeypatch.setattr(transport, "_request", AsyncMock(side_effect=opened))
+
+    with pytest.raises(OSError, match="second source failed"):
+        await transport._download_candidate(
+            _request(),
+            _multi_source_candidate(),
+            transport.clock() + 1,
+        )
+
+    assert collector.race_wasted_bytes.collect() == [
+        ({"outcome": "failed", "stage": "stream"}, float(len(audio_partial))),
+        ({"outcome": "failed", "stage": "completed_sources"}, float(len(video))),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_second_source_cancellation_counts_completed_and_partial_bytes_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collector = MetricsCollector()
+    monkeypatch.setattr(transport_module, "metrics", collector)
+    transport = MediaTransport(output_dir=tmp_path, max_bytes=1_024)
+    monkeypatch.setattr(transport, "probe", AsyncMock(return_value=b"ok"))
+    video = b"\x00\x00\x00\x18ftypisom"
+    audio_partial = b"ID3partial"
+    waiting = asyncio.Event()
+    opened = (
+        SimpleNamespace(
+            response=_ChunkResponse(video, "video/mp4"),
+            url="https://cdn.example/video.mp4",
+            started_at=transport.clock(),
+        ),
+        SimpleNamespace(
+            response=_ChunkResponse(
+                audio_partial,
+                "audio/mpeg",
+                waiting=waiting,
+            ),
+            url="https://cdn.example/audio.mp3",
+            started_at=transport.clock(),
+        ),
+    )
+    monkeypatch.setattr(transport, "_request", AsyncMock(side_effect=opened))
+    task = asyncio.create_task(
+        transport._download_candidate(
+            _request(),
+            _multi_source_candidate(),
+            transport.clock() + 1,
+        )
+    )
+    await asyncio.wait_for(waiting.wait(), timeout=1)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert collector.race_wasted_bytes.collect() == [
+        ({"outcome": "cancelled", "stage": "stream"}, float(len(audio_partial))),
+        (
+            {"outcome": "cancelled", "stage": "completed_sources"},
+            float(len(video)),
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_finalize_failure_counts_all_completed_source_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collector = MetricsCollector()
+    monkeypatch.setattr(transport_module, "metrics", collector)
+    transport = MediaTransport(output_dir=tmp_path, max_bytes=1_024)
+    monkeypatch.setattr(transport, "probe", AsyncMock(return_value=b"ok"))
+    monkeypatch.setattr(transport, "_run_transform", AsyncMock(return_value=1))
+    video = b"\x00\x00\x00\x18ftypisom"
+    audio = b"ID3audio"
+    opened = (
+        SimpleNamespace(
+            response=_ChunkResponse(video, "video/mp4"),
+            url="https://cdn.example/video.mp4",
+            started_at=transport.clock(),
+        ),
+        SimpleNamespace(
+            response=_ChunkResponse(audio, "audio/mpeg"),
+            url="https://cdn.example/audio.mp3",
+            started_at=transport.clock(),
+        ),
+    )
+    monkeypatch.setattr(transport, "_request", AsyncMock(side_effect=opened))
+
+    with pytest.raises(transport_module.DownloadFailed, match="transform failed"):
+        await transport._download_candidate(
+            _request(),
+            _multi_source_candidate(),
+            transport.clock() + 1,
+        )
+
+    assert collector.race_wasted_bytes.collect() == [
+        (
+            {"outcome": "failed", "stage": "completed_sources"},
+            float(len(video) + len(audio)),
+        )
     ]

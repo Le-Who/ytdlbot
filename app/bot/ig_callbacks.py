@@ -534,7 +534,7 @@ async def on_ig_hl_download_all(
             path, _ = await InstagramService.download_story_item(item)
             if not path:
                 return False
-            return await TelegramSender.send_file(
+            receipt = await TelegramSender.send_file(
                 context.bot,
                 chat_id,
                 path,
@@ -542,6 +542,7 @@ async def on_ig_hl_download_all(
                 is_gif=False,
                 caption=f"📷 {item.label}",
             )
+            return receipt.success
 
     results = await asyncio.gather(*[_dl_send(i) for i in items])
     sent = sum(1 for r in results if r)

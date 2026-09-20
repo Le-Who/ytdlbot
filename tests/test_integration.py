@@ -355,17 +355,15 @@ class TestPolicyIntegration(unittest.TestCase):
         self.assertTrue(size_allowed(10 * 1024 * 1024, target="telegram"))
 
     def test_size_allowed_exceeds_limit(self):
-        self.assertFalse(size_allowed(200 * 1024 * 1024, target="telegram"))
+        self.assertFalse(size_allowed(2_000_000_001, target="telegram"))
 
     def test_size_allowed_none_filesize(self):
         """None filesize is allowed (optimistic approach with post-download check)."""
         self.assertTrue(size_allowed(None, target="telegram"))
 
     def test_size_allowed_exact_boundary(self):
-        """Exactly at limit is allowed."""
-        from app.core.config import MAX_TG_UPLOAD_MB
-
-        exact = MAX_TG_UPLOAD_MB * 1024 * 1024
+        """Exactly 2000 decimal MB is allowed."""
+        exact = 2_000_000_000
         self.assertTrue(size_allowed(exact, target="telegram"))
         self.assertFalse(size_allowed(exact + 1, target="telegram"))
 

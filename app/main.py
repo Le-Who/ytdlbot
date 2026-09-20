@@ -2,8 +2,8 @@ import asyncio
 import html
 import logging
 import traceback
-from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -19,11 +19,33 @@ from app.api.routes import router as api_router
 from app.bot import callbacks, commands, messages
 from app.core import config, state
 from app.core.logging import set_correlation_id, setup_logging
-from app.tasks.janitor import janitor_loop
 from app.tasks.auto_updater import auto_updater_loop
+from app.tasks.janitor import janitor_loop
 
 setup_logging()
 logger = logging.getLogger("app.main")
+
+
+def _build_telegram_application_builder() -> Any:
+    """Build PTB with one explicit cloud or required Local Bot API profile."""
+    builder = (
+        Application.builder()
+        .token(config.BOT_TOKEN)
+        .concurrent_updates(True)
+        .media_write_timeout(config.TELEGRAM_MEDIA_WRITE_TIMEOUT)
+        .read_timeout(config.TELEGRAM_READ_TIMEOUT)
+        .write_timeout(config.TELEGRAM_WRITE_TIMEOUT)
+        .connect_timeout(config.TELEGRAM_CONNECT_TIMEOUT)
+        .pool_timeout(config.TELEGRAM_POOL_TIMEOUT)
+    )
+    if config.TELEGRAM_LOCAL_ENDPOINT:
+        endpoint = config.TELEGRAM_LOCAL_ENDPOINT.rstrip("/")
+        builder = (
+            builder.base_url(f"{endpoint}/bot")
+            .base_file_url(f"{endpoint}/file/bot")
+            .local_mode(True)
+        )
+    return builder
 
 
 async def _global_error_handler(update, context):
@@ -111,10 +133,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     janitor_task = asyncio.create_task(janitor_loop(stop_event))
     updater_task = asyncio.create_task(auto_updater_loop(stop_event))
 
-    app_builder = Application.builder().token(config.BOT_TOKEN).concurrent_updates(True)
+    app_builder = _build_telegram_application_builder()
 
     if config.TELEGRAM_LOCAL_ENDPOINT:
-        app_builder.base_url(f"{config.TELEGRAM_LOCAL_ENDPOINT}/bot")
         logger.info(
             "Using local Telegram Bot API Server at %s", config.TELEGRAM_LOCAL_ENDPOINT
         )
@@ -244,7 +265,7 @@ api = FastAPI(lifespan=lifespan)
 api.include_router(api_router)
 
 
-@api.middleware("http")
+@api.middleware("http")  # type: ignore[untyped-decorator]
 async def add_security_headers(request: Request, call_next: Any) -> Any:
     set_correlation_id(request.headers.get("X-Correlation-ID"))
     response = await call_next(request)

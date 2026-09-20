@@ -17,13 +17,17 @@ class MediaKind(StrEnum):
     AUDIO = "audio"
     PHOTO = "photo"
     ANIMATION = "animation"
+    DOCUMENT = "document"
     ALBUM = "album"
 
 
 class DeliveryStatus(StrEnum):
     PENDING = "pending"
+    SUCCESS = "success"
     DELIVERED = "delivered"
     FAILED = "failed"
+    UNCERTAIN = "uncertain"
+    PARTIAL = "partial"
 
 
 @dataclass(frozen=True, slots=True)
@@ -198,8 +202,18 @@ class DeliveryTarget:
 class DeliveredItem:
     item: MediaItem
     status: DeliveryStatus
+    telegram_type: MediaKind
+    item_index: int = 0
+    message_id: int | None = None
+    file_id: str | None = None
+    file_unique_id: str | None = None
     delivery_id: str | None = None
     error: str | None = None
+    error_category: str | None = None
+
+    @property
+    def success(self) -> bool:
+        return self.status in {DeliveryStatus.SUCCESS, DeliveryStatus.DELIVERED}
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +221,21 @@ class DeliveryReceipt:
     target: DeliveryTarget
     items: tuple[DeliveredItem, ...]
     status: DeliveryStatus
+
+    @property
+    def success(self) -> bool:
+        return self.status in {DeliveryStatus.SUCCESS, DeliveryStatus.DELIVERED}
+
+    @property
+    def retryable_items(self) -> tuple[DeliveredItem, ...]:
+        """Items known not to have been sent; uncertain outcomes are excluded."""
+        return tuple(
+            item for item in self.items if item.status is DeliveryStatus.FAILED
+        )
+
+    def __bool__(self) -> bool:
+        """Keep legacy truthiness while callers migrate from bool to receipts."""
+        return self.success
 
 
 def canonicalize_media_url(url: str) -> str:

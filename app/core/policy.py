@@ -1,18 +1,21 @@
-from app.core.config import MAX_TG_UPLOAD_MB, MAX_DL_MB
+from app.core.config import MAX_MEDIA_FILE_MB
 
-__all__ = ["size_allowed"]
+__all__ = ["DECIMAL_MB", "max_media_file_bytes", "size_allowed"]
 
-# Limits applied when filesize is unknown (conservative fail-safe)
-_MAX_UNKNOWN_SIZE_LIMITS = {
-    "telegram": MAX_TG_UPLOAD_MB,  # Same as TG upload limit
-    "http": MAX_DL_MB,
-}
+DECIMAL_MB = 1_000_000
+
+
+def max_media_file_bytes(*, limit_mb: int = MAX_MEDIA_FILE_MB) -> int:
+    """Return the configured limit using Telegram's decimal-MB definition."""
+    if limit_mb <= 0:
+        raise ValueError("media file limit must be positive")
+    return limit_mb * DECIMAL_MB
 
 
 def size_allowed(filesize_bytes: int | None, *, target: str = "telegram") -> bool:
-    limit_mb = MAX_TG_UPLOAD_MB if target == "telegram" else MAX_DL_MB
+    """Apply the one media limit; delivery enforces the cloud degraded cap."""
+    if target not in {"telegram", "http"}:
+        raise ValueError(f"unsupported size-policy target: {target}")
     if filesize_bytes is None:
-        # Unknown size: allow but cap to target limit as a safety net
-        # Callers should enforce post-download size checks
         return True
-    return filesize_bytes <= limit_mb * 1024 * 1024
+    return 0 <= filesize_bytes <= max_media_file_bytes()

@@ -54,6 +54,9 @@ if not _is_real_fastapi():
 os.environ.setdefault("BOT_TOKEN", "test_token")
 os.environ.setdefault("WEBHOOK_URL", "https://example.com")
 os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "test-secret")
+os.environ.setdefault("MAX_MEDIA_FILE_MB", "2000")
+os.environ.setdefault("MAX_DL_MB", "2000")
+os.environ.setdefault("MAX_TG_UPLOAD_MB", "2000")
 
 
 # ── Shared Fixtures ──────────────────────────────────────────────

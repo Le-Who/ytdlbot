@@ -1,5 +1,6 @@
 """Public media-provider contracts."""
 
+from .delivery import DeliveryAsset, TelegramDelivery
 from .models import (
     ClipInterval,
     DeliveredItem,
@@ -36,6 +37,7 @@ __all__ = [
     "CandidateValidationResult",
     "ClipInterval",
     "DeliveredItem",
+    "DeliveryAsset",
     "DeliveryReceipt",
     "DeliveryStatus",
     "DeliveryTarget",
@@ -48,6 +50,7 @@ __all__ = [
     "MediaTransport",
     "QualityPolicy",
     "ResolvedMedia",
+    "TelegramDelivery",
     "URLPolicy",
     "UnsafeMediaURL",
     "UnsupportedMediaUrlError",

@@ -18,13 +18,66 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
 TELEGRAM_SECRET_TOKEN: str = os.getenv(
     "TELEGRAM_SECRET_TOKEN"
 ) or secrets.token_urlsafe(32)
-TELEGRAM_LOCAL_ENDPOINT = os.getenv("TELEGRAM_LOCAL_ENDPOINT", "").strip()
+TELEGRAM_LOCAL_ENDPOINT = os.getenv("TELEGRAM_LOCAL_ENDPOINT", "").strip().rstrip("/")
 
 LINK_TTL_MINUTES = int(os.getenv("LINK_TTL_MINUTES", "60"))
 ENABLE_TELEGRAM_UPLOAD = os.getenv("ENABLE_TELEGRAM_UPLOAD", "1").strip() == "1"
-_max_tg_upload_default = "2000" if TELEGRAM_LOCAL_ENDPOINT else "45"
-MAX_TG_UPLOAD_MB = int(os.getenv("MAX_TG_UPLOAD_MB", _max_tg_upload_default))
-MAX_DL_MB = int(os.getenv("MAX_DL_MB", "1000"))
+
+
+def _positive_int(name: str, raw: str, *, maximum: int | None = None) -> int:
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise RuntimeError(f"{name} must be an integer") from error
+    if value <= 0 or (maximum is not None and value > maximum):
+        suffix = f" and at most {maximum}" if maximum is not None else ""
+        raise RuntimeError(f"{name} must be positive{suffix}")
+    return value
+
+
+def _resolve_media_file_limit_mb() -> int:
+    primary_raw = os.getenv("MAX_MEDIA_FILE_MB")
+    legacy_raw = {
+        name: os.getenv(name)
+        for name in ("MAX_DL_MB", "MAX_TG_UPLOAD_MB")
+        if os.getenv(name) is not None
+    }
+    legacy = {
+        name: _positive_int(name, raw or "", maximum=2000)
+        for name, raw in legacy_raw.items()
+    }
+    if primary_raw is not None:
+        primary = _positive_int("MAX_MEDIA_FILE_MB", primary_raw, maximum=2000)
+        if any(value != primary for value in legacy.values()):
+            raise RuntimeError(
+                "conflicting media file limits: MAX_MEDIA_FILE_MB and legacy "
+                "MAX_DL_MB/MAX_TG_UPLOAD_MB must match"
+            )
+        return primary
+    if len(set(legacy.values())) > 1:
+        raise RuntimeError(
+            "conflicting media file limits: legacy MAX_DL_MB and "
+            "MAX_TG_UPLOAD_MB must match"
+        )
+    return next(iter(legacy.values()), 2000)
+
+
+MAX_MEDIA_FILE_MB = _resolve_media_file_limit_mb()
+# Compatibility aliases only; all three names resolve to one effective policy.
+MAX_TG_UPLOAD_MB = MAX_MEDIA_FILE_MB
+MAX_DL_MB = MAX_MEDIA_FILE_MB
+TELEGRAM_CLOUD_MAX_FILE_MB = _positive_int(
+    "TELEGRAM_CLOUD_MAX_FILE_MB",
+    os.getenv("TELEGRAM_CLOUD_MAX_FILE_MB", "50"),
+    maximum=50,
+)
+TELEGRAM_MEDIA_WRITE_TIMEOUT = float(
+    os.getenv("TELEGRAM_MEDIA_WRITE_TIMEOUT", "1200")
+)
+TELEGRAM_READ_TIMEOUT = float(os.getenv("TELEGRAM_READ_TIMEOUT", "120"))
+TELEGRAM_WRITE_TIMEOUT = float(os.getenv("TELEGRAM_WRITE_TIMEOUT", "120"))
+TELEGRAM_CONNECT_TIMEOUT = float(os.getenv("TELEGRAM_CONNECT_TIMEOUT", "30"))
+TELEGRAM_POOL_TIMEOUT = float(os.getenv("TELEGRAM_POOL_TIMEOUT", "30"))
 MAX_CONCURRENT_TASKS = int(os.getenv("MAX_CONCURRENT_TASKS", "5"))
 
 LIMITER_USER_CAPACITY = float(os.getenv("LIMITER_USER_CAPACITY", "10"))

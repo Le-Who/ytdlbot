@@ -28,6 +28,7 @@ from app.core.models import DownloadContext
 from app.services.sender import TelegramSender
 from app.services.media.pipeline import (
     CallbackDataError,
+    build_media_request,
     decode_callback_payload,
     encode_callback_data,
 )
@@ -49,6 +50,9 @@ async def _deliver_authorized_stories(
     stories: list[object],
     *,
     auth_scope: str,
+    caller_scope: str = "ig_callback",
+    clip: str | None = None,
+    canonical_url: str | None = None,
 ) -> bool:
     """Deliver selected authorized CDN items through the common pipeline."""
     pipeline = state.media_pipeline
@@ -70,12 +74,11 @@ async def _deliver_authorized_stories(
         if len(items) == 1
         else "album:" + ":".join(item.media_id for item in items)
     )
-    request = MediaRequest(
-        canonical_url=f"https://www.instagram.com/stories/{stable_media_id}/",
-        platform="instagram",
-        media_id=stable_media_id,
+    request = build_media_request(
+        canonical_url or f"https://www.instagram.com/stories/{stable_media_id}/",
         kind=kind,
-        caller_scope="ig_callback",
+        clip=clip,
+        caller_scope=caller_scope,
         auth_scope=f"instagram:{auth_scope}",
         exact=True,
     )

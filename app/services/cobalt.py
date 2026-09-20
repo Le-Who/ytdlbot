@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional
 
 from curl_cffi.requests import AsyncSession, Response
 
-from app.core.config import COBALT_API_KEY, COBALT_API_URLS, TEMP_DIR
+from app.core.config import COBALT_API_KEYS, COBALT_API_URLS, TEMP_DIR, _cobalt_origin
 
 __all__ = ["CobaltPickerItem", "CobaltResult", "CobaltService"]
 
@@ -88,9 +88,9 @@ class CobaltService:
             "Content-Type": "application/json",
             "User-Agent": "ytdlbot/2.0 (FastAPI)",
         }
-        # Do not send the API key to the public instance
-        if COBALT_API_KEY and "api.cobalt.tools" not in api_base.lower():
-            headers["Authorization"] = f"Api-Key {COBALT_API_KEY}"
+        api_key = COBALT_API_KEYS.get(_cobalt_origin(api_base))
+        if api_key:
+            headers["Authorization"] = f"Api-Key {api_key}"
         return headers
 
     @staticmethod

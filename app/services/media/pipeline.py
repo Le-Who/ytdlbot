@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
@@ -149,7 +150,10 @@ class MediaPipeline:
         artifact_validator: ArtifactValidator | None = None,
         refreshers: Mapping[str, Any] | None = None,
         enforce_route_matrix: bool = False,
+        lease_renew_interval: float = 5 * 60,
     ) -> None:
+        if not math.isfinite(lease_renew_interval) or lease_renew_interval <= 0:
+            raise ValueError("lease renewal interval must be finite and positive")
         self.registry = registry
         self.transport = transport
         self.delivery = delivery
@@ -158,6 +162,7 @@ class MediaPipeline:
         self.artifact_validator = artifact_validator or validate_materialized_artifact
         self.refreshers = dict(refreshers or {})
         self.enforce_route_matrix = enforce_route_matrix
+        self.lease_renew_interval = lease_renew_interval
         # Domain separation is intentional: the same textual key can never make
         # a resolve factory subscribe to its own materialization flight.
         self._resolve_flights: SingleFlightGroup[str, ResolvedMedia] = (
@@ -195,36 +200,37 @@ class MediaPipeline:
             if not cached_receipt.retryable_items:
                 return cached_receipt
 
-        resolved = await self.resolve(request)
-        async with self.open_materialized(request, resolved=resolved) as materialized:
-            materialized.renew_lease()
-            if cached_receipt is not None:
-                retry = await self.delivery.retry_failed(
-                    cached_receipt,
-                    materialized,
-                    target,
-                    request=request,
-                    **delivery_options,
-                )
-                return _merge_receipts(cached_receipt, retry)
+        async with self.open_materialized(request) as materialized:
 
-            receipt = await self.delivery.deliver(
-                materialized,
-                target,
-                request=request,
-                **delivery_options,
-            )
-            if receipt.retryable_items:
-                materialized.renew_lease()
-                retried = await self.delivery.retry_failed(
-                    receipt,
+            async def send() -> DeliveryReceipt:
+                if cached_receipt is not None:
+                    retry = await self.delivery.retry_failed(
+                        cached_receipt,
+                        materialized,
+                        target,
+                        request=request,
+                        **delivery_options,
+                    )
+                    return _merge_receipts(cached_receipt, retry)
+
+                receipt = await self.delivery.deliver(
                     materialized,
                     target,
                     request=request,
                     **delivery_options,
                 )
-                receipt = _merge_receipts(receipt, retried)
-            return receipt
+                if receipt.retryable_items:
+                    retried = await self.delivery.retry_failed(
+                        receipt,
+                        materialized,
+                        target,
+                        request=request,
+                        **delivery_options,
+                    )
+                    return _merge_receipts(receipt, retried)
+                return receipt
+
+            return await self._with_lease_renewal(materialized, send())
 
     async def deliver_candidate(
         self,
@@ -258,37 +264,70 @@ class MediaPipeline:
             items=candidate.items or (_candidate_item(request, candidate),),
             candidates=(candidate,),
             provider=candidate.provider,
+            attempted_providers=(candidate.provider,) if candidate.provider else (),
         )
         async with self.open_materialized(request, resolved=resolved) as materialized:
-            materialized.renew_lease()
-            if cached_receipt is not None:
-                retry = await self.delivery.retry_failed(
-                    cached_receipt,
+
+            async def send() -> DeliveryReceipt:
+                if cached_receipt is not None:
+                    retry = await self.delivery.retry_failed(
+                        cached_receipt,
+                        materialized,
+                        target,
+                        request=request,
+                        **delivery_options,
+                    )
+                    return _merge_receipts(cached_receipt, retry)
+                receipt = await self.delivery.deliver(
                     materialized,
                     target,
                     request=request,
                     **delivery_options,
                 )
-                return _merge_receipts(cached_receipt, retry)
-            receipt = await self.delivery.deliver(
-                materialized,
-                target,
-                request=request,
-                **delivery_options,
-            )
-            if receipt.retryable_items:
-                materialized.renew_lease()
-                receipt = _merge_receipts(
-                    receipt,
-                    await self.delivery.retry_failed(
+                if receipt.retryable_items:
+                    receipt = _merge_receipts(
                         receipt,
-                        materialized,
-                        target,
-                        request=request,
-                        **delivery_options,
-                    ),
-                )
-            return receipt
+                        await self.delivery.retry_failed(
+                            receipt,
+                            materialized,
+                            target,
+                            request=request,
+                            **delivery_options,
+                        ),
+                    )
+                return receipt
+
+            return await self._with_lease_renewal(materialized, send())
+
+    async def _with_lease_renewal(
+        self,
+        materialized: MaterializedItem,
+        operation: Awaitable[DeliveryReceipt],
+    ) -> DeliveryReceipt:
+        async def renew() -> None:
+            while True:
+                await asyncio.sleep(self.lease_renew_interval)
+                materialized.renew_lease()
+
+        delivery_task = asyncio.ensure_future(operation)
+        renewal_task = asyncio.create_task(renew())
+        try:
+            done, _ = await asyncio.wait(
+                (delivery_task, renewal_task),
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if delivery_task in done:
+                return delivery_task.result()
+            renewal_error = renewal_task.exception()
+            delivery_task.cancel()
+            await asyncio.gather(delivery_task, return_exceptions=True)
+            raise MediaPipelineError(
+                "media lease renewal failed; Telegram outcome is uncertain"
+            ) from renewal_error
+        finally:
+            renewal_task.cancel()
+            delivery_task.cancel()
+            await asyncio.gather(renewal_task, delivery_task, return_exceptions=True)
 
     @asynccontextmanager
     async def open_materialized(
@@ -306,30 +345,51 @@ class MediaPipeline:
 
                 async def materialize_once() -> MaterializedItem:
                     selected = resolved or await self.resolve(request)
-                    candidates = _materialization_candidates(selected.candidates)
-                    try:
-                        completed = await self.transport.materialize(
-                            work_request,
-                            candidates,
-                            refreshers=self.refreshers,
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as error:
-                        provider = selected.provider or "materialization"
-                        raise MediaPipelineError(f"{provider}: {error}") from error
-                    try:
-                        await self.artifact_validator(work_request, completed)
-                    except BaseException as error:
-                        await _await_preserving_cancellation(
-                            completed.release(delete=True)
-                        )
-                        if isinstance(error, asyncio.CancelledError):
+                    attempted = {
+                        candidate.provider
+                        for candidate in selected.candidates
+                        if candidate.provider is not None
+                    }
+                    attempted.update(selected.attempted_providers)
+                    failures: list[tuple[str, BaseException]] = []
+                    while True:
+                        candidates = _materialization_candidates(selected.candidates)
+                        completed: MaterializedItem | None = None
+                        try:
+                            completed = await self.transport.materialize(
+                                work_request,
+                                candidates,
+                                refreshers=self.refreshers,
+                            )
+                            await self.artifact_validator(work_request, completed)
+                        except asyncio.CancelledError:
+                            if completed is not None:
+                                await _await_preserving_cancellation(
+                                    completed.release(delete=True)
+                                )
                             raise
-                        if isinstance(error, MediaPipelineError):
-                            raise
-                        provider = selected.provider or "artifact-validation"
-                        raise MediaPipelineError(f"{provider}: {error}") from error
+                        except BaseException as error:
+                            if completed is not None:
+                                await _await_preserving_cancellation(
+                                    completed.release(delete=True)
+                                )
+                            failures.append(
+                                (selected.provider or "materialization", error)
+                            )
+                            reserve = await self._resolve_reserve(
+                                work_request, attempted
+                            )
+                            if reserve is None:
+                                details = "; ".join(
+                                    f"{provider}: {error}"
+                                    for provider, error in failures
+                                )
+                                raise MediaPipelineError(details) from error
+                            selected = reserve
+                            attempted.update(reserve.attempted_providers)
+                            continue
+                        break
+                    await self._store_metadata(selected)
                     try:
                         # Publish inside the shared factory.  If its final
                         # subscriber is cancelled after the bytes are ready,
@@ -374,11 +434,47 @@ class MediaPipeline:
         resolved = ResolvedMedia(
             request=request,
             items=items,
-            candidates=(winner,),
+            candidates=(winner, *result.winner.alternatives),
             provider=result.winner.provider,
+            attempted_providers=result.attempted_providers,
         )
         await self._store_metadata(resolved)
         return resolved
+
+    async def _resolve_reserve(
+        self, request: MediaRequest, attempted: set[str]
+    ) -> ResolvedMedia | None:
+        routes = tuple(
+            route
+            for route in self._routes_for(request)
+            if route.provider.name not in attempted
+        )
+        if not routes:
+            return None
+        config = RaceConfig(
+            resolve_timeout=self.race_config.resolve_timeout,
+            total_timeout=self.race_config.total_timeout,
+            connect_timeout=self.race_config.connect_timeout,
+            heavy_delay=0,
+        )
+        result = await race_candidates(
+            request, routes, validate_candidate, config=config
+        )
+        if result.winner is None:
+            return None
+        winner = _project_album_selection(request, result.winner.candidate)
+        alternatives = tuple(
+            _project_album_selection(request, candidate)
+            for candidate in result.winner.alternatives
+        )
+        items = winner.items or (_candidate_item(request, winner),)
+        return ResolvedMedia(
+            request=request,
+            items=items,
+            candidates=(winner, *alternatives),
+            provider=result.winner.provider,
+            attempted_providers=result.attempted_providers,
+        )
 
     def _routes_for(self, request: MediaRequest) -> tuple[ProviderRoute, ...]:
         routes = self.registry.routes_for(request)
@@ -685,14 +781,22 @@ async def validate_materialized_artifact(
             raise ArtifactValidationError("final artifact has no audio stream")
         if item.kind is MediaKind.VIDEO and candidate.has_audio and not audio:
             raise ArtifactValidationError("final video has no required audio stream")
+        if video:
+            expected_width = item.width or candidate.width
+            expected_height = item.height or candidate.height
+            if expected_width is not None and expected_height is not None:
+                actual_width, actual_height = _display_dimensions(video[0])
+                width_tolerance = max(2, round(expected_width * 0.02))
+                height_tolerance = max(2, round(expected_height * 0.02))
+                if (
+                    abs(actual_width - expected_width) > width_tolerance
+                    or abs(actual_height - expected_height) > height_tolerance
+                ):
+                    raise ArtifactValidationError(
+                        "final video dimensions or orientation do not match"
+                    )
         if request.quality.max_edge is not None and item.kind is MediaKind.VIDEO:
-            stream = video[0]
-            try:
-                short_edge = min(int(stream["width"]), int(stream["height"]))
-            except (KeyError, TypeError, ValueError) as error:
-                raise ArtifactValidationError(
-                    "final video dimensions are unavailable"
-                ) from error
+            short_edge = min(_display_dimensions(video[0]))
             if short_edge < request.quality.max_edge:
                 raise ArtifactValidationError("final video is below requested quality")
         format_data = probe.get("format")
@@ -727,6 +831,17 @@ async def validate_materialized_artifact(
                 raise ArtifactValidationError(
                     "final animation exceeds the 60 second limit"
                 )
+        if request.audio_language is not None:
+            requested_language = _normalize_language(request.audio_language)
+            actual_languages = {
+                _normalize_language(str(tags.get("language") or ""))
+                for stream in audio
+                if isinstance((tags := stream.get("tags")), Mapping)
+            }
+            if requested_language not in actual_languages:
+                raise ArtifactValidationError(
+                    "final audio language does not match request"
+                )
 
         _validate_stream_codecs(
             request,
@@ -736,7 +851,7 @@ async def validate_materialized_artifact(
             item_index=item_index,
             output_container=expected_container,
         )
-        expected_duration = _expected_clip_duration(request, candidate)
+        expected_duration = _expected_duration(request, candidate, item)
         if expected_duration is not None:
             actual_duration = _probe_duration(format_data)
             tolerance = max(1.5, expected_duration * 0.05)
@@ -744,7 +859,12 @@ async def validate_materialized_artifact(
                 actual_duration is None
                 or abs(actual_duration - expected_duration) > tolerance
             ):
-                raise ArtifactValidationError("final clip duration does not match")
+                if (
+                    request.clip.start_seconds is not None
+                    or request.clip.end_seconds is not None
+                ):
+                    raise ArtifactValidationError("final clip duration does not match")
+                raise ArtifactValidationError("final duration does not match")
 
 
 def _validate_stream_codecs(
@@ -829,19 +949,65 @@ def _probe_duration(format_data: Mapping[str, Any]) -> float | None:
     return duration if duration >= 0 else None
 
 
-def _expected_clip_duration(
-    request: MediaRequest, candidate: MediaCandidate
+def _expected_duration(
+    request: MediaRequest, candidate: MediaCandidate, item: MediaItem
 ) -> float | None:
     start = request.clip.start_seconds
     end = request.clip.end_seconds
+    source_duration = (
+        item.duration_seconds
+        if item.duration_seconds is not None
+        else candidate.duration_seconds
+    )
     if start is None and end is None:
-        return None
+        return source_duration
     clip_start = start or 0
     if end is not None:
         return max(0, end - clip_start)
-    if candidate.duration_seconds is not None:
-        return max(0, candidate.duration_seconds - clip_start)
+    if source_duration is not None:
+        return max(0, source_duration - clip_start)
     return None
+
+
+def _display_dimensions(stream: Mapping[str, Any]) -> tuple[int, int]:
+    try:
+        width = int(stream["width"])
+        height = int(stream["height"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ArtifactValidationError(
+            "final video dimensions are unavailable"
+        ) from error
+    if width <= 0 or height <= 0:
+        raise ArtifactValidationError("final video dimensions are unavailable")
+    rotation: float = 0
+    tags = stream.get("tags")
+    if isinstance(tags, Mapping) and tags.get("rotate") is not None:
+        try:
+            rotation = float(tags["rotate"])
+        except (TypeError, ValueError):
+            rotation = 0
+    side_data = stream.get("side_data_list")
+    if isinstance(side_data, list):
+        for entry in side_data:
+            if isinstance(entry, Mapping) and entry.get("rotation") is not None:
+                try:
+                    rotation = float(entry["rotation"])
+                except (TypeError, ValueError):
+                    continue
+                break
+    if math.isfinite(rotation) and round(abs(rotation) / 90) % 2:
+        return height, width
+    return width, height
+
+
+def _normalize_language(value: str) -> str:
+    language = value.strip().lower().replace("_", "-").split("-", 1)[0]
+    aliases = {
+        "eng": "en",
+        "rus": "ru",
+        "ukr": "uk",
+    }
+    return aliases.get(language, language)
 
 
 async def _ffprobe(path: Path) -> dict[str, Any]:
@@ -910,10 +1076,15 @@ def build_default_pipeline(bot: Any) -> MediaPipeline:
             {"tiktok", "twitter", "x", "instagram", "facebook", "pinterest"},
         )
     )
+    cobalt_credentials = config.resolve_cobalt_api_credentials(
+        getattr(config, "COBALT_API_URLS", ()),
+        getattr(config, "COBALT_API_KEYS", {}),
+        getattr(config, "COBALT_API_KEY", ""),
+    )
     endpoints = tuple(
         ProviderEndpoint(
             origin,
-            getattr(config, "COBALT_API_KEY", None) or None,
+            cobalt_credentials.get(config._cobalt_origin(origin)),
             cobalt_capabilities,
             cobalt_verified,
         )
@@ -1007,6 +1178,10 @@ def _project_album_selection(
     selection = request.album_selection
     if not selection:
         return candidate
+    if any(index < 0 for index in selection):
+        raise MediaResolutionError(
+            f"{candidate.provider or 'provider'}: album selection is out of range"
+        )
     if not candidate.items:
         if selection == (0,):
             return candidate
@@ -1121,8 +1296,8 @@ def _clock_seconds(value: str) -> float:
         if len(parts) not in {2, 3}:
             raise ValueError("invalid clip clock")
         seconds = sum(part * (60**index) for index, part in enumerate(reversed(parts)))
-    if seconds < 0:
-        raise ValueError("clip seconds must not be negative")
+    if not math.isfinite(seconds) or seconds < 0:
+        raise ValueError("clip seconds must be finite and non-negative")
     return int(seconds) if seconds.is_integer() else seconds
 
 

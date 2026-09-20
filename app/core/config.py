@@ -1,7 +1,10 @@
+import json
 import os
 import secrets
 import tempfile
+from collections.abc import Mapping, Sequence
 from typing import Optional
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -161,7 +164,89 @@ COBALT_CAPABILITIES = frozenset(
 )
 SNAPSAVE_CONTRACT_VERIFIED = os.getenv("SNAPSAVE_CONTRACT_VERIFIED", "0").strip() == "1"
 
-COBALT_API_KEY = os.getenv("COBALT_API_KEY", "")
+COBALT_API_KEY = os.getenv("COBALT_API_KEY", "").strip()
+
+
+def _cobalt_origin(value: str) -> str:
+    try:
+        parsed = urlsplit(value.strip())
+        port = parsed.port
+    except ValueError as error:
+        raise RuntimeError("Cobalt credential origin is malformed") from error
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        raise RuntimeError("Cobalt credential must name one exact HTTP(S) origin")
+    scheme = parsed.scheme.lower()
+    host = parsed.hostname.lower().rstrip(".")
+    if ":" in host:
+        host = f"[{host}]"
+    default_port = 443 if scheme == "https" else 80
+    authority = host if port in {None, default_port} else f"{host}:{port}"
+    return f"{scheme}://{authority}"
+
+
+def resolve_cobalt_api_credentials(
+    origins: Sequence[str],
+    configured: Mapping[str, str],
+    legacy_key: str = "",
+) -> dict[str, str]:
+    """Bind every Cobalt credential to one normalized exact origin."""
+    normalized_origins = tuple(_cobalt_origin(origin) for origin in origins)
+    if len(set(normalized_origins)) != len(normalized_origins):
+        raise RuntimeError("Cobalt API origins must be unique")
+    allowed = set(normalized_origins)
+    credentials: dict[str, str] = {}
+    for raw_origin, raw_key in configured.items():
+        origin = _cobalt_origin(str(raw_origin))
+        key = str(raw_key).strip()
+        if origin not in allowed:
+            raise RuntimeError("Cobalt credential names an unconfigured exact origin")
+        if not key:
+            raise RuntimeError("Cobalt credential must not be empty")
+        if origin in credentials:
+            raise RuntimeError("Cobalt credential origin is duplicated")
+        credentials[origin] = key
+    legacy = legacy_key.strip()
+    if legacy:
+        if len(normalized_origins) != 1:
+            raise RuntimeError(
+                "COBALT_API_KEY requires exactly one configured exact origin"
+            )
+        origin = normalized_origins[0]
+        mapped = credentials.get(origin)
+        if mapped is not None and mapped != legacy:
+            raise RuntimeError("conflicting Cobalt credentials for exact origin")
+        credentials[origin] = legacy
+    return credentials
+
+
+def _configured_cobalt_api_keys() -> dict[str, str]:
+    raw = os.getenv("COBALT_API_KEYS", "").strip()
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as error:
+        raise RuntimeError("COBALT_API_KEYS must be a JSON object") from error
+    if not isinstance(value, dict) or not all(
+        isinstance(key, str) and isinstance(item, str) for key, item in value.items()
+    ):
+        raise RuntimeError("COBALT_API_KEYS must map exact origins to string keys")
+    return value
+
+
+COBALT_API_KEYS = resolve_cobalt_api_credentials(
+    COBALT_API_URLS,
+    _configured_cobalt_api_keys(),
+    COBALT_API_KEY,
+)
 
 LIMITER_IG_CAPACITY = float(os.getenv("LIMITER_IG_CAPACITY", "15"))
 LIMITER_IG_REFILL_PER_SEC = float(

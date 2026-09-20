@@ -10,9 +10,10 @@ from telegram import Update
 
 from app.constants import AUDIO_FORMAT_ID, CHUNK_SIZE, GIF_FORMAT_ID
 from app.core import state
-from app.core.config import TELEGRAM_SECRET_TOKEN, DL_TIMEOUT_HTTP, MAX_DL_MB
+from app.core.config import DL_TIMEOUT_HTTP, MAX_DL_MB, TELEGRAM_SECRET_TOKEN
 from app.core.logging import set_correlation_id
 from app.core.models import DownloadContext
+from app.core.policy import max_media_file_bytes
 from app.core.process import run_subprocess
 
 logger = logging.getLogger("app.api")
@@ -68,7 +69,7 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
         file_ext = "mp4"
         media_type = "video/mp4"
 
-    max_bytes = MAX_DL_MB * 1024 * 1024
+    max_bytes = max_media_file_bytes(limit_mb=MAX_DL_MB)
 
     if state.media_pipeline is not None:
         from app.services.media.pipeline import (
@@ -102,9 +103,15 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
         async def stream_materialized():
             bytes_sent = 0
             renewal = asyncio.create_task(_renew_materialized_lease(materialized))
+            active_error: BaseException | None = None
             try:
                 with media_path.open("rb") as source:
-                    while chunk := await asyncio.to_thread(source.read, CHUNK_SIZE):
+                    while True:
+                        _raise_lease_renewal_failure(renewal)
+                        chunk = await asyncio.to_thread(source.read, CHUNK_SIZE)
+                        _raise_lease_renewal_failure(renewal)
+                        if not chunk:
+                            break
                         bytes_sent += len(chunk)
                         if bytes_sent > max_bytes:
                             logger.warning(
@@ -113,10 +120,19 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
                             )
                             return
                         yield chunk
+            except BaseException as error:
+                active_error = error
+                raise
             finally:
-                renewal.cancel()
-                await asyncio.gather(renewal, return_exceptions=True)
+                renewal_error = await _stop_lease_renewal(renewal)
                 await _exit_materialized(lease)
+                if renewal_error is not None:
+                    if active_error is None:
+                        raise renewal_error
+                    logger.error(
+                        "Media lease renewal failed during stream shutdown",
+                        extra={"error_type": type(renewal_error).__name__},
+                    )
 
         return StreamingResponse(
             stream_materialized(),
@@ -243,6 +259,27 @@ async def _renew_materialized_lease(materialized) -> None:  # type: ignore[no-un
     while True:
         materialized.renew_lease()
         await asyncio.sleep(_HTTP_LEASE_RENEW_SECONDS)
+
+
+def _raise_lease_renewal_failure(task: asyncio.Task[None]) -> None:
+    if task.done() and not task.cancelled():
+        task.result()
+
+
+async def _stop_lease_renewal(
+    task: asyncio.Task[None],
+) -> BaseException | None:
+    cancelled_here = not task.done()
+    if cancelled_here:
+        task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        if not cancelled_here:
+            raise
+    except BaseException as error:
+        return error
+    return None
 
 
 @router.post("/webhook")

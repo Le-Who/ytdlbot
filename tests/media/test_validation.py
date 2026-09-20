@@ -199,3 +199,13 @@ def test_legacy_candidate_without_explicit_kind_remains_auto_and_audio_compatibl
 
     assert validate_candidate(request_fixture(), candidate).usable
     assert validate_candidate(request_fixture(kind=MediaKind.AUDIO), candidate).usable
+
+
+def test_explicit_candidate_media_identity_must_match_request():
+    mismatch = validate_candidate(
+        request_fixture(), candidate_fixture(media_id="different-video")
+    )
+    legacy = validate_candidate(request_fixture(), candidate_fixture(media_id=None))
+
+    assert CandidateRejectionReason.MEDIA_ID_MISMATCH in mismatch.reasons
+    assert legacy.usable

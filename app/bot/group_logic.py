@@ -14,9 +14,12 @@ from app.core.texts import Texts
 from app.services.ytdlp.parsers import _is_tiktok
 from app.services.media.pipeline import (
     CallbackDataError,
+    MediaPipelineError,
+    build_media_request,
     decode_callback_payload,
     encode_callback_data,
 )
+from app.services.media.models import DeliveryTarget
 
 logger = logging.getLogger("app.bot.group_logic")
 
@@ -84,6 +87,50 @@ async def handle_group_message(
             exact=False,
         )
         try:
+            if request.platform == "tiktok":
+                resolved = await state.media_pipeline.resolve(request)
+                if len(resolved.items) > 1:
+                    token = uuid.uuid4().hex
+                    await state.link_cache.set(
+                        token,
+                        DownloadContext(
+                            page_url=request.canonical_url,
+                            user_tag=user_tag,
+                            chat_id=chat.id,
+                            original_msg_id=update.message.message_id,
+                            api_source="pipeline",
+                            api_json={
+                                "media_id": request.media_id,
+                                "item_count": len(resolved.items),
+                                "item_kinds": [
+                                    item.kind.value for item in resolved.items
+                                ],
+                            },
+                            section=section,
+                        ),
+                    )
+                    kb = InlineKeyboardMarkup(
+                        [
+                            [
+                                InlineKeyboardButton(
+                                    "📸 Альбом",
+                                    callback_data=encode_callback_data(
+                                        "apigrpslide", token, "photo"
+                                    ),
+                                ),
+                                InlineKeyboardButton(
+                                    "🎬 Видео",
+                                    callback_data=encode_callback_data(
+                                        "apigrpslide", token, "video"
+                                    ),
+                                ),
+                            ]
+                        ]
+                    )
+                    await status_msg.edit_text(
+                        Texts.GROUP_SLIDESHOW_CHOICE, reply_markup=kb
+                    )
+                    return
             receipt = await state.media_pipeline.deliver(
                 request,
                 DeliveryTarget(str(chat.id), caller_scope="group"),
@@ -108,10 +155,6 @@ async def handle_group_message(
         await status_msg.edit_text(error_text)
         return
     if url_type != "unknown":
-        try:
-            await status_msg.delete()
-        except Exception:
-            pass
         from app.bot.messages import _handle_instagram
 
         await _handle_instagram(
@@ -119,10 +162,12 @@ async def handle_group_message(
             context,
             url,
             uuid.uuid4().hex[:8],
-            None,
+            section,
             url_type,
             ig_target,
             ig_item_id,
+            status_msg=status_msg,
+            caller_scope="group",
         )
         return
 
@@ -455,6 +500,75 @@ async def on_group_slideshow(
 
     try:
         await q.edit_message_text(Texts.SLIDESHOW_DOWNLOADING)
+
+        if is_api and payload.api_source == "pipeline":
+            pipeline = state.media_pipeline
+            if pipeline is None:
+                await q.edit_message_text(Texts.SLIDESHOW_ERROR)
+                return
+            request = build_media_request(
+                page_url,
+                kind="auto",
+                clip=payload.section,
+                caller_scope="group",
+                exact=False,
+            )
+            if (
+                not payload.api_json
+                or payload.api_json.get("media_id") != request.media_id
+            ):
+                await q.edit_message_text(Texts.SLIDESHOW_ERROR)
+                return
+            try:
+                if is_photo_mode:
+                    receipt = await pipeline.deliver(
+                        request,
+                        DeliveryTarget(str(chat_id), caller_scope="group"),
+                        caption=f"👤 {user_tag}",
+                        parse_mode="HTML",
+                    )
+                    success = receipt.success
+                    error_text = next(
+                        (item.error for item in receipt.items if item.error),
+                        Texts.GROUP_SEND_ERROR,
+                    )
+                else:
+                    async with pipeline.open_materialized(request) as materialized:
+                        materialized.renew_lease()
+                        video_path = await MediaSender.images_to_video(
+                            [str(path) for path in materialized.paths], None
+                        )
+                        if not video_path:
+                            await q.edit_message_text(Texts.SLIDESHOW_ERROR)
+                            return
+                        materialized.renew_lease()
+                        gif_token = uuid.uuid4().hex
+                        state.file_cache[gif_token] = video_path
+                        from app.bot.keyboards import build_video_keyboard
+
+                        success = await MediaSender.send_file(
+                            context.bot,
+                            chat_id,
+                            video_path,
+                            is_audio=False,
+                            is_gif=False,
+                            caption=f"👤 {user_tag}",
+                            parse_mode="HTML",
+                            reply_markup=build_video_keyboard(gif_token),
+                        )
+                    error_text = Texts.GROUP_SEND_ERROR
+            except MediaPipelineError as error:
+                await q.edit_message_text(str(error))
+                return
+            if success:
+                try:
+                    await context.bot.delete_message(chat_id, original_msg_id)
+                except Exception:
+                    pass
+                await q.delete_message()
+            else:
+                await q.edit_message_text(error_text)
+            return
 
         if is_api and payload.api_json:
             from app.services.gallery_dl.service import SlideshowResult

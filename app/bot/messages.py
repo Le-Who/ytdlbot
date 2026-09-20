@@ -85,6 +85,30 @@ async def _deliver_private_pipeline(
         exact=exact,
     )
     try:
+        if request.platform == "tiktok" and request.kind.value == "auto":
+            resolved = await pipeline.resolve(request)
+            if len(resolved.items) > 1:
+                token = uuid.uuid4().hex
+                await state.link_cache.set(
+                    token,
+                    DownloadContext(
+                        page_url=request.canonical_url,
+                        chat_id=chat.id,
+                        original_msg_id=status.message_id,
+                        api_source="pipeline",
+                        api_json={
+                            "media_id": request.media_id,
+                            "item_count": len(resolved.items),
+                            "item_kinds": [item.kind.value for item in resolved.items],
+                        },
+                        section=section,
+                    ),
+                )
+                await status.edit_text(
+                    Texts.GROUP_SLIDESHOW_CHOICE,
+                    reply_markup=build_slideshow_keyboard(token),
+                )
+                return
         receipt = await pipeline.deliver(
             request,
             DeliveryTarget(str(chat.id), caller_scope="private"),
@@ -611,6 +635,9 @@ async def _handle_instagram(
     url_type: str,
     target: str | None,
     item_id: str | None,
+    *,
+    status_msg: Any | None = None,
+    caller_scope: str = "private",
 ) -> None:
     """Handle Instagram URLs with rich selection UX."""
     msg = update.message
@@ -648,7 +675,12 @@ async def _handle_instagram(
 
     # ── Direct story link with specific item_id ──────────────────
     if url_type == "stories" and target and item_id:
-        status_msg = await msg.reply_text(Texts.IG_DOWNLOADING.format(type="историю"))
+        if status_msg is None:
+            status_msg = await msg.reply_text(
+                Texts.IG_DOWNLOADING.format(type="историю")
+            )
+        else:
+            await status_msg.edit_text(Texts.IG_DOWNLOADING.format(type="историю"))
 
         profile_media = await InstagramService.get_profile_media(target)
         if profile_media.error:
@@ -658,6 +690,27 @@ async def _handle_instagram(
         story = next((s for s in profile_media.stories if s.mediaid == item_id), None)
         if not story:
             await status_msg.edit_text("⚠️ История не найдена или уже истекла.")
+            return
+
+        if state.media_pipeline is not None:
+            from app.bot.ig_callbacks import _deliver_authorized_stories
+
+            success = await _deliver_authorized_stories(
+                context,
+                chat.id,
+                [story],
+                auth_scope=parse_token,
+                caller_scope=caller_scope,
+                clip=section,
+                canonical_url=url,
+            )
+            if success:
+                try:
+                    await status_msg.delete()
+                except Exception:
+                    pass
+            else:
+                await status_msg.edit_text(Texts.IG_DOWNLOAD_ERROR)
             return
 
         file_path, error = await InstagramService.download_story_item(story)

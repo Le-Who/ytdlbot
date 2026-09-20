@@ -32,9 +32,12 @@ from app.core.models import DownloadContext
 from app.services.orchestrator import DownloadOrchestrator
 from app.services.media.pipeline import (
     CallbackDataError,
+    MediaPipelineError,
+    build_media_request,
     decode_callback_payload,
     encode_callback_data,
 )
+from app.services.media.models import DeliveryTarget
 
 __all__ = [
     "on_back",
@@ -501,7 +504,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             from app.services.cobalt import CobaltResult
 
             api_res = CobaltResult(**payload.api_json)
-        else:
+        elif api_source != "pipeline":
             await _edit_or_reply(q, "⚠️ Неизвестный API источник.")
             return
 
@@ -531,6 +534,62 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     try:
         await _edit_or_reply(q, Texts.SLIDESHOW_DOWNLOADING)
+
+        if is_api and api_source == "pipeline":
+            pipeline = state.media_pipeline
+            if pipeline is None:
+                await _edit_or_reply(q, Texts.LINK_EXPIRED)
+                return
+            request = build_media_request(
+                page_url,
+                kind="auto",
+                clip=payload.section,
+                caller_scope="callback",
+                exact=False,
+            )
+            if payload.api_json.get("media_id") != request.media_id:
+                await _edit_or_reply(q, Texts.LINK_EXPIRED)
+                return
+            try:
+                if is_photo_mode:
+                    receipt = await pipeline.deliver(
+                        request,
+                        DeliveryTarget(str(q.message.chat_id), caller_scope="callback"),
+                        caption="📸",
+                    )
+                    success = receipt.success
+                    error_text = next(
+                        (item.error for item in receipt.items if item.error),
+                        Texts.SEND_ERROR,
+                    )
+                else:
+                    async with pipeline.open_materialized(request) as materialized:
+                        materialized.renew_lease()
+                        video_path = await MediaSender.images_to_video(
+                            [str(path) for path in materialized.paths], None
+                        )
+                        if not video_path:
+                            await _edit_or_reply(q, Texts.SLIDESHOW_ERROR)
+                            return
+                        materialized.renew_lease()
+                        try:
+                            success = await MediaSender.send_file(
+                                context.bot,
+                                q.message.chat_id,
+                                video_path,
+                                caption="🎬",
+                            )
+                        finally:
+                            await asyncio.to_thread(safe_remove, video_path)
+                    error_text = Texts.SEND_ERROR
+            except MediaPipelineError as error:
+                await _edit_or_reply(q, str(error))
+                return
+            if success:
+                await q.delete_message()
+            else:
+                await _edit_or_reply(q, error_text)
+            return
 
         if is_api:
             from app.services.gallery_dl.service import SlideshowResult

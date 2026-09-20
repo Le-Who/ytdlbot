@@ -48,8 +48,25 @@ def build_format_keyboard(
     return InlineKeyboardMarkup(buttons)
 
 
-def build_slideshow_keyboard() -> InlineKeyboardMarkup:
+def build_slideshow_keyboard(token: str | None = None) -> InlineKeyboardMarkup:
     """Build keyboard for TikTok slideshow (image carousel) posts."""
+    if token is not None:
+        return InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        Texts.BTN_SLIDESHOW_PHOTOS,
+                        callback_data=encode_callback_data("apislide", token, "photo"),
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        Texts.BTN_SLIDESHOW_VIDEO,
+                        callback_data=encode_callback_data("apislide", token, "video"),
+                    )
+                ],
+            ]
+        )
     return InlineKeyboardMarkup(
         [
             [

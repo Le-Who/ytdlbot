@@ -9,6 +9,7 @@ from .models import MediaCandidate, MediaKind, MediaRequest
 
 
 class CandidateRejectionReason(StrEnum):
+    MEDIA_ID_MISMATCH = "media_id_mismatch"
     VIDEO_UNAVAILABLE = "video_unavailable"
     KIND_MISMATCH = "kind_mismatch"
     ALBUM_INCOMPLETE = "album_incomplete"
@@ -32,6 +33,9 @@ def validate_candidate(
     request: MediaRequest, candidate: MediaCandidate
 ) -> CandidateValidationResult:
     reasons: list[CandidateRejectionReason] = []
+
+    if candidate.media_id is not None and candidate.media_id != request.media_id:
+        reasons.append(CandidateRejectionReason.MEDIA_ID_MISMATCH)
 
     if candidate.auth_scope != request.auth_scope:
         reasons.append(CandidateRejectionReason.AUTH_SCOPE_MISMATCH)

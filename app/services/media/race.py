@@ -27,6 +27,7 @@ class RaceConfig:
 class CandidateWinner:
     provider: str
     candidate: MediaCandidate
+    alternatives: tuple[MediaCandidate, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,6 +50,7 @@ class RaceResult:
     winner: CandidateWinner | None
     failures: tuple[ProviderFailure, ...] = ()
     rejections: tuple[CandidateRejection, ...] = ()
+    attempted_providers: tuple[str, ...] = ()
 
 
 async def _resolve(
@@ -121,6 +123,9 @@ async def race_candidates(
     )
     failures: list[ProviderFailure] = []
     rejections: list[CandidateRejection] = []
+    attempted_providers: list[str] = []
+    route_positions = {id(route): index for index, route in enumerate(eligible)}
+    validated: list[tuple[int, int, CandidateWinner]] = []
 
     async def attempt_route(route: ProviderRoute) -> bool:
         """Return whether this route actually acquired admission and ran."""
@@ -132,6 +137,8 @@ async def race_candidates(
             ):
                 return ran
             ran = True
+            if provider not in attempted_providers:
+                attempted_providers.append(provider)
             try:
                 candidates = await _resolve(
                     route,
@@ -161,15 +168,29 @@ async def race_candidates(
                 raise
             else:
                 route.breaker.record_success(provider, request.platform)
+                usable: list[MediaCandidate] = []
                 for candidate in candidates:
                     validation = validate(request, candidate)
                     if validation.usable:
-                        if not finished.done() and clock() < deadline:
-                            finished.set_result(CandidateWinner(provider, candidate))
-                        return ran
-                    rejections.append(
-                        CandidateRejection(provider, candidate, validation)
-                    )
+                        usable.append(candidate)
+                    else:
+                        rejections.append(
+                            CandidateRejection(provider, candidate, validation)
+                        )
+                if usable:
+                    for candidate_index, candidate in enumerate(usable):
+                        validated.append(
+                            (
+                                route_positions[id(route)],
+                                candidate_index,
+                                CandidateWinner(provider, candidate),
+                            )
+                        )
+                    if not finished.done() and clock() < deadline:
+                        finished.set_result(
+                            CandidateWinner(provider, usable[0], tuple(usable[1:]))
+                        )
+                    return ran
                 return ran
         return ran
 
@@ -207,4 +228,19 @@ async def race_candidates(
         finally:
             for task in tasks:
                 task.cancel()
-    return RaceResult(winner, tuple(failures), tuple(rejections))
+    if winner is not None:
+        ordered = [entry[2] for entry in sorted(validated, key=lambda entry: entry[:2])]
+        alternatives = tuple(
+            item.candidate
+            for item in ordered
+            if not (
+                item.provider == winner.provider and item.candidate is winner.candidate
+            )
+        )
+        winner = CandidateWinner(winner.provider, winner.candidate, alternatives)
+    return RaceResult(
+        winner,
+        tuple(failures),
+        tuple(rejections),
+        tuple(attempted_providers),
+    )

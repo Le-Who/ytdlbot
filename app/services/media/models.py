@@ -43,6 +43,10 @@ class ClipInterval:
     end_seconds: float | None = None
 
     def __post_init__(self) -> None:
+        if self.start_seconds is not None and not math.isfinite(self.start_seconds):
+            raise ValueError("clip start must be finite")
+        if self.end_seconds is not None and not math.isfinite(self.end_seconds):
+            raise ValueError("clip end must be finite")
         if self.start_seconds is not None and self.start_seconds < 0:
             raise ValueError("clip start must not be negative")
         if self.end_seconds is not None and self.end_seconds < 0:
@@ -189,6 +193,7 @@ class ResolvedMedia:
     items: tuple[MediaItem, ...]
     candidates: tuple[MediaCandidate, ...] = ()
     provider: str | None = None
+    attempted_providers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

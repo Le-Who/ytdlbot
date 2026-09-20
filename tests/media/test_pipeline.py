@@ -30,8 +30,9 @@ from app.services.media.pipeline import (
     build_media_request,
     validate_materialized_artifact,
 )
+from app.services.media.race import RaceConfig
 from app.services.media.registry import ProviderRegistry, ProviderRoute
-from app.services.media.transport import MaterializedItem
+from app.services.media.transport import MaterializationError, MaterializedItem
 
 
 class _Reservation:
@@ -250,6 +251,114 @@ async def test_resolve_and_materialize_use_separate_singleflight_domains(
 
 
 @pytest.mark.asyncio
+async def test_late_materialization_subscriber_does_not_repeat_resolution(
+    tmp_path: Path,
+):
+    request = _request()
+    provider = _Provider("winner", _candidate())
+    materialized, reservation = _materialized(tmp_path, provider.candidate)
+    transport = _Transport(materialized)
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(provider)]),
+        transport,
+        _Delivery(),
+        artifact_validator=AsyncMock(),
+    )
+
+    first = asyncio.create_task(pipeline.deliver(request, DeliveryTarget("1")))
+    await transport.started.wait()
+    second = asyncio.create_task(pipeline.deliver(request, DeliveryTarget("2")))
+    await asyncio.sleep(0)
+    transport.release.set()
+    await asyncio.gather(first, second)
+
+    assert provider.calls == 1
+    assert transport.calls == 1
+    assert reservation.released == 1
+
+
+@pytest.mark.asyncio
+async def test_materialization_failure_resolves_next_route_without_duplicate_heavy_work(
+    tmp_path: Path,
+):
+    request = build_media_request("https://www.instagram.com/reel/one/")
+    gallery_candidate = replace(_candidate("gallery-dl"), media_id="one")
+    ytdlp_candidate = replace(_candidate("ytdlp"), media_id="one")
+    gallery = _Provider("gallery-dl", gallery_candidate)
+    ytdlp = _Provider("ytdlp", ytdlp_candidate, is_heavy=True)
+    completed, reservation = _materialized(tmp_path, ytdlp_candidate)
+
+    class FailingOverTransport:
+        def __init__(self) -> None:
+            self.providers: list[tuple[str | None, ...]] = []
+
+        async def materialize(self, request, candidates, **kwargs):
+            providers = tuple(candidate.provider for candidate in candidates)
+            self.providers.append(providers)
+            if providers == ("gallery-dl",):
+                raise MaterializationError("expired CDN URL")
+            return completed
+
+    transport = FailingOverTransport()
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(gallery), ProviderRoute(ytdlp)]),
+        transport,
+        _Delivery(),
+        race_config=RaceConfig(heavy_delay=60),
+        artifact_validator=AsyncMock(),
+    )
+
+    receipt = await pipeline.deliver(request, DeliveryTarget("1"))
+
+    assert receipt.success
+    assert transport.providers == [("gallery-dl",), ("ytdlp",)]
+    assert gallery.calls == 1
+    assert ytdlp.calls == 1
+    assert reservation.released == 1
+
+
+@pytest.mark.asyncio
+async def test_materialization_reserve_does_not_repeat_earlier_cheap_routes(
+    tmp_path: Path,
+):
+    request = build_media_request("https://www.instagram.com/reel/one/")
+    unavailable = _Provider("snapsave", None)
+    gallery_candidate = replace(_candidate("gallery-dl"), media_id="one")
+    ytdlp_candidate = replace(_candidate("ytdlp"), media_id="one")
+    gallery = _Provider("gallery-dl", gallery_candidate, is_heavy=True)
+    ytdlp = _Provider("ytdlp", ytdlp_candidate, is_heavy=True)
+    completed, _ = _materialized(tmp_path, ytdlp_candidate)
+
+    class FailingOverTransport:
+        async def materialize(self, request, candidates, **kwargs):
+            if candidates[0].provider == "gallery-dl":
+                raise MaterializationError("expired CDN URL")
+            return completed
+
+    pipeline = MediaPipeline(
+        ProviderRegistry(
+            [
+                ProviderRoute(unavailable),
+                ProviderRoute(gallery),
+                ProviderRoute(ytdlp),
+            ]
+        ),
+        FailingOverTransport(),
+        _Delivery(),
+        race_config=RaceConfig(heavy_delay=0),
+        artifact_validator=AsyncMock(),
+        enforce_route_matrix=True,
+    )
+
+    receipt = await pipeline.deliver(request, DeliveryTarget("1"))
+
+    assert receipt.success
+    assert unavailable.calls == 1
+    assert gallery.calls == 1
+    assert ytdlp.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_public_entrypoints_share_resolve_and_materialize_flights(
     tmp_path: Path,
 ):
@@ -311,6 +420,98 @@ async def test_uncertain_delivery_is_never_retried_and_lease_is_released(
 
     assert receipt.status is DeliveryStatus.UNCERTAIN
     assert delivery.retry_calls == 0
+    assert reservation.released == 1
+
+
+@pytest.mark.asyncio
+async def test_slow_telegram_delivery_periodically_renews_materialized_lease(
+    tmp_path: Path,
+):
+    request = _request()
+    candidate = _candidate()
+    materialized, reservation = _materialized(tmp_path, candidate)
+    transport = _Transport(materialized)
+    transport.release.set()
+
+    class SlowDelivery(_Delivery):
+        def __init__(self) -> None:
+            super().__init__()
+            self.started = asyncio.Event()
+            self.finish = asyncio.Event()
+
+        async def deliver(self, media, target, **kwargs):
+            self.started.set()
+            await self.finish.wait()
+            return await super().deliver(media, target, **kwargs)
+
+    delivery = SlowDelivery()
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(_Provider("winner", candidate))]),
+        transport,
+        delivery,
+        artifact_validator=AsyncMock(),
+        lease_renew_interval=0.01,
+    )
+
+    task = asyncio.create_task(pipeline.deliver(request, DeliveryTarget("1")))
+    await delivery.started.wait()
+    await asyncio.sleep(0.035)
+    delivery.finish.set()
+    receipt = await task
+
+    assert receipt.success
+    assert reservation.renewed >= 3
+    assert reservation.released == 1
+
+
+@pytest.mark.asyncio
+async def test_telegram_lease_renewal_failure_stops_without_duplicate_send(
+    tmp_path: Path,
+):
+    request = _request()
+    candidate = _candidate()
+
+    class FailingReservation(_Reservation):
+        def renew(self) -> None:
+            super().renew()
+            if self.renewed >= 2:
+                raise RuntimeError("lease owner changed")
+
+    path = tmp_path / "item.mp4"
+    path.write_bytes(b"\x00\x00\x00\x18ftypisom")
+    reservation = FailingReservation()
+    materialized = MaterializedItem((path,), 12, candidate, reservation)
+    transport = _Transport(materialized)
+    transport.release.set()
+
+    class HangingDelivery(_Delivery):
+        def __init__(self) -> None:
+            super().__init__()
+            self.cancelled = False
+
+        async def deliver(self, media, target, **kwargs):
+            self.calls.append(media)
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+
+    delivery = HangingDelivery()
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(_Provider("winner", candidate))]),
+        transport,
+        delivery,
+        artifact_validator=AsyncMock(),
+        lease_renew_interval=0.01,
+    )
+
+    with pytest.raises(MediaPipelineError, match="outcome is uncertain"):
+        await pipeline.deliver(request, DeliveryTarget("1"))
+
+    assert len(delivery.calls) == 1
+    assert delivery.retry_calls == 0
+    assert delivery.cancelled
     assert reservation.released == 1
 
 
@@ -565,6 +766,37 @@ async def test_album_selection_projects_fresh_items_and_cached_output_indexes(
 
 
 @pytest.mark.asyncio
+async def test_negative_album_selection_is_rejected_before_materialization(
+    tmp_path: Path,
+):
+    items = tuple(
+        MediaItem(
+            f"abc123:{index}",
+            MediaKind.PHOTO,
+            f"https://cdn.example/{index}.jpg",
+        )
+        for index in range(2)
+    )
+    candidate = replace(_candidate(items=items), media_id="abc123")
+    transport_item, _ = _materialized(tmp_path, candidate)
+    transport = _Transport(transport_item)
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(_Provider("winner", candidate))]),
+        transport,
+        _Delivery(),
+        artifact_validator=AsyncMock(),
+    )
+
+    with pytest.raises(MediaResolutionError, match="album_selection_unavailable"):
+        await pipeline.deliver(
+            replace(_request(kind=MediaKind.AUTO), album_selection=(-1,)),
+            DeliveryTarget("1"),
+        )
+
+    assert transport.calls == 0
+
+
+@pytest.mark.asyncio
 async def test_auto_request_without_album_metadata_does_not_accept_item_zero_cache(
     tmp_path: Path,
 ):
@@ -591,6 +823,74 @@ async def test_auto_request_without_album_metadata_does_not_accept_item_zero_cac
 
     assert receipt.success
     assert provider.calls == 1
+    assert transport.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_authorized_album_metadata_enables_file_id_hit_before_materialization(
+    tmp_path: Path,
+):
+    request = build_media_request(
+        "https://www.instagram.com/stories/tester/123/",
+        kind=MediaKind.ALBUM,
+        caller_scope="ig_callback",
+        auth_scope="instagram:session-7",
+    )
+    items = (
+        MediaItem("story-1", MediaKind.PHOTO, "https://cdn.example/1.jpg"),
+        MediaItem("story-2", MediaKind.VIDEO, "https://cdn.example/2.mp4"),
+    )
+    candidate = MediaCandidate(
+        candidate_id="authorized-album",
+        url=items[0].url,
+        has_video=True,
+        has_audio=True,
+        provider="authorized-instagram",
+        backend_family="instagram-session",
+        media_id=request.media_id,
+        kind=MediaKind.ALBUM,
+        items=items,
+        sources=(
+            MediaSource("0", items[0].url, container="jpg"),
+            MediaSource("1", items[1].url, container="mp4"),
+        ),
+        auth_scope=request.auth_scope,
+    )
+    materialized, _ = _materialized(tmp_path, candidate)
+    transport = _Transport(materialized)
+    transport.release.set()
+    cache = MediaCache()
+
+    class CachingDelivery(_Delivery):
+        async def deliver(self, media, target, **kwargs):
+            receipt = await super().deliver(media, target, **kwargs)
+            cache_request = kwargs["request"]
+            for delivered in receipt.items:
+                await cache.put_delivery(
+                    cache_request,
+                    bot_id=self.bot_id,
+                    delivery=CachedDelivery(
+                        delivered.file_id or f"file-{delivered.item_index}",
+                        delivered.telegram_type,
+                        delivered.item_index,
+                    ),
+                )
+            return receipt
+
+    pipeline = MediaPipeline(
+        ProviderRegistry([]),
+        transport,
+        CachingDelivery(cache),
+        artifact_validator=AsyncMock(),
+    )
+    target = DeliveryTarget(
+        "1", caller_scope="ig_callback", auth_scope=request.auth_scope
+    )
+
+    first = await pipeline.deliver_candidate(request, target, candidate)
+    second = await pipeline.deliver_candidate(request, target, candidate)
+
+    assert first.success and second.success
     assert transport.calls == 1
 
 
@@ -821,6 +1121,123 @@ async def test_final_artifact_validation_accepts_expected_clip_transcode(
     await validate_materialized_artifact(request, materialized)
 
 
+@pytest.mark.asyncio
+async def test_final_artifact_rejects_landscape_output_for_portrait_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    candidate = replace(_candidate(), width=1080, height=1920)
+    materialized, _ = _materialized(tmp_path, candidate)
+    monkeypatch.setattr(
+        "app.services.media.pipeline._ffprobe",
+        AsyncMock(
+            return_value={
+                "streams": [
+                    {
+                        "codec_type": "video",
+                        "codec_name": "h264",
+                        "width": 1920,
+                        "height": 1080,
+                    },
+                    {"codec_type": "audio", "codec_name": "aac"},
+                ],
+                "format": {"format_name": "mov,mp4", "duration": "20"},
+            }
+        ),
+    )
+
+    with pytest.raises(ArtifactValidationError, match="dimensions"):
+        await validate_materialized_artifact(_request(), materialized)
+
+
+@pytest.mark.asyncio
+async def test_final_artifact_applies_rotation_metadata_to_display_dimensions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    candidate = replace(_candidate(), width=1080, height=1920, duration_seconds=20)
+    materialized, _ = _materialized(tmp_path, candidate)
+    monkeypatch.setattr(
+        "app.services.media.pipeline._ffprobe",
+        AsyncMock(
+            return_value={
+                "streams": [
+                    {
+                        "codec_type": "video",
+                        "codec_name": "h264",
+                        "width": 1920,
+                        "height": 1080,
+                        "tags": {"rotate": "90"},
+                    },
+                    {"codec_type": "audio", "codec_name": "aac"},
+                ],
+                "format": {"format_name": "mov,mp4", "duration": "20.2"},
+            }
+        ),
+    )
+
+    await validate_materialized_artifact(_request(), materialized)
+
+
+@pytest.mark.asyncio
+async def test_final_artifact_rejects_truncated_unclipped_duration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    candidate = replace(_candidate(), duration_seconds=120)
+    materialized, _ = _materialized(tmp_path, candidate)
+    monkeypatch.setattr(
+        "app.services.media.pipeline._ffprobe",
+        AsyncMock(
+            return_value={
+                "streams": [
+                    {
+                        "codec_type": "video",
+                        "codec_name": "h264",
+                        "width": 1280,
+                        "height": 720,
+                    },
+                    {"codec_type": "audio", "codec_name": "aac"},
+                ],
+                "format": {"format_name": "mov,mp4", "duration": "20"},
+            }
+        ),
+    )
+
+    with pytest.raises(ArtifactValidationError, match="duration"):
+        await validate_materialized_artifact(_request(), materialized)
+
+
+@pytest.mark.asyncio
+async def test_final_artifact_rejects_wrong_audio_language_tag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    request = replace(_request(), audio_language="uk")
+    candidate = replace(_candidate(), audio_languages=("uk",))
+    materialized, _ = _materialized(tmp_path, candidate)
+    monkeypatch.setattr(
+        "app.services.media.pipeline._ffprobe",
+        AsyncMock(
+            return_value={
+                "streams": [
+                    {
+                        "codec_type": "video",
+                        "codec_name": "h264",
+                        "width": 1280,
+                        "height": 720,
+                    },
+                    {
+                        "codec_type": "audio",
+                        "codec_name": "aac",
+                        "tags": {"language": "eng"},
+                    },
+                ],
+                "format": {"format_name": "mov,mp4", "duration": "20"},
+            }
+        ),
+    )
+
+    with pytest.raises(ArtifactValidationError, match="audio language"):
+        await validate_materialized_artifact(request, materialized)
+
+
 @pytest.mark.parametrize(
     ("url", "expected"),
     [
@@ -911,10 +1328,68 @@ def test_default_pipeline_composes_gallery_dl_local_route(monkeypatch):
     )
 
 
+def test_default_pipeline_scopes_cobalt_credentials_to_exact_origins(monkeypatch):
+    from app.core import config
+    from app.services.media.providers.http import endpoint_headers
+
+    monkeypatch.setattr(
+        config,
+        "COBALT_API_URLS",
+        ["https://first.example", "https://second.example"],
+    )
+    monkeypatch.setattr(
+        config,
+        "COBALT_API_KEYS",
+        {
+            "https://first.example": "first-secret",
+            "https://second.example": "second-secret",
+        },
+        raising=False,
+    )
+    monkeypatch.setattr(config, "COBALT_API_KEY", "")
+    monkeypatch.setattr(config, "COBALT_CONTRACT_VERIFIED", True)
+    pipeline = build_default_pipeline(SimpleNamespace(id=1))
+
+    cobalt = next(
+        route.provider
+        for route in pipeline.registry._routes
+        if route.provider.name == "cobalt"
+    )
+
+    assert [endpoint.origin for endpoint in cobalt.endpoints] == [
+        "https://first.example",
+        "https://second.example",
+    ]
+    assert [
+        endpoint_headers(endpoint).get("Authorization") for endpoint in cobalt.endpoints
+    ] == [
+        "Api-Key first-secret",
+        "Api-Key second-secret",
+    ]
+
+
+def test_default_pipeline_rejects_one_legacy_cobalt_key_for_multiple_origins(
+    monkeypatch,
+):
+    from app.core import config
+
+    monkeypatch.setattr(
+        config,
+        "COBALT_API_URLS",
+        ["https://first.example", "https://second.example"],
+    )
+    monkeypatch.setattr(config, "COBALT_API_KEYS", {}, raising=False)
+    monkeypatch.setattr(config, "COBALT_API_KEY", "shared-secret")
+    monkeypatch.setattr(config, "COBALT_CONTRACT_VERIFIED", True)
+
+    with pytest.raises(RuntimeError, match="exact origin"):
+        build_default_pipeline(SimpleNamespace(id=1))
+
+
 @pytest.mark.asyncio
 async def test_disabled_provider_is_skipped_without_timeout():
     disabled = _Provider("tikwm", _candidate("tikwm"), delay=60)
-    fallback = _Provider("ytdlp", _candidate("ytdlp"))
+    fallback = _Provider("ytdlp", replace(_candidate("ytdlp"), media_id="1"))
     pipeline = MediaPipeline(
         ProviderRegistry(
             [ProviderRoute(disabled, enabled=False), ProviderRoute(fallback)]
@@ -932,3 +1407,19 @@ async def test_disabled_provider_is_skipped_without_timeout():
 
     assert resolved.provider == "ytdlp"
     assert disabled.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_race_rejects_wrong_media_identity_and_uses_matching_provider():
+    wrong = _Provider("wrong", replace(_candidate("wrong"), media_id="other"))
+    matching = _Provider("matching", _candidate("matching"), delay=0.01)
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(wrong), ProviderRoute(matching)]),
+        SimpleNamespace(),
+        _Delivery(),
+        artifact_validator=AsyncMock(),
+    )
+
+    resolved = await pipeline.resolve(_request())
+
+    assert resolved.provider == "matching"

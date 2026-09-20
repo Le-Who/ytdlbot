@@ -27,6 +27,7 @@ from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID, SLIDESHOW_PHOTO_FORMAT
 from app.bot.keyboards import build_format_keyboard
 from app.core.texts import Texts
 from app.core.logging import set_correlation_id
+from app.core.process import process_supervisor
 from app.services.downloader import MediaSender
 from app.core.models import DownloadContext
 from app.services.orchestrator import DownloadOrchestrator
@@ -275,6 +276,7 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         (token,) = parts
         await state.cancel_cache.set(token, True)
+        await process_supervisor.cancel_owner(token)
         await q.edit_message_text(Texts.CANCELLED)
     except (CallbackDataError, ValueError, AttributeError) as e:
         logger.error("Invalid callback data in on_cancel", extra={"error": str(e)})

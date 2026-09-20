@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 import os
 import shutil
 import signal
@@ -18,10 +19,156 @@ from collections.abc import (
     Sequence,
 )
 from contextlib import asynccontextmanager
+from ctypes import wintypes
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.core import state
+
+_CREATE_SUSPENDED = 0x00000004
+_JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
+_JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
+_JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+
+
+class _IoCounters(ctypes.Structure):
+    _fields_ = [
+        ("ReadOperationCount", ctypes.c_ulonglong),
+        ("WriteOperationCount", ctypes.c_ulonglong),
+        ("OtherOperationCount", ctypes.c_ulonglong),
+        ("ReadTransferCount", ctypes.c_ulonglong),
+        ("WriteTransferCount", ctypes.c_ulonglong),
+        ("OtherTransferCount", ctypes.c_ulonglong),
+    ]
+
+
+class _BasicLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("PerProcessUserTimeLimit", ctypes.c_longlong),
+        ("PerJobUserTimeLimit", ctypes.c_longlong),
+        ("LimitFlags", wintypes.DWORD),
+        ("MinimumWorkingSetSize", ctypes.c_size_t),
+        ("MaximumWorkingSetSize", ctypes.c_size_t),
+        ("ActiveProcessLimit", wintypes.DWORD),
+        ("Affinity", ctypes.c_size_t),
+        ("PriorityClass", wintypes.DWORD),
+        ("SchedulingClass", wintypes.DWORD),
+    ]
+
+
+class _ExtendedLimitInformation(ctypes.Structure):
+    _fields_ = [
+        ("BasicLimitInformation", _BasicLimitInformation),
+        ("IoInfo", _IoCounters),
+        ("ProcessMemoryLimit", ctypes.c_size_t),
+        ("JobMemoryLimit", ctypes.c_size_t),
+        ("PeakProcessMemoryUsed", ctypes.c_size_t),
+        ("PeakJobMemoryUsed", ctypes.c_size_t),
+    ]
+
+
+class _BasicAccountingInformation(ctypes.Structure):
+    _fields_ = [
+        ("TotalUserTime", ctypes.c_longlong),
+        ("TotalKernelTime", ctypes.c_longlong),
+        ("ThisPeriodTotalUserTime", ctypes.c_longlong),
+        ("ThisPeriodTotalKernelTime", ctypes.c_longlong),
+        ("TotalPageFaultCount", wintypes.DWORD),
+        ("TotalProcesses", wintypes.DWORD),
+        ("ActiveProcesses", wintypes.DWORD),
+        ("TotalTerminatedProcesses", wintypes.DWORD),
+    ]
+
+
+def _windows_kernel32():
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+    ]
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateJobObject.restype = wintypes.BOOL
+    kernel32.QueryInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+    ]
+    kernel32.QueryInformationJobObject.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    return kernel32
+
+
+def _create_windows_job() -> int:
+    kernel32 = _windows_kernel32()
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        raise ctypes.WinError(ctypes.get_last_error())
+    information = _ExtendedLimitInformation()
+    information.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+    configured = kernel32.SetInformationJobObject(
+        job,
+        _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+        ctypes.byref(information),
+        ctypes.sizeof(information),
+    )
+    if not configured:
+        error = ctypes.get_last_error()
+        kernel32.CloseHandle(job)
+        raise ctypes.WinError(error)
+    return int(job)
+
+
+def _windows_process_handle(proc: asyncio.subprocess.Process) -> int:
+    transport = getattr(proc, "_transport")
+    popen = transport.get_extra_info("subprocess")
+    return int(popen._handle)
+
+
+def _assign_windows_job_and_resume(
+    job_handle: int, proc: asyncio.subprocess.Process
+) -> None:
+    kernel32 = _windows_kernel32()
+    process_handle = _windows_process_handle(proc)
+    if not kernel32.AssignProcessToJobObject(job_handle, process_handle):
+        raise ctypes.WinError(ctypes.get_last_error())
+    ntdll = ctypes.WinDLL("ntdll")
+    ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
+    ntdll.NtResumeProcess.restype = ctypes.c_long
+    status = ntdll.NtResumeProcess(process_handle)
+    if status != 0:
+        raise OSError(f"NtResumeProcess failed with NTSTATUS {status:#x}")
+
+
+def _terminate_windows_job(job_handle: int) -> bool:
+    return bool(_windows_kernel32().TerminateJobObject(job_handle, 1))
+
+
+def _windows_job_active_processes(job_handle: int) -> int:
+    information = _BasicAccountingInformation()
+    queried = _windows_kernel32().QueryInformationJobObject(
+        job_handle,
+        _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION,
+        ctypes.byref(information),
+        ctypes.sizeof(information),
+        None,
+    )
+    if not queried:
+        return 0
+    return int(information.ActiveProcesses)
+
+
+def _close_windows_job(job_handle: int) -> None:
+    _windows_kernel32().CloseHandle(job_handle)
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,6 +188,8 @@ class ProcessHandle:
     owner: Hashable
     process_group_id: int
     cleanup_paths: tuple[Path, ...] = ()
+    cleanup_stems: tuple[Path, ...] = ()
+    windows_job: int | None = None
     stderr_data: deque[bytes] = field(default_factory=lambda: deque(maxlen=200))
     stderr_task: asyncio.Task[None] | None = None
     cancel_requested: bool = False
@@ -57,6 +206,15 @@ class ProcessHandle:
 
     async def _terminate_group(self) -> None:
         if sys.platform == "win32":
+            if self.windows_job is not None and _terminate_windows_job(
+                self.windows_job
+            ):
+                await self._wait_for_windows_job_exit()
+                try:
+                    await asyncio.wait_for(self.proc.wait(), timeout=0.5)
+                except TimeoutError:
+                    pass
+                return
             try:
                 completed = await asyncio.to_thread(
                     subprocess.run,
@@ -107,28 +265,63 @@ class ProcessHandle:
                 if path.is_dir():
                     await asyncio.to_thread(shutil.rmtree, path, True)
                 else:
-                    # Downloaders commonly add .part/.ytdl/fragment suffixes to
-                    # the configured output path.  The base names are UUIDs, so
-                    # removing the owned prefix is both complete and isolated.
-                    for candidate in path.parent.glob(f"{path.name}*"):
-                        if candidate.is_dir():
-                            await asyncio.to_thread(shutil.rmtree, candidate, True)
-                        else:
-                            candidate.unlink(missing_ok=True)
+                    path.unlink(missing_ok=True)
             except OSError:
                 pass
+        for output in self.cleanup_stems:
+            # yt-dlp inserts format identifiers between the configured UUID
+            # stem and extension (for example job.f137.mp4.part).  Matching
+            # only "<stem>.*" removes that job without touching job-other.
+            try:
+                for candidate in output.parent.glob(f"{output.stem}.*"):
+                    if candidate.is_dir():
+                        await asyncio.to_thread(shutil.rmtree, candidate, True)
+                    else:
+                        candidate.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    async def _wait_for_windows_job_exit(self) -> None:
+        if self.windows_job is None:
+            return
+        deadline = asyncio.get_running_loop().time() + 0.5
+        while _windows_job_active_processes(self.windows_job):
+            if asyncio.get_running_loop().time() >= deadline:
+                return
+            await asyncio.sleep(0.01)
+
+    async def close_tree(self) -> None:
+        if self.windows_job is not None:
+            _terminate_windows_job(self.windows_job)
+            await self._wait_for_windows_job_exit()
+            _close_windows_job(self.windows_job)
+            self.windows_job = None
 
     async def wait(self) -> int:
         return await self.proc.wait()
 
 
 class ProcessSupervisor:
-    """Own and bound subprocesses across yt-dlp, gallery-dl and FFmpeg tools."""
+    """Bound media workloads and their finite nested subprocess pipelines."""
 
-    def __init__(self, max_processes: int = 4) -> None:
+    def __init__(
+        self,
+        max_processes: int = 4,
+        *,
+        max_child_processes: int | None = None,
+    ) -> None:
         if max_processes < 1:
             raise ValueError("max_processes must be positive")
-        self._slots = asyncio.Semaphore(max_processes)
+        child_limit = (
+            max_processes * 2 if max_child_processes is None else max_child_processes
+        )
+        if child_limit < 1:
+            raise ValueError("max_child_processes must be positive")
+        # A workload lease prevents unrelated jobs from bypassing the limit.
+        # A separate process lease permits the one required two-process pipe,
+        # while still imposing a hard upper bound on same-owner children.
+        self._workload_slots = asyncio.Semaphore(max_processes)
+        self._process_slots = asyncio.Semaphore(child_limit)
         self._lock = asyncio.Lock()
         self._by_owner: dict[Hashable, set[ProcessHandle]] = {}
         self._owner_generation: dict[Hashable, int] = {}
@@ -177,7 +370,12 @@ class ProcessSupervisor:
         await self._acquire_owner_slot(owner_key)
         proc: asyncio.subprocess.Process | None = None
         handle: ProcessHandle | None = None
+        windows_job: int | None = None
+        windows_job_ready = False
+        process_slot_acquired = False
         try:
+            await self._process_slots.acquire()
+            process_slot_acquired = True
             async with self._lock:
                 cancelled = self._owner_generation.get(owner_key, 0) != generation
             if cancelled:
@@ -187,7 +385,10 @@ class ProcessSupervisor:
 
             kwargs: dict[str, object] = {}
             if sys.platform == "win32":
-                kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+                windows_job = _create_windows_job()
+                kwargs["creationflags"] = (
+                    subprocess.CREATE_NEW_PROCESS_GROUP | _CREATE_SUSPENDED
+                )
             else:
                 kwargs["start_new_session"] = True
             proc = await asyncio.create_subprocess_exec(
@@ -205,12 +406,16 @@ class ProcessSupervisor:
                 ),
                 **kwargs,  # type: ignore[arg-type]
             )
+            if windows_job is not None:
+                _assign_windows_job_and_resume(windows_job, proc)
+                windows_job_ready = True
             handle = ProcessHandle(
-                proc,
-                owner_key,
-                proc.pid,
-                tuple(Path(path) for path in cleanup_paths)
-                + self._owned_output_paths(command),
+                proc=proc,
+                owner=owner_key,
+                process_group_id=proc.pid,
+                cleanup_paths=tuple(Path(path) for path in cleanup_paths),
+                cleanup_stems=self._owned_output_paths(command),
+                windows_job=windows_job if windows_job_ready else None,
             )
             async with state.active_processes_lock:
                 state.active_processes.add(proc)
@@ -229,9 +434,21 @@ class ProcessSupervisor:
                 await asyncio.shield(handle.cancel())
                 await asyncio.shield(self._finish(handle))
             else:
-                if proc is not None and proc.returncode is None:
-                    temporary = ProcessHandle(proc, owner_key, proc.pid)
+                if proc is not None:
+                    temporary = ProcessHandle(
+                        proc=proc,
+                        owner=owner_key,
+                        process_group_id=proc.pid,
+                        windows_job=windows_job if windows_job_ready else None,
+                    )
                     await asyncio.shield(temporary.cancel())
+                    await asyncio.shield(temporary.close_tree())
+                    if windows_job_ready:
+                        windows_job = None
+                if windows_job is not None:
+                    _close_windows_job(windows_job)
+                if process_slot_acquired:
+                    self._process_slots.release()
                 await asyncio.shield(self._release_owner_slot(owner_key))
             raise
 
@@ -242,11 +459,11 @@ class ProcessSupervisor:
                 self._owner_slot_refs[owner] += 1
                 return
 
-        await self._slots.acquire()
+        await self._workload_slots.acquire()
         async with self._lock:
             if owner in self._owner_slot_refs:
                 self._owner_slot_refs[owner] += 1
-                self._slots.release()
+                self._workload_slots.release()
             else:
                 self._owner_slot_refs[owner] = 1
 
@@ -260,7 +477,7 @@ class ProcessSupervisor:
             else:
                 self._owner_slot_refs[owner] = references - 1
         if release_slot:
-            self._slots.release()
+            self._workload_slots.release()
 
     async def _finish(self, handle: ProcessHandle) -> None:
         first_finish = False
@@ -275,7 +492,9 @@ class ProcessSupervisor:
                         self._by_owner.pop(handle.owner, None)
         async with state.active_processes_lock:
             state.active_processes.discard(handle.proc)
+        await asyncio.shield(handle.close_tree())
         if first_finish:
+            self._process_slots.release()
             await self._release_owner_slot(handle.owner)
 
     def run(

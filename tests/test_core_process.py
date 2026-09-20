@@ -13,7 +13,10 @@ class TestProcess(unittest.IsolatedAsyncioTestCase):
         proc.kill = Mock()
         proc.terminate = Mock()
         proc.kill = Mock()
-        with patch("asyncio.create_subprocess_exec", return_value=proc):
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=proc),
+            patch("app.core.process._create_windows_job", return_value=None),
+        ):
             async with run_subprocess(["echo", "ok"]) as handle:
                 self.assertEqual(handle.proc, proc)
             self.assertEqual(list(handle.stderr_data), [b"err\n"])
@@ -34,7 +37,10 @@ class TestProcess(unittest.IsolatedAsyncioTestCase):
             0,
             0,
         ]
-        with patch("asyncio.create_subprocess_exec", return_value=proc):
+        with (
+            patch("asyncio.create_subprocess_exec", return_value=proc),
+            patch("app.core.process._create_windows_job", return_value=None),
+        ):
             async with run_subprocess(["sleep", "10"]) as handle:
                 await handle.cancel()
             proc.kill.assert_called()

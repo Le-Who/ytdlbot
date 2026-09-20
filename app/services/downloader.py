@@ -27,7 +27,7 @@ from app.core.config import (
     YOUTUBE_PIPE_MODE,
 )
 from app.core.utils import safe_remove
-from app.core.process import run_subprocess
+from app.core.process import ProcessOwnerCancelled, run_subprocess
 from app.core.policy import size_allowed
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 
@@ -150,7 +150,11 @@ class VideoDownloader:
                 if progress_callback:
                     asyncio.create_task(_handle_progress(line))
 
-            async with run_subprocess(cmd, stderr_callback=on_stderr) as handle:
+            async with run_subprocess(
+                cmd,
+                stderr_callback=on_stderr,
+                owner=token,
+            ) as handle:
                 proc = handle.proc
                 assert proc.stdout is not None
                 stderr = handle.stderr_data
@@ -160,10 +164,12 @@ class VideoDownloader:
                 buffer = io.BytesIO() if use_pipe else None
                 last_cancel_check = 0.0
 
-                # Drain stdout; check cancel/timeout throttled (every 2s)
+                # The callback cancels this stable token owner immediately.
+                # This short poll remains as a fallback for non-Bot callers
+                # that only update the shared cancellation cache.
                 while True:
                     now = time.time()
-                    if now - last_cancel_check > 2.0:
+                    if now - last_cancel_check > 0.25:
                         if await state.cancel_cache.get(token):
                             logger.info("Cancelled by user", extra={"token": token})
                             return None, "❌ Загрузка отменена пользователем."
@@ -177,14 +183,14 @@ class VideoDownloader:
                         if use_pipe:
                             assert buffer is not None
                             chunk = await asyncio.wait_for(
-                                proc.stdout.read(65536), timeout=2.0
+                                proc.stdout.read(65536), timeout=0.25
                             )
                             if not chunk:
                                 break
                             buffer.write(chunk)
                         else:
                             line = await asyncio.wait_for(
-                                proc.stdout.readline(), timeout=2.0
+                                proc.stdout.readline(), timeout=0.25
                             )
                             if not line:
                                 break
@@ -194,6 +200,9 @@ class VideoDownloader:
                         continue
 
                 await proc.wait()
+
+                if await state.cancel_cache.get(token):
+                    return None, "❌ Загрузка отменена пользователем."
 
                 if proc.returncode != 0:
                     _metrics().downloads_failed.inc(platform="telegram")
@@ -273,6 +282,8 @@ class VideoDownloader:
                 )
                 return tmp_path, None
 
+        except ProcessOwnerCancelled:
+            return None, "❌ Загрузка отменена пользователем."
         except Exception as e:
             logger.error("Download exception", extra={"error": str(e)}, exc_info=True)
             _metrics().downloads_failed.inc(platform="telegram")

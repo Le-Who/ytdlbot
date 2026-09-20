@@ -173,8 +173,13 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
     async def test_on_cancel(self):
         token = "cancel_token"
         self.update.callback_query.data = f"cancel|{token}"
-        await callbacks.on_cancel(self.update, self.context)
+        with patch(
+            "app.bot.callbacks.process_supervisor.cancel_owner",
+            new_callable=AsyncMock,
+        ) as cancel_owner:
+            await callbacks.on_cancel(self.update, self.context)
         self.assertTrue(await state.cancel_cache.get(token))
+        cancel_owner.assert_awaited_once_with(token)
         args, _ = self.update.callback_query.edit_message_text.call_args
         self.assertIn("Загрузка отменена", args[0])
 

@@ -419,6 +419,7 @@ def test_pending_or_incomplete_manifest_cannot_be_used_for_live_acceptance() -> 
         "approved_by": "reviewer",
         "approved_at": "2026-09-20T00:00:00Z",
     }
+    incomplete["shorts"][0]["url"] = None
     with pytest.raises((AssertionError, ValidationError)):
         _require_approved_manifest(incomplete)
 

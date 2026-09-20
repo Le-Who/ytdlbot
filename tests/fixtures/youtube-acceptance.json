@@ -6,31 +6,127 @@
     "approved_at": null
   },
   "shorts": [
-    {"case_id": "short-01", "url": null, "traits": []},
-    {"case_id": "short-02", "url": null, "traits": []},
-    {"case_id": "short-03", "url": null, "traits": []},
-    {"case_id": "short-04", "url": null, "traits": []},
-    {"case_id": "short-05", "url": null, "traits": []},
-    {"case_id": "short-06", "url": null, "traits": []},
-    {"case_id": "short-07", "url": null, "traits": []},
-    {"case_id": "short-08", "url": null, "traits": []},
-    {"case_id": "short-09", "url": null, "traits": []},
-    {"case_id": "short-10", "url": null, "traits": []},
-    {"case_id": "short-11", "url": null, "traits": []},
-    {"case_id": "short-12", "url": null, "traits": []}
+    {
+      "case_id": "short-01",
+      "url": "https://www.youtube.com/shorts/myZ9kn9MIWQ",
+      "traits": ["vertical", "short-duration", "720p", "1080p", "separate-av", "recent-publication"]
+    },
+    {
+      "case_id": "short-02",
+      "url": "https://www.youtube.com/shorts/QP5Fs3AYuWE",
+      "traits": ["vertical", "short-duration", "1080p", "separate-av", "recent-publication"]
+    },
+    {
+      "case_id": "short-03",
+      "url": "https://www.youtube.com/shorts/VV_JW4iCni0",
+      "traits": ["vertical", "short-duration", "1080p", "separate-av", "recent-publication"]
+    },
+    {
+      "case_id": "short-04",
+      "url": "https://www.youtube.com/shorts/fUrlyCjL8JA",
+      "traits": ["vertical", "short-duration", "1080p", "separate-av", "recent-publication"]
+    },
+    {
+      "case_id": "short-05",
+      "url": "https://www.youtube.com/shorts/fetjDn1pTCw",
+      "traits": ["vertical", "short-duration", "1080p", "separate-av", "recent-publication"]
+    },
+    {
+      "case_id": "short-06",
+      "url": "https://www.youtube.com/shorts/koVK7fP0mrk",
+      "traits": ["vertical", "short-duration", "1080p", "separate-av", "recent-publication"]
+    },
+    {
+      "case_id": "short-07",
+      "url": "https://www.youtube.com/shorts/9GwzVFpxl2w",
+      "traits": ["vertical", "short-duration", "1080p", "separate-av", "recent-publication"]
+    },
+    {
+      "case_id": "short-08",
+      "url": "https://www.youtube.com/shorts/N-H_qeG-iLc",
+      "traits": ["vertical", "short-duration", "1080p", "separate-av", "recent-publication"]
+    },
+    {
+      "case_id": "short-09",
+      "url": "https://www.youtube.com/shorts/7k1sXY-ZCkI",
+      "traits": ["vertical", "short-duration", "1080p", "separate-av", "recent-publication"]
+    },
+    {
+      "case_id": "short-10",
+      "url": "https://www.youtube.com/shorts/MzJZuaJkX_0",
+      "traits": ["vertical", "short-duration", "1080p", "separate-av", "recent-publication"]
+    },
+    {
+      "case_id": "short-11",
+      "url": "https://www.youtube.com/shorts/LnSdkakqEVY",
+      "traits": ["vertical", "short-duration", "1080p", "separate-av", "recent-publication"]
+    },
+    {
+      "case_id": "short-12",
+      "url": "https://www.youtube.com/shorts/XXhq0IYvR24",
+      "traits": ["vertical", "short-duration", "1080p", "separate-av", "recent-publication"]
+    }
   ],
   "videos": [
-    {"case_id": "video-01", "url": null, "traits": []},
-    {"case_id": "video-02", "url": null, "traits": []},
-    {"case_id": "video-03", "url": null, "traits": []},
-    {"case_id": "video-04", "url": null, "traits": []},
-    {"case_id": "video-05", "url": null, "traits": []},
-    {"case_id": "video-06", "url": null, "traits": []},
-    {"case_id": "video-07", "url": null, "traits": []},
-    {"case_id": "video-08", "url": null, "traits": []},
-    {"case_id": "video-09", "url": null, "traits": []},
-    {"case_id": "video-10", "url": null, "traits": []},
-    {"case_id": "video-11", "url": null, "traits": []},
-    {"case_id": "video-12", "url": null, "traits": []}
+    {
+      "case_id": "video-01",
+      "url": "https://www.youtube.com/watch?v=aqz-KE-bpKQ",
+      "traits": ["horizontal", "long-duration", "1080p", "separate-av", "over-50-mb"]
+    },
+    {
+      "case_id": "video-02",
+      "url": "https://www.youtube.com/watch?v=eRsGyueVLvQ",
+      "traits": ["horizontal", "long-duration", "1080p", "separate-av", "over-50-mb"]
+    },
+    {
+      "case_id": "video-03",
+      "url": "https://www.youtube.com/watch?v=R6MlUcmOul8",
+      "traits": ["horizontal", "long-duration", "1080p", "separate-av"]
+    },
+    {
+      "case_id": "video-04",
+      "url": "https://www.youtube.com/watch?v=LXb3EKWsInQ",
+      "traits": ["horizontal", "short-duration", "1080p", "separate-av", "over-50-mb"]
+    },
+    {
+      "case_id": "video-05",
+      "url": "https://www.youtube.com/watch?v=WhWc3b3KhnY",
+      "traits": ["horizontal", "long-duration", "1080p", "separate-av", "over-50-mb"]
+    },
+    {
+      "case_id": "video-06",
+      "url": "https://www.youtube.com/watch?v=l5OZu-IrXpw",
+      "traits": ["horizontal", "short-duration", "1080p", "separate-av", "recent-publication", "over-50-mb"]
+    },
+    {
+      "case_id": "video-07",
+      "url": "https://www.youtube.com/watch?v=IwZVXmQdX1E",
+      "traits": ["horizontal", "short-duration", "1080p", "separate-av", "multiple-audio-tracks", "recent-publication", "over-50-mb"]
+    },
+    {
+      "case_id": "video-08",
+      "url": "https://www.youtube.com/watch?v=FkgVB19I6xw",
+      "traits": ["horizontal", "short-duration", "720p", "1080p", "separate-av", "recent-publication"]
+    },
+    {
+      "case_id": "video-09",
+      "url": "https://www.youtube.com/watch?v=HuGAiGfKqW0",
+      "traits": ["horizontal", "short-duration", "1080p", "separate-av", "multiple-audio-tracks", "recent-publication"]
+    },
+    {
+      "case_id": "video-10",
+      "url": "https://www.youtube.com/watch?v=rPq7ITrWFvY",
+      "traits": ["horizontal", "short-duration", "1080p", "separate-av", "multiple-audio-tracks", "recent-publication", "over-50-mb"]
+    },
+    {
+      "case_id": "video-11",
+      "url": "https://www.youtube.com/watch?v=Nm5e9ok8dIg",
+      "traits": ["horizontal", "short-duration", "1080p", "separate-av", "multiple-audio-tracks", "recent-publication", "over-50-mb"]
+    },
+    {
+      "case_id": "video-12",
+      "url": "https://www.youtube.com/watch?v=2jBT5mlomoE",
+      "traits": ["horizontal", "long-duration", "1080p", "separate-av", "multiple-audio-tracks", "recent-publication", "over-50-mb"]
+    }
   ]
 }

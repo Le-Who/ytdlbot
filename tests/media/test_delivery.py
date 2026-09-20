@@ -33,6 +33,42 @@ class Reservation:
         pass
 
 
+class CacheFailureDouble:
+    """Cache boundary double with explicit, independently failing operations."""
+
+    def __init__(
+        self,
+        *,
+        cached: CachedDelivery | None = None,
+        fail_get: bool = False,
+        fail_evict: bool = False,
+        fail_put_indexes: frozenset[int] = frozenset(),
+    ) -> None:
+        self.cached = cached
+        self.fail_get = fail_get
+        self.fail_evict = fail_evict
+        self.fail_put_indexes = fail_put_indexes
+        self.put_indexes: list[int] = []
+
+    async def get_delivery(self, *args, **kwargs):
+        del args, kwargs
+        if self.fail_get:
+            raise RuntimeError("cache-get-secret-file-id")
+        return self.cached
+
+    async def evict_delivery(self, *args, **kwargs):
+        del args, kwargs
+        if self.fail_evict:
+            raise RuntimeError("cache-evict-secret-file-id")
+
+    async def put_delivery(self, *args, **kwargs):
+        del args
+        index = kwargs["delivery"].item_index
+        self.put_indexes.append(index)
+        if index in self.fail_put_indexes:
+            raise RuntimeError(f"cache-put-secret-file-id-{index}")
+
+
 def telegram_message(kind: MediaKind, file_id: str, message_id: int = 41):
     media = SimpleNamespace(file_id=file_id, file_unique_id=f"unique-{file_id}")
     if kind is MediaKind.PHOTO:
@@ -211,6 +247,152 @@ async def test_uncertain_cached_file_id_send_is_not_evicted_or_uploaded(tmp_path
     assert receipt.status is DeliveryStatus.UNCERTAIN
     assert bot.send_video.await_count == 1
     assert await cache.get_delivery(request, bot_id="bot-a") == original
+
+
+@pytest.mark.asyncio
+async def test_cache_get_failure_is_a_miss_and_uploads_once(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    """Catches optional cache reads turning into delivery availability failures."""
+    path = tmp_path / "video.mp4"
+    path.write_bytes(b"payload")
+    request = MediaRequest.from_url("https://youtu.be/abc123", kind=MediaKind.VIDEO)
+    cache = CacheFailureDouble(fail_get=True)
+    bot = AsyncMock()
+    bot.send_video.return_value = telegram_message(MediaKind.VIDEO, "fresh-id")
+    delivery = TelegramDelivery(
+        bot,
+        media_dir=tmp_path,
+        local_mode=True,
+        media_cache=cache,  # type: ignore[arg-type]
+        bot_id="bot-a",
+    )
+
+    receipt = await delivery.deliver(
+        asset(path), DeliveryTarget("123"), request=request
+    )
+
+    assert receipt.status is DeliveryStatus.SUCCESS
+    assert receipt.items[0].file_id == "fresh-id"
+    assert bot.send_video.await_count == 1
+    assert any(getattr(record, "operation", None) == "get" for record in caplog.records)
+    assert "cache-get-secret-file-id" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_cache_evict_failure_does_not_block_known_not_sent_upload(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    """Catches cache cleanup becoming a prerequisite for a safe upload fallback."""
+    path = tmp_path / "video.mp4"
+    path.write_bytes(b"payload")
+    request = MediaRequest.from_url("https://youtu.be/abc123", kind=MediaKind.VIDEO)
+    cache = CacheFailureDouble(
+        cached=CachedDelivery("stale-id", MediaKind.VIDEO), fail_evict=True
+    )
+    bot = AsyncMock()
+    bot.send_video.side_effect = [
+        BadRequest("Wrong file identifier/HTTP URL specified"),
+        telegram_message(MediaKind.VIDEO, "fresh-id"),
+    ]
+    delivery = TelegramDelivery(
+        bot,
+        media_dir=tmp_path,
+        local_mode=True,
+        media_cache=cache,  # type: ignore[arg-type]
+        bot_id="bot-a",
+    )
+
+    receipt = await delivery.deliver(
+        asset(path), DeliveryTarget("123"), request=request
+    )
+
+    assert receipt.status is DeliveryStatus.SUCCESS
+    assert receipt.items[0].file_id == "fresh-id"
+    assert bot.send_video.await_count == 2
+    assert any(
+        getattr(record, "operation", None) == "evict" for record in caplog.records
+    )
+    assert "cache-evict-secret-file-id" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_single_cache_put_failure_preserves_confirmed_success(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+):
+    """Catches cache writes hiding a confirmed Telegram message receipt."""
+    path = tmp_path / "video.mp4"
+    path.write_bytes(b"payload")
+    request = MediaRequest.from_url("https://youtu.be/abc123", kind=MediaKind.VIDEO)
+    cache = CacheFailureDouble(fail_put_indexes=frozenset({0}))
+    bot = AsyncMock()
+    bot.send_video.return_value = telegram_message(
+        MediaKind.VIDEO, "confirmed-id", message_id=73
+    )
+    delivery = TelegramDelivery(
+        bot,
+        media_dir=tmp_path,
+        local_mode=True,
+        media_cache=cache,  # type: ignore[arg-type]
+        bot_id="bot-a",
+    )
+
+    receipt = await delivery.deliver(
+        asset(path), DeliveryTarget("123"), request=request
+    )
+
+    assert receipt.status is DeliveryStatus.SUCCESS
+    assert receipt.items[0].message_id == 73
+    assert receipt.items[0].file_id == "confirmed-id"
+    assert bot.send_video.await_count == 1
+    assert any(getattr(record, "operation", None) == "put" for record in caplog.records)
+    assert "cache-put-secret-file-id-0" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_indexes", [frozenset({0}), frozenset({0, 1, 2})])
+async def test_group_cache_put_failures_preserve_every_confirmed_item_in_order(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    failed_indexes: frozenset[int],
+):
+    """Catches one cache write aborting receipt construction for a sent album."""
+    request = MediaRequest.from_url("https://youtu.be/abc123", kind=MediaKind.ALBUM)
+    cache = CacheFailureDouble(fail_put_indexes=failed_indexes)
+    assets: list[DeliveryAsset] = []
+    for index in range(3):
+        path = tmp_path / f"{index}.jpg"
+        path.write_bytes(b"photo")
+        assets.append(asset(path, kind=MediaKind.PHOTO, index=index))
+    bot = AsyncMock()
+    bot.send_media_group.return_value = [
+        telegram_message(MediaKind.PHOTO, f"confirmed-{index}", 100 + index)
+        for index in range(3)
+    ]
+    delivery = TelegramDelivery(
+        bot,
+        media_dir=tmp_path,
+        local_mode=True,
+        media_cache=cache,  # type: ignore[arg-type]
+        bot_id="bot-a",
+    )
+
+    receipt = await delivery.deliver(assets, DeliveryTarget("123"), request=request)
+
+    assert receipt.status is DeliveryStatus.SUCCESS
+    assert [item.item_index for item in receipt.items] == [0, 1, 2]
+    assert [item.message_id for item in receipt.items] == [100, 101, 102]
+    assert [item.file_id for item in receipt.items] == [
+        "confirmed-0",
+        "confirmed-1",
+        "confirmed-2",
+    ]
+    assert cache.put_indexes == [0, 1, 2]
+    assert bot.send_media_group.await_count == 1
+    assert sum(
+        getattr(record, "operation", None) == "put" for record in caplog.records
+    ) == len(failed_indexes)
+    assert "cache-put-secret-file-id" not in caplog.text
 
 
 @pytest.mark.asyncio

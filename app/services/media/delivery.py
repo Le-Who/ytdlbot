@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
     from app.core.media_cache import CachedDelivery, MediaCache
 
 MAX_TELEGRAM_ALBUM_SIZE = 10
+logger = logging.getLogger("app.services.media.delivery")
 
 MediaSource: TypeAlias = str | os.PathLike[str] | BinaryIO | io.BytesIO
 
@@ -359,17 +361,24 @@ class TelegramDelivery:
         force_upload: bool = False,
     ) -> _PreparedAsset | DeliveredItem:
         cache = self.media_cache
-        bot_id = self._cache_bot_id()
+        bot_id = (
+            self._cache_bot_id() if cache is not None and request is not None else None
+        )
         if not force_upload and cache is not None and request is not None and bot_id:
-            cached = await cache.get_delivery(
-                request, bot_id=bot_id, item_index=asset.item_index or 0
-            )
-            if cached is not None:
-                if str(cached.telegram_type) == asset.item.kind.value:
-                    return _PreparedAsset(asset, cached.file_id, cached)
-                await cache.evict_delivery(
+            try:
+                cached = await cache.get_delivery(
                     request, bot_id=bot_id, item_index=asset.item_index or 0
                 )
+            except Exception:  # noqa: BLE001 - optional cache boundary
+                self._log_cache_failure("get", asset)
+                cached = None
+            if cached is not None:
+                try:
+                    if str(cached.telegram_type) == asset.item.kind.value:
+                        return _PreparedAsset(asset, cached.file_id, cached)
+                except Exception:  # noqa: BLE001 - malformed optional cache record
+                    self._log_cache_failure("decode", asset)
+                await self._evict(request, asset)
 
         if asset.source is None:
             return self._failure(
@@ -605,37 +614,60 @@ class TelegramDelivery:
     ) -> None:
         from app.core.media_cache import CachedDelivery
 
-        bot_id = self._cache_bot_id()
-        if (
-            self.media_cache is None
-            or request is None
-            or not bot_id
-            or not delivered.file_id
-        ):
+        if self.media_cache is None or request is None or not delivered.file_id:
             return
-        await self.media_cache.put_delivery(
-            request,
-            bot_id=bot_id,
-            delivery=CachedDelivery(
-                file_id=delivered.file_id,
-                telegram_type=delivered.telegram_type,
-                item_index=delivered.item_index,
-                file_unique_id=delivered.file_unique_id,
-            ),
-        )
+        bot_id = self._cache_bot_id()
+        if not bot_id:
+            return
+        try:
+            await self.media_cache.put_delivery(
+                request,
+                bot_id=bot_id,
+                delivery=CachedDelivery(
+                    file_id=delivered.file_id,
+                    telegram_type=delivered.telegram_type,
+                    item_index=delivered.item_index,
+                    file_unique_id=delivered.file_unique_id,
+                ),
+            )
+        except Exception:  # noqa: BLE001 - optional cache boundary
+            self._log_cache_failure("put", delivered)
 
     async def _evict(self, request: MediaRequest | None, asset: DeliveryAsset) -> None:
-        bot_id = self._cache_bot_id()
-        if self.media_cache is not None and request is not None and bot_id:
-            await self.media_cache.evict_delivery(
-                request, bot_id=bot_id, item_index=asset.item_index or 0
-            )
+        if self.media_cache is not None and request is not None:
+            bot_id = self._cache_bot_id()
+            if not bot_id:
+                return
+            try:
+                await self.media_cache.evict_delivery(
+                    request, bot_id=bot_id, item_index=asset.item_index or 0
+                )
+            except Exception:  # noqa: BLE001 - optional cache boundary
+                self._log_cache_failure("evict", asset)
 
     def _cache_bot_id(self) -> str | None:
         if self.bot_id:
             return self.bot_id
-        value = getattr(self.bot, "id", None)
+        try:
+            value = getattr(self.bot, "id", None)
+        except Exception:  # noqa: BLE001 - optional cache identity
+            logger.warning(
+                "Optional media cache operation failed",
+                extra={"operation": "identity", "category": "backend_error"},
+            )
+            return None
         return str(value) if isinstance(value, int | str) else None
+
+    @staticmethod
+    def _log_cache_failure(operation: str, item: DeliveryAsset | DeliveredItem) -> None:
+        logger.warning(
+            "Optional media cache operation failed",
+            extra={
+                "operation": operation,
+                "category": "backend_error",
+                "item_index": item.item_index or 0,
+            },
+        )
 
     @staticmethod
     def _receipt(

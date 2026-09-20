@@ -83,6 +83,7 @@ actual_files=$(
 expected_files=$(printf '%s\n' \
   './docker-compose.yml' \
   './release.manifest' \
+  './scripts/bootstrap-production.sh' \
   './scripts/deploy-release.sh' \
   './scripts/preflight-production.sh' \
   './scripts/rollback-release.sh' |
@@ -153,6 +154,8 @@ tg_api_volume=$(docker inspect --format \
   "$tg_api_container" | sed -n '1p')
 [ -n "$redis_volume" ] && [ -n "$tg_api_volume" ] ||
   fail "Persistent Redis and Telegram session volumes must already exist."
+
+BOOTSTRAP_MODE=check "$RELEASE_DIR/scripts/bootstrap-production.sh"
 
 BOT_IMAGE="$BOT_IMAGE" APP_RELEASE="$RELEASE_SHA" \
   docker compose -p "$COMPOSE_PROJECT" -f "$RELEASE_DIR/docker-compose.yml" \

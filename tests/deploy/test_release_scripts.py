@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import time
@@ -81,6 +82,8 @@ def fake_host(tmp_path: Path) -> FakeHost:
     state_dir = tmp_path / "fake-state"
     for directory in (root, script_dir, fake_bin, state_dir):
         directory.mkdir(parents=True, exist_ok=True)
+    deploy_state = root / ".deploy"
+    deploy_state.mkdir()
 
     old_compose = "services:\n  bot:\n    image: ${BOT_IMAGE}\n"
     candidate_compose = (
@@ -108,7 +111,23 @@ def fake_host(tmp_path: Path) -> FakeHost:
         + "\n",
         encoding="utf-8",
     )
+    (deploy_state / "bootstrap.manifest").write_text(
+        "\n".join(
+            (
+                "BOOTSTRAP_SCHEMA=1",
+                "COMPOSE_PROJECT=verified-project",
+                "MEDIA_VOLUME=verified-project_media",
+                "STATE_VOLUME=verified-project_state",
+                "TG_API_VOLUME=verified-project_tg-api-data",
+                "REDIS_VOLUME=verified-project_redis-data",
+                "BOT_UID_GID=10001:10001",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+    )
     for name in (
+        "bootstrap-production.sh",
         "deploy-release.sh",
         "preflight-production.sh",
         "rollback-release.sh",
@@ -142,11 +161,16 @@ if [ "$1" = inspect ]; then
     *com.docker.compose.project*bot-id) printf '%s|bot\n' "$COMPOSE_PROJECT" ;;
     *com.docker.compose.project*redis-id) printf '%s|redis\n' "$COMPOSE_PROJECT" ;;
     *com.docker.compose.project*tg-api-id) printf '%s|tg-api\n' "$COMPOSE_PROJECT" ;;
+    *com.docker.compose.project*volume-init-id) printf '%s|volume-init\n' "$COMPOSE_PROJECT" ;;
+    *State.Status*volume-init-id) printf 'exited|0\n' ;;
     *Config.Image*bot-id) cat "$FAKE_RUNTIME_IMAGE" ;;
     *'{{.Image}}'*bot-id) cat "$FAKE_RUNTIME_IMAGE" ;;
     *Config.Env*bot-id) printf 'APP_RELEASE=%s\n' "$(cat "$FAKE_RUNTIME_RELEASE")" ;;
-    *Mounts*redis-id) printf '%s_redis-data\n' "$COMPOSE_PROJECT" ;;
-    *Mounts*tg-api-id) printf '%s_tg-api-data\n' "$COMPOSE_PROJECT" ;;
+    *'/srv/ytdlbot/media'*bot-id) printf '%s\n' "${FAKE_BOT_MEDIA_MOUNT:-${COMPOSE_PROJECT}_media|true}" ;;
+    *'/srv/ytdlbot/state'*bot-id) printf '%s\n' "${FAKE_BOT_STATE_MOUNT:-${COMPOSE_PROJECT}_state|true}" ;;
+    *'/srv/ytdlbot/media'*tg-api-id) printf '%s\n' "${FAKE_TG_MEDIA_MOUNT:-${COMPOSE_PROJECT}_media|false}" ;;
+    *'/var/lib/telegram-bot-api'*tg-api-id) printf '%s\n' "${FAKE_TG_SESSION_MOUNT:-${COMPOSE_PROJECT}_tg-api-data|true}" ;;
+    *'/data'*redis-id) printf '%s\n' "${FAKE_REDIS_MOUNT:-${COMPOSE_PROJECT}_redis-data|true}" ;;
     *) exit 3 ;;
   esac
   exit
@@ -158,6 +182,7 @@ if [ "$1" = compose ]; then
     *'ps -q bot') printf 'bot-id\n'; exit ;;
     *'ps -q redis') printf 'redis-id\n'; exit ;;
     *'ps -q tg-api') printf 'tg-api-id\n'; exit ;;
+    *'ps -q -a volume-init') printf 'volume-init-id\n'; exit ;;
     *'up -d --no-deps --no-build bot')
       if [ "${FAKE_ACTIVATION_FAILURE:-0}" = 1 ] && [ "$APP_RELEASE" = "$RELEASE_SHA" ] && [ ! -e "$FAKE_STATE_DIR/activation-failed" ]; then
         : > "$FAKE_STATE_DIR/activation-failed"
@@ -167,7 +192,8 @@ if [ "$1" = compose ]; then
       printf '%s' "$BOT_IMAGE" > "$FAKE_RUNTIME_IMAGE"
       exit
       ;;
-    *'exec -T bot python'*) [ "${FAKE_WEBHOOK_FAILURE:-0}" != 1 ]; exit ;;
+    *'exec -T bot python'*getWebhookInfo*) [ "${FAKE_WEBHOOK_FAILURE:-0}" != 1 ]; exit ;;
+    *'exec -T bot python'*) [ "${FAKE_OWNERSHIP_FAILURE:-0}" != 1 ]; exit ;;
   esac
 fi
 exit 4
@@ -181,6 +207,15 @@ printf 'curl' >> "$FAKE_COMMAND_LOG"
 for arg in "$@"; do printf ' %s' "$arg" >> "$FAKE_COMMAND_LOG"; done
 printf '\n' >> "$FAKE_COMMAND_LOG"
 release=$(cat "$FAKE_RUNTIME_RELEASE")
+case "$*" in
+  *'/health')
+    printf '{"ok":true}\n'
+    exit
+    ;;
+esac
+if [ "${FAKE_PREVIOUS_LEGACY_HEALTH:-0}" = 1 ] && [ "$release" != "$RELEASE_SHA" ]; then
+  exit 22
+fi
 if [ "${FAKE_READY_FAILURE:-0}" = 1 ] && [ "$release" = "$RELEASE_SHA" ]; then
   exit 22
 fi
@@ -213,6 +248,20 @@ fi
 exit 1
 """,
     )
+    _write_executable(
+        fake_bin / "mv",
+        """#!/bin/sh
+set -eu
+/usr/bin/mv "$@"
+destination=''
+for argument in "$@"; do destination=$argument; done
+if [ "${FAKE_SIGNAL_AFTER_CONFIG_SWAP:-0}" = 1 ] && [ "$destination" = "$PROJECT_ROOT/docker-compose.yml" ] && [ ! -e "$FAKE_STATE_DIR/config-signal-sent" ]; then
+  : > "$FAKE_STATE_DIR/config-signal-sent"
+  kill -TERM "$PPID"
+  sleep 0.1
+fi
+""",
+    )
 
     env = os.environ.copy()
     env.update(
@@ -228,6 +277,7 @@ exit 1
             "PYTHON_BIN": _bash_path(Path(sys.executable)),
             "CURL_BIN": _bash_path(fake_bin / "curl"),
             "DF_BIN": _bash_path(fake_bin / "df"),
+            "MV_BIN": _bash_path(fake_bin / "mv"),
             "DEPLOY_HEALTH_ATTEMPTS": "1",
             "DEPLOY_HEALTH_INTERVAL_SECONDS": "0",
             "DEPLOY_MIN_FREE_BYTES": "4096",
@@ -281,7 +331,11 @@ def test_readiness_failure_restores_previous_image_and_config(
     assert fake_host.runtime_image.read_text(encoding="utf-8") == PREVIOUS_IMAGE
     assert (fake_host.root / "docker-compose.yml").read_text() == fake_host.old_compose
     activation = "docker compose -p verified-project up -d --no-deps --no-build bot"
-    assert fake_host.commands().count(activation) == 2
+    assert fake_host.commands().count(activation) == 1
+    assert any(
+        "rollback-bot.override.yml up -d --no-deps --no-build bot" in command
+        for command in fake_host.commands()
+    )
 
 
 def test_stale_branch_sha_is_a_successful_noop(fake_host: FakeHost) -> None:
@@ -339,15 +393,117 @@ def test_project_root_must_match_existing_compose_identity(fake_host: FakeHost) 
     )
 
 
+def test_routine_deploy_requires_recorded_bootstrap_topology(
+    fake_host: FakeHost,
+) -> None:
+    (fake_host.root / ".deploy" / "bootstrap.manifest").unlink()
+
+    result = fake_host.run()
+
+    assert result.returncode != 0
+    assert "bootstrap" in result.stderr.lower()
+    assert not any(
+        command.startswith("docker pull ") for command in fake_host.commands()
+    )
+
+
+def test_bootstrap_gate_records_only_verified_existing_topology(
+    fake_host: FakeHost,
+) -> None:
+    evidence = fake_host.root / ".deploy" / "bootstrap.manifest"
+    evidence.unlink()
+
+    result = fake_host.run("bootstrap-production.sh", BOOTSTRAP_MODE="record")
+
+    assert result.returncode == 0, result.stderr
+    assert "MEDIA_VOLUME=verified-project_media" in evidence.read_text()
+    assert "STATE_VOLUME=verified-project_state" in evidence.read_text()
+    assert "TG_API_VOLUME=verified-project_tg-api-data" in evidence.read_text()
+    assert "REDIS_VOLUME=verified-project_redis-data" in evidence.read_text()
+    assert not any(" up " in command for command in fake_host.commands())
+
+
+@pytest.mark.parametrize(
+    ("override", "value"),
+    (
+        ("FAKE_BOT_MEDIA_MOUNT", "wrong_media|true"),
+        ("FAKE_BOT_STATE_MOUNT", "wrong_state|true"),
+        ("FAKE_TG_MEDIA_MOUNT", "verified-project_media|true"),
+        ("FAKE_TG_SESSION_MOUNT", "wrong_session|true"),
+        ("FAKE_REDIS_MOUNT", "wrong_redis|true"),
+        ("FAKE_OWNERSHIP_FAILURE", "1"),
+    ),
+)
+def test_routine_deploy_rejects_unbootstrapped_mount_or_ownership(
+    fake_host: FakeHost,
+    override: str,
+    value: str,
+) -> None:
+    result = fake_host.run(**{override: value})
+
+    assert result.returncode != 0
+    assert "bootstrap" in result.stderr.lower()
+    assert not any(
+        command.startswith("docker pull ") for command in fake_host.commands()
+    )
+
+
 def test_interrupted_activation_runs_rollback(fake_host: FakeHost) -> None:
     result = fake_host.run(FAKE_ACTIVATION_FAILURE="1")
 
     assert result.returncode != 0
     activation = "docker compose -p verified-project up -d --no-deps --no-build bot"
-    assert fake_host.commands().count(activation) == 2
+    assert fake_host.commands().count(activation) == 1
+    assert any(
+        "rollback-bot.override.yml up -d --no-deps --no-build bot" in command
+        for command in fake_host.commands()
+    )
     assert fake_host.runtime_release.read_text(encoding="utf-8") == PREVIOUS_RELEASE
     assert fake_host.runtime_image.read_text(encoding="utf-8") == PREVIOUS_IMAGE
     assert (fake_host.root / "docker-compose.yml").read_text() == fake_host.old_compose
+
+
+def test_signal_after_active_config_swap_restores_previous_release(
+    fake_host: FakeHost,
+) -> None:
+    result = fake_host.run(FAKE_SIGNAL_AFTER_CONFIG_SWAP="1")
+
+    assert result.returncode != 0
+    assert (fake_host.state_dir / "config-signal-sent").exists()
+    assert (fake_host.root / "docker-compose.yml").read_text() == fake_host.old_compose
+    assert fake_host.runtime_release.read_text(encoding="utf-8") == PREVIOUS_RELEASE
+    assert fake_host.runtime_image.read_text(encoding="utf-8") == PREVIOUS_IMAGE
+
+
+def test_rollback_override_pins_previous_image_despite_hardcoded_compose(
+    fake_host: FakeHost,
+) -> None:
+    hardcoded = "services:\n  bot:\n    image: ghcr.io/example/ytdlbot:latest\n"
+    (fake_host.root / "docker-compose.yml").write_text(hardcoded)
+
+    result = fake_host.run(FAKE_READY_FAILURE="1")
+
+    assert result.returncode != 0
+    assert (fake_host.root / "docker-compose.yml").read_text() == hardcoded
+    assert fake_host.runtime_image.read_text(encoding="utf-8") == PREVIOUS_IMAGE
+    assert any(
+        "rollback-bot.override.yml up -d --no-deps --no-build bot" in command
+        for command in fake_host.commands()
+    )
+
+
+def test_rollback_uses_recorded_legacy_health_contract_for_baseline_migration(
+    fake_host: FakeHost,
+) -> None:
+    result = fake_host.run(
+        FAKE_PREVIOUS_LEGACY_HEALTH="1",
+        FAKE_READY_FAILURE="1",
+    )
+
+    assert result.returncode != 0
+    assert "rollback failed" not in result.stderr.lower()
+    assert fake_host.runtime_release.read_text(encoding="utf-8") == PREVIOUS_RELEASE
+    assert any(command.endswith("/health") for command in fake_host.commands())
 
 
 def test_release_directory_rejects_files_outside_allowlist(fake_host: FakeHost) -> None:
@@ -413,7 +569,11 @@ def test_webhook_verification_failure_rolls_back(fake_host: FakeHost) -> None:
 
     assert result.returncode != 0
     activation = "docker compose -p verified-project up -d --no-deps --no-build bot"
-    assert fake_host.commands().count(activation) == 2
+    assert fake_host.commands().count(activation) == 1
+    assert any(
+        "rollback-bot.override.yml up -d --no-deps --no-build bot" in command
+        for command in fake_host.commands()
+    )
     assert fake_host.runtime_release.read_text(encoding="utf-8") == PREVIOUS_RELEASE
     assert fake_host.runtime_image.read_text(encoding="utf-8") == PREVIOUS_IMAGE
 
@@ -425,7 +585,10 @@ def test_workflows_gate_exact_sha_build_once_and_validate_known_host() -> None:
     assert "vps" in test_workflow
     assert 'python-version: ["3.12"]' in test_workflow
     assert "docker compose config" in test_workflow
-    assert "bash -n scripts/deploy-release.sh" in test_workflow
+    assert "bash -n scripts/bootstrap-production.sh" in test_workflow
+    assert "scripts/deploy-release.sh" in test_workflow
+    assert "scripts/preflight-production.sh" in test_workflow
+    assert "scripts/rollback-release.sh" in test_workflow
 
     assert "needs: verify" in deploy_workflow
     assert "cancel-in-progress: false" in deploy_workflow
@@ -437,6 +600,50 @@ def test_workflows_gate_exact_sha_build_once_and_validate_known_host() -> None:
     assert "release-payload/release.manifest" in deploy_workflow
     assert "release-payload/scripts/deploy-release.sh" in deploy_workflow
     assert 'source: "release-payload/*"' not in deploy_workflow
+
+
+def test_clean_ci_installs_all_pinned_test_dependencies() -> None:
+    ci_requirements = (ROOT / "requirements-ci.txt").read_text().splitlines()
+    expected = {
+        "pytest==9.1.1",
+        "pytest-cov==7.1.0",
+        "pytest-asyncio==1.4.0",
+        "hypothesis==6.168.0",
+        "PyYAML==6.0.3",
+        "httpx==0.28.1",
+    }
+    assert expected <= set(ci_requirements)
+    for workflow_name in ("test.yml", "deploy.yml"):
+        workflow = (ROOT / ".github" / "workflows" / workflow_name).read_text()
+        assert "pip install -r requirements-ci.txt" in workflow
+        assert "pip install pytest pytest-cov" not in workflow
+
+
+def test_workflow_smokes_immutable_image_and_promotes_trusted_staging() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
+
+    assert "Smoke immutable built image" in workflow
+    assert 'docker pull "$SMOKE_IMAGE"' in workflow
+    assert 'docker run --rm --entrypoint python "$SMOKE_IMAGE"' in workflow
+    assert "health_live" in workflow
+    assert "Prepare trusted fresh staging directory" in workflow
+    assert "readlink -f" in workflow
+    assert 'test ! -L "$staging_dir"' in workflow
+    assert "/.incoming/" in workflow
+    assert 'mv "$staging_dir" "$release_dir"' in workflow
+
+
+def test_all_first_party_actions_are_pinned_to_full_commit_sha() -> None:
+    workflows = "\n".join(
+        (ROOT / ".github" / "workflows" / name).read_text()
+        for name in ("test.yml", "deploy.yml")
+    )
+    first_party = ("actions/", "docker/")
+    uses_lines = [line.strip() for line in workflows.splitlines() if "uses:" in line]
+    for line in uses_lines:
+        action = line.split("uses:", 1)[1].strip()
+        if action.startswith(first_party):
+            assert re.fullmatch(r"[^@]+@[0-9a-f]{40}(?:\s+#.*)?", action), action
 
 
 def test_release_automation_contains_no_host_wide_or_secret_rewrite_operations() -> (

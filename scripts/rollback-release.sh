@@ -5,6 +5,7 @@ set -eu
 : "${COMPOSE_PROJECT:?COMPOSE_PROJECT is required}"
 : "${PYTHON_BIN:=python3}"
 : "${CURL_BIN:=curl}"
+: "${MV_BIN:=mv}"
 : "${DEPLOY_HEALTH_ATTEMPTS:=45}"
 : "${DEPLOY_HEALTH_INTERVAL_SECONDS:=2}"
 : "${LOCAL_READY_URL:=http://127.0.0.1:8000/health/ready}"
@@ -41,12 +42,23 @@ previous_release=$(manifest_field RELEASE_SHA)
 previous_image=$(manifest_field BOT_IMAGE)
 previous_project=$(manifest_field COMPOSE_PROJECT)
 previous_compose=$(manifest_field COMPOSE_FILE)
+previous_override=$(manifest_field OVERRIDE_FILE)
+previous_health_contract=$(manifest_field HEALTH_CONTRACT)
+previous_health_url=$(manifest_field HEALTH_URL)
 [ "$previous_project" = "$COMPOSE_PROJECT" ] ||
   fail "Rollback project mismatch."
 [ "$previous_compose" = "$DEPLOY_STATE_DIR/rollback-compose.yml" ] ||
   fail "Rollback Compose path is outside managed state."
+[ "$previous_override" = "$DEPLOY_STATE_DIR/rollback-bot.override.yml" ] ||
+  fail "Rollback override path is outside managed state."
 [ -f "$previous_compose" ] && [ ! -L "$previous_compose" ] ||
   fail "Rollback Compose configuration is unavailable or unsafe."
+[ -f "$previous_override" ] && [ ! -L "$previous_override" ] ||
+  fail "Rollback bot image override is unavailable or unsafe."
+case "$previous_health_contract:$previous_health_url" in
+  "release-ready:$LOCAL_READY_URL"|"legacy-health:${LOCAL_READY_URL%/health/ready}/health") ;;
+  *) fail "Rollback health contract is invalid." ;;
+esac
 
 if [ "${DEPLOY_LOCK_HELD:-0}" != 1 ]; then
   mkdir -p "$DEPLOY_STATE_DIR"
@@ -60,29 +72,37 @@ fi
 
 rollback_tmp="$PROJECT_ROOT/.docker-compose.rollback.$$"
 cp "$previous_compose" "$rollback_tmp"
-mv -f "$rollback_tmp" "$PROJECT_ROOT/docker-compose.yml"
+"$MV_BIN" -f "$rollback_tmp" "$PROJECT_ROOT/docker-compose.yml"
 
 cd "$PROJECT_ROOT"
 export BOT_IMAGE="$previous_image"
+export ROLLBACK_BOT_IMAGE="$previous_image"
 export APP_RELEASE="$previous_release"
-docker compose -p "$COMPOSE_PROJECT" up -d --no-deps --no-build bot
+docker compose -p "$COMPOSE_PROJECT" \
+  -f "$PROJECT_ROOT/docker-compose.yml" \
+  -f "$previous_override" \
+  up -d --no-deps --no-build bot
 
 attempt=1
 while [ "$attempt" -le "$DEPLOY_HEALTH_ATTEMPTS" ]; do
-  body=$("$CURL_BIN" --fail --silent --show-error --max-time 5 "$LOCAL_READY_URL" || true)
+  body=$("$CURL_BIN" --fail --silent --show-error --max-time 5 \
+    "$previous_health_url" || true)
   if printf '%s' "$body" | "$PYTHON_BIN" -c '
 import json
 import sys
 
 expected = sys.argv[1]
+contract = sys.argv[2]
 try:
     payload = json.load(sys.stdin)
 except (ValueError, TypeError):
     raise SystemExit(1)
-raise SystemExit(
-    0 if payload.get("ready") is True and payload.get("release") == expected else 1
-)
-' "$previous_release"; then
+if contract == "legacy-health":
+    healthy = payload.get("ok") is True
+else:
+    healthy = payload.get("ready") is True and payload.get("release") == expected
+raise SystemExit(0 if healthy else 1)
+' "$previous_release" "$previous_health_contract"; then
     printf 'Rollback restored release %s.\n' "$previous_release"
     exit 0
   fi

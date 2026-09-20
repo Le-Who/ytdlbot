@@ -13,6 +13,7 @@ services:
       - MEDIA_DIR=/srv/ytdlbot/media
       - YTDLBOT_JOB_DB=/srv/ytdlbot/state/jobs.sqlite3
       - APP_RELEASE=${APP_RELEASE}
+      - DRAIN_TIMEOUT_SECONDS=30
       - POT_PROVIDER_URL=http://bgutil-pot:4416
     # Хостовый Caddy проксирует vid.tri.mom → 127.0.0.1:8000
     ports:
@@ -37,6 +38,7 @@ services:
       timeout: 5s
       retries: 6
       start_period: 20s
+    stop_grace_period: 45s
     deploy:
       resources:
         limits:

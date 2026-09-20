@@ -11,6 +11,7 @@ set -eu
 : "${DEPLOY_STATE_DIR:=$PROJECT_ROOT/.deploy}"
 : "${PYTHON_BIN:=python3}"
 : "${CURL_BIN:=curl}"
+: "${MV_BIN:=mv}"
 : "${DEPLOY_HEALTH_ATTEMPTS:=45}"
 : "${DEPLOY_HEALTH_INTERVAL_SECONDS:=2}"
 : "${LOCAL_READY_URL:=http://127.0.0.1:8000/health/ready}"
@@ -91,23 +92,69 @@ case "$previous_release" in
   ''|*[!A-Za-z0-9._-]*) previous_release=legacy ;;
 esac
 
+previous_health_contract=''
+previous_health_url=''
+previous_ready_body=$("$CURL_BIN" --fail --silent --show-error --max-time 5 \
+  "$LOCAL_READY_URL" || true)
+if printf '%s' "$previous_ready_body" | "$PYTHON_BIN" -c '
+import json
+import sys
+
+expected = sys.argv[1]
+try:
+    payload = json.load(sys.stdin)
+except (ValueError, TypeError):
+    raise SystemExit(1)
+raise SystemExit(
+    0 if payload.get("ready") is True and payload.get("release") == expected else 1
+)
+' "$previous_release"; then
+  previous_health_contract=release-ready
+  previous_health_url=$LOCAL_READY_URL
+else
+  legacy_health_url=${LOCAL_READY_URL%/health/ready}/health
+  previous_live_body=$("$CURL_BIN" --fail --silent --show-error --max-time 5 \
+    "$legacy_health_url" || true)
+  if printf '%s' "$previous_live_body" | "$PYTHON_BIN" -c '
+import json
+import sys
+
+try:
+    payload = json.load(sys.stdin)
+except (ValueError, TypeError):
+    raise SystemExit(1)
+raise SystemExit(0 if payload.get("ok") is True else 1)
+'; then
+    previous_health_contract=legacy-health
+    previous_health_url=$legacy_health_url
+  else
+    fail "Current bot has no bounded health contract for safe rollback."
+  fi
+fi
+
 rollback_compose_tmp="$DEPLOY_STATE_DIR/rollback-compose.yml.tmp.$$"
 rollback_manifest_tmp="$DEPLOY_STATE_DIR/rollback.manifest.tmp.$$"
+rollback_override_tmp="$DEPLOY_STATE_DIR/rollback-bot.override.yml.tmp.$$"
 cp "$PROJECT_ROOT/docker-compose.yml" "$rollback_compose_tmp"
 mv -f "$rollback_compose_tmp" "$DEPLOY_STATE_DIR/rollback-compose.yml"
+{
+  printf 'services:\n'
+  printf '  bot:\n'
+  printf '%s\n' '    image: "${ROLLBACK_BOT_IMAGE:?captured previous bot image required}"'
+} >"$rollback_override_tmp"
+mv -f "$rollback_override_tmp" "$DEPLOY_STATE_DIR/rollback-bot.override.yml"
 {
   printf 'RELEASE_SHA=%s\n' "$previous_release"
   printf 'BOT_IMAGE=%s\n' "$previous_image"
   printf 'COMPOSE_PROJECT=%s\n' "$COMPOSE_PROJECT"
   printf 'COMPOSE_FILE=%s\n' "$DEPLOY_STATE_DIR/rollback-compose.yml"
+  printf 'OVERRIDE_FILE=%s\n' "$DEPLOY_STATE_DIR/rollback-bot.override.yml"
+  printf 'HEALTH_CONTRACT=%s\n' "$previous_health_contract"
+  printf 'HEALTH_URL=%s\n' "$previous_health_url"
 } >"$rollback_manifest_tmp"
 mv -f "$rollback_manifest_tmp" "$DEPLOY_STATE_DIR/rollback.manifest"
 
 docker pull "$BOT_IMAGE"
-
-candidate_tmp="$PROJECT_ROOT/.docker-compose.candidate.$$"
-cp "$RELEASE_DIR/docker-compose.yml" "$candidate_tmp"
-mv -f "$candidate_tmp" "$PROJECT_ROOT/docker-compose.yml"
 
 ROLLBACK_ARMED=1
 on_exit() {
@@ -124,6 +171,10 @@ on_exit() {
 }
 trap on_exit EXIT
 trap 'exit 130' HUP INT TERM
+
+candidate_tmp="$PROJECT_ROOT/.docker-compose.candidate.$$"
+cp "$RELEASE_DIR/docker-compose.yml" "$candidate_tmp"
+"$MV_BIN" -f "$candidate_tmp" "$PROJECT_ROOT/docker-compose.yml"
 
 export APP_RELEASE="$RELEASE_SHA"
 export BOT_IMAGE
@@ -185,7 +236,7 @@ if payload.get("ok") is not True or actual != expected:
 
 current_manifest_tmp="$DEPLOY_STATE_DIR/current.manifest.tmp.$$"
 cp "$RELEASE_DIR/release.manifest" "$current_manifest_tmp"
-mv -f "$current_manifest_tmp" "$DEPLOY_STATE_DIR/current.manifest"
+"$MV_BIN" -f "$current_manifest_tmp" "$DEPLOY_STATE_DIR/current.manifest"
 ROLLBACK_ARMED=0
 printf 'Activated immutable release %s for project %s.\n' \
   "$RELEASE_SHA" "$COMPOSE_PROJECT"

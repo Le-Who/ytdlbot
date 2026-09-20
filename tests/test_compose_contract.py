@@ -73,8 +73,17 @@ def test_compose_uses_versioned_images_and_readiness_healthcheck() -> None:
     assert "service_started" == services["bot"]["depends_on"]["tg-api"]["condition"]
 
 
-def test_runtime_dependencies_are_exactly_pinned_and_image_does_not_self_update(
-) -> None:
+def test_compose_stop_budget_exceeds_durable_drain_deadline() -> None:
+    bot = load_compose()["services"]["bot"]
+    environment = dict(item.split("=", 1) for item in bot["environment"])
+
+    assert environment["DRAIN_TIMEOUT_SECONDS"] == "30"
+    assert bot["stop_grace_period"] == "45s"
+
+
+def test_runtime_dependencies_are_exactly_pinned_and_image_does_not_self_update() -> (
+    None
+):
     requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
     dependency_lines = [
         line.strip()

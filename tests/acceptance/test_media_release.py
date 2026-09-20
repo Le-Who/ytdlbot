@@ -128,6 +128,18 @@ def _validate_evidence(evidence: dict[str, Any], case_kinds: dict[str, str]) -> 
     _validate_schema(evidence, EVIDENCE_SCHEMA)
     assert re.fullmatch(r"[0-9a-f]{40}", evidence["release_sha"])
     assert re.fullmatch(r"[0-9a-f]{64}", evidence["manifest_sha256"])
+    assert re.fullmatch(r"sha256:[0-9a-f]{64}", evidence["image_id"])
+    assert evidence["runtime_profile"] in {"legacy-baseline", "candidate"}
+    assert evidence["identity_binding"] in {
+        "legacy-deployment-attestation",
+        "candidate-release-and-digest",
+    }
+    if evidence["runtime_profile"] == "candidate":
+        assert evidence["identity_binding"] == "candidate-release-and-digest"
+        assert re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", evidence["image_reference"])
+    else:
+        assert evidence["identity_binding"] == "legacy-deployment-attestation"
+        assert evidence["image_reference"] == evidence["image_id"]
     assert evidence["source"] == "production-vps"
     assert evidence["production_ip_attested"] is True
     assert evidence["redaction"] == {
@@ -151,6 +163,7 @@ def _validate_evidence(evidence: dict[str, Any], case_kinds: dict[str, str]) -> 
         (case_id, cache) for case_id in case_kinds for cache in ("cold", "warm")
     }
     for window in windows:
+        assert isinstance(window["reconciliations"], list)
         actual_runs = [(run["case_id"], run["cache_state"]) for run in window["runs"]]
         assert len(actual_runs) == len(expected_runs)
         assert set(actual_runs) == expected_runs
@@ -171,8 +184,20 @@ def _validate_evidence(evidence: dict[str, Any], case_kinds: dict[str, str]) -> 
                 assert math.isfinite(latency) and latency >= 0
             assert isinstance(run["full_delivery"], bool)
             if run["full_delivery"]:
-                assert all(latency is not None for latency in latencies.values())
-            assert run["bytes_downloaded"] >= 0
+                assert all(
+                    latencies[phase] is not None
+                    for phase in ("resolve", "materialize", "deliver")
+                )
+            measurement = run["measurement"]
+            assert set(measurement) == {"first_byte", "downloaded_bytes"}
+            first_available = measurement["first_byte"]["availability"] == "measured"
+            assert first_available is (latencies["first_byte"] is not None)
+            bytes_available = (
+                measurement["downloaded_bytes"]["availability"] == "measured"
+            )
+            assert bytes_available is (run["bytes_downloaded"] is not None)
+            if run["bytes_downloaded"] is not None:
+                assert run["bytes_downloaded"] >= 0
             assert run["bytes_wasted"] >= 0
             assert math.isfinite(run["process_cpu_seconds"])
             assert run["process_cpu_seconds"] >= 0
@@ -227,8 +252,22 @@ def _validate_evidence(evidence: dict[str, Any], case_kinds: dict[str, str]) -> 
                 if failure["status"] == status
             )
             assert summary[field] == {cause: causes[cause] for cause in summary[field]}
-        assert summary["bytes_downloaded"] == sum(
-            run["bytes_downloaded"] for run in cohort
+        measured_bytes = [run["bytes_downloaded"] for run in cohort]
+        expected_downloaded = (
+            sum(measured_bytes)
+            if all(value is not None for value in measured_bytes)
+            else None
+        )
+        assert summary["bytes_downloaded"] == expected_downloaded
+        expected_complete = all(
+            run["measurement"]["first_byte"]["availability"] == "measured"
+            and run["measurement"]["downloaded_bytes"]["availability"] == "measured"
+            for run in cohort
+        )
+        assert summary["measurement_complete"] is expected_complete
+        assert summary["measurement_complete"], (
+            "release comparison fails closed when first-byte or downloaded-byte "
+            "measurement is unavailable"
         )
         assert summary["bytes_wasted"] == sum(run["bytes_wasted"] for run in cohort)
         assert math.isclose(
@@ -315,6 +354,16 @@ def _valid_evidence(case_kinds: dict[str, str]) -> dict[str, Any]:
                         "materialize": 1.0,
                         "deliver": 1.0,
                     },
+                    "measurement": {
+                        "first_byte": {
+                            "availability": "measured",
+                            "method": "task11-metric",
+                        },
+                        "downloaded_bytes": {
+                            "availability": "measured",
+                            "method": "structured-request-bytes",
+                        },
+                    },
                     "full_delivery": True,
                     "failure_stage": None,
                     "http_failures": [],
@@ -354,6 +403,7 @@ def _valid_evidence(case_kinds: dict[str, str]) -> dict[str, Any]:
                     "http_403_causes": empty_causes.copy(),
                     "http_429_causes": empty_causes.copy(),
                     "bytes_downloaded": 36,
+                    "measurement_complete": True,
                     "bytes_wasted": 0,
                     "process_cpu_seconds": 0.0,
                     "peak_rss_bytes": {
@@ -373,6 +423,10 @@ def _valid_evidence(case_kinds: dict[str, str]) -> dict[str, Any]:
         "source": "production-vps",
         "production_ip_attested": True,
         "current_memory_limit_bytes": 2_147_483_648,
+        "runtime_profile": "candidate",
+        "image_id": "sha256:" + "c" * 64,
+        "image_reference": "ghcr.io/example/bot@sha256:" + "d" * 64,
+        "identity_binding": "candidate-release-and-digest",
         "redaction": {
             "urls_hashed": True,
             "tokens_removed": True,
@@ -384,6 +438,7 @@ def _valid_evidence(case_kinds: dict[str, str]) -> dict[str, Any]:
                 "window_id": f"window-{index}",
                 "started_at": f"2026-09-2{index}T15:00:00Z",
                 "runs": copy.deepcopy(runs),
+                "reconciliations": [],
             }
             for index in range(1, 4)
         ],
@@ -435,6 +490,10 @@ def test_evidence_schema_requires_redacted_three_window_stage_results() -> None:
         "manifest_sha256",
         "source",
         "production_ip_attested",
+        "runtime_profile",
+        "image_id",
+        "image_reference",
+        "identity_binding",
         "redaction",
         "windows",
         "summaries",
@@ -447,6 +506,7 @@ def test_evidence_schema_requires_redacted_three_window_stage_results() -> None:
         "kind",
         "cache_state",
         "latency_seconds",
+        "measurement",
         "full_delivery",
         "http_failures",
         "bytes_downloaded",
@@ -454,6 +514,41 @@ def test_evidence_schema_requires_redacted_three_window_stage_results() -> None:
         "process_cpu_seconds",
         "independent_route",
     } <= run_required
+
+
+def test_task14_commands_target_actual_vps_path_and_require_image_binding() -> None:
+    documentation = (ROOT / "docs" / "acceptance.md").read_text(encoding="utf-8")
+    controlled_run = documentation.split("## Controlled Task 14 run", 1)[1]
+    assert "--project-dir /opt/ytdlbot" in controlled_run
+    assert "--project-dir /srv/ytdlbot" not in controlled_run
+    assert "--expected-image-id" in controlled_run
+    assert "--legacy-attestation" in controlled_run
+    assert "5c1aaa1b786a92e979f80b09033b71978cbae701" in controlled_run
+    assert (
+        "sha256:2b109643e8cb04386b2508d112cbab02b1648e2b02f1827356039a59448ef3cf"
+        in controlled_run
+    )
+
+
+def test_unavailable_measurement_is_schema_valid_but_fails_release_criterion() -> None:
+    case_kinds = _require_approved_manifest(_approved_manifest())
+    evidence = _valid_evidence(case_kinds)
+    run = evidence["windows"][0]["runs"][0]
+    run["latency_seconds"]["first_byte"] = None
+    run["measurement"]["first_byte"] = {
+        "availability": "unavailable",
+        "method": "unavailable",
+    }
+    summary = next(
+        item
+        for item in evidence["summaries"]
+        if item["kind"] == run["kind"] and item["cache_state"] == run["cache_state"]
+    )
+    summary["measurement_complete"] = False
+    _validate_schema(evidence, EVIDENCE_SCHEMA)
+
+    with pytest.raises(AssertionError, match="fails closed"):
+        _validate_evidence(evidence, case_kinds)
 
 
 def test_ci_pins_draft_2020_schema_validator_with_format_support() -> None:
@@ -579,6 +674,9 @@ def test_approved_manifest_rejects_schema_and_bucket_violations(mutate) -> None:
         ),
         lambda evidence: evidence["summaries"][0].update(
             {"sample_count": 999, "full_delivery_rate": 0.5}
+        ),
+        lambda evidence: evidence.update(
+            {"identity_binding": "legacy-deployment-attestation"}
         ),
     ),
 )

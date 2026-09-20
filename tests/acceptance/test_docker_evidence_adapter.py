@@ -50,12 +50,19 @@ def _metrics(*, complete: bool, legacy: bool = False) -> dict[str, Any]:
         "wasted_bytes": 7 if complete else 5,
         "file_id_hits": 0,
         "providers": {"ytdlp": 1} if complete else {},
+        "provider_attempts": {"ytdlp": 1} if complete else {},
+        "active_downloads": 0,
+        "queue_depth": 0,
         "legacy": {
             name: {
                 "count": value[0] if complete else 0,
                 "sum": value[1] if complete else 0.0,
             }
             for name, value in legacy_values.items()
+        },
+        "legacy_results": {
+            "success": 1 if complete and legacy else 0,
+            "failed": 0,
         },
         "required_metrics_present": not legacy,
         "legacy_metrics_present": legacy,
@@ -68,6 +75,8 @@ class FakeRuntime:
         self.profile = profile
         self.calls: list[tuple[str, dict[str, Any]]] = []
         self.snapshot_count = 0
+        self.log_count = 0
+        self.submitted = False
 
     def identity(self) -> Any:
         return self.module.DockerIdentity(
@@ -100,6 +109,8 @@ class FakeRuntime:
                 "webhook_template_valid": True,
                 "required_metrics_present": candidate,
                 "legacy_metrics_present": not candidate,
+                "active_downloads_present": True,
+                "queue_depth_present": True,
                 "job_store_supported": candidate,
                 "cache_modes": (
                     ["legacy-inf", "media-cache"] if candidate else ["legacy-inf"]
@@ -116,12 +127,13 @@ class FakeRuntime:
             assert "chat" not in payload["update"]["message"]
             assert "from" not in payload["update"]["message"]
             assert "webhook_secret" not in payload
+            self.submitted = True
             return {"accepted": True}
         if action == "cancel":
             return {"cancelled": False}
         assert action == "snapshot"
         self.snapshot_count += 1
-        complete = self.snapshot_count > 1
+        complete = self.submitted
         if self.profile == "candidate":
             job = {
                 "supported": True,
@@ -138,6 +150,7 @@ class FakeRuntime:
                     else []
                 ),
                 "other_jobs": 0,
+                "active_jobs": 0,
             }
         else:
             job = {
@@ -145,6 +158,7 @@ class FakeRuntime:
                 "state": None,
                 "deliveries": [],
                 "other_jobs": 0,
+                "active_jobs": 0,
             }
         return {
             "metrics": _metrics(
@@ -152,13 +166,15 @@ class FakeRuntime:
             ),
             "cpu_seconds": 3.25 if complete else 3.0,
             "rss_bytes": 12_000 if complete else 10_000,
-            "media_sizes": {"path-hash": 900} if complete else {},
             "job": job,
         }
 
     def correlated_logs(self, *, since: str, correlation_id: str) -> str:
         del since
+        self.log_count += 1
         if self.profile == "legacy-baseline":
+            if self.log_count == 1:
+                return f"{correlation_id} webhook accepted"
             return "\n".join(
                 (
                     json.dumps(
@@ -169,6 +185,13 @@ class FakeRuntime:
                         }
                     ),
                     f"{correlation_id} sendVideo status=200 telegram-success",
+                    json.dumps(
+                        {
+                            "correlation_id": correlation_id,
+                            "event": "delivery",
+                            "delivered_file_size_bytes": 900,
+                        }
+                    ),
                 )
             )
         return f"{correlation_id} sendVideo status=200"
@@ -193,6 +216,7 @@ def test_candidate_preflight_proves_container_readiness_without_sending(
     adapter = adapter_module.ProductionDockerAdapter(
         runtime,
         expected_release="d" * 40,
+        expected_image_id="sha256:" + "b" * 64,
         runtime_profile="candidate",
     )
 
@@ -201,6 +225,7 @@ def test_candidate_preflight_proves_container_readiness_without_sending(
     assert result["current_memory_limit_bytes"] == 2 * 1024 * 1024 * 1024
     assert result["runtime_profile"] == "candidate"
     assert result["container_id"] == "a" * 12
+    assert result["identity_binding"] == "candidate-release-and-digest"
     assert [call[0] for call in runtime.calls] == ["preflight"]
     assert "submit" not in json.dumps(runtime.calls)
     assert "BOT_TOKEN" not in json.dumps(result)
@@ -213,6 +238,7 @@ def test_candidate_observation_confirms_terminal_delivery_and_resource_deltas(
     adapter = adapter_module.ProductionDockerAdapter(
         runtime,
         expected_release="d" * 40,
+        expected_image_id="sha256:" + "b" * 64,
         runtime_profile="candidate",
     )
 
@@ -226,13 +252,50 @@ def test_candidate_observation_confirms_terminal_delivery_and_resource_deltas(
     assert result["job_state"] == "completed"
     assert result["delivery_outcomes"] == ["success"]
     assert result["pipeline_results_after"] == {"success": 1}
-    assert result["artifact_size_samples"] == [0, 900]
+    assert result["measurement"]["first_byte"]["method"] == "task11-metric"
+    assert result["measurement"]["downloaded_bytes"]["availability"] == "unavailable"
+    assert result["wasted_bytes_after"] - result["wasted_bytes_before"] == 2
     assert result["cpu_seconds_after"] - result["cpu_seconds_before"] == 0.25
     assert result["rss_bytes_samples"] == [10_000, 12_000]
     submit = next(payload for action, payload in runtime.calls if action == "submit")
     assert "BOT_TOKEN" not in json.dumps(submit)
     assert "ADMIN_CHAT_ID" not in json.dumps(submit)
     assert "TELEGRAM_SECRET_TOKEN" not in json.dumps(submit)
+
+
+def test_multiple_task11_first_byte_samples_fail_closed_without_directory_guess(
+    adapter_module: Any,
+) -> None:
+    class MultiSourceRuntime(FakeRuntime):
+        def container_call(
+            self, action: str, payload: dict[str, Any], *, timeout: float
+        ) -> dict[str, Any]:
+            result = super().container_call(action, payload, timeout=timeout)
+            if action == "snapshot" and self.submitted:
+                result["metrics"]["phases"]["first_byte"] = {
+                    "count": 2,
+                    "sum": 0.3,
+                }
+            return result
+
+    runtime = MultiSourceRuntime(adapter_module, profile="candidate")
+    adapter = adapter_module.ProductionDockerAdapter(
+        runtime,
+        expected_release="d" * 40,
+        expected_image_id="sha256:" + "b" * 64,
+        runtime_profile="candidate",
+    )
+
+    result = adapter.observe(
+        update=_update(), correlation_id="proof:multi-source", timeout_seconds=10
+    )
+
+    assert result["unavailable_phases"] == ["first_byte"]
+    assert result["measurement"]["first_byte"] == {
+        "availability": "unavailable",
+        "method": "unavailable",
+    }
+    assert "artifact_size_samples" not in result
 
 
 def test_legacy_profile_uses_exact_inf_eviction_and_correlated_terminal_logs(
@@ -242,7 +305,12 @@ def test_legacy_profile_uses_exact_inf_eviction_and_correlated_terminal_logs(
     adapter = adapter_module.ProductionDockerAdapter(
         runtime,
         expected_release="e" * 40,
+        expected_image_id="sha256:" + "b" * 64,
         runtime_profile="legacy-baseline",
+        legacy_attestation={
+            "deployment_sha": "e" * 40,
+            "image_id": "sha256:" + "b" * 64,
+        },
         clock=lambda: 100.0,
     )
     case = {
@@ -271,6 +339,12 @@ def test_legacy_profile_uses_exact_inf_eviction_and_correlated_terminal_logs(
     assert result["delivery_outcomes"] == ["success"]
     assert result["phase_metrics"]["first_byte"]["after_sum"] == pytest.approx(0.2)
     assert result["phase_metrics"]["materialize"]["after_sum"] == pytest.approx(0.25)
+    assert result["measurement"]["downloaded_bytes"] == {
+        "availability": "measured",
+        "method": "legacy-correlated-delivered-size",
+        "value": 900,
+    }
+    assert runtime.log_count >= 2
 
 
 def test_embedded_eviction_has_no_global_or_pattern_delete(adapter_module: Any) -> None:
@@ -291,11 +365,176 @@ def test_candidate_profile_does_not_accept_legacy_readiness(
     adapter = adapter_module.ProductionDockerAdapter(
         runtime,
         expected_release="d" * 40,
+        expected_image_id="sha256:" + "b" * 64,
         runtime_profile="candidate",
     )
 
     with pytest.raises(adapter_module.AdapterError, match="candidate readiness"):
         adapter.preflight()
+
+
+def test_legacy_requires_exact_image_and_immutable_attestation(
+    adapter_module: Any,
+) -> None:
+    runtime = FakeRuntime(adapter_module, profile="legacy-baseline")
+    with pytest.raises(adapter_module.AdapterError, match="attestation"):
+        adapter_module.ProductionDockerAdapter(
+            runtime,
+            expected_release="e" * 40,
+            expected_image_id="sha256:" + "b" * 64,
+            runtime_profile="legacy-baseline",
+        )
+    adapter = adapter_module.ProductionDockerAdapter(
+        runtime,
+        expected_release="e" * 40,
+        expected_image_id="sha256:" + "f" * 64,
+        runtime_profile="legacy-baseline",
+        legacy_attestation={
+            "deployment_sha": "e" * 40,
+            "image_id": "sha256:" + "f" * 64,
+        },
+    )
+    with pytest.raises(adapter_module.AdapterError, match="image ID"):
+        adapter.preflight()
+
+
+def test_configured_provider_is_not_attempted_without_exact_attempt_delta(
+    adapter_module: Any,
+) -> None:
+    runtime = FakeRuntime(adapter_module, profile="candidate")
+    adapter = adapter_module.ProductionDockerAdapter(
+        runtime,
+        expected_release="d" * 40,
+        expected_image_id="sha256:" + "b" * 64,
+        runtime_profile="candidate",
+        external_free_providers=frozenset({"external"}),
+    )
+    assert adapter._route_outcome({}, {}, {}, {}, "", cache_hit=False) == {
+        "attempted": False,
+        "succeeded": False,
+        "route_class": None,
+    }
+    assert adapter._route_outcome(
+        {}, {"external": 1}, {}, {"external": 1}, "", cache_hit=False
+    ) == {
+        "attempted": True,
+        "succeeded": True,
+        "route_class": "external-free",
+    }
+
+
+def test_observe_refuses_nonquiescent_candidate_before_submit(
+    adapter_module: Any,
+) -> None:
+    class BusyRuntime(FakeRuntime):
+        def container_call(
+            self, action: str, payload: dict[str, Any], *, timeout: float
+        ) -> dict[str, Any]:
+            result = super().container_call(action, payload, timeout=timeout)
+            if action == "snapshot":
+                result["job"]["active_jobs"] = 1
+            return result
+
+    runtime = BusyRuntime(adapter_module, profile="candidate")
+    adapter = adapter_module.ProductionDockerAdapter(
+        runtime,
+        expected_release="d" * 40,
+        expected_image_id="sha256:" + "b" * 64,
+        runtime_profile="candidate",
+        sleep=lambda _: None,
+    )
+    with pytest.raises(adapter_module.AdapterError, match="quiescent"):
+        adapter.observe(
+            update=_update(), correlation_id="proof:busy", timeout_seconds=10
+        )
+    assert not any(action == "submit" for action, _ in runtime.calls)
+
+
+def test_legacy_requires_zero_active_downloads_for_quiet_grace(
+    adapter_module: Any,
+) -> None:
+    class BusyRuntime(FakeRuntime):
+        def container_call(
+            self, action: str, payload: dict[str, Any], *, timeout: float
+        ) -> dict[str, Any]:
+            result = super().container_call(action, payload, timeout=timeout)
+            if action == "snapshot":
+                result["metrics"]["active_downloads"] = 1
+            return result
+
+    runtime = BusyRuntime(adapter_module, profile="legacy-baseline")
+    adapter = adapter_module.ProductionDockerAdapter(
+        runtime,
+        expected_release="e" * 40,
+        expected_image_id="sha256:" + "b" * 64,
+        runtime_profile="legacy-baseline",
+        legacy_attestation={
+            "deployment_sha": "e" * 40,
+            "image_id": "sha256:" + "b" * 64,
+        },
+        sleep=lambda _: None,
+    )
+    with pytest.raises(adapter_module.AdapterError, match="quiescent"):
+        adapter.observe(
+            update=_update(), correlation_id="proof:legacy-busy", timeout_seconds=10
+        )
+    assert not any(action == "submit" for action, _ in runtime.calls)
+
+
+def test_legacy_polls_through_ack_and_records_correlated_terminal_failure(
+    adapter_module: Any,
+) -> None:
+    class FailingRuntime(FakeRuntime):
+        def container_call(
+            self, action: str, payload: dict[str, Any], *, timeout: float
+        ) -> dict[str, Any]:
+            result = super().container_call(action, payload, timeout=timeout)
+            if action == "snapshot" and self.submitted:
+                result["metrics"]["legacy_results"] = {
+                    "success": 0,
+                    "failed": 1,
+                }
+            return result
+
+        def correlated_logs(self, *, since: str, correlation_id: str) -> str:
+            del since
+            self.log_count += 1
+            if self.log_count == 1:
+                return f"{correlation_id} webhook accepted"
+            return f"{correlation_id} sendVideo telegram-failed"
+
+    runtime = FailingRuntime(adapter_module, profile="legacy-baseline")
+    adapter = adapter_module.ProductionDockerAdapter(
+        runtime,
+        expected_release="e" * 40,
+        expected_image_id="sha256:" + "b" * 64,
+        runtime_profile="legacy-baseline",
+        legacy_attestation={
+            "deployment_sha": "e" * 40,
+            "image_id": "sha256:" + "b" * 64,
+        },
+        clock=lambda: 100.0,
+        sleep=lambda _: None,
+    )
+
+    result = adapter.observe(
+        update=_update(), correlation_id="proof:legacy-failed", timeout_seconds=10
+    )
+
+    assert runtime.log_count >= 2
+    assert result["attribution_confirmed"] is True
+    assert result["job_state"] == "failed"
+    assert result["delivery_outcomes"] == ["failed"]
+
+
+def test_container_helper_uses_process_rss_not_cgroup_memory_current(
+    adapter_module: Any,
+) -> None:
+    helper = adapter_module._CONTAINER_HELPER
+    assert 'Path("/sys/fs/cgroup/cgroup.procs")' in helper
+    assert '"VmRSS:"' in helper
+    assert 'read_counter("/sys/fs/cgroup/memory.current")' not in helper
+    assert "media_sizes" not in helper
 
 
 def test_fake_docker_commands_are_project_scoped_and_keep_url_off_argv(

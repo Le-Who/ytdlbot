@@ -135,21 +135,54 @@ candidate example does not submit an update:
 
 ```sh
 RELEASE_SHA=0123456789abcdef0123456789abcdef01234567
+EXPECTED_IMAGE_ID=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
 printf '{}\n' | python3 scripts/media-acceptance-docker-adapter.py \
-  --project-dir /srv/ytdlbot \
+  --project-dir /opt/ytdlbot \
   --project-name ytdlbot \
   --compose-file docker-compose.yml \
   --expected-release "$RELEASE_SHA" \
+  --expected-image-id "$EXPECTED_IMAGE_ID" \
   --runtime-profile candidate \
   preflight
 ```
 
-For a baseline preflight, change only `--runtime-profile` to
-`legacy-baseline` and set `RELEASE_SHA` to the exact baseline source SHA. The
-legacy gate records the actual health/media policy instead of pretending it has
-candidate readiness or a 2,000 MB upload limit. It still requires legacy timing
-counters plus correlated first-byte and terminal `sendVideo`/`sendDocument`
-success logs; without those signals it stops rather than fabricating stages.
+`EXPECTED_IMAGE_ID` must come from the reviewed build/deployment record, not be
+discovered and trusted by the same collection command. Candidate preflight also
+requires `APP_RELEASE` to equal `RELEASE_SHA` and the configured image reference
+to be pinned by registry digest.
+
+The current VPS legacy baseline has this reviewed deployment/image pair. Create
+its explicit attestation in the private evidence directory:
+
+```sh
+install -d -m 0700 /var/lib/ytdlbot/media-evidence
+cat > /var/lib/ytdlbot/media-evidence/legacy-attestation.json <<'JSON'
+{"deployment_sha":"5c1aaa1b786a92e979f80b09033b71978cbae701","image_id":"sha256:2b109643e8cb04386b2508d112cbab02b1648e2b02f1827356039a59448ef3cf"}
+JSON
+chmod 0400 /var/lib/ytdlbot/media-evidence/legacy-attestation.json
+```
+
+Run the baseline preflight with that exact pair, never an unattested caller SHA:
+
+```sh
+BASELINE_SHA=5c1aaa1b786a92e979f80b09033b71978cbae701
+BASELINE_IMAGE_ID=sha256:2b109643e8cb04386b2508d112cbab02b1648e2b02f1827356039a59448ef3cf
+printf '{}\n' | python3 scripts/media-acceptance-docker-adapter.py \
+  --project-dir /opt/ytdlbot \
+  --project-name ytdlbot \
+  --compose-file docker-compose.yml \
+  --expected-release "$BASELINE_SHA" \
+  --expected-image-id "$BASELINE_IMAGE_ID" \
+  --legacy-attestation /var/lib/ytdlbot/media-evidence/legacy-attestation.json \
+  --runtime-profile legacy-baseline \
+  preflight
+```
+
+The legacy gate records the actual health/media policy instead of pretending it
+has candidate readiness or a 2,000 MB upload limit. A webhook HTTP 200 is only
+asynchronous acceptance. Legacy observation continues until a correlated
+terminal `sendVideo`/`sendDocument` outcome and matching metric/log evidence;
+without those signals it stops rather than fabricating completion.
 
 One invocation collects or resumes one window. Use the actual tested release SHA
 and a different real UTC period for each fixed window (the example shows
@@ -158,7 +191,8 @@ and a different real UTC period for each fixed window (the example shows
 ```sh
 install -d -m 0700 /var/lib/ytdlbot/media-evidence
 RELEASE_SHA=0123456789abcdef0123456789abcdef01234567
-ADAPTER="python3 scripts/media-acceptance-docker-adapter.py --project-dir /srv/ytdlbot --project-name ytdlbot --compose-file docker-compose.yml --expected-release ${RELEASE_SHA} --runtime-profile candidate"
+EXPECTED_IMAGE_ID=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+ADAPTER="python3 scripts/media-acceptance-docker-adapter.py --project-dir /opt/ytdlbot --project-name ytdlbot --compose-file docker-compose.yml --expected-release ${RELEASE_SHA} --expected-image-id ${EXPECTED_IMAGE_ID} --runtime-profile candidate"
 python3 scripts/collect-media-release-evidence.py collect-window \
   --manifest tests/fixtures/youtube-acceptance.json \
   --output "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-window-1.json" \
@@ -177,11 +211,24 @@ classification aborts collection; the adapter does not silently report it as an
 unattempted route. Omitting both flags is therefore safe when only local `ytdlp`
 is eligible, but it cannot close the independent-route acceptance criterion.
 
-The output is atomically replaced after every case/cache record, so invoking the
-same command after an SSH interruption skips completed pairs. A timed-out pair is
-written as `cancelled` only after the adapter confirms cancellation; collection
-then stops for operator review. Once all three windows contain 48 records, merge
-and validate them with:
+Before webhook submission, the output is atomically replaced with an `IN_FLIGHT`
+reservation containing deterministic update/correlation IDs. After an SSH loss,
+timeout, or unknown submit result, resume hard-stops and never resubmits that
+pair. `Future.cancel()` is not application cancellation. Only after an operator
+has independently proved that the webhook was not accepted may they append an
+audited reconciliation and permit a retry:
+
+```sh
+python3 scripts/collect-media-release-evidence.py reconcile-in-flight \
+  --output "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-window-1.json" \
+  --decision confirmed-not-accepted \
+  --audited-by release-owner \
+  --reconciled-at 2026-09-20T12:15:00Z
+```
+
+The output is also atomically replaced after every successful case/cache record,
+so a normal resume skips completed pairs. Once all three windows contain 48
+records, merge and validate them with:
 
 ```sh
 python3 scripts/collect-media-release-evidence.py finalize \
@@ -197,8 +244,9 @@ python3 scripts/collect-media-release-evidence.py finalize \
 The adapter protocol is JSON on standard input/output. The collector invokes
 `<adapter> identity`, `evict-case`, `observe`, and `cancel`; nonzero exit, invalid
 JSON, or output outside the closed enums fails the run without echoing adapter
-stdout/stderr. `identity` returns only the verified container/image identity,
-runtime profile, positive cgroup memory limit, capabilities, and
+stdout/stderr. `identity` returns only the verified release/container/image
+identity and binding method, runtime profile, positive cgroup memory limit,
+capabilities, and
 `production_ip_attested=true`; it never returns a token or chat ID. `evict-case`
 receives the case URL on standard input. In `legacy-baseline` it deletes only
 `inf:<exact URL>`. In `candidate` it additionally derives the exact metadata,
@@ -212,14 +260,18 @@ submitting the cold webhook.
 input. The in-container helper inserts the configured administrative chat and
 secret, posts the update with the supplied `X-Correlation-ID`, samples before/after
 Prometheus counters and per-phase sums/counts, follows sanitized correlated job
-and delivery events, samples the case's temporary artifact bytes, and reads
-cgroup process-CPU and RSS counters. It must return
+and delivery events, reads cgroup CPU usage, and sums `VmRSS` for every PID in
+the container cgroup. It must return
 `attribution_confirmed=true` only when the deltas belong to that case and a
 terminal Telegram response is confirmed: candidate runs require a finalized
 successful JobStore delivery with its returned message ID plus the success
 metric; legacy runs require the correlated `sendVideo`/`sendDocument` success log
-plus unambiguous legacy metric deltas. The collector also rejects any phase/result
-delta that reveals concurrent pipeline activity. HTTP details are reduced to
+plus unambiguous legacy metric deltas. Before every run, candidate must have no
+accepted/running/checkpointed jobs and no active media work; legacy must have
+zero active downloads. Relevant global counters must remain unchanged for a
+quiet grace interval. The collector rejects any phase/result delta or unrelated
+job that reveals concurrent pipeline activity, including work accepted before
+the evidence case. HTTP details are reduced to
 status 403/429 plus the schema's cause enum, and provider data is reduced to the
 independent route class. `cancel` attempts only an exact correlation-owned
 application cancellation. The current runtime exposes no such hook, so a timeout
@@ -228,10 +280,16 @@ start another case. Fake-Docker tests exercise both runtime profiles without a
 Docker daemon.
 
 There is intentionally no fallback that guesses cold-cache state, attributes a
-process-wide metric during concurrent traffic, derives CPU from wall time, or
-declares delivery from a downloaded file. If the production installation cannot
-provide exact case eviction, correlated job/delivery outcome, or bounded cancel,
-the run remains unverified rather than emitting nominal evidence.
+process-wide metric during concurrent traffic, derives CPU from wall time,
+labels temporary-directory growth as downloaded bytes or first-byte latency, or
+declares delivery from a downloaded file. Candidate first-byte uses the Task 11
+metric only when its delta is attributable; legacy first-byte uses only a
+correlated progress event. Downloaded bytes use only a structured per-request
+byte value (legacy may use a correlated exact delivered file size). Otherwise
+the value is `null` with closed `unavailable` metadata and the comparison fails
+closed. If the production installation cannot provide exact case eviction,
+correlated job/delivery outcome, or bounded cancel, the run remains unverified
+rather than emitting nominal evidence.
 
 A run counts as success only when the requested media is fully delivered through
 Telegram with the requested kind, quality/clip/audio policy, album completeness,
@@ -246,17 +304,21 @@ For each case and cache state, collect:
 - downloaded and wasted bytes;
 - measured process CPU seconds and peak resident memory as `peak_rss_bytes`;
   keep wall-clock transform workload separate when process CPU is unavailable;
-- whether an independent route was attempted and whether it succeeded.
+- whether an independent route was attempted and whether it succeeded. Provider
+  configuration alone is not an attempt: this requires a positive exact
+  provider-attempt metric delta or a correlated structured attempt event.
 
-All four latency values on a successful (`full_delivery = true`) run are
-required and must be finite, non-negative numbers. Failed runs may use `null`
-for stages they did not reach, but every recorded numeric latency is subject to
-the same finite, non-negative constraint.
+Every available latency value must be finite and non-negative. A successful
+delivery may record first-byte as `null` only with explicit `unavailable`
+metadata; that is truthful evidence, but `measurement_complete=false` makes the
+release comparison fail. Failed runs may use `null` for stages they did not
+reach.
 
 Aggregate four cohorts: Shorts/cold, Shorts/warm, videos/cold, and videos/warm.
 For every stage report p50 and p95, sample count, full-delivery rate, 403/429 cause
 counts, bytes, CPU, peak-RSS p50/p95/max, and independent-route success rate.
-The evidence also records `current_memory_limit_bytes`; each cohort's
+The evidence also records the exact runtime image identity/reference and binding
+method plus `current_memory_limit_bytes`; each cohort's
 `within_current_memory_limit` decision must equal whether its measured maximum
 RSS is at or below that limit and must be true for acceptance. This makes the
 same schema suitable for comparing baseline and candidate evidence without
@@ -272,6 +334,7 @@ The acceptance gate validates both files with the pinned Draft 2020-12
 checks. It requires:
 
 - exact release SHA and SHA-256 of the approved manifest;
+- exact runtime image ID/reference and legacy-attestation or candidate-digest binding;
 - `source = "production-vps"` and an explicit production-IP attestation;
 - exactly the three windows `window-1`, `window-2`, and `window-3`;
 - one cold and one warm record for every approved case in every window;
@@ -279,7 +342,7 @@ checks. It requires:
   and independent-route outcome;
 - the positive `current_memory_limit_bytes` used by the deployment;
 - four Shorts/video × cold/warm summaries with latency p50/p95, peak-RSS
-  p50/p95/max, and the derived within-limit decision;
+  p50/p95/max, measurement completeness, and the derived within-limit decision;
 - affirmative redaction flags for URL hashing and removal of tokens, signed query
   strings, and cookies.
 

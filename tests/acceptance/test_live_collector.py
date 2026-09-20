@@ -65,7 +65,17 @@ def _observation(*, successful: bool = True, cache_hit: bool = False) -> dict[st
         },
         "wasted_bytes_before": 100,
         "wasted_bytes_after": 103,
-        "artifact_size_samples": [1_000, 1_900, 1_000],
+        "measurement": {
+            "first_byte": {
+                "availability": "measured",
+                "method": "file-id-cache" if cache_hit else "task11-metric",
+            },
+            "downloaded_bytes": {
+                "availability": "measured",
+                "method": "file-id-cache" if cache_hit else "structured-request-bytes",
+                "value": 0 if cache_hit else 900,
+            },
+        },
         "cpu_seconds_before": 8.0,
         "cpu_seconds_after": 8.25,
         "rss_bytes_samples": [25_000_000, 27_000_000, 26_000_000],
@@ -95,6 +105,11 @@ class FakeAdapter:
         return {
             "current_memory_limit_bytes": 536_870_912,
             "production_ip_attested": True,
+            "release": "a" * 40,
+            "runtime_profile": "candidate",
+            "image_id": "sha256:" + "b" * 64,
+            "image_reference": "ghcr.io/example/bot@sha256:" + "c" * 64,
+            "identity_binding": "candidate-release-and-digest",
         }
 
     def evict_case(self, case: Any) -> bool:
@@ -185,6 +200,7 @@ def test_collects_exact_cold_warm_sequence_without_persisting_secrets_or_urls(
     }
     assert first["full_delivery"] is True
     assert first["bytes_downloaded"] == 900
+    assert first["measurement"]["first_byte"]["method"] == "task11-metric"
     assert first["bytes_wasted"] == 3
     assert first["process_cpu_seconds"] == pytest.approx(0.25)
     assert first["peak_rss_bytes"] == 27_000_000
@@ -195,6 +211,8 @@ def test_collects_exact_cold_warm_sequence_without_persisting_secrets_or_urls(
         "materialize": 0.0,
         "deliver": pytest.approx(0.44),
     }
+    assert payload["image_id"] == "sha256:" + "b" * 64
+    assert payload["in_flight"] is None
 
 
 def test_resume_skips_completed_case_cache_pairs(
@@ -229,7 +247,7 @@ def test_refuses_cold_run_when_exact_case_eviction_is_unavailable(
     assert not [call for call in adapter.calls if call[0] == "observe"]
 
 
-def test_timeout_requests_bounded_cancel_and_persists_truthful_failure(
+def test_timeout_leaves_atomic_in_flight_reservation_and_resume_hard_stops(
     collector: Any,
     tmp_path: Path,
 ) -> None:
@@ -241,31 +259,21 @@ def test_timeout_requests_bounded_cancel_and_persists_truthful_failure(
 
     assert adapter.cancelled == ["release-proof:window-1:short-01:cold"]
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["runs"] == [
-        {
-            "case_id": "short-01",
-            "kind": "short",
-            "cache_state": "cold",
-            "latency_seconds": {
-                "resolve": None,
-                "first_byte": None,
-                "materialize": None,
-                "deliver": None,
-            },
-            "full_delivery": False,
-            "failure_stage": "cancelled",
-            "http_failures": [],
-            "bytes_downloaded": 0,
-            "bytes_wasted": 0,
-            "process_cpu_seconds": 0.0,
-            "peak_rss_bytes": 0,
-            "independent_route": {
-                "attempted": False,
-                "succeeded": False,
-                "route_class": None,
-            },
-        }
-    ]
+    assert payload["runs"] == []
+    assert payload["in_flight"] == {
+        "case_id": "short-01",
+        "kind": "short",
+        "cache_state": "cold",
+        "correlation_id": "release-proof:window-1:short-01:cold",
+        "update_id": collector._update_id("release-proof:window-1:short-01:cold"),
+        "reserved_at": "2026-09-20T12:00:00Z",
+        "state": "IN_FLIGHT",
+    }
+
+    resumed = FakeAdapter()
+    with pytest.raises(collector.EvidenceValidationError, match="IN_FLIGHT"):
+        _collect(collector, tmp_path, resumed, output_name=output.name)
+    assert not [call for call in resumed.calls if call[0] == "observe"]
 
 
 def test_unconfirmed_timeout_stops_window_as_unattributable(
@@ -284,8 +292,8 @@ def test_unconfirmed_timeout_stops_window_as_unattributable(
         _collect(collector, tmp_path, adapter, output_name=output.name)
 
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["runs"][0]["failure_stage"] == "validation"
-    assert len(payload["runs"]) == 1
+    assert payload["runs"] == []
+    assert payload["in_flight"]["state"] == "IN_FLIGHT"
 
 
 def test_observation_rejects_ambiguous_process_wide_metric_delta(
@@ -307,12 +315,74 @@ def test_observation_rejects_ambiguous_process_wide_metric_delta(
             output_name=output.name,
         )
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert payload["runs"][0]["failure_stage"] == "validation"
+    assert payload["runs"] == []
+    assert payload["in_flight"]["state"] == "IN_FLIGHT"
 
     resumed = FakeAdapter()
-    with pytest.raises(collector.EvidenceValidationError, match="operator review"):
+    with pytest.raises(
+        collector.EvidenceValidationError, match="audited reconciliation"
+    ):
         _collect(collector, tmp_path, resumed, output_name=output.name)
     assert not [call for call in resumed.calls if call[0] == "observe"]
+
+
+def test_reservation_is_persisted_before_submit_and_requires_audited_reconciliation(
+    collector: Any, tmp_path: Path
+) -> None:
+    output = tmp_path / "crashed.json"
+
+    class CrashAfterReservation(FakeAdapter):
+        def observe(self, **kwargs: Any) -> dict[str, Any]:
+            reservation = json.loads(output.read_text(encoding="utf-8"))["in_flight"]
+            assert reservation["state"] == "IN_FLIGHT"
+            assert reservation["correlation_id"] == kwargs["correlation_id"]
+            assert reservation["update_id"] == kwargs["update"]["update_id"]
+            raise collector.ObservationError("submit outcome unknown")
+
+    with pytest.raises(collector.ObservationError, match="unknown"):
+        _collect(collector, tmp_path, CrashAfterReservation(), output_name=output.name)
+
+    with pytest.raises(collector.EvidenceValidationError, match="IN_FLIGHT"):
+        _collect(collector, tmp_path, FakeAdapter(), output_name=output.name)
+
+    collector.reconcile_in_flight(
+        output_path=output,
+        decision="confirmed-not-accepted",
+        audited_by="release-owner",
+        reconciled_at="2026-09-20T12:15:00Z",
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert payload["in_flight"] is None
+    assert payload["reconciliations"][0]["decision"] == "confirmed-not-accepted"
+    _collect(collector, tmp_path, FakeAdapter(), output_name=output.name)
+
+
+def test_unavailable_measurements_are_null_and_make_summary_incomplete(
+    collector: Any, tmp_path: Path
+) -> None:
+    observation = _observation()
+    observation["measurement"] = {
+        "first_byte": {"availability": "unavailable", "method": "unavailable"},
+        "downloaded_bytes": {
+            "availability": "unavailable",
+            "method": "unavailable",
+            "value": None,
+        },
+    }
+    observation["unavailable_phases"] = ["first_byte"]
+    run = collector._run_from_observation(
+        case=collector.CaseSpec("video-01", "video", "https://invalid.example"),
+        cache_state="cold",
+        observation=observation,
+    )
+
+    assert run["latency_seconds"]["first_byte"] is None
+    assert run["bytes_downloaded"] is None
+    summary = collector._summary(
+        [run], kind="video", cache_state="cold", memory_limit=536_870_912
+    )
+    assert summary["measurement_complete"] is False
+    assert summary["bytes_downloaded"] is None
 
 
 def test_refuses_unattested_host_and_unsafe_correlated_log_values(
@@ -338,6 +408,20 @@ def test_refuses_unattested_host_and_unsafe_correlated_log_values(
 
     with pytest.raises(collector.ObservationError, match="unsafe events"):
         _collect(collector, tmp_path, UnsafeLogAdapter(), output_name="unsafe-log.json")
+
+    class InvalidImageBindingAdapter(FakeAdapter):
+        def identity(self) -> dict[str, Any]:
+            result = super().identity()
+            result["image_reference"] = "mutable-image:latest"
+            return result
+
+    with pytest.raises(collector.EvidenceValidationError, match="image binding"):
+        _collect(
+            collector,
+            tmp_path,
+            InvalidImageBindingAdapter(),
+            output_name="invalid-image.json",
+        )
 
 
 def test_finalize_requires_three_fixed_windows_and_computes_four_summaries(
@@ -380,6 +464,9 @@ def test_finalize_requires_three_fixed_windows_and_computes_four_summaries(
     assert all(item["sample_count"] == 36 for item in evidence["summaries"])
     assert all(item["full_delivery_rate"] == 1.0 for item in evidence["summaries"])
     assert evidence["current_memory_limit_bytes"] == 536_870_912
+    assert evidence["image_id"] == "sha256:" + "b" * 64
+    assert evidence["image_reference"].endswith("@sha256:" + "c" * 64)
+    assert evidence["identity_binding"] == "candidate-release-and-digest"
     assert evidence["redaction"] == {
         "urls_hashed": True,
         "tokens_removed": True,

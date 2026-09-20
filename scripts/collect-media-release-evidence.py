@@ -2,8 +2,9 @@
 """Collect redacted production media evidence through a trusted command adapter.
 
 The collector deliberately does not infer per-request data from process-wide metrics.
-Its adapter must return an unambiguous one-request delta and must explicitly confirm
-case-scoped cold-cache eviction and timeout cancellation. Raw URLs and credentials
+Its adapter must return an unambiguous one-request delta and explicitly confirm
+case-scoped cold-cache eviction. An atomic pre-submit reservation makes every
+unknown outcome fail closed until audited reconciliation. Raw URLs and credentials
 exist only in adapter input and are never written to evidence files.
 """
 
@@ -14,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -54,6 +56,21 @@ FAILURE_STAGES = {
     "deliver",
     "validation",
     "cancelled",
+}
+IMAGE_ID_RE = re.compile(r"sha256:[0-9a-f]{64}")
+CANDIDATE_IMAGE_REFERENCE_RE = re.compile(r"[^\s]+@sha256:[0-9a-f]{64}")
+IMAGE_BINDINGS = {"legacy-deployment-attestation", "candidate-release-and-digest"}
+FIRST_BYTE_METHODS = {
+    "task11-metric",
+    "legacy-correlated-progress",
+    "file-id-cache",
+    "unavailable",
+}
+DOWNLOADED_BYTES_METHODS = {
+    "structured-request-bytes",
+    "legacy-correlated-delivered-size",
+    "file-id-cache",
+    "unavailable",
 }
 
 
@@ -335,6 +352,7 @@ def _phase_deltas(
     *,
     successful: bool,
     bypassed: set[str],
+    unavailable: set[str],
 ) -> dict[str, float | None]:
     if not isinstance(raw, dict) or set(raw) != set(PHASES):
         raise ObservationError("phase_metrics must contain the four pipeline phases")
@@ -348,17 +366,22 @@ def _phase_deltas(
         after_count = _nonnegative_int(item["after_count"], f"{phase}.after_count")
         count_delta = after_count - before_count
         expected_count = 0 if phase in bypassed else 1
+        before_sum = _nonnegative_number(item["before_sum"], f"{phase}.before_sum")
+        after_sum = _nonnegative_number(item["after_sum"], f"{phase}.after_sum")
+        sum_delta = after_sum - before_sum
+        if sum_delta < -1e-9:
+            raise ObservationError(f"phase metric {phase} decreased")
+        if phase in unavailable:
+            if count_delta < 0:
+                raise ObservationError("phase metric counter decreased")
+            result[phase] = None
+            continue
         if (
             count_delta < 0
             or count_delta > 1
             or (successful and count_delta != expected_count)
         ):
             raise ObservationError("concurrent activity made phase metrics ambiguous")
-        before_sum = _nonnegative_number(item["before_sum"], f"{phase}.before_sum")
-        after_sum = _nonnegative_number(item["after_sum"], f"{phase}.after_sum")
-        sum_delta = after_sum - before_sum
-        if sum_delta < -1e-9:
-            raise ObservationError(f"phase metric {phase} decreased")
         if successful and phase in bypassed:
             if abs(sum_delta) > 1e-9:
                 raise ObservationError(f"bypassed phase metric {phase} changed")
@@ -366,6 +389,48 @@ def _phase_deltas(
         else:
             result[phase] = max(0.0, sum_delta) if count_delta == 1 else None
     return result
+
+
+def _measurement(raw: Any) -> tuple[dict[str, Any], int | None]:
+    if not isinstance(raw, dict) or set(raw) != {"first_byte", "downloaded_bytes"}:
+        raise ObservationError("measurement metadata has an invalid shape")
+    first_byte = raw["first_byte"]
+    downloaded = raw["downloaded_bytes"]
+    if not isinstance(first_byte, dict) or set(first_byte) != {
+        "availability",
+        "method",
+    }:
+        raise ObservationError("first-byte measurement has an invalid shape")
+    if not isinstance(downloaded, dict) or set(downloaded) != {
+        "availability",
+        "method",
+        "value",
+    }:
+        raise ObservationError("downloaded-byte measurement has an invalid shape")
+    for item, methods, label in (
+        (first_byte, FIRST_BYTE_METHODS, "first-byte"),
+        (downloaded, DOWNLOADED_BYTES_METHODS, "downloaded-byte"),
+    ):
+        availability = item.get("availability")
+        method = item.get("method")
+        if availability not in {"measured", "unavailable"} or method not in methods:
+            raise ObservationError(f"{label} measurement is invalid")
+        if (availability == "unavailable") != (method == "unavailable"):
+            raise ObservationError(f"{label} availability and method disagree")
+    value = downloaded["value"]
+    if downloaded["availability"] == "unavailable":
+        if value is not None:
+            raise ObservationError("unavailable downloaded bytes must be null")
+        bytes_downloaded = None
+    else:
+        bytes_downloaded = _nonnegative_int(value, "downloaded_bytes.value")
+    return {
+        "first_byte": dict(first_byte),
+        "downloaded_bytes": {
+            "availability": downloaded["availability"],
+            "method": downloaded["method"],
+        },
+    }, bytes_downloaded
 
 
 def _run_from_observation(
@@ -416,6 +481,16 @@ def _run_from_observation(
     ):
         raise ObservationError("bypassed_phases contains an unsafe value")
     bypassed = set(raw_bypassed)
+    raw_unavailable = observation.get("unavailable_phases", [])
+    if (
+        not isinstance(raw_unavailable, list)
+        or any(item not in PHASES for item in raw_unavailable)
+        or len(set(raw_unavailable)) != len(raw_unavailable)
+    ):
+        raise ObservationError("unavailable_phases contains an unsafe value")
+    unavailable = set(raw_unavailable)
+    if unavailable & bypassed:
+        raise ObservationError("a phase cannot be both bypassed and unavailable")
     if bypassed:
         before_hits = _nonnegative_int(
             observation.get("file_id_hits_before"), "file_id_hits_before"
@@ -426,8 +501,15 @@ def _run_from_observation(
         if after_hits - before_hits != 1:
             raise ObservationError("bypassed phases require one file_id cache hit")
     latencies = _phase_deltas(
-        observation.get("phase_metrics"), successful=full_delivery, bypassed=bypassed
+        observation.get("phase_metrics"),
+        successful=full_delivery,
+        bypassed=bypassed,
+        unavailable=unavailable,
     )
+    measurement, bytes_downloaded = _measurement(observation.get("measurement"))
+    first_byte_available = measurement["first_byte"]["availability"] == "measured"
+    if first_byte_available != ("first_byte" not in unavailable):
+        raise ObservationError("first-byte phase and measurement availability disagree")
     failure_stage: str | None = None
     if not full_delivery:
         supplied_stage = observation.get("failure_stage")
@@ -444,12 +526,6 @@ def _run_from_observation(
     )
     if after_waste < before_waste:
         raise ObservationError("wasted-byte counter decreased")
-    artifact_samples = observation.get("artifact_size_samples")
-    if not isinstance(artifact_samples, list) or not artifact_samples:
-        raise ObservationError("temporary artifact size samples are required")
-    artifact_sizes = [
-        _nonnegative_int(value, "artifact_size_samples") for value in artifact_samples
-    ]
     cpu_before = _nonnegative_number(
         observation.get("cpu_seconds_before"), "cpu_seconds_before"
     )
@@ -467,37 +543,15 @@ def _run_from_observation(
         "kind": case.kind,
         "cache_state": cache_state,
         "latency_seconds": latencies,
+        "measurement": measurement,
         "full_delivery": full_delivery,
         "failure_stage": failure_stage,
         "http_failures": _safe_http_failures(observation.get("http_failures")),
-        "bytes_downloaded": max(artifact_sizes) - artifact_sizes[0],
+        "bytes_downloaded": bytes_downloaded,
         "bytes_wasted": after_waste - before_waste,
         "process_cpu_seconds": cpu_after - cpu_before,
         "peak_rss_bytes": max(rss_values),
         "independent_route": _safe_route(observation.get("independent_route")),
-    }
-
-
-def _failed_run(
-    case: CaseSpec, cache_state: str, *, failure_stage: str
-) -> dict[str, Any]:
-    return {
-        "case_id": case.case_id,
-        "kind": case.kind,
-        "cache_state": cache_state,
-        "latency_seconds": {phase: None for phase in PHASES},
-        "full_delivery": False,
-        "failure_stage": failure_stage,
-        "http_failures": [],
-        "bytes_downloaded": 0,
-        "bytes_wasted": 0,
-        "process_cpu_seconds": 0.0,
-        "peak_rss_bytes": 0,
-        "independent_route": {
-            "attempted": False,
-            "succeeded": False,
-            "route_class": None,
-        },
     }
 
 
@@ -528,6 +582,10 @@ def _resume_state(
     collected_at: str,
     memory_limit: int,
     production_ip_attested: bool,
+    runtime_profile: str,
+    image_id: str,
+    image_reference: str,
+    identity_binding: str,
     case_kinds: dict[str, str],
 ) -> dict[str, Any]:
     if not output_path.exists():
@@ -539,6 +597,12 @@ def _resume_state(
             "started_at": collected_at,
             "current_memory_limit_bytes": memory_limit,
             "production_ip_attested": production_ip_attested,
+            "runtime_profile": runtime_profile,
+            "image_id": image_id,
+            "image_reference": image_reference,
+            "identity_binding": identity_binding,
+            "in_flight": None,
+            "reconciliations": [],
             "runs": [],
         }
     payload = _load_json(output_path)
@@ -549,13 +613,24 @@ def _resume_state(
         "window_id": window_id,
         "current_memory_limit_bytes": memory_limit,
         "production_ip_attested": production_ip_attested,
+        "runtime_profile": runtime_profile,
+        "image_id": image_id,
+        "image_reference": image_reference,
+        "identity_binding": identity_binding,
     }
     if any(payload.get(key) != value for key, value in metadata.items()):
         raise EvidenceValidationError("resume metadata does not match this collection")
-    if not isinstance(payload.get("started_at"), str) or not isinstance(
-        payload.get("runs"), list
+    if (
+        not isinstance(payload.get("started_at"), str)
+        or not isinstance(payload.get("runs"), list)
+        or not isinstance(payload.get("reconciliations"), list)
+        or "in_flight" not in payload
     ):
         raise EvidenceValidationError("resume file has an invalid shape")
+    if payload["in_flight"] is not None:
+        raise EvidenceValidationError(
+            "window has an unresolved IN_FLIGHT reservation; audited reconciliation required"
+        )
     seen: set[tuple[str, str]] = set()
     for run in payload["runs"]:
         if not isinstance(run, dict):
@@ -568,14 +643,40 @@ def _resume_state(
         if run.get("kind") != case_kinds[key[0]]:
             raise EvidenceValidationError("resume run kind does not match the manifest")
         seen.add(cast(tuple[str, str], key))
-    if any(
-        run.get("failure_stage") in {"cancelled", "validation"}
-        for run in payload["runs"]
-    ):
-        raise EvidenceValidationError(
-            "window contains an interrupted or unattributable run; operator review required"
-        )
     return payload
+
+
+def reconcile_in_flight(
+    *,
+    output_path: Path,
+    decision: str,
+    audited_by: str,
+    reconciled_at: str,
+) -> None:
+    """Clear one unknown reservation only after an explicit operator audit."""
+    if decision != "confirmed-not-accepted":
+        raise EvidenceValidationError("unsupported reconciliation decision")
+    safe = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.@"
+    if not audited_by or any(character not in safe for character in audited_by):
+        raise EvidenceValidationError("audited_by contains unsafe characters")
+    _unix_time(reconciled_at)
+    state = _load_json(output_path)
+    reservation = state.get("in_flight")
+    if not isinstance(reservation, dict) or reservation.get("state") != "IN_FLIGHT":
+        raise EvidenceValidationError("no IN_FLIGHT reservation to reconcile")
+    state.setdefault("reconciliations", []).append(
+        {
+            "case_id": reservation.get("case_id"),
+            "cache_state": reservation.get("cache_state"),
+            "correlation_id": reservation.get("correlation_id"),
+            "update_id": reservation.get("update_id"),
+            "decision": decision,
+            "audited_by": audited_by,
+            "reconciled_at": reconciled_at,
+        }
+    )
+    state["in_flight"] = None
+    _atomic_json(output_path, state)
 
 
 def _unix_time(timestamp: str) -> int:
@@ -626,6 +727,32 @@ def collect_window(
         raise EvidenceValidationError(
             "adapter did not attest the production-IP boundary"
         )
+    if identity.get("release") != release_sha:
+        raise EvidenceValidationError(
+            "adapter release identity does not match collection"
+        )
+    runtime_profile = identity.get("runtime_profile")
+    if runtime_profile not in {"legacy-baseline", "candidate"}:
+        raise EvidenceValidationError("adapter runtime profile is invalid")
+    image_id = identity.get("image_id")
+    if not isinstance(image_id, str) or not IMAGE_ID_RE.fullmatch(image_id):
+        raise EvidenceValidationError("adapter image identity is invalid")
+    image_reference = identity.get("image_reference")
+    if not isinstance(image_reference, str) or not image_reference:
+        raise EvidenceValidationError("adapter image reference is invalid")
+    identity_binding = identity.get("identity_binding")
+    if identity_binding not in IMAGE_BINDINGS:
+        raise EvidenceValidationError("adapter identity binding is invalid")
+    if runtime_profile == "candidate" and (
+        identity_binding != "candidate-release-and-digest"
+        or not CANDIDATE_IMAGE_REFERENCE_RE.fullmatch(image_reference)
+    ):
+        raise EvidenceValidationError("candidate image binding is invalid")
+    if runtime_profile == "legacy-baseline" and (
+        identity_binding != "legacy-deployment-attestation"
+        or image_reference != image_id
+    ):
+        raise EvidenceValidationError("legacy image binding is invalid")
     case_kinds = {case.case_id: case.kind for case in cases}
     state = _resume_state(
         output_path=output_path,
@@ -635,6 +762,10 @@ def collect_window(
         collected_at=collected_at,
         memory_limit=memory_limit,
         production_ip_attested=True,
+        runtime_profile=runtime_profile,
+        image_id=image_id,
+        image_reference=image_reference,
+        identity_binding=identity_binding,
         case_kinds=case_kinds,
     )
     completed = {(run["case_id"], run["cache_state"]) for run in state["runs"]}
@@ -656,6 +787,16 @@ def collect_window(
                 correlation_id=correlation_id,
                 unix_time=unix_time,
             )
+            state["in_flight"] = {
+                "case_id": case.case_id,
+                "kind": case.kind,
+                "cache_state": cache_state,
+                "correlation_id": correlation_id,
+                "update_id": update["update_id"],
+                "reserved_at": state["started_at"],
+                "state": "IN_FLIGHT",
+            }
+            _atomic_json(output_path, state)
             try:
                 observation = adapter.observe(
                     update=update,
@@ -664,37 +805,22 @@ def collect_window(
                 )
             except (TimeoutError, subprocess.TimeoutExpired) as exc:
                 cancelled = adapter.cancel(correlation_id)
-                stage = "cancelled" if cancelled else "validation"
-                state["runs"].append(
-                    _failed_run(case, cache_state, failure_stage=stage)
-                )
-                _atomic_json(output_path, state)
                 if not cancelled:
                     raise ObservationError(
-                        f"timeout cancellation could not be confirmed for {case.case_id}"
+                        f"timeout cancellation could not be confirmed for {case.case_id}; "
+                        "IN_FLIGHT reconciliation required"
                     ) from exc
                 raise ObservationError(
-                    f"{case.case_id} {cache_state} cancelled after timeout"
+                    f"{case.case_id} {cache_state} cancelled after timeout; "
+                    "IN_FLIGHT reconciliation required"
                 ) from exc
-            except ObservationError:
-                state["runs"].append(
-                    _failed_run(case, cache_state, failure_stage="validation")
-                )
-                _atomic_json(output_path, state)
-                raise
-            try:
-                run = _run_from_observation(
-                    case=case,
-                    cache_state=cache_state,
-                    observation=observation,
-                )
-            except ObservationError:
-                state["runs"].append(
-                    _failed_run(case, cache_state, failure_stage="validation")
-                )
-                _atomic_json(output_path, state)
-                raise
+            run = _run_from_observation(
+                case=case,
+                cache_state=cache_state,
+                observation=observation,
+            )
             state["runs"].append(run)
+            state["in_flight"] = None
             completed.add(key)
             _atomic_json(output_path, state)
 
@@ -757,7 +883,16 @@ def _summary(
         "latency_seconds": latencies,
         "http_403_causes": {cause: cause_counts[403][cause] for cause in HTTP_CAUSES},
         "http_429_causes": {cause: cause_counts[429][cause] for cause in HTTP_CAUSES},
-        "bytes_downloaded": sum(run["bytes_downloaded"] for run in cohort),
+        "bytes_downloaded": (
+            sum(run["bytes_downloaded"] for run in cohort)
+            if all(run["bytes_downloaded"] is not None for run in cohort)
+            else None
+        ),
+        "measurement_complete": all(
+            run["measurement"]["first_byte"]["availability"] == "measured"
+            and run["measurement"]["downloaded_bytes"]["availability"] == "measured"
+            for run in cohort
+        ),
         "bytes_wasted": sum(run["bytes_wasted"] for run in cohort),
         "process_cpu_seconds": sum(run["process_cpu_seconds"] for run in cohort),
         "peak_rss_bytes": {
@@ -817,12 +952,23 @@ def finalize_evidence(
     releases = {state.get("release_sha") for state in ordered}
     manifests = {state.get("manifest_sha256") for state in ordered}
     limits = {state.get("current_memory_limit_bytes") for state in ordered}
+    image_ids = {state.get("image_id") for state in ordered}
+    image_references = {state.get("image_reference") for state in ordered}
+    runtime_profiles = {state.get("runtime_profile") for state in ordered}
+    bindings = {state.get("identity_binding") for state in ordered}
     if len(releases) != 1:
         raise EvidenceValidationError("window release SHAs do not match")
     if manifests != {manifest_sha256}:
         raise EvidenceValidationError("window manifest hashes do not match")
     if len(limits) != 1:
         raise EvidenceValidationError("window memory limits do not match")
+    if any(
+        len(values) != 1
+        for values in (image_ids, image_references, runtime_profiles, bindings)
+    ):
+        raise EvidenceValidationError("window runtime image identities do not match")
+    if any(state.get("in_flight") is not None for state in ordered):
+        raise EvidenceValidationError("cannot finalize an IN_FLIGHT reservation")
     if any(state.get("production_ip_attested") is not True for state in ordered):
         raise EvidenceValidationError("a window lacks production-IP attestation")
     memory_limit = _positive_int(next(iter(limits)), "current_memory_limit_bytes")
@@ -831,6 +977,7 @@ def finalize_evidence(
             "window_id": state["window_id"],
             "started_at": state["started_at"],
             "runs": state["runs"],
+            "reconciliations": state.get("reconciliations", []),
         }
         for state in ordered
     ]
@@ -850,6 +997,10 @@ def finalize_evidence(
         "source": "production-vps",
         "production_ip_attested": True,
         "current_memory_limit_bytes": memory_limit,
+        "runtime_profile": next(iter(runtime_profiles)),
+        "image_id": next(iter(image_ids)),
+        "image_reference": next(iter(image_references)),
+        "identity_binding": next(iter(bindings)),
         "redaction": {
             "urls_hashed": True,
             "tokens_removed": True,
@@ -882,6 +1033,13 @@ def _parser() -> argparse.ArgumentParser:
     finalize.add_argument("--window-file", type=Path, action="append", required=True)
     finalize.add_argument("--output", type=Path, required=True)
     finalize.add_argument("--collected-at", required=True)
+    reconcile = subparsers.add_parser("reconcile-in-flight")
+    reconcile.add_argument("--output", type=Path, required=True)
+    reconcile.add_argument(
+        "--decision", choices=("confirmed-not-accepted",), required=True
+    )
+    reconcile.add_argument("--audited-by", required=True)
+    reconcile.add_argument("--reconciled-at", required=True)
     return parser
 
 
@@ -899,13 +1057,20 @@ def main(argv: Sequence[str] | None = None) -> int:
                 timeout_seconds=args.timeout_seconds,
                 collected_at=args.collected_at,
             )
-        else:
+        elif args.mode == "finalize":
             finalize_evidence(
                 manifest_path=args.manifest,
                 schema_path=args.schema,
                 window_paths=args.window_file,
                 output_path=args.output,
                 collected_at=args.collected_at,
+            )
+        else:
+            reconcile_in_flight(
+                output_path=args.output,
+                decision=args.decision,
+                audited_by=args.audited_by,
+                reconciled_at=args.reconciled_at,
             )
     except EvidenceError as exc:
         print(f"evidence collection failed: {exc}", file=sys.stderr)

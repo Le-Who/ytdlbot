@@ -12,6 +12,10 @@
     "source",
     "production_ip_attested",
     "current_memory_limit_bytes",
+    "runtime_profile",
+    "image_id",
+    "image_reference",
+    "identity_binding",
     "redaction",
     "windows",
     "summaries"
@@ -24,6 +28,12 @@
     "source": {"const": "production-vps"},
     "production_ip_attested": {"const": true},
     "current_memory_limit_bytes": {"type": "integer", "minimum": 1},
+    "runtime_profile": {"enum": ["legacy-baseline", "candidate"]},
+    "image_id": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "image_reference": {"type": "string", "pattern": "^[^\\s]+$"},
+    "identity_binding": {
+      "enum": ["legacy-deployment-attestation", "candidate-release-and-digest"]
+    },
     "redaction": {
       "type": "object",
       "additionalProperties": false,
@@ -48,6 +58,26 @@
       "items": {"$ref": "#/$defs/summary"}
     }
   },
+  "allOf": [
+    {
+      "if": {"properties": {"runtime_profile": {"const": "candidate"}}},
+      "then": {
+        "properties": {
+          "identity_binding": {"const": "candidate-release-and-digest"},
+          "image_reference": {"pattern": "^[^\\s]+@sha256:[0-9a-f]{64}$"}
+        }
+      }
+    },
+    {
+      "if": {"properties": {"runtime_profile": {"const": "legacy-baseline"}}},
+      "then": {
+        "properties": {
+          "identity_binding": {"const": "legacy-deployment-attestation"},
+          "image_reference": {"pattern": "^sha256:[0-9a-f]{64}$"}
+        }
+      }
+    }
+  ],
   "$defs": {
     "latency": {
       "type": "object",
@@ -116,6 +146,55 @@
         }
       ]
     },
+    "measurement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["first_byte", "downloaded_bytes"],
+      "properties": {
+        "first_byte": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "method"],
+          "properties": {
+            "availability": {"enum": ["measured", "unavailable"]},
+            "method": {
+              "enum": ["task11-metric", "legacy-correlated-progress", "file-id-cache", "unavailable"]
+            }
+          },
+          "allOf": [
+            {
+              "if": {"properties": {"availability": {"const": "unavailable"}}},
+              "then": {"properties": {"method": {"const": "unavailable"}}}
+            },
+            {
+              "if": {"properties": {"availability": {"const": "measured"}}},
+              "then": {"properties": {"method": {"not": {"const": "unavailable"}}}}
+            }
+          ]
+        },
+        "downloaded_bytes": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["availability", "method"],
+          "properties": {
+            "availability": {"enum": ["measured", "unavailable"]},
+            "method": {
+              "enum": ["structured-request-bytes", "legacy-correlated-delivered-size", "file-id-cache", "unavailable"]
+            }
+          },
+          "allOf": [
+            {
+              "if": {"properties": {"availability": {"const": "unavailable"}}},
+              "then": {"properties": {"method": {"const": "unavailable"}}}
+            },
+            {
+              "if": {"properties": {"availability": {"const": "measured"}}},
+              "then": {"properties": {"method": {"not": {"const": "unavailable"}}}}
+            }
+          ]
+        }
+      }
+    },
     "run": {
       "type": "object",
       "additionalProperties": false,
@@ -124,6 +203,7 @@
         "kind",
         "cache_state",
         "latency_seconds",
+        "measurement",
         "full_delivery",
         "failure_stage",
         "http_failures",
@@ -141,6 +221,7 @@
         "kind": {"enum": ["short", "video"]},
         "cache_state": {"enum": ["cold", "warm"]},
         "latency_seconds": {"$ref": "#/$defs/latency"},
+        "measurement": {"$ref": "#/$defs/measurement"},
         "full_delivery": {"type": "boolean"},
         "failure_stage": {
           "enum": [
@@ -154,7 +235,7 @@
           ]
         },
         "http_failures": {"type": "array", "items": {"$ref": "#/$defs/httpFailure"}},
-        "bytes_downloaded": {"type": "integer", "minimum": 0},
+        "bytes_downloaded": {"type": ["integer", "null"], "minimum": 0},
         "bytes_wasted": {"type": "integer", "minimum": 0},
         "process_cpu_seconds": {"type": "number", "minimum": 0},
         "peak_rss_bytes": {"type": "integer", "minimum": 0},
@@ -172,7 +253,6 @@
               "latency_seconds": {
                 "properties": {
                   "resolve": {"type": "number", "minimum": 0},
-                  "first_byte": {"type": "number", "minimum": 0},
                   "materialize": {"type": "number", "minimum": 0},
                   "deliver": {"type": "number", "minimum": 0}
                 }
@@ -205,7 +285,7 @@
     "window": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["window_id", "started_at", "runs"],
+      "required": ["window_id", "started_at", "runs", "reconciliations"],
       "properties": {
         "window_id": {
           "enum": ["window-1", "window-2", "window-3"]
@@ -216,7 +296,25 @@
           "minItems": 48,
           "maxItems": 48,
           "items": {"$ref": "#/$defs/run"}
+        },
+        "reconciliations": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/reconciliation"}
         }
+      }
+    },
+    "reconciliation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["case_id", "cache_state", "correlation_id", "update_id", "decision", "audited_by", "reconciled_at"],
+      "properties": {
+        "case_id": {"type": "string", "pattern": "^(short|video)-(0[1-9]|1[0-2])$"},
+        "cache_state": {"enum": ["cold", "warm"]},
+        "correlation_id": {"type": "string", "pattern": "^[A-Za-z0-9:_.-]+$"},
+        "update_id": {"type": "integer", "minimum": 1},
+        "decision": {"const": "confirmed-not-accepted"},
+        "audited_by": {"type": "string", "pattern": "^[A-Za-z0-9_.@-]+$"},
+        "reconciled_at": {"type": "string", "format": "date-time"}
       }
     },
     "percentiles": {
@@ -283,6 +381,7 @@
         "http_403_causes",
         "http_429_causes",
         "bytes_downloaded",
+        "measurement_complete",
         "bytes_wasted",
         "process_cpu_seconds",
         "peak_rss_bytes",
@@ -297,7 +396,8 @@
         "latency_seconds": {"$ref": "#/$defs/summaryLatency"},
         "http_403_causes": {"$ref": "#/$defs/causeCounts"},
         "http_429_causes": {"$ref": "#/$defs/causeCounts"},
-        "bytes_downloaded": {"type": "integer", "minimum": 0},
+        "bytes_downloaded": {"type": ["integer", "null"], "minimum": 0},
+        "measurement_complete": {"type": "boolean"},
         "bytes_wasted": {"type": "integer", "minimum": 0},
         "process_cpu_seconds": {"type": "number", "minimum": 0},
         "peak_rss_bytes": {"$ref": "#/$defs/memorySummary"},

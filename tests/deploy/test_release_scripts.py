@@ -831,9 +831,14 @@ def test_webhook_verification_failure_rolls_back(fake_host: FakeHost) -> None:
 
 def test_workflows_gate_exact_sha_build_once_and_validate_known_host() -> None:
     test_workflow = (ROOT / ".github" / "workflows" / "test.yml").read_text()
+    integration_workflow = (
+        ROOT / ".github" / "workflows" / "integration.yml"
+    ).read_text()
     deploy_workflow = (ROOT / ".github" / "workflows" / "deploy.yml").read_text()
 
-    assert "vps" in test_workflow
+    for workflow in (test_workflow, integration_workflow):
+        document = yaml.load(workflow, Loader=yaml.BaseLoader)
+        assert "vps" not in document["on"]["push"]["branches"]
     assert 'python-version: ["3.12"]' in test_workflow
     assert "docker compose config" in test_workflow
     assert "scripts/bootstrap-migrate-production.sh" in test_workflow
@@ -979,6 +984,8 @@ def test_deploy_release_gate_is_bounded_and_not_repeated() -> None:
     }
     assert required_nodes <= set(script.split())
     assert "--no-cov --timeout=60 -q" in script
+    assert "install -m 600 .env.example .env" in script
+    assert "trap 'rm -f .env' EXIT" in script
 
 
 def test_every_active_ci_workflow_uses_one_pinned_test_contract() -> None:

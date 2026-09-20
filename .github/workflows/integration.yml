@@ -2,7 +2,7 @@ name: Media Acceptance
 
 on:
   push:
-    branches: [main, master, vps]
+    branches: [main, master]
   pull_request:
     branches: [main]
   workflow_dispatch:

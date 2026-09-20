@@ -75,6 +75,8 @@ jobs:
             tests/deploy/test_release_scripts.py::test_deploy_release_gate_is_bounded_and_not_repeated \
             --no-cov --timeout=60 -q
           bash -n scripts/bootstrap-production.sh scripts/bootstrap-migrate-production.sh scripts/deploy-release.sh scripts/preflight-production.sh scripts/rollback-release.sh
+          install -m 600 .env.example .env
+          trap 'rm -f .env' EXIT
           docker compose config --quiet
 
   build:

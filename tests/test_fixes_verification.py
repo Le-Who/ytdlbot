@@ -24,10 +24,22 @@ class TestFixesVerification(unittest.TestCase):
             output="out.mp4",
         )
 
-        # Check for cascading fallback in format selector
-        # We expect: 137+(audio_sel)/best[height=1080]/bestvideo+bestaudio/best
-        # wait, the code does: f"{video_sel}+({audio_sel})/{prog_sel}/bestvideo+bestaudio/best"
-        self.assertTrue(any("bestvideo+bestaudio/best" in arg for arg in cmd))
+        # Every fallback retains the requested short-edge quality and audio.
+        fmt_arg = cmd[cmd.index("--format") + 1]
+        branches = fmt_arg.split("/")
+        self.assertTrue(
+            all(
+                "[height<=1080]" in branch or "[width<=1080]" in branch
+                for branch in branches
+            )
+        )
+        self.assertTrue(
+            all(
+                "bestaudio" in branch or "[acodec!=none]" in branch
+                for branch in branches
+            )
+        )
+        self.assertNotIn("bestvideo+bestaudio/best", fmt_arg)
         self.assertNotIn("--no-check-certificate", cmd)
 
     def test_audio_selector_robustness(self):

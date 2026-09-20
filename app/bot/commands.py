@@ -133,6 +133,7 @@ async def _fast_download(
         fmt_size=None,
         update_ui=_update_ui,
         kb_error=None,
+        caller_scope="command",
     )
 
     if success:
@@ -144,16 +145,12 @@ async def _fast_download(
 
 async def cmd_mp3(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/mp3 <url> — download best audio, no format picker."""
-    await _fast_download(
-        update, context, format_id=AUDIO_FORMAT_ID, is_audio=True
-    )
+    await _fast_download(update, context, format_id=AUDIO_FORMAT_ID, is_audio=True)
 
 
 async def cmd_mp4(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/mp4 <url> — download best video, no format picker."""
-    await _fast_download(
-        update, context, format_id=_MP4_FORMAT, is_audio=False
-    )
+    await _fast_download(update, context, format_id=_MP4_FORMAT, is_audio=False)
 
 
 # ── /settings ─────────────────────────────────────────────────────────────────
@@ -174,8 +171,10 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     prefs = await get_prefs(user.id)
     fmt = prefs.get("default_format") or "—"
     q_raw = prefs.get("default_quality")
-    quality = str(q_raw) + "p" if q_raw else (
-        "наилучшее" if prefs.get("default_format") else "—"
+    quality = (
+        str(q_raw) + "p"
+        if q_raw
+        else ("наилучшее" if prefs.get("default_format") else "—")
     )
 
     await msg.reply_text(
@@ -200,9 +199,7 @@ async def cmd_setformat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     value = args[0].lower()
     await set_prefs(user.id, default_format=value)
-    await msg.reply_text(
-        Texts.SETTINGS_FMT_SET.format(fmt=value), parse_mode="HTML"
-    )
+    await msg.reply_text(Texts.SETTINGS_FMT_SET.format(fmt=value), parse_mode="HTML")
 
 
 # ── /setquality ───────────────────────────────────────────────────────────────

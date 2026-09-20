@@ -12,6 +12,11 @@ from app.services.downloader import MediaSender
 from app.core.models import DownloadContext
 from app.core.texts import Texts
 from app.services.ytdlp.parsers import _is_tiktok
+from app.services.media.pipeline import (
+    CallbackDataError,
+    decode_callback_payload,
+    encode_callback_data,
+)
 
 logger = logging.getLogger("app.bot.group_logic")
 
@@ -34,7 +39,7 @@ async def handle_group_message(
     if not update.message or not update.message.text:
         return
 
-    url, _ = extract_url_from_update(update.message)
+    url, section = extract_url_from_update(update.message)
 
     # In groups, we only react if a URL is found.
     # We do NOT reply with error if URL is not supported (passive mode).
@@ -67,6 +72,41 @@ async def handle_group_message(
     from app.services.instagram import parse_instagram_url
 
     url_type, ig_target, ig_item_id = parse_instagram_url(url)
+    if state.media_pipeline is not None and url_type in {"unknown", "post"}:
+        from app.services.media.models import DeliveryTarget
+        from app.services.media.pipeline import MediaPipelineError, build_media_request
+
+        request = build_media_request(
+            url,
+            kind="auto",
+            clip=section,
+            caller_scope="group",
+            exact=False,
+        )
+        try:
+            receipt = await state.media_pipeline.deliver(
+                request,
+                DeliveryTarget(str(chat.id), caller_scope="group"),
+                caption=f"📹 {user_tag}",
+            )
+        except MediaPipelineError as error:
+            await status_msg.edit_text(str(error))
+            return
+        if receipt.success:
+            try:
+                await status_msg.delete()
+            except Exception:
+                pass
+            try:
+                await update.message.delete()
+            except Exception:
+                pass
+            return
+        error_text = next(
+            (item.error for item in receipt.items if item.error), Texts.SEND_ERROR
+        )
+        await status_msg.edit_text(error_text)
+        return
     if url_type != "unknown":
         try:
             await status_msg.delete()
@@ -75,8 +115,14 @@ async def handle_group_message(
         from app.bot.messages import _handle_instagram
 
         await _handle_instagram(
-            update, context, url, uuid.uuid4().hex[:8], None,
-            url_type, ig_target, ig_item_id,
+            update,
+            context,
+            url,
+            uuid.uuid4().hex[:8],
+            None,
+            url_type,
+            ig_target,
+            ig_item_id,
         )
         return
 
@@ -178,10 +224,12 @@ async def handle_group_message(
             [
                 [
                     InlineKeyboardButton(
-                        "📸 Альбом", callback_data=f"{prefix}|{token}|photo"
+                        "📸 Альбом",
+                        callback_data=encode_callback_data(prefix, token, "photo"),
                     ),
                     InlineKeyboardButton(
-                        "🎬 Видео", callback_data=f"{prefix}|{token}|video"
+                        "🎬 Видео",
+                        callback_data=encode_callback_data(prefix, token, "video"),
                     ),
                 ]
             ]
@@ -230,6 +278,7 @@ async def handle_group_message(
             # Smart BVC2/HEVC Fallback Check
             if file_path and (not file_path.startswith("http")):
                 from app.services.orchestrator import extract_video_meta, TG_SAFE_CODECS
+
                 meta = await extract_video_meta(file_path)
                 vcodec = meta.get("vcodec")
                 pix_fmt = meta.get("pix_fmt")
@@ -242,15 +291,20 @@ async def handle_group_message(
                 if not (is_safe_codec and is_safe_pix_fmt and is_safe_tag):
                     logger.warning(
                         "TikTok group fast-path returned incompatible format (codec:%s, pix_fmt:%s, tag:%s). Falling back to yt-dlp H.264 stream...",
-                        vcodec, pix_fmt, codec_tag
+                        vcodec,
+                        pix_fmt,
+                        codec_tag,
                     )
                     from app.core.utils import safe_remove
+
                     safe_remove(file_path)
                     file_path = None
                     err = "Incompatible video codec (BVC2/HEVC)"
 
             if not file_path:
-                logger.warning("Group TikTok fast-path failed (%s). Falling back to yt-dlp...", err)
+                logger.warning(
+                    "Group TikTok fast-path failed (%s). Falling back to yt-dlp...", err
+                )
                 file_path, error = await MediaSender.download_video(
                     page_url=url,
                     format_id="bestvideo[vcodec^=avc]+bestaudio/best",
@@ -262,8 +316,9 @@ async def handle_group_message(
                 error = None
                 if file_path and not file_path.startswith("http"):
                     from app.services.orchestrator import ensure_telegram_compatible
+
                     file_path = await ensure_telegram_compatible(file_path)
-                
+
             if file_path:
                 state.file_cache[token] = file_path
         elif video_format == "gallerydl_fallback":
@@ -353,8 +408,13 @@ async def on_group_slideshow(
         return
 
     try:
-        prefix, token, mode = q.data.split("|", 2)
-    except (ValueError, AttributeError) as e:
+        prefix, parts = decode_callback_payload(
+            q.data,
+            allowed_actions=("grpslide", "cbgrpslide", "apigrpslide"),
+            max_parts=2,
+        )
+        token, mode = parts
+    except (CallbackDataError, ValueError, AttributeError) as e:
         logger.error(
             "Invalid callback data in on_group_slideshow", extra={"error": str(e)}
         )

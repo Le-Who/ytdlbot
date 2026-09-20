@@ -208,7 +208,9 @@ async def test_default_auto_request_allows_pinterest_photo_to_win():
     )
 
     result = await result_of(
-        start(clock, [Provider("pinterest", clock, candidates=[photo])], request=request)
+        start(
+            clock, [Provider("pinterest", clock, candidates=[photo])], request=request
+        )
     )
 
     assert result.winner is not None
@@ -236,7 +238,9 @@ async def test_auto_request_allows_mixed_fxtwitter_album_to_win():
     )
 
     result = await result_of(
-        start(clock, [Provider("fxtwitter", clock, candidates=[album])], request=request)
+        start(
+            clock, [Provider("fxtwitter", clock, candidates=[album])], request=request
+        )
     )
 
     assert result.winner is not None
@@ -261,7 +265,10 @@ async def test_explicit_kind_mismatch_cannot_win_race():
     video = replace(GOOD, candidate_id="video", kind=MediaKind.VIDEO)
     task = start(
         clock,
-        [Provider("photo", clock, 0.1, [photo]), Provider("video", clock, 0.2, [video])],
+        [
+            Provider("photo", clock, 0.1, [photo]),
+            Provider("video", clock, 0.2, [video]),
+        ],
         request=request,
     )
 
@@ -283,7 +290,9 @@ async def test_audio_request_can_win_with_video_backed_candidate():
     video = replace(GOOD, kind=MediaKind.VIDEO, has_audio=True)
 
     result = await result_of(
-        start(clock, [Provider("video-audio", clock, candidates=[video])], request=request)
+        start(
+            clock, [Provider("video-audio", clock, candidates=[video])], request=request
+        )
     )
 
     assert result.winner is not None
@@ -521,19 +530,21 @@ async def test_queued_route_is_rechecked_before_admission():
     assert queued.starts == []
 
 
-async def test_failed_heavy_route_does_not_start_second_heavy_provider():
+async def test_failed_heavy_route_falls_through_without_concurrent_heavy_work():
     clock = ManualClock()
     first = Provider("local-one", clock, candidates=[], is_heavy=True)
     second = Provider("local-two", clock, is_heavy=True)
     task = start(clock, [first, second])
     await clock.advance(1.5)
-    assert (await result_of(task)).winner is None
+    result = await result_of(task)
+    assert result.winner is not None
+    assert result.winner.provider == "local-two"
     assert first.starts == [1.5]
-    assert second.starts == []
+    assert second.starts == [1.5]
     assert clock.sleepers == []
 
 
-async def test_heavy_retry_after_cannot_consume_a_second_resolve_invocation():
+async def test_heavy_retry_after_does_not_retry_before_next_heavy_route():
     clock = ManualClock()
     provider = Provider(
         "local",
@@ -544,13 +555,11 @@ async def test_heavy_retry_after_cannot_consume_a_second_resolve_invocation():
     reserve = Provider("reserve-local", clock, is_heavy=True)
     task = start(clock, [provider, reserve])
     await clock.advance(1.5)
-    finished_after_first_attempt = task.done()
-    await clock.advance(2)
     result = await result_of(task)
     assert provider.starts == [1.5]
-    assert reserve.starts == []
-    assert result.winner is None
-    assert finished_after_first_attempt
+    assert reserve.starts == [1.5]
+    assert result.winner is not None
+    assert result.winner.provider == "reserve-local"
     assert len(result.failures) == 1
     assert result.failures[0].retry_after == 2
     assert clock.sleepers == []

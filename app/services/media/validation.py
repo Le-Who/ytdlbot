@@ -12,12 +12,14 @@ class CandidateRejectionReason(StrEnum):
     VIDEO_UNAVAILABLE = "video_unavailable"
     KIND_MISMATCH = "kind_mismatch"
     ALBUM_INCOMPLETE = "album_incomplete"
+    ALBUM_SELECTION_UNAVAILABLE = "album_selection_unavailable"
     WATERMARK_PRESENT = "watermark_present"
     WATERMARK_UNKNOWN = "watermark_unknown"
     QUALITY_TOO_LOW = "quality_too_low"
     AUDIO_UNAVAILABLE = "audio_unavailable"
     AUDIO_FORMAT_UNAVAILABLE = "audio_format_unavailable"
     AUDIO_LANGUAGE_UNAVAILABLE = "audio_language_unavailable"
+    AUTH_SCOPE_MISMATCH = "auth_scope_mismatch"
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +33,9 @@ def validate_candidate(
 ) -> CandidateValidationResult:
     reasons: list[CandidateRejectionReason] = []
 
+    if candidate.auth_scope != request.auth_scope:
+        reasons.append(CandidateRejectionReason.AUTH_SCOPE_MISMATCH)
+
     if not _kind_is_compatible(request, candidate):
         reasons.append(CandidateRejectionReason.KIND_MISMATCH)
 
@@ -40,6 +45,16 @@ def validate_candidate(
         and (request.kind is MediaKind.ALBUM or candidate.kind is MediaKind.ALBUM)
     ):
         reasons.append(CandidateRejectionReason.ALBUM_INCOMPLETE)
+
+    if request.album_selection:
+        if not candidate.items:
+            if request.album_selection != (0,):
+                reasons.append(CandidateRejectionReason.ALBUM_SELECTION_UNAVAILABLE)
+        elif any(
+            index < 0 or index >= len(candidate.items)
+            for index in request.album_selection
+        ):
+            reasons.append(CandidateRejectionReason.ALBUM_SELECTION_UNAVAILABLE)
 
     if request.exact and not request.watermark_allowed:
         if candidate.watermark_free is False:
@@ -64,7 +79,10 @@ def validate_candidate(
         reasons.append(CandidateRejectionReason.AUDIO_UNAVAILABLE)
     elif request.audio_format and request.audio_format not in candidate.audio_formats:
         reasons.append(CandidateRejectionReason.AUDIO_FORMAT_UNAVAILABLE)
-    elif request.audio_language and request.audio_language not in candidate.audio_languages:
+    elif (
+        request.audio_language
+        and request.audio_language not in candidate.audio_languages
+    ):
         reasons.append(CandidateRejectionReason.AUDIO_LANGUAGE_UNAVAILABLE)
 
     return CandidateValidationResult(usable=not reasons, reasons=tuple(reasons))

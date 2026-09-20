@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Any
 
 from telegram import Bot, ReplyParameters
@@ -19,6 +21,23 @@ from app.services.media.models import (
     MediaItem,
     MediaKind,
 )
+
+
+@contextmanager
+def _open_media(
+    file_path_or_buffer: str | io.BytesIO, use_local_api: bool = False
+) -> Iterator[Any]:
+    """Retain the legacy media-opening contract for compatibility callers."""
+    if isinstance(file_path_or_buffer, str):
+        if file_path_or_buffer.startswith(("http://", "https://")):
+            yield file_path_or_buffer
+        elif use_local_api:
+            yield f"file://{os.path.abspath(file_path_or_buffer)}"
+        else:
+            with open(file_path_or_buffer, "rb") as handle:
+                yield handle
+    else:
+        yield file_path_or_buffer
 
 
 class TelegramSender:
@@ -128,4 +147,4 @@ class TelegramSender:
         )
 
 
-__all__ = ["MAX_TELEGRAM_ALBUM_SIZE", "TelegramSender"]
+__all__ = ["MAX_TELEGRAM_ALBUM_SIZE", "TelegramSender", "_open_media"]

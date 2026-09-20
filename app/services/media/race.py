@@ -99,8 +99,9 @@ async def race_candidates(
     """Return the first validated candidate, respecting all request constraints.
 
     Two cheap workers hold their slots through Retry-After waits. A single
-    delayed heavy worker may invoke one route once. Adapters can consume the same
-    RaceConfig.connect_timeout when they construct their HTTP clients.
+    delayed heavy worker invokes local routes sequentially, never concurrently.
+    Adapters can consume the same RaceConfig.connect_timeout when they construct
+    their HTTP clients.
     """
     if config is None:
         config = RaceConfig()
@@ -178,7 +179,8 @@ async def race_candidates(
             if is_heavy:
                 await sleep(max(0, started + config.heavy_delay - clock()))
                 for route in heavy:
-                    if await attempt_route(route):
+                    await attempt_route(route)
+                    if finished.done():
                         break
             else:
                 for route in cheap:

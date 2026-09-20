@@ -71,9 +71,7 @@ TELEGRAM_CLOUD_MAX_FILE_MB = _positive_int(
     os.getenv("TELEGRAM_CLOUD_MAX_FILE_MB", "50"),
     maximum=50,
 )
-TELEGRAM_MEDIA_WRITE_TIMEOUT = float(
-    os.getenv("TELEGRAM_MEDIA_WRITE_TIMEOUT", "1200")
-)
+TELEGRAM_MEDIA_WRITE_TIMEOUT = float(os.getenv("TELEGRAM_MEDIA_WRITE_TIMEOUT", "1200"))
 TELEGRAM_READ_TIMEOUT = float(os.getenv("TELEGRAM_READ_TIMEOUT", "120"))
 TELEGRAM_WRITE_TIMEOUT = float(os.getenv("TELEGRAM_WRITE_TIMEOUT", "120"))
 TELEGRAM_CONNECT_TIMEOUT = float(os.getenv("TELEGRAM_CONNECT_TIMEOUT", "30"))
@@ -109,17 +107,18 @@ POT_PROVIDER_URL: Optional[str] = os.getenv("POT_PROVIDER_URL", "").strip() or N
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 
+
 def parse_proxy_uri(proxy_raw: Optional[str]) -> Optional[str]:
     if not proxy_raw:
         return None
     proxy_raw = proxy_raw.strip()
     if not proxy_raw:
         return None
-    
+
     # If it already has a scheme, assume it is correctly formatted
     if "://" in proxy_raw:
         return proxy_raw
-        
+
     parts = proxy_raw.split(":")
     if len(parts) == 4:
         # Format: host:port:user:pass
@@ -129,9 +128,10 @@ def parse_proxy_uri(proxy_raw: Optional[str]) -> Optional[str]:
         # Format: host:port
         host, port = parts
         return f"http://{host}:{port}"
-        
+
     # Fallback to appending http://
     return f"http://{proxy_raw}"
+
 
 # TikTok proxy — route TikTok requests through WireGuard/SOCKS5 to bypass
 # datacenter IP blocks on age-restricted content.
@@ -150,6 +150,16 @@ COBALT_API_URLS = [
     url.strip() for url in os.getenv("COBALT_API_URL", "").split(",") if url.strip()
 ]
 ENABLE_COBALT_TIKTOK = os.getenv("ENABLE_COBALT_TIKTOK", "0").strip() == "1"
+COBALT_CONTRACT_VERIFIED = os.getenv("COBALT_CONTRACT_VERIFIED", "0").strip() == "1"
+COBALT_CAPABILITIES = frozenset(
+    capability.strip().lower()
+    for capability in os.getenv(
+        "COBALT_CAPABILITIES",
+        "tiktok,twitter,x,instagram,facebook,pinterest",
+    ).split(",")
+    if capability.strip()
+)
+SNAPSAVE_CONTRACT_VERIFIED = os.getenv("SNAPSAVE_CONTRACT_VERIFIED", "0").strip() == "1"
 
 COBALT_API_KEY = os.getenv("COBALT_API_KEY", "")
 
@@ -169,7 +179,9 @@ IG_SESSIONS_B64 = [
 # Admin chat ID for error reporting. Set to your Telegram user ID.
 # If unset, error reporting to admin is disabled.
 _admin_raw = os.getenv("ADMIN_CHAT_ID", "").strip()
-ADMIN_CHAT_ID: Optional[int] = int(_admin_raw) if _admin_raw.lstrip("-").isdigit() else None
+ADMIN_CHAT_ID: Optional[int] = (
+    int(_admin_raw) if _admin_raw.lstrip("-").isdigit() else None
+)
 
 # ── Download Queue ───────────────────────────────────────────────────────────
 # Hard cap on how many requests can wait in the queue before rejecting.

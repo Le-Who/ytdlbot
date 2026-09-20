@@ -126,6 +126,21 @@ async def test_strict_mp3_selects_requested_language_and_requires_conversion():
     assert not candidate.has_video
 
 
+async def test_animation_request_selects_video_only_and_requires_mute_mp4():
+    provider = YtDlpProvider(extract=AsyncMock(return_value=metadata()))
+    request = MediaRequest.from_url(URL, kind=MediaKind.ANIMATION)
+
+    assert provider.supports(request)
+    candidate = (await provider.resolve(request))[0]
+
+    assert candidate.kind is MediaKind.ANIMATION
+    assert candidate.sources[0].video_codec is not None
+    assert len(candidate.sources) == 1
+    assert not candidate.has_audio
+    assert candidate.container == "mp4"
+    assert candidate.mux_mode == "mute-mp4"
+
+
 async def test_expired_source_has_clean_refresh_descriptor_and_bounded_refresh():
     extract = AsyncMock(return_value=metadata())
     provider = YtDlpProvider(extract=extract)

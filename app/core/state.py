@@ -44,7 +44,9 @@ ytdlp = YtDlpService()
 # api_sem     : TikWM / Cobalt / Pinterest fetches (near-zero CPU).
 # download_sem: yt-dlp + aria2 downloads (IO-bound, moderate CPU).
 # conversion_sem / gif_file_sem retain their existing limits.
-tasks_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)   # kept for legacy callbacks.py usage
+tasks_sem = asyncio.Semaphore(
+    MAX_CONCURRENT_TASKS
+)  # kept for legacy callbacks.py usage
 api_sem = asyncio.Semaphore(int(os.getenv("MAX_API_TASKS", "10")))
 download_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 parsing_sem = asyncio.Semaphore(5)  # Лимит на одновременный парсинг форматов
@@ -82,7 +84,9 @@ disk_critical: bool = False
 # Глобальный объект приложения Telegram (инициализируется в main.py)
 if TYPE_CHECKING:
     from telegram.ext import Application
+    from app.services.media.pipeline import MediaPipeline
 bot_app: Application | None = None
+media_pipeline: MediaPipeline | None = None
 
 if REDIS_URL:
     import redis.asyncio as redis

@@ -30,6 +30,11 @@ from app.core.logging import set_correlation_id
 from app.services.downloader import MediaSender
 from app.core.models import DownloadContext
 from app.services.orchestrator import DownloadOrchestrator
+from app.services.media.pipeline import (
+    CallbackDataError,
+    decode_callback_payload,
+    encode_callback_data,
+)
 
 __all__ = [
     "on_back",
@@ -171,8 +176,11 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     try:
-        _, pick_key = q.data.split("|", 1)
-    except (ValueError, AttributeError) as e:
+        _, parts = decode_callback_payload(
+            q.data, allowed_actions=("pick",), max_parts=1
+        )
+        (pick_key,) = parts
+    except (CallbackDataError, ValueError, AttributeError) as e:
         logger.error("Invalid callback data in on_pick", extra={"error": str(e)})
         return
 
@@ -204,10 +212,21 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     kb = [[InlineKeyboardButton(Texts.BTN_DOWNLOAD_LINK, url=dl_link)]]
     if ENABLE_TELEGRAM_UPLOAD:
         kb.append(
-            [InlineKeyboardButton(Texts.BTN_SEND_TG, callback_data=f"send|{token}")]
+            [
+                InlineKeyboardButton(
+                    Texts.BTN_SEND_TG,
+                    callback_data=encode_callback_data("send", token),
+                )
+            ]
         )
 
-    kb.append([InlineKeyboardButton(Texts.BTN_BACK, callback_data="back")])
+    kb.append(
+        [
+            InlineKeyboardButton(
+                Texts.BTN_BACK, callback_data=encode_callback_data("back")
+            )
+        ]
+    )
 
     height = data["format_map"].get(format_id)
     filesize = data.get("size_map", {}).get(format_id)
@@ -246,10 +265,15 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     try:
-        _, token = q.data.split("|", 1)
+        _, parts = decode_callback_payload(
+            q.data,
+            allowed_actions=("cancel", "cancel_parse"),
+            max_parts=1,
+        )
+        (token,) = parts
         await state.cancel_cache.set(token, True)
         await q.edit_message_text(Texts.CANCELLED)
-    except (ValueError, AttributeError) as e:
+    except (CallbackDataError, ValueError, AttributeError) as e:
         logger.error("Invalid callback data in on_cancel", extra={"error": str(e)})
 
 
@@ -274,8 +298,11 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     try:
-        _, token = q.data.split("|", 1)
-    except (ValueError, AttributeError) as e:
+        _, parts = decode_callback_payload(
+            q.data, allowed_actions=("send",), max_parts=1
+        )
+        (token,) = parts
+    except (CallbackDataError, ValueError, AttributeError) as e:
         logger.error("Invalid callback data in on_send", extra={"error": str(e)})
         return
 
@@ -289,7 +316,11 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     kb_error = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(Texts.BTN_DOWNLOAD_LINK, url=dl_link)],
-            [InlineKeyboardButton(Texts.BTN_BACK, callback_data="back")],
+            [
+                InlineKeyboardButton(
+                    Texts.BTN_BACK, callback_data=encode_callback_data("back")
+                )
+            ],
         ]
     )
 
@@ -335,7 +366,13 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except Exception as e:
         logger.warning("Callback answer failed", extra={"error": str(e)})
 
-    _, token = q.data.split("|", 1)
+    try:
+        _, parts = decode_callback_payload(
+            q.data, allowed_actions=("gif",), max_parts=1
+        )
+        (token,) = parts
+    except (CallbackDataError, ValueError):
+        return
 
     # 1. Get file path from cache
     video_path = state.file_cache.get(token)
@@ -423,8 +460,12 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     try:
-        prefix, rest = q.data.split("|", 1)
-    except (ValueError, AttributeError) as e:
+        prefix, parts = decode_callback_payload(
+            q.data,
+            allowed_actions=("slideshow", "cbslide", "apislide"),
+            max_parts=2,
+        )
+    except (CallbackDataError, ValueError, AttributeError) as e:
         logger.error("Invalid callback data in on_slideshow", extra={"error": str(e)})
         return
 
@@ -432,7 +473,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if is_api:
         try:
-            parse_token, mode = rest.split("|", 1)
+            parse_token, mode = parts
         except ValueError:
             return
 
@@ -466,7 +507,10 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         page_url = payload.page_url
     else:
-        mode = rest
+        try:
+            (mode,) = parts
+        except ValueError:
+            return
         data = context.user_data
         assert data is not None
         page_url = data.get("page_url")
@@ -528,6 +572,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 total = len(result.images)
                 import math
                 from app.services.sender import MAX_TELEGRAM_ALBUM_SIZE
+
                 total_batches = math.ceil(total / MAX_TELEGRAM_ALBUM_SIZE)
                 if total_batches > 1:
                     caption = Texts.SLIDESHOW_MULTI_ALBUM.format(
@@ -603,7 +648,13 @@ async def on_save_as_gif_file(
     q = update.callback_query
     assert q is not None and isinstance(q.message, Message) and q.data is not None
 
-    _, token = q.data.split("|", 1)
+    try:
+        _, parts = decode_callback_payload(
+            q.data, allowed_actions=("giffile",), max_parts=1
+        )
+        (token,) = parts
+    except (CallbackDataError, ValueError):
+        return
 
     # Needs to get URL from context to determine global cache key
     ctx = await state.link_cache.get(token)
@@ -631,7 +682,8 @@ async def on_save_as_gif_file(
             [
                 [
                     InlineKeyboardButton(
-                        Texts.BTN_SAVE_GIF_WAIT, callback_data=f"giffile|{token}"
+                        Texts.BTN_SAVE_GIF_WAIT,
+                        callback_data=encode_callback_data("giffile", token),
                     )
                 ]
             ]
@@ -659,7 +711,7 @@ async def on_save_as_gif_file(
                         [
                             InlineKeyboardButton(
                                 Texts.BTN_SAVE_GIF_DONE,
-                                callback_data=f"giffile|{token}",
+                                callback_data=encode_callback_data("giffile", token),
                             )
                         ]
                     ]
@@ -796,7 +848,7 @@ async def on_save_as_gif_file(
                         [
                             InlineKeyboardButton(
                                 Texts.BTN_SAVE_GIF_DONE,
-                                callback_data=f"giffile|{token}",
+                                callback_data=encode_callback_data("giffile", token),
                             )
                         ]
                     ]

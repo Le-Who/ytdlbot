@@ -34,7 +34,9 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         state.info_cache = AsyncMockCache()
         state.link_cache = AsyncMockCache()
         state.cancel_cache = AsyncMockCache()
-        state.prefs_cache = AsyncMockCache()  # needed by user_prefs fast-path in on_message
+        state.prefs_cache = (
+            AsyncMockCache()
+        )  # needed by user_prefs fast-path in on_message
         state.inflight_parsing = {}
         state.limiter = MagicMock()
         state.limiter.allow_user = AsyncMock(return_value=True)
@@ -69,7 +71,9 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         )
         await on_message(self.update, self.context)
 
-        self.status_msg.edit_text.assert_awaited_with(Texts.ACCESS_DENIED)
+        self.status_msg.edit_text.assert_awaited_with(
+            "Login required", parse_mode="HTML"
+        )
 
     async def test_video_not_found_error(self):
         """VideoNotFoundError shows not found text."""

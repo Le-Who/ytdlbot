@@ -907,6 +907,30 @@ async def test_extract_mp3_uses_ffmpeg_and_returns_only_mp3(tmp_path: Path) -> N
 
 
 @pytest.mark.asyncio
+async def test_animation_transform_mutes_and_caps_mp4_duration(tmp_path: Path) -> None:
+    responses = [FakeResponse(), FakeResponse()]
+    runner = RecordingProcessRunner()
+    media, _ = transport(tmp_path, responses, process_runner=runner)
+    candidate = replace(
+        source_candidate(size=24),
+        has_audio=False,
+        mux_mode="mute-mp4",
+        container="mp4",
+        kind=MediaKind.ANIMATION,
+    )
+    animation = replace(request(), kind=MediaKind.ANIMATION)
+
+    item = await media.materialize(animation, [candidate])
+
+    command = runner.commands[0]
+    assert item.paths[0].suffix == ".mp4"
+    assert "-an" in command
+    assert command[command.index("-t") + 1] == "60"
+    assert command[command.index("-c:v") + 1] == "copy"
+    await item.release(delete=True)
+
+
+@pytest.mark.asyncio
 async def test_transform_output_is_stopped_while_crossing_byte_cap(
     tmp_path: Path,
 ) -> None:

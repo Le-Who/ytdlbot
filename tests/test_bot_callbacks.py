@@ -22,6 +22,7 @@ from unittest.mock import MagicMock, patch
 from app.bot import callbacks
 from app.core import state
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
+from app.core.config import MAX_TG_UPLOAD_MB
 from telegram import Message
 from app.services.ytdlp.models import ExtractionResult
 
@@ -39,6 +40,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.api_sem = asyncio.Semaphore(10)
         # Reset queues each test so _queue_full tests don't pollute successors
         from app.core.download_queue import DownloadQueue
+
         state.download_queue = DownloadQueue(state.download_sem, max_queue_size=15)
         state.api_queue = DownloadQueue(state.api_sem, max_queue_size=15)
 
@@ -190,8 +192,11 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.link_cache[token] = {"page_url": "http://example.com", "format_id": "137"}
         # Replace download_queue with one whose enqueue() rejects immediately
         from app.core.download_queue import DownloadQueue
+
         full_sem = asyncio.Semaphore(0)  # 0 capacity → wait path
-        queue = DownloadQueue(full_sem, max_queue_size=0)  # 0 queue cap → immediate QUEUE_FULL
+        queue = DownloadQueue(
+            full_sem, max_queue_size=0
+        )  # 0 queue cap → immediate QUEUE_FULL
         state.download_queue = queue
 
         await callbacks.on_send(self.update, self.context)
@@ -307,8 +312,9 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             "format_id": "137",
             "title": "Big Video",
         }
-        # > 50MB
-        self.context.user_data = {"size_map": {"137": 60 * 1024 * 1024}}
+        self.context.user_data = {
+            "size_map": {"137": (MAX_TG_UPLOAD_MB + 1) * 1024 * 1024}
+        }
 
         await callbacks.on_send(self.update, self.context)
         args, _ = self.update.callback_query.edit_message_text.call_args

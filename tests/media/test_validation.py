@@ -78,6 +78,22 @@ def test_exact_incomplete_album_is_rejected_but_fast_mode_can_offer_it():
     assert fast.usable
 
 
+def test_album_selection_rejects_candidate_without_requested_indexes():
+    candidate = candidate_fixture(
+        kind=MediaKind.ALBUM,
+        items=(MediaItem("abc123:0", MediaKind.PHOTO, "https://cdn/1.jpg"),),
+        has_video=False,
+        has_audio=False,
+    )
+
+    result = validate_candidate(
+        request_fixture(kind=MediaKind.ALBUM, album_selection=(1,)), candidate
+    )
+
+    assert not result.usable
+    assert CandidateRejectionReason.ALBUM_SELECTION_UNAVAILABLE in result.reasons
+
+
 def test_exact_no_watermark_request_rejects_watermarked_candidate_only():
     """Catches exact no-watermark policy being ignored while preserving fast mode."""
     candidate = candidate_fixture(
@@ -85,9 +101,7 @@ def test_exact_no_watermark_request_rejects_watermarked_candidate_only():
         watermark_free=False,
     )
 
-    exact = validate_candidate(
-        request_fixture(watermark_allowed=False), candidate
-    )
+    exact = validate_candidate(request_fixture(watermark_allowed=False), candidate)
     fast = validate_candidate(
         request_fixture(watermark_allowed=False, exact=False), candidate
     )
@@ -118,7 +132,10 @@ def test_auto_request_accepts_each_provider_discovered_visual_kind():
     )
 
     assert request_fixture().kind is MediaKind.AUTO
-    assert all(validate_candidate(request_fixture(), candidate).usable for candidate in discovered)
+    assert all(
+        validate_candidate(request_fixture(), candidate).usable
+        for candidate in discovered
+    )
 
 
 def test_audio_request_accepts_audio_native_and_video_backed_candidates():
@@ -181,6 +198,4 @@ def test_legacy_candidate_without_explicit_kind_remains_auto_and_audio_compatibl
     candidate = candidate_fixture(kind=None, has_audio=True)
 
     assert validate_candidate(request_fixture(), candidate).usable
-    assert validate_candidate(
-        request_fixture(kind=MediaKind.AUDIO), candidate
-    ).usable
+    assert validate_candidate(request_fixture(kind=MediaKind.AUDIO), candidate).usable

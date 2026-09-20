@@ -7,6 +7,7 @@ from app.constants import (
     SLIDESHOW_VIDEO_FORMAT_ID,
 )
 from app.core.texts import Texts
+from app.services.media.pipeline import encode_callback_data
 
 
 from typing import Any
@@ -22,14 +23,14 @@ def build_format_keyboard(
         row = [
             InlineKeyboardButton(
                 format_label(formats_slice[i]),
-                callback_data=f"pick|{i}",
+                callback_data=encode_callback_data("pick", str(i)),
             )
         ]
         if i + 1 < len(formats_slice):
             row.append(
                 InlineKeyboardButton(
                     format_label(formats_slice[i + 1]),
-                    callback_data=f"pick|{i + 1}",
+                    callback_data=encode_callback_data("pick", str(i + 1)),
                 )
             )
         buttons.append(row)
@@ -40,7 +41,7 @@ def build_format_keyboard(
             [
                 InlineKeyboardButton(
                     format_label(special_format),
-                    callback_data=f"pick|{idx}",
+                    callback_data=encode_callback_data("pick", str(idx)),
                 )
             ]
         )
@@ -54,19 +55,23 @@ def build_slideshow_keyboard() -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     Texts.BTN_SLIDESHOW_PHOTOS,
-                    callback_data=f"slideshow|{SLIDESHOW_PHOTO_FORMAT_ID}",
+                    callback_data=encode_callback_data(
+                        "slideshow", SLIDESHOW_PHOTO_FORMAT_ID
+                    ),
                 )
             ],
             [
                 InlineKeyboardButton(
                     Texts.BTN_SLIDESHOW_VIDEO,
-                    callback_data=f"slideshow|{SLIDESHOW_VIDEO_FORMAT_ID}",
+                    callback_data=encode_callback_data(
+                        "slideshow", SLIDESHOW_VIDEO_FORMAT_ID
+                    ),
                 )
             ],
             [
                 InlineKeyboardButton(
                     "🎵 Audio",
-                    callback_data=f"pick|{AUDIO_FORMAT_ID}",
+                    callback_data=encode_callback_data("pick", AUDIO_FORMAT_ID),
                 )
             ],
         ]
@@ -84,7 +89,7 @@ def build_sent_gif_keyboard(token: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     Texts.BTN_SAVE_GIF_FILE,
-                    callback_data=f"giffile|{token}",
+                    callback_data=encode_callback_data("giffile", token),
                 )
             ]
         ]
@@ -97,10 +102,12 @@ def build_video_keyboard(token: str) -> InlineKeyboardMarkup:
         [
             [
                 InlineKeyboardButton(
-                    Texts.BTN_SEND_ANIMATION_MP4, callback_data=f"gif|{token}"
+                    Texts.BTN_SEND_ANIMATION_MP4,
+                    callback_data=encode_callback_data("gif", token),
                 ),
                 InlineKeyboardButton(
-                    Texts.BTN_SAVE_GIF_FILE, callback_data=f"giffile|{token}"
+                    Texts.BTN_SAVE_GIF_FILE,
+                    callback_data=encode_callback_data("giffile", token),
                 ),
             ]
         ]
@@ -114,9 +121,8 @@ def build_cancel_keyboard(token: str) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     Texts.BTN_CANCEL_DOWNLOAD,
-                    callback_data=f"cancel|{token}",
+                    callback_data=encode_callback_data("cancel", token),
                 )
             ]
         ]
     )
-

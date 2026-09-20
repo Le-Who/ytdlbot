@@ -9,7 +9,7 @@ class AsyncMockCache(dict):
     async def get(self, key, default=None):
         return super().get(key, default)
 
-    async def set(self, key, value):
+    async def set(self, key, value, **kwargs):
         self[key] = value
 
     async def delete(self, key):
@@ -30,7 +30,9 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
         state.info_cache = AsyncMockCache()
         state.link_cache = AsyncMockCache()
         state.cancel_cache = AsyncMockCache()
-        state.prefs_cache = AsyncMockCache()  # needed by user_prefs fast-path in on_message
+        state.prefs_cache = (
+            AsyncMockCache()
+        )  # needed by user_prefs fast-path in on_message
         state.inflight_parsing = {}
         state.limiter = MagicMock()
         state.limiter.allow_user = AsyncMock(return_value=True)
@@ -128,6 +130,29 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
         # user_data should have page_url set
         self.assertEqual(self.context.user_data["page_url"], url)
         self.assertEqual(self.context.user_data["title"], "Cached Video Title")
+
+    async def test_tiktok_api_failure_assigns_synthetic_cache_value(self):
+        """TikTok fallback must not read the local ``cached`` before assignment."""
+        self.update.message.text = "https://www.tiktok.com/@user/video/123"
+        status_msg = AsyncMock()
+        self.update.message.reply_text = AsyncMock(return_value=status_msg)
+
+        with (
+            patch.object(state, "media_pipeline", None),
+            patch.object(messages, "ENABLE_COBALT_TIKTOK", False),
+            patch.object(
+                messages.TikWMService,
+                "process",
+                new=AsyncMock(side_effect=RuntimeError("TikWM unavailable")),
+            ),
+            patch.object(messages, "classify_tiktok_content", return_value="video"),
+            patch.object(messages, "build_format_keyboard", return_value=MagicMock()),
+        ):
+            await messages.on_message(self.update, self.context)
+
+        self.assertEqual(self.context.user_data["page_url"], self.update.message.text)
+        self.assertEqual(self.context.user_data["title"], "TikTok Content")
+        self.assertTrue(status_msg.edit_text.called)
 
 
 if __name__ == "__main__":

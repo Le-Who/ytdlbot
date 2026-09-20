@@ -19,7 +19,11 @@ from app.services.downloader import MediaSender
 from app.services.tikwm import TikWMService
 from app.services.gallery_dl.service import GalleryDlService
 from app.services.pinterest import PinterestNativeService
-from app.services.converter import compress_video_to_size, find_thumbnail, split_video_stream_copy
+from app.services.converter import (
+    compress_video_to_size,
+    find_thumbnail,
+    split_video_stream_copy,
+)
 
 logger = logging.getLogger("app.services.orchestrator")
 
@@ -58,10 +62,12 @@ async def extract_video_meta(
             if info.get("height"):
                 meta["height"] = int(info["height"])
             meta["vcodec"] = info.get("vcodec")
-            
-            # Fast-path return: if we have duration, or if we have vcodec and dimensions 
+
+            # Fast-path return: if we have duration, or if we have vcodec and dimensions
             # (duration is optional for Telegram, and missing in slideshows/images), skip ffprobe.
-            if meta["duration"] or (meta["vcodec"] and meta["width"] and meta["height"]):
+            if meta["duration"] or (
+                meta["vcodec"] and meta["width"] and meta["height"]
+            ):
                 return meta
         except Exception:
             pass
@@ -112,7 +118,9 @@ async def extract_video_meta(
     return meta
 
 
-async def ensure_telegram_compatible(file_path: str, info_json_path: Optional[str] = None) -> str:
+async def ensure_telegram_compatible(
+    file_path: str, info_json_path: Optional[str] = None
+) -> str:
     """Re-encode video to H.264/AAC if its codec is not Telegram-compatible.
 
     TikTok CDN often serves HEVC (H.265) videos which Telegram clients
@@ -220,6 +228,7 @@ def _build_gif_reply_markup(token: str, is_gif: bool) -> Optional[object]:
 # OPT-3: Native Opus / M4A Audio Bypass
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def _is_native_audio_container(file_path: str) -> bool:
     """Return True if the file is already in a Telegram-compatible audio container.
 
@@ -272,6 +281,7 @@ async def _maybe_rename_webm_to_ogg(file_path: str) -> str:
 # OPT-4: Cobalt Direct URL Delivery
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 async def _cobalt_url_head_size(url: str) -> Optional[int]:
     """HTTP HEAD request to Cobalt URL to fetch Content-Length in < 300 ms.
 
@@ -294,6 +304,7 @@ async def _cobalt_url_head_size(url: str) -> Optional[int]:
 # Main Orchestrator
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 class DownloadOrchestrator:
     """Encapsulates the download business logic, leaving UI components thin."""
 
@@ -306,6 +317,7 @@ class DownloadOrchestrator:
         fmt_size: Optional[int],
         update_ui: Callable[[str, Optional[object]], Awaitable[None]],
         kb_error: object,
+        caller_scope: str = "callback",
     ) -> bool:
         """Process download with concurrency checks, sizes, and Telegram upload.
 
@@ -329,11 +341,46 @@ class DownloadOrchestrator:
         if not acquired:
             return False
 
-
         # Tracks extra files created during this pipeline that must be cleaned up.
         _cleanup_extras: list[str] = []
 
         try:
+            if state.media_pipeline is not None:
+                from app.services.media.models import DeliveryTarget
+                from app.services.media.pipeline import (
+                    MediaPipelineError,
+                    request_from_download_context,
+                )
+
+                request = request_from_download_context(
+                    payload,
+                    caller_scope=caller_scope,
+                    auth_scope="public",
+                    exact=True,
+                )
+                await update_ui(Texts.STARTING_DOWNLOAD, None)
+                try:
+                    receipt = await state.media_pipeline.deliver(
+                        request,
+                        DeliveryTarget(
+                            str(chat_id),
+                            caller_scope=request.caller_scope,
+                            auth_scope=request.auth_scope,
+                        ),
+                        caption="🎵" if request.kind.value == "audio" else "📹",
+                    )
+                except MediaPipelineError as error:
+                    await update_ui(str(error), kb_error)
+                    return False
+                if not receipt.success:
+                    error_text = next(
+                        (item.error for item in receipt.items if item.error),
+                        Texts.SEND_ERROR,
+                    )
+                    await update_ui(error_text, kb_error)
+                    return False
+                return True
+
             if not size_allowed(fmt_size, target="telegram"):
                 mb = (fmt_size or 0) / (1024 * 1024)
                 await update_ui(
@@ -343,7 +390,7 @@ class DownloadOrchestrator:
                 return False
 
             from app.bot.keyboards import build_cancel_keyboard
-            
+
             await update_ui(Texts.STARTING_DOWNLOAD, build_cancel_keyboard(token))
             try:
                 await bot.send_chat_action(
@@ -439,7 +486,9 @@ class DownloadOrchestrator:
                             last_threshold = current
                             filled = int(pct / 10)
                             bar = "■" * filled + "□" * (10 - filled)
-                            text = Texts.DOWNLOAD_PROGRESS.format(pct=f"{pct:.1f}", bar=bar, eta=eta)
+                            text = Texts.DOWNLOAD_PROGRESS.format(
+                                pct=f"{pct:.1f}", bar=bar, eta=eta
+                            )
                             await update_ui(text, build_cancel_keyboard(token))
 
                 file_path, error = await MediaSender.download_video(
@@ -485,7 +534,9 @@ class DownloadOrchestrator:
             # ── Re-encode pass: non-H.264 videos for Telegram compatibility ───
             # (TikTok CDN often serves HEVC which Telegram can't play)
             if isinstance(file_path, str) and not is_gif and not is_audio:
-                file_path = await ensure_telegram_compatible(file_path, info_json_path=payload.info_json_path)
+                file_path = await ensure_telegram_compatible(
+                    file_path, info_json_path=payload.info_json_path
+                )
 
             # ── OPT-2: Stream-Copy Splitting vs Compression ───────────────────
             # Before attempting CPU-heavy two-pass compression, try to split the video
@@ -514,7 +565,9 @@ class DownloadOrchestrator:
                             all_ok = True
                             for idx, part_path in enumerate(parts, 1):
                                 part_meta = await extract_video_meta(part_path)
-                                part_thumb = find_thumbnail(file_path)  # share original thumb
+                                part_thumb = find_thumbnail(
+                                    file_path
+                                )  # share original thumb
                                 caption = f"📹 Часть {idx}/{total}"
                                 # Load thumbnail into BytesIO for type-safe passing
                                 _part_thumb_bytes: io.BytesIO | None = None
@@ -539,7 +592,9 @@ class DownloadOrchestrator:
                                 _cleanup_extras.append(part_path)
                                 if not ok:
                                     all_ok = False
-                                    logger.warning("OPT-2: Part %d/%d send failed", idx, total)
+                                    logger.warning(
+                                        "OPT-2: Part %d/%d send failed", idx, total
+                                    )
 
                             safe_remove(file_path)
                             if not all_ok:
@@ -548,7 +603,9 @@ class DownloadOrchestrator:
                             return True
 
                         # Split not possible / yielded single part → fall through to compression
-                        logger.info("OPT-2: Split not viable, falling back to compression")
+                        logger.info(
+                            "OPT-2: Split not viable, falling back to compression"
+                        )
                         original_path = file_path
                         compressed_path = await compress_video_to_size(file_path)
                         if compressed_path is not None:

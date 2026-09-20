@@ -13,12 +13,17 @@ from app.core.user_prefs import get_prefs
 from app.core.models import DownloadContext
 from app.core.metrics import metrics as _m
 from app.bot.commands import cmd_mp3, _MP4_FORMAT as _fmt_pref, _fast_download
-from app.services.instagram import is_instagram_url, parse_instagram_url, InstagramService
+from app.services.instagram import (
+    is_instagram_url,
+    parse_instagram_url,
+    InstagramService,
+)
 from app.services.tikwm import TikWMService
 from app.services.cobalt import CobaltService
 from app.services.ytdlp.parsers import classify_tiktok_content
 from app.services.ytdlp.service import FormatItem
 from app.services.ytdlp.models import ExtractionResult
+from app.services.media.pipeline import encode_callback_data
 from app.core.utils import extract_url_from_update
 from app.bot.keyboards import build_format_keyboard, build_slideshow_keyboard
 from app.core.texts import Texts
@@ -30,6 +35,74 @@ from app.services.ytdlp.exceptions import (
 )
 
 logger = logging.getLogger("app.bot.messages")
+
+
+async def _deliver_private_pipeline(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url: str,
+    section: str | None,
+) -> None:
+    """Thin private-message adapter: one request and one editable status message."""
+    user = update.effective_user
+    chat = update.effective_chat
+    msg = update.message
+    pipeline = state.media_pipeline
+    assert (
+        user is not None
+        and chat is not None
+        and msg is not None
+        and pipeline is not None
+    )
+
+    prefs = await get_prefs(user.id)
+    preferred_format = prefs.get("default_format")
+    preferred_quality = prefs.get("default_quality")
+    if preferred_format == "audio":
+        kind = "audio"
+        audio_format = "mp3"
+        exact = True
+    elif preferred_format == "video" or preferred_quality is not None:
+        kind = "video"
+        audio_format = None
+        exact = True
+    else:
+        kind = "auto"
+        audio_format = None
+        exact = False
+
+    from app.services.media.models import DeliveryTarget
+    from app.services.media.pipeline import MediaPipelineError, build_media_request
+
+    status = await msg.reply_text(Texts.SEARCHING)
+    request = build_media_request(
+        url,
+        kind=kind,
+        quality=preferred_quality,
+        audio_format=audio_format,
+        clip=section,
+        caller_scope="private",
+        exact=exact,
+    )
+    try:
+        receipt = await pipeline.deliver(
+            request,
+            DeliveryTarget(str(chat.id), caller_scope="private"),
+            caption="🎵" if kind == "audio" else "📹",
+        )
+    except MediaPipelineError as error:
+        await status.edit_text(str(error))
+        return
+    if receipt.success:
+        try:
+            await status.delete()
+        except Exception:
+            pass
+        return
+    error_text = next(
+        (item.error for item in receipt.items if item.error), Texts.SEND_ERROR
+    )
+    await status.edit_text(error_text)
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -58,8 +131,13 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     # ── Instagram Early Intercept ────────────────────────────────────────
     url_type, ig_target, ig_item_id = parse_instagram_url(text)
+    if state.media_pipeline is not None and url_type in {"unknown", "post"}:
+        await _deliver_private_pipeline(update, context, text, section)
+        return
     if url_type != "unknown":
-        await _handle_instagram(update, context, text, parse_token, section, url_type, ig_target, ig_item_id)
+        await _handle_instagram(
+            update, context, text, parse_token, section, url_type, ig_target, ig_item_id
+        )
         return
     # ── End Instagram Intercept ──────────────────────────────────────────
 
@@ -94,10 +172,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             )
         else:
             target_fmt = _fmt_pref
-        
-        await _fast_download(
-            update, context, format_id=target_fmt, is_audio=False
-        )
+
+        await _fast_download(update, context, format_id=target_fmt, is_audio=False)
         return
     # ── End User Preferences Fast-Path ───────────────────────────────────
 
@@ -105,7 +181,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         [
             [
                 InlineKeyboardButton(
-                    "❌ Отмена", callback_data=f"cancel_parse|{parse_token}"
+                    "❌ Отмена",
+                    callback_data=encode_callback_data("cancel_parse", parse_token),
                 )
             ]
         ]
@@ -169,23 +246,18 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             # Bypass yt-dlp completely for TikTok to prevent proxy blocks.
             # We assume it's just a fallback video or slideshow for GalleryDL.
             _fallback_is_slideshow = classify_tiktok_content(text) == "slideshow"
+            fallback_format = FormatItem(
+                format_id="gallerydl_fallback",
+                ext="mp4",
+                height=None,
+                filesize=None,
+                is_tiktok=True,
+                format_note="gallerydl_fallback",
+            )
             result = ExtractionResult(
                 title="TikTok Content",
-                formats=[
-                    FormatItem(
-                        format_id="gallerydl_fallback",
-                        ext="mp4",
-                        height=None,
-                        filesize=None,
-                        is_tiktok=True,
-                        format_note="gallerydl_fallback",
-                    )
-                ],
-                special_format=(
-                    "gallerydl_fallback"  # type: ignore
-                    if not _fallback_is_slideshow
-                    else None
-                ),
+                formats=[],
+                special_format=fallback_format if not _fallback_is_slideshow else None,
                 duration_str="—",
                 is_slideshow=_fallback_is_slideshow,
                 info_json_path=None,
@@ -201,6 +273,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
             # Cache the synthetic result briefly
             await state.info_cache.set(text, result, ttl=300)
+            cached = result
 
         else:
             cached = await state.info_cache.get(text)
@@ -250,6 +323,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                     async with asyncio.timeout(300.0):
                         async with state.parsing_sem:
                             import time as _time
+
                             _ext_start = _time.monotonic()
                             result = await state.ytdlp.list_formats(text)
                             title = result.title
@@ -341,10 +415,16 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                 [
                     [
                         InlineKeyboardButton(
-                            "📸 Альбом", callback_data=f"apislide|{parse_token}|photo"
+                            "📸 Альбом",
+                            callback_data=encode_callback_data(
+                                "apislide", parse_token, "photo"
+                            ),
                         ),
                         InlineKeyboardButton(
-                            "🎬 Видео", callback_data=f"apislide|{parse_token}|video"
+                            "🎬 Видео",
+                            callback_data=encode_callback_data(
+                                "apislide", parse_token, "video"
+                            ),
                         ),
                     ]
                 ]
@@ -392,6 +472,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         # Smart BVC2/HEVC Fallback Check
         if file_path and (not file_path.startswith("http")):
             from app.services.orchestrator import extract_video_meta, TG_SAFE_CODECS
+
             meta = await extract_video_meta(file_path)
             vcodec = meta.get("vcodec")
             pix_fmt = meta.get("pix_fmt")
@@ -404,17 +485,23 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             if not (is_safe_codec and is_safe_pix_fmt and is_safe_tag):
                 logger.warning(
                     "TikTok fast-path returned incompatible format (codec:%s, pix_fmt:%s, tag:%s). Falling back to yt-dlp H.264 stream...",
-                    vcodec, pix_fmt, codec_tag
+                    vcodec,
+                    pix_fmt,
+                    codec_tag,
                 )
                 from app.core.utils import safe_remove
+
                 safe_remove(file_path)
                 file_path = None
                 err = "Incompatible video codec (BVC2/HEVC)"
 
         if not file_path:
-            logger.warning("Fast-path TikTok download failed (%s). Falling back to yt-dlp...", err)
+            logger.warning(
+                "Fast-path TikTok download failed (%s). Falling back to yt-dlp...", err
+            )
             await status_msg.edit_text("⏳ Загрузка через резервный канал...")
             from app.services.downloader import MediaSender
+
             file_path, err = await MediaSender.download_video(
                 page_url=text,
                 format_id="bestvideo[vcodec^=avc]+bestaudio/best",
@@ -428,6 +515,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
         if file_path and not file_path.startswith("http"):
             from app.services.orchestrator import ensure_telegram_compatible
+
             file_path = await ensure_telegram_compatible(file_path)
 
         from app.bot.keyboards import build_video_keyboard
@@ -634,7 +722,9 @@ async def _handle_instagram(
             row_buf.append(
                 InlineKeyboardButton(
                     str(i + 1),
-                    callback_data=f"ig_hl_dl|{hl_cache_key}|{item.mediaid}",
+                    callback_data=encode_callback_data(
+                        "ig_hl_dl", hl_cache_key, item.mediaid
+                    ),
                 )
             )
             if len(row_buf) >= 5:
@@ -646,7 +736,8 @@ async def _handle_instagram(
         btn_rows.append(
             [
                 InlineKeyboardButton(
-                    "📥 Скачать все", callback_data=f"ig_hl_dl_all|{hl_cache_key}"
+                    "📥 Скачать все",
+                    callback_data=encode_callback_data("ig_hl_dl_all", hl_cache_key),
                 )
             ]
         )
@@ -716,14 +807,14 @@ async def _handle_instagram(
             buttons.append(
                 InlineKeyboardButton(
                     f"📸 Истории ({len(profile_media.stories)})",
-                    callback_data=f"ig_stories|{parse_token}",
+                    callback_data=encode_callback_data("ig_stories", parse_token),
                 )
             )
         if profile_media.highlights:
             buttons.append(
                 InlineKeyboardButton(
                     f"📁 Хайлайты ({len(profile_media.highlights)})",
-                    callback_data=f"ig_highlights|{parse_token}",
+                    callback_data=encode_callback_data("ig_highlights", parse_token),
                 )
             )
 
@@ -736,7 +827,7 @@ async def _handle_instagram(
                 [
                     InlineKeyboardButton(
                         "📥 Скачать все истории",
-                        callback_data=f"ig_dl_all|{parse_token}",
+                        callback_data=encode_callback_data("ig_dl_all", parse_token),
                     )
                 ]
             )
@@ -795,6 +886,7 @@ async def _handle_twitter(
             await status_msg.edit_text("⏳ Загрузка видео с X...")
             # OPT-4: Direct URL delivery for small files (< 19.5 MB)
             from app.services.orchestrator import _cobalt_url_head_size
+
             _x_size = await _cobalt_url_head_size(res.url)
             _tg_url_limit = int(19.5 * 1024 * 1024)
             if _x_size is not None and _x_size <= _tg_url_limit:

@@ -17,6 +17,19 @@ from .models import (
     canonicalize_media_url,
     request_cache_key,
 )
+from .pipeline import (
+    ArtifactValidationError,
+    CallbackDataError,
+    MediaPipeline,
+    MediaPipelineError,
+    MediaResolutionError,
+    build_default_pipeline,
+    build_media_request,
+    decode_callback_data,
+    decode_callback_payload,
+    encode_callback_data,
+    request_from_download_context,
+)
 from .transport import (
     DECIMAL_MEDIA_LIMIT,
     MaterializedItem,
@@ -33,6 +46,8 @@ from .validation import (
 
 __all__ = [
     "DECIMAL_MEDIA_LIMIT",
+    "ArtifactValidationError",
+    "CallbackDataError",
     "CandidateRejectionReason",
     "CandidateValidationResult",
     "ClipInterval",
@@ -45,6 +60,9 @@ __all__ = [
     "MediaCandidate",
     "MediaItem",
     "MediaKind",
+    "MediaPipeline",
+    "MediaPipelineError",
+    "MediaResolutionError",
     "MediaRequest",
     "MediaSizeExceeded",
     "MediaTransport",
@@ -55,6 +73,12 @@ __all__ = [
     "UnsafeMediaURL",
     "UnsupportedMediaUrlError",
     "canonicalize_media_url",
+    "build_default_pipeline",
+    "build_media_request",
+    "decode_callback_data",
+    "decode_callback_payload",
+    "encode_callback_data",
+    "request_from_download_context",
     "request_cache_key",
     "validate_candidate",
 ]

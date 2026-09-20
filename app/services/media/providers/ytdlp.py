@@ -55,6 +55,7 @@ class YtDlpProvider:
             MediaKind.AUTO,
             MediaKind.VIDEO,
             MediaKind.AUDIO,
+            MediaKind.ANIMATION,
         ) and urlsplit(request.canonical_url).scheme in ("http", "https")
 
     async def resolve(self, request: MediaRequest) -> list[MediaCandidate]:
@@ -116,9 +117,12 @@ class YtDlpProvider:
                 and min(width or 0, height or 0) != request.quality.max_edge
             ):
                 continue
-            if _codec(video, "acodec") and (
-                not request.audio_language
-                or video.get("language") == request.audio_language
+            if request.kind is MediaKind.ANIMATION or (
+                _codec(video, "acodec")
+                and (
+                    not request.audio_language
+                    or video.get("language") == request.audio_language
+                )
             ):
                 candidates.append(self._candidate(request, info, video, None))
             elif not _codec(video, "acodec"):
@@ -144,6 +148,7 @@ class YtDlpProvider:
         sound = audio if audio is not None else primary
         language = sound.get("language")
         is_audio = request.kind is MediaKind.AUDIO
+        is_animation = request.kind is MediaKind.ANIMATION
         mp3 = is_audio and request.audio_format in (None, "mp3")
         size = (
             sum(source.filesize_bytes or 0 for source in sources)
@@ -155,9 +160,13 @@ class YtDlpProvider:
             "mp3"
             if mp3
             else (
-                "mkv"
-                if audio is not None and not _mp4_compatible(primary, audio)
-                else primary.get("ext")
+                "mp4"
+                if is_animation
+                else (
+                    "mkv"
+                    if audio is not None and not _mp4_compatible(primary, audio)
+                    else primary.get("ext")
+                )
             )
         )
         return MediaCandidate(
@@ -166,7 +175,7 @@ class YtDlpProvider:
             width=None if is_audio else _integer(primary.get("width")),
             height=None if is_audio else _integer(primary.get("height")),
             has_video=not is_audio,
-            has_audio=True,
+            has_audio=not is_animation,
             audio_formats=("mp3",)
             if mp3
             else (str(sound.get("ext") or sound.get("acodec")),),
@@ -176,12 +185,24 @@ class YtDlpProvider:
             duration_seconds=_number(info.get("duration")),
             sources=sources,
             complete=True,
-            mux_mode="extract-mp3" if mp3 else ("copy" if audio is not None else None),
+            mux_mode=(
+                "extract-mp3"
+                if mp3
+                else (
+                    "mute-mp4"
+                    if is_animation
+                    else ("copy" if audio is not None else None)
+                )
+            ),
             refresh=RefreshDescriptor(self.name, request.media_id, variant),
             provider=self.name,
             backend_family=self.backend_family,
             media_id=request.media_id,
-            kind=MediaKind.AUDIO if is_audio else MediaKind.VIDEO,
+            kind=(
+                MediaKind.AUDIO
+                if is_audio
+                else (MediaKind.ANIMATION if is_animation else MediaKind.VIDEO)
+            ),
             auth_scope=request.auth_scope,
         )
 

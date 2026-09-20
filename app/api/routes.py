@@ -5,7 +5,7 @@ import re
 from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse, PlainTextResponse
+from fastapi.responses import PlainTextResponse, StreamingResponse
 from telegram import Update
 
 from app.constants import AUDIO_FORMAT_ID, CHUNK_SIZE, GIF_FORMAT_ID
@@ -17,6 +17,7 @@ from app.core.process import run_subprocess
 
 logger = logging.getLogger("app.api")
 router = APIRouter()
+_HTTP_LEASE_RENEW_SECONDS = 5 * 60
 
 
 @router.get("/health")
@@ -68,6 +69,64 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
         media_type = "video/mp4"
 
     max_bytes = MAX_DL_MB * 1024 * 1024
+
+    if state.media_pipeline is not None:
+        from app.services.media.pipeline import (
+            MediaPipelineError,
+            request_from_download_context,
+        )
+
+        media_request = request_from_download_context(payload, caller_scope="api")
+        lease = state.media_pipeline.open_materialized(media_request)
+        try:
+            materialized = await lease.__aenter__()
+        except MediaPipelineError as error:
+            raise HTTPException(502, str(error)) from error
+        if len(materialized.paths) != 1:
+            await lease.__aexit__(None, None, None)
+            raise HTTPException(409, "HTTP download requires one media item")
+        if materialized.size_bytes > max_bytes:
+            await _exit_materialized(lease)
+            raise HTTPException(413, "Media exceeds HTTP download size limit")
+        media_path = materialized.paths[0]
+        suffix = media_path.suffix.lower()
+        media_type = {
+            ".gif": "image/gif",
+            ".m4a": "audio/mp4",
+            ".mp3": "audio/mpeg",
+            ".mp4": "video/mp4",
+            ".webm": "video/webm",
+        }.get(suffix, "application/octet-stream")
+        file_ext = suffix.removeprefix(".") or "bin"
+
+        async def stream_materialized():
+            bytes_sent = 0
+            renewal = asyncio.create_task(_renew_materialized_lease(materialized))
+            try:
+                with media_path.open("rb") as source:
+                    while chunk := await asyncio.to_thread(source.read, CHUNK_SIZE):
+                        bytes_sent += len(chunk)
+                        if bytes_sent > max_bytes:
+                            logger.warning(
+                                "Stream exceeded size limit",
+                                extra={"limit_mb": MAX_DL_MB},
+                            )
+                            return
+                        yield chunk
+            finally:
+                renewal.cancel()
+                await asyncio.gather(renewal, return_exceptions=True)
+                await _exit_materialized(lease)
+
+        return StreamingResponse(
+            stream_materialized(),
+            media_type=media_type,
+            headers={
+                "Content-Disposition": (
+                    f"attachment; filename*=UTF-8''{encoded_filename}.{file_ext}"
+                )
+            },
+        )
 
     async def stream_video_subprocess():
         bytes_sent = 0
@@ -161,6 +220,29 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
             "Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}.{file_ext}"
         },
     )
+
+
+async def _exit_materialized(lease) -> None:  # type: ignore[no-untyped-def]
+    """Await lease cleanup even when the streaming response is cancelled."""
+    cleanup = asyncio.create_task(lease.__aexit__(None, None, None))
+    cancellation: asyncio.CancelledError | None = None
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError as error:
+            cancellation = error
+    if cancellation is not None:
+        if not cleanup.cancelled():
+            cleanup.exception()
+        raise cancellation
+    await cleanup
+
+
+async def _renew_materialized_lease(materialized) -> None:  # type: ignore[no-untyped-def]
+    """Keep local bytes protected while client backpressure suspends streaming."""
+    while True:
+        materialized.renew_lease()
+        await asyncio.sleep(_HTTP_LEASE_RENEW_SECONDS)
 
 
 @router.post("/webhook")

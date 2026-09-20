@@ -26,8 +26,87 @@ from app.core import state
 from app.core.texts import Texts
 from app.core.models import DownloadContext
 from app.services.sender import TelegramSender
+from app.services.media.pipeline import (
+    CallbackDataError,
+    decode_callback_payload,
+    encode_callback_data,
+)
+from app.services.media.models import (
+    DeliveryTarget,
+    MediaCandidate,
+    MediaItem,
+    MediaKind,
+    MediaRequest,
+    MediaSource,
+)
 
 logger = logging.getLogger("app.bot.ig_callbacks")
+
+
+async def _deliver_authorized_stories(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    stories: list[object],
+    *,
+    auth_scope: str,
+) -> bool:
+    """Deliver selected authorized CDN items through the common pipeline."""
+    pipeline = state.media_pipeline
+    if pipeline is None or not stories:
+        return False
+    items: list[MediaItem] = []
+    sources: list[MediaSource] = []
+    for index, story in enumerate(stories):
+        is_video = bool(getattr(story, "is_video"))
+        url = str(getattr(story, "url"))
+        media_id = str(getattr(story, "mediaid"))
+        kind = MediaKind.VIDEO if is_video else MediaKind.PHOTO
+        container = "mp4" if is_video else "jpg"
+        items.append(MediaItem(media_id, kind, url, container=container))
+        sources.append(MediaSource(str(index), url, container=container))
+    kind = items[0].kind if len(items) == 1 else MediaKind.ALBUM
+    stable_media_id = (
+        items[0].media_id
+        if len(items) == 1
+        else "album:" + ":".join(item.media_id for item in items)
+    )
+    request = MediaRequest(
+        canonical_url=f"https://www.instagram.com/stories/{stable_media_id}/",
+        platform="instagram",
+        media_id=stable_media_id,
+        kind=kind,
+        caller_scope="ig_callback",
+        auth_scope=f"instagram:{auth_scope}",
+        exact=True,
+    )
+    candidate = MediaCandidate(
+        candidate_id=f"authorized:{request.media_id}",
+        url=items[0].url,
+        has_video=any(item.kind is MediaKind.VIDEO for item in items),
+        has_audio=any(item.kind is MediaKind.VIDEO for item in items),
+        sources=tuple(sources),
+        provider="authorized-instagram",
+        backend_family="instagram-session",
+        media_id=request.media_id,
+        kind=kind,
+        items=tuple(items),
+        auth_scope=request.auth_scope,
+    )
+    try:
+        receipt = await pipeline.deliver_candidate(
+            request,
+            DeliveryTarget(
+                str(chat_id),
+                caller_scope=request.caller_scope,
+                auth_scope=request.auth_scope,
+            ),
+            candidate,
+            caption=f"📷 {getattr(stories[0], 'label', '')}",
+        )
+    except Exception as error:
+        logger.warning("Authorized Instagram delivery failed: %s", error)
+        return False
+    return receipt.success
 
 
 async def on_ig_stories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -37,8 +116,11 @@ async def on_ig_stories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await q.answer()
 
     try:
-        _, token = q.data.split("|", 1)
-    except ValueError:
+        _, parts = decode_callback_payload(
+            q.data, allowed_actions=("ig_stories",), max_parts=1
+        )
+        (token,) = parts
+    except (CallbackDataError, ValueError):
         return
 
     payload = await state.link_cache.get(token)
@@ -84,7 +166,7 @@ async def on_ig_stories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         row.append(
             InlineKeyboardButton(
                 str(i + 1),
-                callback_data=f"ig_dl|{token}|{mediaid}",
+                callback_data=encode_callback_data("ig_dl", token, mediaid),
             )
         )
         if len(row) >= 5:
@@ -95,10 +177,19 @@ async def on_ig_stories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Add "Download All" and "Back" buttons
     btn_rows.append(
-        [InlineKeyboardButton("📥 Скачать все", callback_data=f"ig_dl_all|{token}")]
+        [
+            InlineKeyboardButton(
+                "📥 Скачать все",
+                callback_data=encode_callback_data("ig_dl_all", token),
+            )
+        ]
     )
     btn_rows.append(
-        [InlineKeyboardButton("🔙 Назад", callback_data=f"ig_menu|{token}")]
+        [
+            InlineKeyboardButton(
+                "🔙 Назад", callback_data=encode_callback_data("ig_menu", token)
+            )
+        ]
     )
 
     try:
@@ -118,8 +209,11 @@ async def on_ig_highlights(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await q.answer()
 
     try:
-        _, token = q.data.split("|", 1)
-    except ValueError:
+        _, parts = decode_callback_payload(
+            q.data, allowed_actions=("ig_highlights",), max_parts=1
+        )
+        (token,) = parts
+    except (CallbackDataError, ValueError):
         return
 
     payload = await state.link_cache.get(token)
@@ -146,13 +240,17 @@ async def on_ig_highlights(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             [
                 InlineKeyboardButton(
                     f"📁 {title} ({count})",
-                    callback_data=f"ig_hl_items|{token}|{hl_id}",
+                    callback_data=encode_callback_data("ig_hl_items", token, hl_id),
                 )
             ]
         )
 
     btn_rows.append(
-        [InlineKeyboardButton("🔙 Назад", callback_data=f"ig_menu|{token}")]
+        [
+            InlineKeyboardButton(
+                "🔙 Назад", callback_data=encode_callback_data("ig_menu", token)
+            )
+        ]
     )
 
     await q.edit_message_text(
@@ -171,8 +269,11 @@ async def on_ig_highlight_items(
     await q.answer()
 
     try:
-        _, token, hl_id = q.data.split("|", 2)
-    except ValueError:
+        _, parts = decode_callback_payload(
+            q.data, allowed_actions=("ig_hl_items",), max_parts=2
+        )
+        token, hl_id = parts
+    except (CallbackDataError, ValueError):
         return
 
     payload = await state.link_cache.get(token)
@@ -234,7 +335,9 @@ async def on_ig_highlight_items(
         row_buf.append(
             InlineKeyboardButton(
                 str(i + 1),
-                callback_data=f"ig_hl_dl|{hl_cache_key}|{item.mediaid}",
+                callback_data=encode_callback_data(
+                    "ig_hl_dl", hl_cache_key, item.mediaid
+                ),
             )
         )
         if len(row_buf) >= 5:
@@ -247,7 +350,7 @@ async def on_ig_highlight_items(
         [
             InlineKeyboardButton(
                 "📥 Скачать все",
-                callback_data=f"ig_hl_dl_all|{hl_cache_key}",
+                callback_data=encode_callback_data("ig_hl_dl_all", hl_cache_key),
             )
         ]
     )
@@ -255,7 +358,7 @@ async def on_ig_highlight_items(
         [
             InlineKeyboardButton(
                 "🔙 К хайлайтам",
-                callback_data=f"ig_highlights|{token}",
+                callback_data=encode_callback_data("ig_highlights", token),
             )
         ]
     )
@@ -274,8 +377,11 @@ async def on_ig_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await q.answer(Texts.IG_DOWNLOADING.format(type=""), show_alert=False)
 
     try:
-        _, token, mediaid = q.data.split("|", 2)
-    except ValueError:
+        _, parts = decode_callback_payload(
+            q.data, allowed_actions=("ig_dl",), max_parts=2
+        )
+        token, mediaid = parts
+    except (CallbackDataError, ValueError):
         return
 
     payload = await state.link_cache.get(token)
@@ -310,6 +416,17 @@ async def on_ig_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         duration=story_data.get("duration"),
         typename=story_data.get("typename", ""),
     )
+
+    if state.media_pipeline is not None:
+        success = await _deliver_authorized_stories(
+            context,
+            q.message.chat_id,
+            [story],
+            auth_scope=token,
+        )
+        if not success:
+            await q.message.reply_text(Texts.IG_DOWNLOAD_ERROR)
+        return
 
     from app.services.instagram import InstagramService
 
@@ -355,8 +472,11 @@ async def on_ig_download_all(
     await q.answer("📥 Скачиваю все...")
 
     try:
-        _, token = q.data.split("|", 1)
-    except ValueError:
+        _, parts = decode_callback_payload(
+            q.data, allowed_actions=("ig_dl_all",), max_parts=1
+        )
+        (token,) = parts
+    except (CallbackDataError, ValueError):
         return
 
     payload = await state.link_cache.get(token)
@@ -388,6 +508,20 @@ async def on_ig_download_all(
         )
         for s in ig_data["stories"]
     ]
+
+    if state.media_pipeline is not None:
+        success = await _deliver_authorized_stories(
+            context,
+            q.message.chat_id,
+            list(stories),
+            auth_scope=token,
+        )
+        await q.edit_message_text(
+            f"✅ Скачано {len(stories)}/{len(stories)} историй."
+            if success
+            else Texts.IG_DOWNLOAD_ERROR
+        )
+        return
 
     sem = asyncio.Semaphore(3)
     results: list[tuple[str | None, IGStoryItem]] = []
@@ -441,8 +575,11 @@ async def on_ig_hl_download(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await q.answer(Texts.IG_DOWNLOADING.format(type=""), show_alert=False)
 
     try:
-        _, cache_key, mediaid = q.data.split("|", 2)
-    except ValueError:
+        _, parts = decode_callback_payload(
+            q.data, allowed_actions=("ig_hl_dl",), max_parts=2
+        )
+        cache_key, mediaid = parts
+    except (CallbackDataError, ValueError):
         return
 
     items_data = await state.link_cache.get(cache_key)
@@ -466,6 +603,17 @@ async def on_ig_hl_download(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         duration=item_data.get("duration"),
         typename=item_data.get("typename", ""),
     )
+
+    if state.media_pipeline is not None:
+        success = await _deliver_authorized_stories(
+            context,
+            q.message.chat_id,
+            [story],
+            auth_scope=cache_key,
+        )
+        if not success:
+            await q.message.reply_text(Texts.IG_DOWNLOAD_ERROR)
+        return
 
     file_path, error = await InstagramService.download_story_item(story)
     if error or not file_path:
@@ -499,8 +647,11 @@ async def on_ig_hl_download_all(
     await q.answer("📥 Скачиваю все...")
 
     try:
-        _, cache_key = q.data.split("|", 1)
-    except ValueError:
+        _, parts = decode_callback_payload(
+            q.data, allowed_actions=("ig_hl_dl_all",), max_parts=1
+        )
+        (cache_key,) = parts
+    except (CallbackDataError, ValueError):
         return
 
     items_data = await state.link_cache.get(cache_key)
@@ -524,6 +675,20 @@ async def on_ig_hl_download_all(
         )
         for d in items_data
     ]
+
+    if state.media_pipeline is not None:
+        success = await _deliver_authorized_stories(
+            context,
+            q.message.chat_id,
+            list(items),
+            auth_scope=cache_key,
+        )
+        await q.edit_message_text(
+            f"✅ Скачано {len(items)}/{len(items)} элементов хайлайта."
+            if success
+            else Texts.IG_DOWNLOAD_ERROR
+        )
+        return
 
     sem = asyncio.Semaphore(3)
     sent = 0
@@ -560,8 +725,11 @@ async def on_ig_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     await q.answer()
 
     try:
-        _, token = q.data.split("|", 1)
-    except ValueError:
+        _, parts = decode_callback_payload(
+            q.data, allowed_actions=("ig_menu",), max_parts=1
+        )
+        (token,) = parts
+    except (CallbackDataError, ValueError):
         return
 
     payload = await state.link_cache.get(token)
@@ -585,14 +753,14 @@ async def on_ig_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         buttons.append(
             InlineKeyboardButton(
                 f"📸 Истории ({len(stories)})",
-                callback_data=f"ig_stories|{token}",
+                callback_data=encode_callback_data("ig_stories", token),
             )
         )
     if highlights:
         buttons.append(
             InlineKeyboardButton(
                 f"📁 Хайлайты ({len(highlights)})",
-                callback_data=f"ig_highlights|{token}",
+                callback_data=encode_callback_data("ig_highlights", token),
             )
         )
 
@@ -605,7 +773,7 @@ async def on_ig_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             [
                 InlineKeyboardButton(
                     "📥 Скачать все истории",
-                    callback_data=f"ig_dl_all|{token}",
+                    callback_data=encode_callback_data("ig_dl_all", token),
                 )
             ]
         )

@@ -569,12 +569,18 @@ class MediaTransport:
             return tuple(inputs)
         if candidate.items and len(inputs) > 1:
             raise DownloadFailed("album transforms require per-item plans")
-        if mode not in {None, "copy", "extract-mp3"}:
+        if mode not in {None, "copy", "extract-mp3", "mute-mp4"}:
             raise DownloadFailed("unsupported media transform plan")
         if mode == "extract-mp3" and len(inputs) != 1:
             raise DownloadFailed("MP3 extraction requires one source")
 
-        extension = ".mp3" if mode == "extract-mp3" else _candidate_extension(candidate)
+        extension = (
+            ".mp3"
+            if mode == "extract-mp3"
+            else ".mp4"
+            if mode == "mute-mp4"
+            else _candidate_extension(candidate)
+        )
         final_path = self.output_dir / f"media_{uuid.uuid4().hex}{extension}"
         partial_path = final_path.with_suffix(f"{final_path.suffix}.part")
         # During a transform both inputs and the final artifact coexist.
@@ -638,9 +644,15 @@ class MediaTransport:
         command = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error", "-y"]
         for path in inputs:
             command.extend(("-i", str(path)))
-        command.extend(_clip_arguments(request))
+        command.extend(
+            _animation_clip_arguments(request)
+            if mode == "mute-mp4"
+            else _clip_arguments(request)
+        )
         if mode == "extract-mp3":
             command.extend(("-vn", "-c:a", "libmp3lame", "-f", "mp3"))
+        elif mode == "mute-mp4":
+            command.extend(("-map", "0:v:0", "-an", "-c:v", "copy", "-f", "mp4"))
         else:
             if len(inputs) == 2:
                 command.extend(("-map", "0:v:0", "-map", "1:a:0"))
@@ -1117,6 +1129,22 @@ def _clip_arguments(request: MediaRequest) -> list[str]:
         if duration <= 0:
             raise DownloadFailed("clip interval produced no media")
         arguments.extend(("-t", _format_seconds(duration)))
+    return arguments
+
+
+def _animation_clip_arguments(request: MediaRequest) -> list[str]:
+    """Telegram animations are silent MP4 files capped at sixty seconds."""
+    start = request.clip.start_seconds
+    end = request.clip.end_seconds
+    arguments: list[str] = []
+    if start is not None and start > 0:
+        arguments.extend(("-ss", _format_seconds(start)))
+    duration = 60.0
+    if end is not None:
+        duration = min(duration, end - (start or 0))
+    if duration <= 0:
+        raise DownloadFailed("clip interval produced no media")
+    arguments.extend(("-t", _format_seconds(duration)))
     return arguments
 
 

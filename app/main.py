@@ -108,7 +108,6 @@ async def _global_error_handler(update, context):
         logger.warning("Failed to send error report to admin: %s", notify_err)
 
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger.info("Starting up...")
@@ -164,28 +163,39 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
     )
 
-    bot_app.add_handler(CallbackQueryHandler(callbacks.on_back, pattern=r"^back$"))
-    bot_app.add_handler(CallbackQueryHandler(callbacks.on_pick, pattern=r"^pick\|"))
-    bot_app.add_handler(CallbackQueryHandler(callbacks.on_cancel, pattern=r"^cancel\|"))
     bot_app.add_handler(
-        CallbackQueryHandler(callbacks.on_cancel, pattern=r"^cancel_parse\|")
-    )
-    bot_app.add_handler(CallbackQueryHandler(callbacks.on_send, pattern=r"^send\|"))
-    bot_app.add_handler(
-        CallbackQueryHandler(callbacks.on_convert_to_gif, pattern=r"^gif\|")
+        CallbackQueryHandler(callbacks.on_back, pattern=r"^(?:m2\|)?back$")
     )
     bot_app.add_handler(
-        CallbackQueryHandler(callbacks.on_save_as_gif_file, pattern=r"^giffile\|")
+        CallbackQueryHandler(callbacks.on_pick, pattern=r"^(?:m2\|)?pick\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(callbacks.on_cancel, pattern=r"^(?:m2\|)?cancel\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(callbacks.on_cancel, pattern=r"^(?:m2\|)?cancel_parse\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(callbacks.on_send, pattern=r"^(?:m2\|)?send\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(callbacks.on_convert_to_gif, pattern=r"^(?:m2\|)?gif\|")
     )
     bot_app.add_handler(
         CallbackQueryHandler(
-            callbacks.on_slideshow, pattern=r"^(slideshow|cbslide|apislide)\|"
+            callbacks.on_save_as_gif_file, pattern=r"^(?:m2\|)?giffile\|"
+        )
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(
+            callbacks.on_slideshow,
+            pattern=r"^(?:m2\|)?(?:slideshow|cbslide|apislide)\|",
         )
     )
     bot_app.add_handler(
         CallbackQueryHandler(
             group_logic.on_group_slideshow,
-            pattern=r"^(grpslide|cbgrpslide|apigrpslide)\|",
+            pattern=r"^(?:m2\|)?(?:grpslide|cbgrpslide|apigrpslide)\|",
         )
     )
 
@@ -193,37 +203,53 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     from app.bot import ig_callbacks
 
     bot_app.add_handler(
-        CallbackQueryHandler(ig_callbacks.on_ig_stories, pattern=r"^ig_stories\|")
-    )
-    bot_app.add_handler(
-        CallbackQueryHandler(ig_callbacks.on_ig_highlights, pattern=r"^ig_highlights\|")
-    )
-    bot_app.add_handler(
         CallbackQueryHandler(
-            ig_callbacks.on_ig_highlight_items, pattern=r"^ig_hl_items\|"
+            ig_callbacks.on_ig_stories, pattern=r"^(?:m2\|)?ig_stories\|"
         )
     )
     bot_app.add_handler(
-        CallbackQueryHandler(ig_callbacks.on_ig_download, pattern=r"^ig_dl\|")
-    )
-    bot_app.add_handler(
-        CallbackQueryHandler(ig_callbacks.on_ig_download_all, pattern=r"^ig_dl_all\|")
-    )
-    bot_app.add_handler(
-        CallbackQueryHandler(ig_callbacks.on_ig_hl_download, pattern=r"^ig_hl_dl\|")
-    )
-    bot_app.add_handler(
         CallbackQueryHandler(
-            ig_callbacks.on_ig_hl_download_all, pattern=r"^ig_hl_dl_all\|"
+            ig_callbacks.on_ig_highlights,
+            pattern=r"^(?:m2\|)?ig_highlights\|",
         )
     )
     bot_app.add_handler(
-        CallbackQueryHandler(ig_callbacks.on_ig_menu, pattern=r"^ig_menu\|")
+        CallbackQueryHandler(
+            ig_callbacks.on_ig_highlight_items,
+            pattern=r"^(?:m2\|)?ig_hl_items\|",
+        )
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(ig_callbacks.on_ig_download, pattern=r"^(?:m2\|)?ig_dl\|")
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(
+            ig_callbacks.on_ig_download_all,
+            pattern=r"^(?:m2\|)?ig_dl_all\|",
+        )
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(
+            ig_callbacks.on_ig_hl_download,
+            pattern=r"^(?:m2\|)?ig_hl_dl\|",
+        )
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(
+            ig_callbacks.on_ig_hl_download_all,
+            pattern=r"^(?:m2\|)?ig_hl_dl_all\|",
+        )
+    )
+    bot_app.add_handler(
+        CallbackQueryHandler(ig_callbacks.on_ig_menu, pattern=r"^(?:m2\|)?ig_menu\|")
     )
 
     bot_app.add_error_handler(_global_error_handler)
 
     await bot_app.initialize()
+    from app.services.media.pipeline import build_default_pipeline
+
+    state.media_pipeline = build_default_pipeline(bot_app.bot)
     await bot_app.start()
     state.bot_app = bot_app
 
@@ -254,6 +280,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     await bot_app.stop()
     await bot_app.shutdown()
+    state.media_pipeline = None
 
     # Redis lifecycle: clean close connection pool
     if state.redis_client:

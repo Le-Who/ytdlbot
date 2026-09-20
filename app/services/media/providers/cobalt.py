@@ -10,6 +10,8 @@ from ..registry import FailureKind, ProviderError
 from .http import (
     CurlProviderTransport,
     HttpTransport,
+    OriginPacer,
+    OriginPacing,
     ProviderEndpoint,
     endpoint_headers,
     probe_candidate,
@@ -27,10 +29,12 @@ class CobaltProvider:
         endpoints: Sequence[ProviderEndpoint],
         *,
         transport: HttpTransport | None = None,
+        pacer: OriginPacing | None = None,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
         self.endpoints = tuple(endpoints)
         self._transport = transport or CurlProviderTransport()
+        self._pacer = pacer or OriginPacer()
         self._wall_clock = wall_clock
 
     def supports(self, request: MediaRequest) -> bool:
@@ -70,6 +74,7 @@ class CobaltProvider:
         }
         if request.quality.max_edge is not None:
             payload["videoQuality"] = str(request.quality.max_edge)
+        await self._pacer.wait(endpoint.origin, endpoint.min_interval)
         data, _ = await request_json(
             transport,
             "POST",

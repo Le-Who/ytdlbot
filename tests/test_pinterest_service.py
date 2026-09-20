@@ -101,6 +101,43 @@ class TestPinterestExtractMediaUrl(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(video_url)
         self.assertIsNone(image_url)
 
+    async def test_strict_boundary_classifies_transport_timeout_as_transient(self):
+        from app.services.media.registry import FailureKind, ProviderError
+        from app.services.pinterest import PinterestNativeService
+
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.get = AsyncMock(side_effect=TimeoutError("slow"))
+
+        with patch("app.services.pinterest.AsyncSession", return_value=mock_session):
+            with self.assertRaises(ProviderError) as raised:
+                await PinterestNativeService.resolve_media_url(
+                    "https://pinterest.com/pin/slow"
+                )
+
+        self.assertIs(raised.exception.kind, FailureKind.TRANSIENT)
+
+    async def test_strict_boundary_classifies_challenge_as_transient(self):
+        from app.services.media.registry import FailureKind, ProviderError
+        from app.services.pinterest import PinterestNativeService
+
+        response = MagicMock()
+        response.status_code = 200
+        response.text = "<html>Cloudflare challenge</html>"
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.get = AsyncMock(return_value=response)
+
+        with patch("app.services.pinterest.AsyncSession", return_value=mock_session):
+            with self.assertRaises(ProviderError) as raised:
+                await PinterestNativeService.resolve_media_url(
+                    "https://pinterest.com/pin/challenge"
+                )
+
+        self.assertIs(raised.exception.kind, FailureKind.TRANSIENT)
+
 
 @unittest.skipUnless(HAS_CURL_CFFI, "curl_cffi not installed")
 class TestPinterestOgParsers(unittest.TestCase):

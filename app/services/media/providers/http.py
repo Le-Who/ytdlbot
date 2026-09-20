@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json as json_module
+import math
 import time
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 from urllib.parse import urljoin, urlsplit
@@ -26,6 +28,8 @@ _CHALLENGE_MARKERS = (
     "verify you are human",
 )
 
+Sleeper = Callable[[float], Awaitable[None]]
+
 
 @dataclass(frozen=True, slots=True)
 class ProviderEndpoint:
@@ -35,6 +39,7 @@ class ProviderEndpoint:
     api_key: str | None
     capabilities: frozenset[str]
     enabled: bool
+    min_interval: float = 0.0
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.origin)
@@ -48,6 +53,10 @@ class ProviderEndpoint:
             or parsed.path not in {"", "/"}
         ):
             raise ValueError("provider endpoint must be an HTTP(S) origin")
+        if not math.isfinite(self.min_interval) or self.min_interval < 0:
+            raise ValueError(
+                "provider endpoint min_interval must be finite and non-negative"
+            )
         object.__setattr__(self, "origin", self.origin.rstrip("/"))
 
     def supports(self, platform: str) -> bool:
@@ -75,6 +84,40 @@ class HttpTransport(Protocol):
         data: object | None = None,
         timeout: float,
     ) -> HttpResponse: ...
+
+
+class OriginPacing(Protocol):
+    async def wait(self, origin: str, min_interval: float) -> None: ...
+
+
+@dataclass(slots=True)
+class _OriginPaceState:
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    next_allowed: float = 0.0
+
+
+class OriginPacer:
+    """Enforce configurable spacing independently for each exact origin."""
+
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Sleeper = asyncio.sleep,
+    ) -> None:
+        self._clock = clock
+        self._sleep = sleep
+        self._states: dict[str, _OriginPaceState] = {}
+
+    async def wait(self, origin: str, min_interval: float) -> None:
+        if min_interval <= 0:
+            return
+        state = self._states.setdefault(origin, _OriginPaceState())
+        async with state.lock:
+            delay = state.next_allowed - self._clock()
+            if delay > 0:
+                await self._sleep(delay)
+            state.next_allowed = self._clock() + min_interval
 
 
 class CurlProviderTransport:
@@ -163,14 +206,25 @@ async def request_response(
         if not location or redirect_count >= max_redirects:
             raise ProviderError(FailureKind.TRANSIENT, "invalid redirect response")
         next_url = urljoin(current_url, location)
-        if _origin(next_url) != _origin(current_url):
+        origin_changed = _origin(next_url) != _origin(current_url)
+        if (
+            origin_changed
+            and response.status_code in {307, 308}
+            and (current_json is not None or current_data is not None)
+        ):
+            raise ProviderError(
+                FailureKind.CONFIG,
+                "refusing cross-origin body-preserving redirect",
+            )
+        if origin_changed:
             current_headers = {
                 key: value
                 for key, value in current_headers.items()
                 if key.lower() not in _SENSITIVE_HEADERS
             }
-        if response.status_code in {301, 302, 303} and current_method.upper() != "GET":
-            current_method = "GET"
+        if response.status_code in {301, 302, 303}:
+            if current_method.upper() != "GET":
+                current_method = "GET"
             current_json = None
             current_data = None
         current_url = next_url

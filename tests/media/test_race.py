@@ -3,7 +3,7 @@ from dataclasses import dataclass, field, replace
 
 import pytest
 
-from app.services.media.models import MediaCandidate, MediaRequest
+from app.services.media.models import MediaCandidate, MediaItem, MediaKind, MediaRequest
 from app.services.media.race import RaceConfig, race_candidates
 from app.services.media.registry import (
     CircuitBreaker,
@@ -133,6 +133,91 @@ async def test_fast_invalid_candidate_never_beats_slower_equivalent_candidate(ex
     assert result.winner.provider == "good"
     assert result.rejections[0].validation.reasons == (
         CandidateRejectionReason.AUDIO_LANGUAGE_UNAVAILABLE,
+    )
+
+
+async def test_exact_incomplete_album_cannot_win_before_complete_album():
+    clock = ManualClock()
+    request = replace(REQUEST, kind=MediaKind.ALBUM, audio_language=None)
+    item = MediaItem("abc:0", MediaKind.PHOTO, "https://cdn.example/one.jpg")
+    incomplete = replace(
+        GOOD,
+        candidate_id="incomplete",
+        kind=MediaKind.ALBUM,
+        items=(item,),
+        complete=False,
+        has_video=False,
+        has_audio=False,
+    )
+    complete = replace(incomplete, candidate_id="complete", complete=True)
+    task = start(
+        clock,
+        [
+            Provider("incomplete", clock, 0.1, [incomplete]),
+            Provider("complete", clock, 0.2, [complete]),
+        ],
+        request=request,
+    )
+
+    await clock.advance(0.1)
+    assert not task.done()
+    await clock.advance(0.1)
+    result = await result_of(task)
+
+    assert result.winner.candidate.candidate_id == "complete"
+    assert result.rejections[0].validation.reasons == (
+        CandidateRejectionReason.ALBUM_INCOMPLETE,
+    )
+
+
+async def test_exact_watermarked_candidate_cannot_beat_watermark_free_candidate():
+    clock = ManualClock()
+    request = replace(REQUEST, watermark_allowed=False)
+    marked = replace(GOOD, kind=MediaKind.VIDEO, watermark_free=False)
+    clean = replace(marked, candidate_id="clean", watermark_free=True)
+    task = start(
+        clock,
+        [
+            Provider("marked", clock, 0.1, [marked]),
+            Provider("clean", clock, 0.2, [clean]),
+        ],
+        request=request,
+    )
+
+    await clock.advance(0.1)
+    await clock.advance(0.1)
+    result = await result_of(task)
+
+    assert result.winner.candidate.candidate_id == "clean"
+    assert result.rejections[0].validation.reasons == (
+        CandidateRejectionReason.WATERMARK_PRESENT,
+    )
+
+
+async def test_explicit_kind_mismatch_cannot_win_race():
+    clock = ManualClock()
+    request = replace(REQUEST, kind=MediaKind.PHOTO, audio_language=None)
+    video = replace(GOOD, kind=MediaKind.VIDEO)
+    photo = replace(
+        GOOD,
+        candidate_id="photo",
+        kind=MediaKind.PHOTO,
+        has_video=False,
+        has_audio=False,
+    )
+    task = start(
+        clock,
+        [Provider("video", clock, 0.1, [video]), Provider("photo", clock, 0.2, [photo])],
+        request=request,
+    )
+
+    await clock.advance(0.1)
+    await clock.advance(0.1)
+    result = await result_of(task)
+
+    assert result.winner.candidate.candidate_id == "photo"
+    assert result.rejections[0].validation.reasons == (
+        CandidateRejectionReason.KIND_MISMATCH,
     )
 
 

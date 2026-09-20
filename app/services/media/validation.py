@@ -10,6 +10,10 @@ from .models import MediaCandidate, MediaKind, MediaRequest
 
 class CandidateRejectionReason(StrEnum):
     VIDEO_UNAVAILABLE = "video_unavailable"
+    KIND_MISMATCH = "kind_mismatch"
+    ALBUM_INCOMPLETE = "album_incomplete"
+    WATERMARK_PRESENT = "watermark_present"
+    WATERMARK_UNKNOWN = "watermark_unknown"
     QUALITY_TOO_LOW = "quality_too_low"
     AUDIO_UNAVAILABLE = "audio_unavailable"
     AUDIO_FORMAT_UNAVAILABLE = "audio_format_unavailable"
@@ -26,6 +30,32 @@ def validate_candidate(
     request: MediaRequest, candidate: MediaCandidate
 ) -> CandidateValidationResult:
     reasons: list[CandidateRejectionReason] = []
+
+    kind_mismatch = (
+        candidate.kind is not None and candidate.kind is not request.kind
+    ) or (
+        candidate.kind is None
+        and request.kind in {
+            MediaKind.PHOTO,
+            MediaKind.ANIMATION,
+            MediaKind.ALBUM,
+        }
+    )
+    if kind_mismatch:
+        reasons.append(CandidateRejectionReason.KIND_MISMATCH)
+
+    if (
+        request.exact
+        and not candidate.complete
+        and (request.kind is MediaKind.ALBUM or candidate.kind is MediaKind.ALBUM)
+    ):
+        reasons.append(CandidateRejectionReason.ALBUM_INCOMPLETE)
+
+    if request.exact and not request.watermark_allowed:
+        if candidate.watermark_free is False:
+            reasons.append(CandidateRejectionReason.WATERMARK_PRESENT)
+        elif candidate.watermark_free is None:
+            reasons.append(CandidateRejectionReason.WATERMARK_UNKNOWN)
 
     if request.kind is MediaKind.VIDEO and not candidate.has_video:
         reasons.append(CandidateRejectionReason.VIDEO_UNAVAILABLE)

@@ -13,6 +13,8 @@ from ..registry import FailureKind, ProviderError
 from .http import (
     CurlProviderTransport,
     HttpTransport,
+    OriginPacer,
+    OriginPacing,
     ProviderEndpoint,
     endpoint_headers,
     probe_candidate,
@@ -35,10 +37,12 @@ class SSSTikProvider:
         endpoint: ProviderEndpoint = DEFAULT_ENDPOINT,
         *,
         transport: HttpTransport | None = None,
+        pacer: OriginPacing | None = None,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
         self.endpoint = endpoint
         self._transport = transport or CurlProviderTransport()
+        self._pacer = pacer or OriginPacer()
         self._wall_clock = wall_clock
 
     def supports(self, request: MediaRequest) -> bool:
@@ -48,6 +52,7 @@ class SSSTikProvider:
         if not self.supports(request):
             return []
         headers = endpoint_headers(self.endpoint)
+        await self._pacer.wait(self.endpoint.origin, self.endpoint.min_interval)
         index = await request_html(
             self._transport, "GET", f"{self.endpoint.origin}/en-1", headers=headers
         )
@@ -67,6 +72,7 @@ class SSSTikProvider:
         post_headers = dict(headers)
         if cookie:
             post_headers["Cookie"] = cookie
+        await self._pacer.wait(self.endpoint.origin, self.endpoint.min_interval)
         result = await request_html(
             self._transport,
             "POST",

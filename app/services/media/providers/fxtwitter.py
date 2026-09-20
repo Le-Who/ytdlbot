@@ -12,6 +12,8 @@ from ..registry import FailureKind, ProviderError
 from .http import (
     CurlProviderTransport,
     HttpTransport,
+    OriginPacer,
+    OriginPacing,
     ProviderEndpoint,
     endpoint_headers,
     probe_candidate,
@@ -23,6 +25,7 @@ DEFAULT_ENDPOINT = ProviderEndpoint(
     None,
     frozenset({"twitter", "x"}),
     True,
+    min_interval=0.1,
 )
 
 
@@ -36,17 +39,17 @@ class FxTwitterProvider:
         endpoint: ProviderEndpoint = DEFAULT_ENDPOINT,
         *,
         transport: HttpTransport | None = None,
-        min_interval: float = 0.1,
+        min_interval: float | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+        pacer: OriginPacing | None = None,
     ) -> None:
         self.endpoint = endpoint
         self._transport = transport or CurlProviderTransport()
-        self._min_interval = max(0.0, min_interval)
-        self._monotonic = monotonic
-        self._sleep = sleep
-        self._rate_lock = asyncio.Lock()
-        self._next_request = 0.0
+        self._min_interval = (
+            endpoint.min_interval if min_interval is None else max(0.0, min_interval)
+        )
+        self._pacer = pacer or OriginPacer(clock=monotonic, sleep=sleep)
 
     def supports(self, request: MediaRequest) -> bool:
         return self.endpoint.supports(request.platform)
@@ -128,11 +131,7 @@ class FxTwitterProvider:
         ]
 
     async def _wait_for_rate_slot(self) -> None:
-        async with self._rate_lock:
-            delay = self._next_request - self._monotonic()
-            if delay > 0:
-                await self._sleep(delay)
-            self._next_request = self._monotonic() + self._min_interval
+        await self._pacer.wait(self.endpoint.origin, self._min_interval)
 
 
 def _ordered_media(media: dict[str, object]) -> tuple[list[dict[str, object]], bool]:

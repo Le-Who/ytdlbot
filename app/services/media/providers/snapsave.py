@@ -12,6 +12,8 @@ from ..registry import FailureKind, ProviderError
 from .http import (
     CurlProviderTransport,
     HttpTransport,
+    OriginPacer,
+    OriginPacing,
     ProviderEndpoint,
     endpoint_headers,
     probe_candidate,
@@ -44,12 +46,14 @@ class SnapSaveProvider:
         endpoint: ProviderEndpoint = DEFAULT_ENDPOINT,
         *,
         transport: HttpTransport | None = None,
+        pacer: OriginPacing | None = None,
         contract_verified: bool = False,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
         self.endpoint = endpoint
         self.contract_verified = contract_verified
         self._transport = transport or CurlProviderTransport()
+        self._pacer = pacer or OriginPacer()
         self._wall_clock = wall_clock
 
     def supports(self, request: MediaRequest) -> bool:
@@ -58,6 +62,7 @@ class SnapSaveProvider:
     async def resolve(self, request: MediaRequest) -> list[MediaCandidate]:
         if not self.supports(request):
             return []
+        await self._pacer.wait(self.endpoint.origin, self.endpoint.min_interval)
         result = await request_html(
             self._transport,
             "POST",

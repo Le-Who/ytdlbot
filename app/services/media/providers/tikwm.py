@@ -11,6 +11,8 @@ from ..registry import FailureKind, ProviderError
 from .http import (
     CurlProviderTransport,
     HttpTransport,
+    OriginPacer,
+    OriginPacing,
     ProviderEndpoint,
     endpoint_headers,
     probe_candidate,
@@ -18,7 +20,11 @@ from .http import (
 )
 
 DEFAULT_ENDPOINT = ProviderEndpoint(
-    "https://www.tikwm.com", None, frozenset({"tiktok"}), True
+    "https://www.tikwm.com",
+    None,
+    frozenset({"tiktok"}),
+    True,
+    min_interval=1.1,
 )
 
 
@@ -32,10 +38,12 @@ class TikWMProvider:
         endpoint: ProviderEndpoint = DEFAULT_ENDPOINT,
         *,
         transport: HttpTransport | None = None,
+        pacer: OriginPacing | None = None,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
         self.endpoint = endpoint
         self._transport = transport or CurlProviderTransport()
+        self._pacer = pacer or OriginPacer()
         self._wall_clock = wall_clock
 
     def supports(self, request: MediaRequest) -> bool:
@@ -48,6 +56,7 @@ class TikWMProvider:
             f"{self.endpoint.origin}/api/?url="
             f"{quote(request.canonical_url, safe='')}&hd=1"
         )
+        await self._pacer.wait(self.endpoint.origin, self.endpoint.min_interval)
         data, _ = await request_json(
             self._transport,
             "GET",

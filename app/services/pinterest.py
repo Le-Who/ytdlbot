@@ -14,6 +14,7 @@ import os
 import uuid
 import logging
 import asyncio
+import time
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Optional, Tuple, List
 
@@ -22,6 +23,14 @@ import re
 
 from app.core.config import TEMP_DIR
 from app.core.utils import safe_remove
+from app.services.media.providers.http import (
+    CurlProviderTransport,
+    HttpTransport,
+    is_challenge,
+    parse_retry_after,
+    probe_candidate,
+)
+from app.services.media.registry import FailureKind, ProviderError
 
 if TYPE_CHECKING:
     from app.services.media.models import MediaCandidate, MediaRequest
@@ -44,8 +53,12 @@ class PinterestProvider:
         extract: Callable[
             [str], Awaitable[tuple[Optional[str], Optional[str]]]
         ] | None = None,
+        transport: HttpTransport | None = None,
+        wall_clock: Callable[[], float] = time.time,
     ) -> None:
-        self._extract = extract or PinterestNativeService.extract_media_url
+        self._extract = extract or PinterestNativeService.resolve_media_url
+        self._transport = transport or CurlProviderTransport()
+        self._wall_clock = wall_clock
 
     def supports(self, request: "MediaRequest") -> bool:
         return request.platform == "pinterest"
@@ -57,12 +70,12 @@ class PinterestProvider:
             MediaKind,
             MediaSource,
         )
-        from app.services.media.registry import FailureKind, ProviderError
-
         if not self.supports(request):
             return []
         try:
             video_url, image_url = await self._extract(request.canonical_url)
+        except ProviderError:
+            raise
         except (TimeoutError, OSError) as error:
             raise ProviderError(FailureKind.TRANSIENT, str(error)) from error
         url = video_url or image_url
@@ -81,6 +94,9 @@ class PinterestProvider:
             kind = MediaKind.PHOTO
             path = url.split("?", 1)[0]
             container = path.rsplit(".", 1)[-1].lower() if "." in path else None
+        await probe_candidate(
+            self._transport, url, wall_clock=self._wall_clock
+        )
         item = MediaItem(request.media_id, kind, url, container=container)
         return [
             MediaCandidate(
@@ -110,61 +126,46 @@ class PinterestNativeService:
             (video_url, image_url) — at least one may be set.
         """
         try:
+            return await PinterestNativeService.resolve_media_url(url)
+        except ProviderError as error:
+            logger.error("[PINTEREST] Native extraction error: %s", error)
+            return None, None
+
+    @staticmethod
+    async def resolve_media_url(url: str) -> Tuple[Optional[str], Optional[str]]:
+        """Strict native boundary used by the provider contract."""
+        try:
             async with AsyncSession() as session:
-                resp = await session.get(
+                response = await session.get(
                     url, impersonate="chrome", timeout=10, allow_redirects=True
                 )
-                if resp.status_code >= 400:
-                    logger.warning(
-                        "[PINTEREST] Native scrape got HTTP %d", resp.status_code
-                    )
-                    return None, None
+        except (TimeoutError, OSError) as error:
+            raise ProviderError(FailureKind.TRANSIENT, str(error)) from error
+        except Exception as error:
+            raise ProviderError(FailureKind.TRANSIENT, str(error)) from error
 
-                html = resp.text
-
-                # 1. Try og:video first (MP4 video pins)
-                video_url = _extract_og_video(html)
-
-                # 2. Try og:image (static image pins / carousels)
-                image_url = _extract_og_image(html)
-
-                # 3. Upgrade jpg to gif if the original animated asset exists
-                if image_url:
-                    match = re.search(
-                        r"pinimg\.com/[^/]+/(.+)\.jpg", image_url, re.IGNORECASE
-                    )
-                    if match:
-                        core_path = match.group(1)
-                        expected_gif_url = (
-                            f"https://i.pinimg.com/originals/{core_path}.gif"
-                        )
-                        if expected_gif_url in html:
-                            image_url = expected_gif_url
-                        else:
-                            gif_match = re.search(
-                                rf"(https://i\.pinimg\.com/[^/]+/{re.escape(core_path)}\.gif)",
-                                html,
-                                re.IGNORECASE,
-                            )
-                            if gif_match:
-                                image_url = gif_match.group(1)
-
-                if video_url:
-                    logger.info("[PINTEREST] Found og:video: %s", video_url[:80])
-                elif image_url and image_url.endswith(".gif"):
-                    logger.info("[PINTEREST] Found original gif: %s", image_url[:80])
-                elif image_url:
-                    logger.info("[PINTEREST] Found og:image: %s", image_url[:80])
-                else:
-                    logger.warning(
-                        "[PINTEREST] Native scrape found no og:video or og:image"
-                    )
-
-                return video_url, image_url
-
-        except Exception as e:
-            logger.error("[PINTEREST] Native extraction error: %s", e)
-            return None, None
+        if response.status_code == 429:
+            raise ProviderError(
+                FailureKind.TRANSIENT,
+                "Pinterest native resolver rate limited",
+                retry_after=parse_retry_after(response.headers),
+            )
+        if response.status_code in {401, 403} or response.status_code >= 500:
+            raise ProviderError(
+                FailureKind.TRANSIENT,
+                f"Pinterest native resolver returned HTTP {response.status_code}",
+            )
+        if response.status_code >= 400:
+            raise ProviderError(
+                FailureKind.PERMANENT,
+                f"Pinterest native resolver returned HTTP {response.status_code}",
+            )
+        html = response.text
+        if is_challenge(html):
+            raise ProviderError(
+                FailureKind.TRANSIENT, "Pinterest native resolver challenge"
+            )
+        return _parse_native_media(html)
 
     @staticmethod
     async def download_video(url: str) -> Tuple[Optional[str], Optional[str]]:
@@ -237,6 +238,37 @@ class PinterestNativeService:
 
 
 # ── Private helpers ──────────────────────────────────────────────────────────
+
+
+def _parse_native_media(html: str) -> tuple[Optional[str], Optional[str]]:
+    video_url = _extract_og_video(html)
+    image_url = _extract_og_image(html)
+
+    if image_url:
+        match = re.search(r"pinimg\.com/[^/]+/(.+)\.jpg", image_url, re.IGNORECASE)
+        if match:
+            core_path = match.group(1)
+            expected_gif_url = f"https://i.pinimg.com/originals/{core_path}.gif"
+            if expected_gif_url in html:
+                image_url = expected_gif_url
+            else:
+                gif_match = re.search(
+                    rf"(https://i\.pinimg\.com/[^/]+/{re.escape(core_path)}\.gif)",
+                    html,
+                    re.IGNORECASE,
+                )
+                if gif_match:
+                    image_url = gif_match.group(1)
+
+    if video_url:
+        logger.info("[PINTEREST] Found og:video: %s", video_url[:80])
+    elif image_url and image_url.endswith(".gif"):
+        logger.info("[PINTEREST] Found original gif: %s", image_url[:80])
+    elif image_url:
+        logger.info("[PINTEREST] Found og:image: %s", image_url[:80])
+    else:
+        logger.warning("[PINTEREST] Native scrape found no og:video or og:image")
+    return video_url, image_url
 
 
 def _extract_og_video(html: str) -> Optional[str]:

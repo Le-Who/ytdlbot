@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,7 +11,12 @@ import pytest
 from app.services.media import MediaKind, MediaRequest, QualityPolicy
 from app.services.media.providers.cobalt import CobaltProvider
 from app.services.media.providers.fxtwitter import FxTwitterProvider
-from app.services.media.providers.http import HttpResponse, ProviderEndpoint
+from app.services.media.providers.http import (
+    HttpResponse,
+    OriginPacer,
+    ProviderEndpoint,
+    request_response,
+)
 from app.services.media.providers.snapsave import (
     SnapSaveProvider,
     UpstreamRenderRequired,
@@ -100,8 +106,15 @@ def endpoint(
     *,
     api_key: str | None = None,
     enabled: bool = True,
+    min_interval: float = 0,
 ) -> ProviderEndpoint:
-    return ProviderEndpoint(origin, api_key, frozenset({platform}), enabled)
+    return ProviderEndpoint(
+        origin,
+        api_key,
+        frozenset({platform}),
+        enabled,
+        min_interval=min_interval,
+    )
 
 
 def ok_probe() -> HttpResponse:
@@ -157,6 +170,8 @@ async def test_cobalt_credentials_are_not_forwarded_to_candidate_origin():
 
     assert transport.requests[0].headers["Authorization"] == "Api-Key secret"
     assert "Authorization" not in transport.requests[1].headers
+    assert transport.requests[1].json is None
+    assert transport.requests[1].data is None
 
 
 @pytest.mark.asyncio
@@ -164,7 +179,7 @@ async def test_cobalt_credentials_are_stripped_on_cross_origin_http_redirect():
     """Catches the HTTP client forwarding endpoint credentials after a redirect."""
     transport = RecordingTransport(
         response(
-            status=307,
+            status=303,
             headers={"Location": "https://other.example/cobalt"},
         ),
         response(
@@ -183,6 +198,47 @@ async def test_cobalt_credentials_are_stripped_on_cross_origin_http_redirect():
 
     assert transport.requests[0].headers["Authorization"] == "Api-Key secret"
     assert "Authorization" not in transport.requests[1].headers
+    assert transport.requests[1].json is None
+    assert transport.requests[1].data is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redirect_status", [307, 308])
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"data": {"s_live": "secret-token"}},
+        {"json": {"token": "secret-token"}},
+    ],
+)
+async def test_cross_origin_body_preserving_redirect_is_refused(
+    body: dict[str, object], redirect_status: int
+):
+    """Catches form/JSON secrets surviving a cross-origin 307/308 redirect."""
+    transport = RecordingTransport(
+        response(
+            status=redirect_status,
+            headers={"Location": "https://evil.example/collect"},
+        )
+    )
+
+    with pytest.raises(ProviderError, match="cross-origin"):
+        await request_response(
+            transport,
+            "POST",
+            "https://ssstik.example/submit",
+            headers={"Authorization": "Api-Key secret"},
+            **body,
+        )
+
+    assert [record.url for record in transport.requests] == [
+        "https://ssstik.example/submit"
+    ]
+    assert not any(
+        record.url.startswith("https://evil.example")
+        and (record.data is not None or record.json is not None)
+        for record in transport.requests
+    )
 
 
 @pytest.mark.asyncio
@@ -620,7 +676,8 @@ async def test_pinterest_provider_wraps_native_resolution_without_downloading():
         calls.append(url)
         return None, "https://i.pinimg.com/originals/asset.gif"
 
-    provider = PinterestProvider(extract=extract)
+    transport = RecordingTransport(ok_probe())
+    provider = PinterestProvider(extract=extract, transport=transport)
     candidate = (
         await provider.resolve(
             request(
@@ -636,3 +693,165 @@ async def test_pinterest_provider_wraps_native_resolution_without_downloading():
     assert candidate.kind is MediaKind.ANIMATION
     assert candidate.url.endswith(".gif")
     assert not provider.is_heavy
+    assert [record.url for record in transport.requests] == [candidate.url]
+
+
+@pytest.mark.asyncio
+async def test_pinterest_provider_rejects_expired_native_url_before_probe():
+    """Catches Pinterest bypassing signed-URL expiry checks."""
+
+    async def extract(_: str) -> tuple[str | None, str | None]:
+        return "https://v.pinimg.com/video.mp4?expire=10", None
+
+    transport = RecordingTransport()
+    provider = PinterestProvider(
+        extract=extract,
+        transport=transport,
+        wall_clock=lambda: 20,
+    )
+
+    with pytest.raises(ProviderError, match="expired") as raised:
+        await provider.resolve(
+            request("pinterest", "https://pinterest.com/pin/1", "1")
+        )
+
+    assert raised.value.kind is FailureKind.TRANSIENT
+    assert transport.requests == []
+
+
+@pytest.mark.asyncio
+async def test_pinterest_provider_preserves_typed_transient_extraction_failure():
+    """Catches transient native failures collapsing into permanent no-media."""
+
+    async def extract(_: str) -> tuple[str | None, str | None]:
+        raise ProviderError(FailureKind.TRANSIENT, "challenge")
+
+    provider = PinterestProvider(extract=extract, transport=RecordingTransport())
+
+    with pytest.raises(ProviderError) as raised:
+        await provider.resolve(
+            request("pinterest", "https://pinterest.com/pin/1", "1")
+        )
+
+    assert raised.value.kind is FailureKind.TRANSIENT
+
+
+class PacingClock:
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.sleepers: list[tuple[float, asyncio.Future[None]]] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    async def sleep(self, seconds: float) -> None:
+        future = asyncio.get_running_loop().create_future()
+        self.sleepers.append((self.now + seconds, future))
+        await future
+
+    async def advance(self, seconds: float) -> None:
+        self.now += seconds
+        for when, future in list(self.sleepers):
+            if when <= self.now and not future.done():
+                future.set_result(None)
+        await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_origin_pacer_serializes_one_origin_without_blocking_another():
+    """Catches a global limiter coupling unrelated provider origins."""
+    clock = PacingClock()
+    pacer = OriginPacer(clock=clock, sleep=clock.sleep)
+
+    await pacer.wait("https://one.example", 2)
+    same = asyncio.create_task(pacer.wait("https://one.example", 2))
+    other = asyncio.create_task(pacer.wait("https://two.example", 2))
+    await asyncio.sleep(0)
+
+    assert other.done()
+    assert not same.done()
+    await clock.advance(2)
+    await same
+
+
+class RecordingPacer:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, float]] = []
+
+    async def wait(self, origin: str, min_interval: float) -> None:
+        self.calls.append((origin, min_interval))
+
+
+@pytest.mark.asyncio
+async def test_cobalt_uses_endpoint_specific_pacing():
+    pacer = RecordingPacer()
+    transport = RecordingTransport(
+        response(
+            payload={"status": "redirect", "url": "https://cdn.example/video.mp4"}
+        ),
+        ok_probe(),
+    )
+    provider = CobaltProvider(
+        (endpoint("https://cobalt.example", "tiktok", min_interval=0.7),),
+        transport=transport,
+        pacer=pacer,
+    )
+
+    await provider.resolve(request("tiktok", "https://tiktok.com/@u/video/1", "1"))
+
+    assert pacer.calls == [("https://cobalt.example", 0.7)]
+
+
+@pytest.mark.asyncio
+async def test_tikwm_default_route_applies_configured_pacing():
+    pacer = RecordingPacer()
+    transport = RecordingTransport(
+        response(payload={"code": 0, "data": {"hdplay": "https://cdn.example/v.mp4"}}),
+        ok_probe(),
+    )
+    provider = TikWMProvider(transport=transport, pacer=pacer)
+
+    await provider.resolve(request("tiktok", "https://tiktok.com/@u/video/1", "1"))
+
+    assert pacer.calls == [(provider.endpoint.origin, 1.1)]
+
+
+@pytest.mark.asyncio
+async def test_ssstik_paces_each_request_to_its_configured_origin():
+    pacer = RecordingPacer()
+    transport = RecordingTransport(
+        response(text=fixture_html("ssstik-index.html"), headers={"Content-Type": "text/html"}),
+        response(text=fixture_html("ssstik-result.html"), headers={"Content-Type": "text/html"}),
+        ok_probe(),
+    )
+    provider = SSSTikProvider(
+        endpoint("https://ssstik.example", "tiktok", min_interval=0.5),
+        transport=transport,
+        pacer=pacer,
+    )
+
+    await provider.resolve(request("tiktok", "https://tiktok.com/@u/video/1", "1"))
+
+    assert pacer.calls == [
+        ("https://ssstik.example", 0.5),
+        ("https://ssstik.example", 0.5),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_snapsave_uses_endpoint_specific_pacing():
+    pacer = RecordingPacer()
+    transport = RecordingTransport(
+        response(text=fixture_html("snapsave-ready.html"), headers={"Content-Type": "text/html"}),
+        ok_probe(),
+    )
+    provider = SnapSaveProvider(
+        endpoint("https://snapsave.example", "instagram", min_interval=0.9),
+        transport=transport,
+        pacer=pacer,
+        contract_verified=True,
+    )
+
+    await provider.resolve(request("instagram", "https://instagram.com/reel/1", "1"))
+
+    assert pacer.calls == [("https://snapsave.example", 0.9)]

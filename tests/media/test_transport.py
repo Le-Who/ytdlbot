@@ -737,6 +737,55 @@ class RecordingProcessRunner:
         return self.return_code
 
 
+@pytest.mark.asyncio
+async def test_adopt_local_owns_and_clips_derived_artifact(tmp_path: Path) -> None:
+    runner = RecordingProcessRunner()
+    media, _ = transport(tmp_path, [], process_runner=runner)
+    source = tmp_path / "slideshow-source.mp4"
+    source.write_bytes(b"\x00\x00\x00\x18ftypisomsource")
+    candidate = replace(
+        source_candidate(size=source.stat().st_size),
+        candidate_id="slideshow-video",
+        url="https://www.tiktok.com/@tester/photo/123",
+        container="mp4",
+        media_id="123",
+        kind=MediaKind.VIDEO,
+        items=(
+            MediaItem(
+                "123",
+                MediaKind.VIDEO,
+                "https://www.tiktok.com/@tester/photo/123",
+                container="mp4",
+            ),
+        ),
+    )
+    clipped = MediaRequest(
+        canonical_url="https://www.tiktok.com/@tester/photo/123",
+        platform="tiktok",
+        media_id="123",
+        kind=MediaKind.VIDEO,
+        clip=ClipInterval(10, 20),
+        output_variant="slideshow-video",
+    )
+
+    item = await media.adopt_local(clipped, source, candidate)
+
+    assert not source.exists()
+    assert len(item.paths) == 1
+    assert item.paths[0].is_file()
+    assert media_lease_path(item.paths[0]).is_file()
+    command = runner.commands[0]
+    assert command[command.index("-ss") + 1] == "10"
+    assert command[command.index("-t") + 1] == "10"
+    assert command[command.index("-c:v") + 1] == "libx264"
+    assert command[command.index("-c:a") + 1] == "aac"
+
+    await item.release(delete=True)
+
+    assert not item.paths[0].exists()
+    assert not media_lease_path(item.paths[0]).exists()
+
+
 class CancellationResistantProcessRunner:
     """An injected runner that ignores cancellation until externally released."""
 

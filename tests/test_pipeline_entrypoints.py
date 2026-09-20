@@ -933,7 +933,7 @@ async def test_private_pipeline_slideshow_photo_callback_delivers_via_pipeline(
     assert len(pipeline.calls) == 1
     request, target, _ = pipeline.calls[0]
     assert request.kind is MediaKind.AUTO
-    assert request.clip == ClipInterval()
+    assert request.clip == ClipInterval(10, 20)
     assert request.caller_scope == target.caller_scope == "callback"
     query.delete_message.assert_awaited_once()
     legacy_download.assert_not_awaited()

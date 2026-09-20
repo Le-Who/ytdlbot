@@ -543,6 +543,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             request = build_media_request(
                 page_url,
                 kind="auto",
+                clip=payload.section,
                 caller_scope="callback",
                 exact=False,
             )

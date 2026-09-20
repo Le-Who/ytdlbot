@@ -78,6 +78,7 @@ class MediaRequest:
     caller_scope: str = "public"
     auth_scope: str = "public"
     exact: bool = True
+    output_variant: str | None = None
     deadline: float | None = None
 
     @classmethod
@@ -95,6 +96,7 @@ class MediaRequest:
         caller_scope: str = "public",
         auth_scope: str = "public",
         exact: bool = True,
+        output_variant: str | None = None,
         deadline: float | None = None,
     ) -> Self:
         canonical_url, platform, media_id, parsed_clip = _parse_media_url(url)
@@ -112,6 +114,7 @@ class MediaRequest:
             caller_scope=caller_scope,
             auth_scope=auth_scope,
             exact=exact,
+            output_variant=output_variant,
             deadline=deadline,
         )
 
@@ -265,6 +268,7 @@ def request_cache_key(request: MediaRequest) -> str:
         "caller_scope": request.caller_scope,
         "auth_scope": request.auth_scope,
         "exact": request.exact,
+        "output_variant": request.output_variant,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=list)
     return f"media:v1:{hashlib.sha256(encoded.encode()).hexdigest()}"

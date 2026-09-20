@@ -227,6 +227,7 @@ async def test_slideshow_video_uses_soundtrack_validation_delivery_and_lease_hea
 ):
     request = build_media_request(
         "https://www.tiktok.com/@tester/photo/123",
+        clip="10-20",
         caller_scope="group",
         exact=False,
     )
@@ -274,6 +275,13 @@ async def test_slideshow_video_uses_soundtrack_validation_delivery_and_lease_hea
             )
             return MaterializedItem(paths, 6 * len(paths), selected, reservation)
 
+        async def adopt_local(self, adopt_request, path, selected, *, deadline=None):
+            del deadline
+            assert adopt_request.clip == ClipInterval(10, 20)
+            reservation = _Reservation()
+            reservations.append(reservation)
+            return MaterializedItem((path,), path.stat().st_size, selected, reservation)
+
     converter_calls = []
 
     async def convert(images, audio_path):
@@ -314,6 +322,16 @@ async def test_slideshow_video_uses_soundtrack_validation_delivery_and_lease_hea
         MediaKind.VIDEO,
     ]
     derived = validator_calls[-1][1]
+    derived_request = validator_calls[-1][0]
+    normal_video_request = replace(
+        request,
+        kind=MediaKind.VIDEO,
+        album_selection=(),
+        exact=True,
+    )
+    assert derived_request.clip == ClipInterval(10, 20)
+    assert derived_request.output_variant == "slideshow-video"
+    assert derived_request.cache_key != normal_video_request.cache_key
     assert derived.candidate.kind is MediaKind.VIDEO
     assert derived.candidate.has_audio
     assert all(reservation.renewed >= 3 for reservation in reservations)

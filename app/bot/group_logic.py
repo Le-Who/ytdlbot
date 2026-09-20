@@ -511,6 +511,7 @@ async def on_group_slideshow(
             request = build_media_request(
                 page_url,
                 kind="auto",
+                clip=payload.section,
                 caller_scope="group",
                 exact=False,
             )

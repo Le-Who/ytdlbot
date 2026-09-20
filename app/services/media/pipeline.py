@@ -114,6 +114,15 @@ class Materializer(Protocol):
         deadline: float | None = None,
     ) -> MaterializedItem: ...
 
+    async def adopt_local(
+        self,
+        request: MediaRequest,
+        path: Path,
+        candidate: MediaCandidate,
+        *,
+        deadline: float | None = None,
+    ) -> MaterializedItem: ...
+
 
 class MediaPipelineError(RuntimeError):
     """Base class for user-visible pipeline failures."""
@@ -135,16 +144,6 @@ class CallbackDataError(ValueError):
 class _ReadyMaterialization:
     item: MaterializedItem
     users: int
-
-
-class _EphemeralReservation:
-    """Adapter for a derived artifact cleaned by its owning pipeline operation."""
-
-    def renew(self) -> None:
-        return None
-
-    async def release(self) -> None:
-        return None
 
 
 class MediaPipeline:
@@ -339,9 +338,11 @@ class MediaPipeline:
             album_selection=(),
         )
         video_request = replace(
-            source_request,
+            request,
             kind=MediaKind.VIDEO,
+            album_selection=(),
             exact=True,
+            output_variant="slideshow-video",
         )
         cached_receipt = await self._deliver_cached(
             video_request, target, delivery_options
@@ -401,6 +402,7 @@ class MediaPipeline:
                 if not output:
                     raise MediaPipelineError("slideshow video conversion failed")
                 video_path = Path(output)
+                derived: MaterializedItem | None = None
                 try:
                     if not video_path.is_file() or video_path.stat().st_size <= 0:
                         raise ArtifactValidationError(
@@ -427,12 +429,12 @@ class MediaPipeline:
                         items=(video_item,),
                         auth_scope=video_request.auth_scope,
                     )
-                    derived = MaterializedItem(
-                        (video_path,),
-                        video_path.stat().st_size,
+                    derived = await self.transport.adopt_local(
+                        video_request,
+                        video_path,
                         video_candidate,
-                        cast(Any, _EphemeralReservation()),
                     )
+                    materialized.append(derived)
                     await self.artifact_validator(video_request, derived)
                     await self._store_metadata(
                         ResolvedMedia(
@@ -469,9 +471,13 @@ class MediaPipeline:
                     return receipt
                 finally:
                     video_path.unlink(missing_ok=True)
+                    if derived is not None:
+                        await _await_preserving_cancellation(
+                            derived.release(delete=True)
+                        )
 
             return await self._with_lease_renewals(
-                tuple(materialized), convert_validate_deliver()
+                materialized, convert_validate_deliver()
             )
 
     async def _with_lease_renewal(
@@ -819,6 +825,7 @@ def build_media_request(
     caller_scope: str = "public",
     auth_scope: str = "public",
     exact: bool = True,
+    output_variant: str | None = None,
     deadline: float | None = None,
 ) -> MediaRequest:
     """Build the same immutable request for every bot/API entrypoint."""
@@ -842,6 +849,7 @@ def build_media_request(
             caller_scope=caller_scope,
             auth_scope=auth_scope,
             exact=exact,
+            output_variant=output_variant,
             deadline=deadline,
         )
     except UnsupportedMediaUrlError:
@@ -860,6 +868,7 @@ def build_media_request(
             caller_scope=caller_scope,
             auth_scope=auth_scope,
             exact=exact,
+            output_variant=output_variant,
             deadline=deadline,
         )
 

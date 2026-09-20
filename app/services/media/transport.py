@@ -455,6 +455,80 @@ class MediaTransport:
         summary = summary or "no usable result"
         raise MaterializationError(f"materialization failed ({summary})")
 
+    async def adopt_local(
+        self,
+        request: MediaRequest,
+        path: Path,
+        candidate: MediaCandidate,
+        *,
+        deadline: float | None = None,
+    ) -> MaterializedItem:
+        """Move a locally derived artifact under DiskBudget/lease ownership.
+
+        A requested clip is applied after adoption through the same supervised
+        transform path used for downloaded candidates.
+        """
+        source = path.resolve()
+        if not source.is_file():
+            raise DownloadFailed("local artifact is missing")
+        source_size = source.stat().st_size
+        if source_size <= 0:
+            raise DownloadFailed("local artifact is empty")
+        self._check_actual_size(source_size)
+        deadlines = [self.clock() + self.materialization_timeout]
+        if request.deadline is not None:
+            deadlines.append(request.deadline)
+        if deadline is not None:
+            deadlines.append(deadline)
+        materialization_deadline = min(deadlines)
+        reserve_timeout = self._remaining(materialization_deadline)
+        try:
+            reservation = await asyncio.wait_for(
+                self.disk_budget.reserve(source_size, owner=uuid.uuid4().hex),
+                timeout=reserve_timeout,
+            )
+        except TimeoutError as error:
+            raise TransferTimeout("disk reservation timed out") from error
+
+        adopted = self.output_dir / (
+            f"media_{uuid.uuid4().hex}{_candidate_extension(candidate)}"
+        )
+        completed: tuple[Path, ...] = ()
+        succeeded = False
+        try:
+            reservation.bind(adopted)
+            await asyncio.to_thread(os.replace, source, adopted)
+            self._remaining(materialization_deadline)
+            if adopted.stat().st_size != source_size:
+                raise DownloadFailed("local artifact move was truncated")
+            completed = await self._finalize_candidate(
+                request,
+                candidate,
+                [adopted],
+                reservation,
+                source_size,
+                materialization_deadline,
+            )
+            final_size = sum(item.stat().st_size for item in completed)
+            self._check_actual_size(final_size)
+            self._remaining(materialization_deadline)
+            succeeded = True
+            return MaterializedItem(completed, final_size, candidate, reservation)
+        except asyncio.CancelledError:
+            raise
+        except TimeoutError as error:
+            raise TransferTimeout("local artifact adoption timed out") from error
+        except MaterializationError:
+            raise
+        except Exception as error:
+            raise DownloadFailed("local artifact adoption failed") from error
+        finally:
+            if not succeeded:
+                adopted.unlink(missing_ok=True)
+                for item in completed:
+                    item.unlink(missing_ok=True)
+                await reservation.release()
+
     async def _race_small(
         self,
         candidates: Sequence[MediaCandidate],

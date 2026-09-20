@@ -1,0 +1,35 @@
+{
+  "code": 200,
+  "status": {
+    "id": "123456789",
+    "media": {
+      "all": [
+        {
+          "type": "photo",
+          "url": "https://pbs.twimg.com/first.jpg",
+          "width": 1200,
+          "height": 800
+        },
+        {
+          "type": "gif",
+          "url": "https://video.twimg.com/second.mp4",
+          "width": 640,
+          "height": 360,
+          "duration": 2.5,
+          "formats": [{"container": "mp4", "url": "https://video.twimg.com/second.mp4"}]
+        },
+        {
+          "type": "video",
+          "url": "https://video.twimg.com/third-360.mp4",
+          "width": 640,
+          "height": 360,
+          "duration": 9.0,
+          "formats": [
+            {"container": "mp4", "url": "https://video.twimg.com/third-360.mp4", "width": 640, "height": 360, "size": 1000},
+            {"container": "mp4", "url": "https://video.twimg.com/third-720.mp4", "width": 1280, "height": 720, "size": 2000}
+          ]
+        }
+      ]
+    }
+  }
+}

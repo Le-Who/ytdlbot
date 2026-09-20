@@ -93,6 +93,42 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
         if res.error_message:
             self.assertIn("not_found", res.error_message)
 
+    async def test_error_response_continues_to_next_configured_origin(self):
+        """Catches one Cobalt business error suppressing a healthy origin."""
+        from app.services.cobalt import CobaltService
+
+        first = MagicMock()
+        first.status_code = 200
+        first.json.return_value = {
+            "status": "error",
+            "error": {"code": "not_found"},
+        }
+        second = MagicMock()
+        second.status_code = 200
+        second.json.return_value = {
+            "status": "redirect",
+            "url": "https://cdn.example.com/video.mp4",
+        }
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.post = AsyncMock(side_effect=[first, second])
+
+        with (
+            patch("app.services.cobalt.AsyncSession", return_value=mock_session),
+            patch(
+                "app.services.cobalt.COBALT_API_URLS",
+                ["https://one.example", "https://two.example"],
+            ),
+        ):
+            result = await CobaltService.process("https://tiktok.com/@u/video/1")
+
+        self.assertEqual(result.status, "redirect")
+        self.assertEqual(
+            [call.args[0] for call in mock_session.post.await_args_list],
+            ["https://one.example/", "https://two.example/"],
+        )
+
     async def test_process_network_error_retries(self):
         from app.services.cobalt import CobaltService
 

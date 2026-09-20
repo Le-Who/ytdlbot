@@ -14,6 +14,8 @@ from urllib.parse import parse_qs, quote, urlsplit
 class MediaKind(StrEnum):
     VIDEO = "video"
     AUDIO = "audio"
+    PHOTO = "photo"
+    ANIMATION = "animation"
     ALBUM = "album"
 
 
@@ -116,6 +118,10 @@ class MediaItem:
     url: str
     title: str | None = None
     duration_seconds: float | None = None
+    width: int | None = None
+    height: int | None = None
+    container: str | None = None
+    filesize_bytes: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -159,6 +165,17 @@ class MediaCandidate:
     complete: bool = True
     mux_mode: str | None = None
     refresh: RefreshDescriptor | None = None
+    provider: str | None = None
+    backend_family: str | None = None
+    media_id: str | None = None
+    kind: MediaKind | None = None
+    items: tuple[MediaItem, ...] = ()
+    quality_label: str | None = None
+    quality_limited: bool = False
+    metadata_complete: bool = True
+    remote_processing: bool = False
+    auth_scope: str = "public"
+    watermark_free: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

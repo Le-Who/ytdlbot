@@ -110,14 +110,13 @@ class CobaltService:
                         status = data["status"]
 
                         if status == "error":
-                            # Cobalt returned an explicit error
                             err_code = data.get("error", {}).get(
                                 "code", "unknown_error"
                             )
-                            return CobaltResult(
-                                status="error",
-                                error_message=f"Cobalt error: {err_code}",
-                            )
+                            # A business error belongs to this exact origin. Another
+                            # configured origin may still resolve the same public URL.
+                            last_error = f"Cobalt error: {err_code}"
+                            break
 
                         if status in ("tunnel", "redirect"):
                             return CobaltResult(

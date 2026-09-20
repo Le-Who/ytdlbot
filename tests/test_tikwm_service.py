@@ -42,6 +42,30 @@ class TestTikWMProcess(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(res.is_slideshow)
         self.assertIsNone(res.error_message)
 
+    async def test_smaller_hd_size_does_not_claim_codec_or_downgrade(self):
+        """Catches the invalid assumption that relative size proves a codec."""
+        from app.services.tikwm import TikWMService
+
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = {
+            "code": 0,
+            "data": {
+                "hdplay": "https://cdn.tikwm.com/hd.mp4",
+                "play": "https://cdn.tikwm.com/sd.mp4",
+                "hd_size": 100,
+                "size": 200,
+            },
+        }
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock(return_value=False)
+        mock_session.get = AsyncMock(return_value=mock_resp)
+
+        with patch("app.services.tikwm.AsyncSession", return_value=mock_session):
+            result = await TikWMService.process("https://tiktok.com/@u/video/1")
+
+        self.assertEqual(result.url, "https://cdn.tikwm.com/hd.mp4")
+
     async def test_success_returns_slideshow_result(self):
         from app.services.tikwm import TikWMService
 

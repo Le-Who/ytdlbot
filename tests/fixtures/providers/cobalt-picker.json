@@ -1,0 +1,9 @@
+{
+  "status": "picker",
+  "audio": "https://cdn.example/audio.mp3",
+  "picker": [
+    {"type": "photo", "url": "https://cdn.example/first.jpg"},
+    {"type": "video", "url": "https://cdn.example/second.mp4"},
+    {"type": "gif", "url": "https://cdn.example/third.mp4"}
+  ]
+}

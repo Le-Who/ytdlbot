@@ -14,7 +14,8 @@ import os
 import uuid
 import logging
 import asyncio
-from typing import Optional, Tuple, List
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING, Optional, Tuple, List
 
 from curl_cffi.requests import AsyncSession
 import re
@@ -22,9 +23,82 @@ import re
 from app.core.config import TEMP_DIR
 from app.core.utils import safe_remove
 
+if TYPE_CHECKING:
+    from app.services.media.models import MediaCandidate, MediaRequest
+
 logger = logging.getLogger("app.services.pinterest")
 
 CHUNK_SIZE = 512 * 1024  # 512 KB chunks for streaming
+
+
+class PinterestProvider:
+    """Resolution-only wrapper around the existing native OpenGraph extractor."""
+
+    name = "pinterest"
+    backend_family = "pinterest-native"
+    is_heavy = False
+
+    def __init__(
+        self,
+        *,
+        extract: Callable[
+            [str], Awaitable[tuple[Optional[str], Optional[str]]]
+        ] | None = None,
+    ) -> None:
+        self._extract = extract or PinterestNativeService.extract_media_url
+
+    def supports(self, request: "MediaRequest") -> bool:
+        return request.platform == "pinterest"
+
+    async def resolve(self, request: "MediaRequest") -> list["MediaCandidate"]:
+        from app.services.media.models import (
+            MediaCandidate,
+            MediaItem,
+            MediaKind,
+            MediaSource,
+        )
+        from app.services.media.registry import FailureKind, ProviderError
+
+        if not self.supports(request):
+            return []
+        try:
+            video_url, image_url = await self._extract(request.canonical_url)
+        except (TimeoutError, OSError) as error:
+            raise ProviderError(FailureKind.TRANSIENT, str(error)) from error
+        url = video_url or image_url
+        if not url:
+            raise ProviderError(
+                FailureKind.PERMANENT, "Pinterest native media unavailable"
+            )
+        container: str | None
+        if video_url:
+            kind = MediaKind.VIDEO
+            container = "mp4"
+        elif ".gif" in url.lower().split("?", 1)[0]:
+            kind = MediaKind.ANIMATION
+            container = "gif"
+        else:
+            kind = MediaKind.PHOTO
+            path = url.split("?", 1)[0]
+            container = path.rsplit(".", 1)[-1].lower() if "." in path else None
+        item = MediaItem(request.media_id, kind, url, container=container)
+        return [
+            MediaCandidate(
+                candidate_id=f"pinterest:{kind.value}",
+                url=url,
+                has_video=kind in {MediaKind.VIDEO, MediaKind.ANIMATION},
+                has_audio=kind is MediaKind.VIDEO,
+                container=container,
+                sources=(MediaSource("native", url, container=container),),
+                provider=self.name,
+                backend_family=self.backend_family,
+                media_id=request.media_id,
+                kind=kind,
+                items=(item,),
+                metadata_complete=False,
+                auth_scope=request.auth_scope,
+            )
+        ]
 
 
 class PinterestNativeService:

@@ -24,7 +24,9 @@ def cleanup_temp_dir(root: str | None = None) -> tuple[int, int]:
     if not os.path.isdir(target_dir):
         return deleted, orphan
 
-    for name in os.listdir(target_dir):
+    names = os.listdir(target_dir)
+    locked_targets = _active_lease_lock_targets(target_dir, names, now)
+    for name in names:
         path = os.path.join(target_dir, name)
 
         if _is_lease_auxiliary(name):
@@ -38,6 +40,8 @@ def cleanup_temp_dir(root: str | None = None) -> tuple[int, int]:
 
         if name.endswith(".lease"):
             target = path.removesuffix(".lease")
+            if target in locked_targets:
+                continue
             if not is_active_media_lease(target):
                 safe_remove(path)
             continue
@@ -74,7 +78,7 @@ def cleanup_temp_dir(root: str | None = None) -> tuple[int, int]:
         except OSError:
             continue
         if age > MAX_TEMP_AGE_SECONDS:
-            if is_active_media_lease(path):
+            if path in locked_targets or is_active_media_lease(path):
                 continue
             orphan += 1
             safe_remove(path)
@@ -100,12 +104,16 @@ def _aggressive_purge_temp(root: str | None = None) -> int:
     deleted = 0
     if not os.path.isdir(target_dir):
         return deleted
-    for name in os.listdir(target_dir):
+    names = os.listdir(target_dir)
+    locked_targets = _active_lease_lock_targets(target_dir, names, time.time())
+    for name in names:
         path = os.path.join(target_dir, name)
         if _is_lease_auxiliary(name):
             continue
         if name.endswith(".lease"):
             target = path.removesuffix(".lease")
+            if target in locked_targets:
+                continue
             if not is_active_media_lease(target):
                 safe_remove(path)
             continue
@@ -126,7 +134,7 @@ def _aggressive_purge_temp(root: str | None = None) -> int:
         ):
             continue
         if os.path.isfile(path):
-            if is_active_media_lease(path):
+            if path in locked_targets or is_active_media_lease(path):
                 continue
             safe_remove(path)
             media_lease_path(path).unlink(missing_ok=True)
@@ -144,6 +152,25 @@ def _is_lease_auxiliary(name: str) -> bool:
     return name.endswith(".lease.lock") or (
         ".lease." in name and name.endswith(".tmp")
     )
+
+
+def _active_lease_lock_targets(
+    target_dir: str, names: list[str], now: float
+) -> set[str]:
+    active: set[str] = set()
+    for name in names:
+        if not name.endswith(".lease.lock"):
+            continue
+        lock_path = os.path.join(target_dir, name)
+        try:
+            age = now - os.path.getmtime(lock_path)
+        except OSError:
+            continue
+        if age > MAX_TEMP_AGE_SECONDS:
+            safe_remove(lock_path)
+            continue
+        active.add(lock_path.removesuffix(".lease.lock"))
+    return active
 
 
 # 0 = ok, 1 = warning sent, 2 = critical sent

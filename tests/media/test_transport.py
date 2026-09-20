@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.core.resource_budget import DiskBudget
+from app.core.resource_budget import DiskBudget, InsufficientDiskSpace
 from app.services.media.models import (
     ClipInterval,
     MediaCandidate,
@@ -54,6 +54,7 @@ class FakeResponse:
     )
     chunks: tuple[bytes, ...] = (b"\x00\x00\x00\x18ftypisompayload",)
     first_delay: float = 0
+    header_delay: float = 0
     stall_delay: float = 0
     closed: bool = False
     body_reads: int = 0
@@ -72,6 +73,18 @@ class FakeResponse:
         self.closed = True
         if self.close_error is not None:
             raise self.close_error
+
+
+class DelayedCloseResponse(FakeResponse):
+    def __init__(self, *, close_delay: float = 0.02) -> None:
+        super().__init__()
+        self.close_delay = close_delay
+        self.close_started = asyncio.Event()
+
+    async def close(self) -> None:
+        self.close_started.set()
+        await asyncio.sleep(self.close_delay)
+        self.closed = True
 
 
 class FakeClient:
@@ -103,6 +116,12 @@ class FakeClient:
                 self.active -= 1
 
         response.close = close  # type: ignore[method-assign]
+        if response.header_delay:
+            try:
+                await asyncio.sleep(response.header_delay)
+            except asyncio.CancelledError:
+                await response.close()
+                raise
         self.requests.append(
             {
                 "method": method,
@@ -154,23 +173,34 @@ def transport(
     *,
     resolver: Resolver | None = None,
     max_bytes: int = 2_000_000_000,
-    first_byte_timeout: float = 0.02,
+    first_byte_timeout: float = 0.2,
     stall_timeout: float = 0.02,
     process_runner: object | None = None,
+    capacity_bytes: int | None = None,
+    transform_poll_interval: float | None = None,
 ) -> tuple[MediaTransport, FakeClient]:
     client = FakeClient(responses)
     policy = URLPolicy(resolver=resolver or Resolver({}))
+    options: dict[str, object] = {}
+    if transform_poll_interval is not None:
+        options["transform_poll_interval"] = transform_poll_interval
     return (
         MediaTransport(
             output_dir=tmp_path,
             client=client,
             url_policy=policy,
-            disk_budget=DiskBudget(tmp_path, capacity_bytes=max_bytes * 3),
+            disk_budget=DiskBudget(
+                tmp_path,
+                capacity_bytes=(
+                    max_bytes * 3 if capacity_bytes is None else capacity_bytes
+                ),
+            ),
             max_bytes=max_bytes,
             probe_bytes=32,
             first_byte_timeout=first_byte_timeout,
             stall_timeout=stall_timeout,
             process_runner=process_runner,
+            **options,
         ),
         client,
     )
@@ -418,6 +448,51 @@ async def test_declared_size_over_decimal_limit_is_rejected_before_open(
 
 
 @pytest.mark.asyncio
+async def test_first_byte_budget_spans_headers_and_first_body_byte(
+    tmp_path: Path,
+) -> None:
+    response = FakeResponse(header_delay=0.08, first_delay=0.09)
+    media, _ = transport(tmp_path, [response], first_byte_timeout=0.15)
+    started = time.monotonic()
+
+    with pytest.raises(TransferTimeout):
+        await media.probe("https://cdn.example/video.mp4")
+
+    assert time.monotonic() - started < 0.23
+    assert response.closed
+
+
+@pytest.mark.asyncio
+async def test_expired_work_deadline_still_allows_bounded_response_cleanup(
+    tmp_path: Path,
+) -> None:
+    response = DelayedCloseResponse()
+    media, _ = transport(tmp_path, [])
+
+    await media._close_response(response, time.monotonic() - 1)
+
+    assert response.closed
+
+
+@pytest.mark.asyncio
+async def test_cancellation_waits_for_response_cleanup_then_propagates(
+    tmp_path: Path,
+) -> None:
+    response = DelayedCloseResponse()
+    media, _ = transport(tmp_path, [])
+    cleanup = asyncio.create_task(
+        media._close_response(response, time.monotonic() + 10)
+    )
+    await response.close_started.wait()
+
+    cleanup.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cleanup
+
+    assert response.closed
+
+
+@pytest.mark.asyncio
 async def test_stream_aborts_at_limit_without_buffering_and_removes_partial(
     tmp_path: Path,
 ) -> None:
@@ -530,6 +605,27 @@ async def test_cancellation_closes_stream_and_removes_partial_and_lease(
     assert not list(tmp_path.glob("*.lease"))
 
 
+@pytest.mark.asyncio
+async def test_stream_cancellation_is_not_masked_by_cleanup_failure(
+    tmp_path: Path,
+) -> None:
+    probe = FakeResponse()
+    body = FakeResponse(first_delay=1, close_error=OSError("close failed"))
+    media, _ = transport(tmp_path, [probe, body], first_byte_timeout=2)
+    task = asyncio.create_task(
+        media.materialize(request(), [source_candidate(size=30_000_000)])
+    )
+    await asyncio.sleep(0.05)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert body.closed
+    assert not list(tmp_path.glob("media_*"))
+    assert not list(tmp_path.glob("*.lease"))
+
+
 class RecordingProcessRunner:
     def __init__(
         self,
@@ -559,6 +655,34 @@ class RecordingProcessRunner:
                 self.cancelled = True
                 raise
         return self.return_code
+
+
+def _append_bytes(path: Path, data: bytes) -> None:
+    with path.open("ab") as stream:
+        stream.write(data)
+
+
+class GrowingProcessRunner:
+    def __init__(self, *, chunk: bytes = b"12345678") -> None:
+        self.chunk = chunk
+        self.bytes_written = 0
+        self.started = asyncio.Event()
+        self.cancelled = False
+
+    async def __call__(self, command: list[str], timeout: float) -> int:
+        del timeout
+        output = Path(command[-1])
+        output.write_bytes(b"\x00\x00\x00\x18ftyp")
+        self.bytes_written = output.stat().st_size
+        self.started.set()
+        try:
+            while True:
+                await asyncio.to_thread(_append_bytes, output, self.chunk)
+                self.bytes_written += len(self.chunk)
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
 
 
 def split_candidate() -> MediaCandidate:
@@ -591,7 +715,7 @@ def split_candidate() -> MediaCandidate:
 
 
 @pytest.mark.asyncio
-async def test_split_video_audio_is_copy_muxed_to_one_clipped_deliverable(
+async def test_clipped_split_video_audio_is_reencoded_to_one_exact_deliverable(
     tmp_path: Path,
 ) -> None:
     responses = [
@@ -614,10 +738,30 @@ async def test_split_video_audio_is_copy_muxed_to_one_clipped_deliverable(
     assert second_input < command.index("-ss") < command.index("-t")
     assert command[command.index("-ss") + 1] == "10"
     assert command[command.index("-t") + 1] == "10"
-    assert command[command.index("-c") + 1] == "copy"
+    assert "copy" not in command
+    assert command[command.index("-c:v") + 1] == "libx264"
+    assert command[command.index("-c:a") + 1] == "aac"
+    assert command.index("-t") < command.index("-c:v")
     assert not any(
         path.name.endswith((".m4a", ".mp4.part")) for path in tmp_path.iterdir()
     )
+    await item.release(delete=True)
+
+
+@pytest.mark.asyncio
+async def test_unclipped_split_video_audio_retains_copy_mux(
+    tmp_path: Path,
+) -> None:
+    responses = [FakeResponse(), FakeResponse(), FakeResponse(), FakeResponse()]
+    runner = RecordingProcessRunner()
+    media, _ = transport(tmp_path, responses, process_runner=runner)
+
+    item = await media.materialize(request(), [split_candidate()])
+
+    command = runner.commands[0]
+    assert command[command.index("-c") + 1] == "copy"
+    assert "-ss" not in command
+    assert "-t" not in command
     await item.release(delete=True)
 
 
@@ -639,9 +783,13 @@ async def test_extract_mp3_uses_ffmpeg_and_returns_only_mp3(tmp_path: Path) -> N
         kind=MediaKind.AUDIO,
     )
 
-    item = await media.materialize(
-        replace(request(), kind=MediaKind.AUDIO, audio_format="mp3"), [candidate]
+    clipped = replace(
+        request(),
+        kind=MediaKind.AUDIO,
+        audio_format="mp3",
+        clip=ClipInterval(2.5, 8),
     )
+    item = await media.materialize(clipped, [candidate])
 
     assert len(item.paths) == 1
     assert item.paths[0].suffix == ".mp3"
@@ -649,7 +797,58 @@ async def test_extract_mp3_uses_ffmpeg_and_returns_only_mp3(tmp_path: Path) -> N
     assert command[command.index("-c:a") + 1] == "libmp3lame"
     assert "-vn" in command
     assert command[command.index("-f") + 1] == "mp3"
+    assert command.index("-i") < command.index("-ss") < command.index("-t")
+    assert command.index("-t") < command.index("-c:a")
+    assert command[command.index("-ss") + 1] == "2.5"
+    assert command[command.index("-t") + 1] == "5.5"
     await item.release(delete=True)
+
+
+@pytest.mark.asyncio
+async def test_transform_output_is_stopped_while_crossing_byte_cap(
+    tmp_path: Path,
+) -> None:
+    responses = [FakeResponse(), FakeResponse()]
+    runner = GrowingProcessRunner()
+    media, _ = transport(
+        tmp_path,
+        responses,
+        max_bytes=48,
+        process_runner=runner,
+        transform_poll_interval=0.001,
+    )
+    candidate = replace(source_candidate(size=24), mux_mode="copy", container="mp4")
+
+    with pytest.raises(MediaSizeExceeded):
+        await media.materialize(request(), [candidate])
+
+    assert runner.cancelled
+    assert runner.bytes_written <= 48 + len(runner.chunk)
+    assert not list(tmp_path.glob("media_*"))
+    assert not list(tmp_path.glob("*.lease"))
+
+
+@pytest.mark.asyncio
+async def test_transform_reserves_input_plus_full_output_cap_before_process_start(
+    tmp_path: Path,
+) -> None:
+    responses = [FakeResponse(), FakeResponse()]
+    runner = RecordingProcessRunner()
+    media, _ = transport(
+        tmp_path,
+        responses,
+        max_bytes=100,
+        capacity_bytes=100,
+        process_runner=runner,
+    )
+    candidate = replace(source_candidate(size=24), mux_mode="copy", container="mp4")
+
+    with pytest.raises(InsufficientDiskSpace):
+        await media.materialize(request(), [candidate])
+
+    assert runner.commands == []
+    assert not list(tmp_path.glob("media_*"))
+    assert not list(tmp_path.glob("*.lease"))
 
 
 @pytest.mark.asyncio

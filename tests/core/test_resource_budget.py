@@ -179,11 +179,38 @@ def test_aggressive_janitor_purge_still_preserves_active_lease(
 def test_aggressive_janitor_does_not_remove_in_progress_lease_lock(
     tmp_path: Path,
 ) -> None:
-    lock = tmp_path / "media_active.mp4.part.lease.lock"
+    target = tmp_path / "media_active.mp4.part"
+    target.write_bytes(b"in-progress")
+    lock = Path(f"{target}.lease.lock")
     lock.write_bytes(b"")
 
-    with patch("app.tasks.janitor.TEMP_DIR", str(tmp_path)):
+    with (
+        patch("app.tasks.janitor.TEMP_DIR", str(tmp_path)),
+        patch("app.tasks.janitor.MAX_TEMP_AGE_SECONDS", 10),
+    ):
         deleted = janitor._aggressive_purge_temp()
 
     assert deleted == 0
+    assert target.exists()
     assert lock.exists()
+
+
+def test_aggressive_janitor_reclaims_target_with_expired_orphan_lock(
+    tmp_path: Path,
+) -> None:
+    target = tmp_path / "media_expired.mp4.part"
+    target.write_bytes(b"orphan")
+    lock = Path(f"{target}.lease.lock")
+    lock.write_bytes(b"")
+    old = time.time() - 100
+    os.utime(lock, (old, old))
+
+    with (
+        patch("app.tasks.janitor.TEMP_DIR", str(tmp_path)),
+        patch("app.tasks.janitor.MAX_TEMP_AGE_SECONDS", 10),
+    ):
+        deleted = janitor._aggressive_purge_temp()
+
+    assert deleted == 1
+    assert not target.exists()
+    assert not lock.exists()

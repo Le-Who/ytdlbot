@@ -251,6 +251,8 @@ class MediaTransport:
         dns_timeout: float = 3.0,
         max_redirects: int = 3,
         materialization_timeout: float = 3600.0,
+        transform_poll_interval: float = 0.01,
+        cleanup_timeout: float = 3.5,
         clock: Callable[[], float] = time.monotonic,
         process_runner: ProcessRunner | None = None,
     ) -> None:
@@ -264,6 +266,8 @@ class MediaTransport:
                 request_timeout,
                 dns_timeout,
                 materialization_timeout,
+                transform_poll_interval,
+                cleanup_timeout,
             )
         ):
             raise ValueError("transport timeouts must be finite and positive")
@@ -287,6 +291,8 @@ class MediaTransport:
         self.dns_timeout = dns_timeout
         self.max_redirects = max_redirects
         self.materialization_timeout = materialization_timeout
+        self.transform_poll_interval = transform_poll_interval
+        self.cleanup_timeout = cleanup_timeout
         self.clock = clock
         self.process_runner = process_runner or _run_process
 
@@ -554,10 +560,7 @@ class MediaTransport:
         input_bytes: int,
         deadline: float,
     ) -> tuple[Path, ...]:
-        clip_requested = (
-            request.clip.start_seconds is not None
-            or request.clip.end_seconds is not None
-        )
+        clip_requested = _clip_requested(request)
         mode = candidate.mux_mode
         if mode is None and not clip_requested:
             if len(inputs) > 1 and not candidate.items:
@@ -577,24 +580,18 @@ class MediaTransport:
         reserve_timeout = self._remaining(deadline)
         try:
             await asyncio.wait_for(
-                reservation.ensure(
-                    input_bytes + min(max(input_bytes, 1), self.max_bytes)
-                ),
+                reservation.ensure(input_bytes + self.max_bytes),
                 timeout=reserve_timeout,
             )
         except TimeoutError as error:
             raise TransferTimeout("transform reservation timed out") from error
         reservation.bind(partial_path)
         command = self._build_transform_command(
-            inputs, partial_path, request, mode or "copy", extension
+            inputs, partial_path, request, candidate, mode or "copy", extension
         )
         succeeded = False
         try:
-            process_timeout = self._remaining(deadline)
-            return_code = await asyncio.wait_for(
-                self.process_runner(command, process_timeout),
-                timeout=process_timeout,
-            )
+            return_code = await self._run_transform(command, partial_path, deadline)
             if return_code != 0:
                 raise DownloadFailed("media transform failed")
             if not partial_path.is_file():
@@ -634,6 +631,7 @@ class MediaTransport:
         inputs: Sequence[Path],
         output: Path,
         request: MediaRequest,
+        candidate: MediaCandidate,
         mode: str,
         extension: str,
     ) -> list[str]:
@@ -648,9 +646,49 @@ class MediaTransport:
                 command.extend(("-map", "0:v:0", "-map", "1:a:0"))
             else:
                 command.extend(("-map", "0"))
-            command.extend(("-c", "copy", "-f", _ffmpeg_format(extension)))
+            if _clip_requested(request):
+                command.extend(_reencode_arguments(candidate, extension))
+            else:
+                command.extend(("-c", "copy"))
+            command.extend(("-f", _ffmpeg_format(extension)))
+        command.extend(("-fs", str(self.max_bytes)))
         command.append(str(output))
         return command
+
+    async def _run_transform(
+        self, command: list[str], partial_path: Path, deadline: float
+    ) -> int:
+        process_timeout = self._remaining(deadline)
+        task: asyncio.Future[int] = asyncio.ensure_future(
+            self.process_runner(command, process_timeout)
+        )
+        try:
+            while True:
+                remaining = self._remaining(deadline)
+                done, _ = await asyncio.wait(
+                    {task},
+                    timeout=min(self.transform_poll_interval, remaining),
+                )
+                if partial_path.is_file():
+                    self._check_actual_size(partial_path.stat().st_size)
+                if task in done:
+                    return task.result()
+        except asyncio.CancelledError:
+            await self._cancel_process_task(task)
+            raise
+        except Exception:
+            await self._cancel_process_task(task)
+            raise
+
+    async def _cancel_process_task(self, task: asyncio.Future[int]) -> None:
+        if task.done():
+            await asyncio.gather(task, return_exceptions=True)
+            return
+        task.cancel()
+        _, pending = await asyncio.wait({task}, timeout=self.cleanup_timeout)
+        for unfinished in pending:
+            unfinished.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     async def _stream_source(
         self,
@@ -804,7 +842,7 @@ class MediaTransport:
             except Exception as error:
                 raise DownloadFailed("media connection failed") from error
             if response.status_code not in _REDIRECTS:
-                return _Opened(response, current_url, self.clock())
+                return _Opened(response, current_url, started_at)
             location = _header(response.headers, "location")
             await self._close_response(response, operation_deadline)
             if not location or redirect_count >= self.max_redirects:
@@ -879,15 +917,36 @@ class MediaTransport:
     async def _close_response(
         self, response: StreamingResponse, deadline: float
     ) -> None:
+        del deadline
+        current_task = asyncio.current_task()
+        cancellation_pending = bool(current_task and current_task.cancelling())
+        close_task = asyncio.create_task(response.close())
         try:
-            remaining = max(0, deadline - self.clock())
-            await asyncio.wait_for(response.close(), timeout=remaining)
+            await asyncio.wait_for(
+                asyncio.shield(close_task), timeout=self.cleanup_timeout
+            )
         except asyncio.CancelledError:
+            await self._finish_response_cleanup(close_task, allow_grace=True)
             raise
         except TimeoutError as error:
+            await self._finish_response_cleanup(close_task, allow_grace=False)
+            if cancellation_pending:
+                raise asyncio.CancelledError from error
             raise TransferTimeout("media response cleanup timed out") from error
         except Exception as error:
+            if cancellation_pending:
+                raise asyncio.CancelledError from error
             raise DownloadFailed("media response cleanup failed") from error
+
+    async def _finish_response_cleanup(
+        self, task: asyncio.Task[None], *, allow_grace: bool
+    ) -> None:
+        pending: set[asyncio.Task[None]] = {task} if not task.done() else set()
+        if allow_grace and pending:
+            _, pending = await asyncio.wait(pending, timeout=self.cleanup_timeout)
+        for unfinished in pending:
+            unfinished.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
     def _download_sources(self, candidate: MediaCandidate) -> tuple[MediaSource, ...]:
         if candidate.sources:
@@ -1043,6 +1102,32 @@ def _clip_arguments(request: MediaRequest) -> list[str]:
         if duration <= 0:
             raise DownloadFailed("clip interval produced no media")
         arguments.extend(("-t", _format_seconds(duration)))
+    return arguments
+
+
+def _clip_requested(request: MediaRequest) -> bool:
+    return (
+        request.clip.start_seconds is not None or request.clip.end_seconds is not None
+    )
+
+
+def _reencode_arguments(candidate: MediaCandidate, extension: str) -> list[str]:
+    if not candidate.has_video:
+        audio_codec = {
+            ".flac": "flac",
+            ".ogg": "libopus",
+            ".opus": "libopus",
+            ".wav": "pcm_s16le",
+        }.get(extension, "aac")
+        return ["-vn", "-c:a", audio_codec]
+    if extension == ".webm":
+        arguments = ["-c:v", "libvpx-vp9"]
+        arguments.extend(("-c:a", "libopus") if candidate.has_audio else ("-an",))
+        return arguments
+    if extension == ".gif":
+        return ["-c:v", "gif", "-an"]
+    arguments = ["-c:v", "libx264", "-preset", "medium"]
+    arguments.extend(("-c:a", "aac") if candidate.has_audio else ("-an",))
     return arguments
 
 

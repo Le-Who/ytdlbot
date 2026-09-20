@@ -135,6 +135,11 @@ class JobStore:
         await self.initialize()
         return await asyncio.to_thread(self._pragma_int, "busy_timeout")
 
+    async def write_probe(self) -> None:
+        """Prove that a bounded immediate write transaction can be acquired."""
+
+        await self._run(self._write_probe_sync, self._clock())
+
     async def accept_update(self, payload: Mapping[str, Any]) -> AcceptedUpdate:
         minimal = _minimal_update_payload(payload)
         return await self._run(
@@ -500,6 +505,23 @@ class JobStore:
         try:
             return str(connection.execute(f"PRAGMA {name}").fetchone()[0]).lower()
         finally:
+            connection.close()
+
+    def _write_probe_sync(self, now: float) -> None:
+        connection = self._connect()
+        try:
+            probe_timeout_ms = min(self.busy_timeout_ms, 500)
+            connection.execute(f"PRAGMA busy_timeout = {probe_timeout_ms}")
+            connection.execute("BEGIN IMMEDIATE")
+            updated = connection.execute(
+                "UPDATE worker_lease SET expires_at = expires_at "
+                "WHERE singleton = 1 AND expires_at > ?",
+                (now,),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("durable worker lease is not live")
+        finally:
+            connection.rollback()
             connection.close()
 
     def _accept_update_sync(

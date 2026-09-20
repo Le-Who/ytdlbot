@@ -9,6 +9,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.core.media_cache import CachedDelivery, MediaCache
+from app.core.metrics import MetricsCollector
+from app.services.media import pipeline as pipeline_module
 from app.services.media.models import (
     ClipInterval,
     DeliveredItem,
@@ -223,8 +225,10 @@ async def test_cache_miss_races_resolvers_then_delivers_one_valid_winner(
 
 @pytest.mark.asyncio
 async def test_slideshow_video_uses_soundtrack_validation_delivery_and_lease_heartbeat(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    collector = MetricsCollector()
+    monkeypatch.setattr(pipeline_module, "metrics", collector)
     request = build_media_request(
         "https://www.tiktok.com/@tester/photo/123",
         clip="10-20",
@@ -353,6 +357,15 @@ async def test_slideshow_video_uses_soundtrack_validation_delivery_and_lease_hea
     assert reservations[-1].renewed >= 2
     assert all(reservation.released == 1 for reservation in reservations)
     assert not video.exists()
+    assert collector.pipeline_results.collect() == [
+        ({"platform": "tiktok", "status": "success"}, 1.0)
+    ]
+    total = [
+        count
+        for labels, count, _ in collector.pipeline_duration.collect()
+        if labels.get("phase") == "total"
+    ]
+    assert total == [1]
 
 
 @pytest.mark.asyncio
@@ -962,8 +975,10 @@ async def test_auto_request_without_album_metadata_does_not_accept_item_zero_cac
 
 @pytest.mark.asyncio
 async def test_authorized_album_metadata_enables_file_id_hit_before_materialization(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
+    collector = MetricsCollector()
+    monkeypatch.setattr(pipeline_module, "metrics", collector)
     request = build_media_request(
         "https://www.instagram.com/stories/tester/123/",
         kind=MediaKind.ALBUM,
@@ -1026,6 +1041,15 @@ async def test_authorized_album_metadata_enables_file_id_hit_before_materializat
 
     assert first.success and second.success
     assert transport.calls == 1
+    assert collector.pipeline_results.collect() == [
+        ({"platform": "instagram", "status": "success"}, 2.0)
+    ]
+    total = [
+        count
+        for labels, count, _ in collector.pipeline_duration.collect()
+        if labels.get("phase") == "total"
+    ]
+    assert total == [2]
 
 
 @pytest.mark.asyncio

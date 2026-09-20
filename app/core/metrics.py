@@ -184,9 +184,9 @@ class MetricsCollector:
             "ytdlbot_media_provider_wins_total",
             "Winning provider selections",
         )
-        self.transcode_cpu_seconds = _Counter(
-            "ytdlbot_media_transcode_cpu_seconds_total",
-            "Measured transform workload seconds; label identifies the proxy",
+        self.transform_workload_duration_seconds = _Counter(
+            "ytdlbot_media_transform_workload_duration_seconds_total",
+            "Wall-clock seconds spent running bounded media transforms",
         )
 
         # Gauges
@@ -254,7 +254,7 @@ class MetricsCollector:
             self.race_wasted_bytes,
             self.retries,
             self.provider_wins,
-            self.transcode_cpu_seconds,
+            self.transform_workload_duration_seconds,
             self.active_downloads,
             self.queue_depth,
             self.orphan_processes,

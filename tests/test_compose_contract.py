@@ -23,6 +23,21 @@ def test_compose_mounts_shared_media_and_separate_durable_state() -> None:
     assert {"media", "state", "tg-api-data", "redis-data", "bot_cache"} <= set(
         compose["volumes"]
     )
+    init = services["volume-init"]
+    assert init["user"] == "0:0"
+    assert "media:/srv/ytdlbot/media" in init["volumes"]
+    assert "state:/srv/ytdlbot/state" in init["volumes"]
+    assert "bot_cache:/home/botuser/.cache/yt-dlp" in init["volumes"]
+    assert init["command"] == [
+        "chown -R 10001:10001 /srv/ytdlbot/media /srv/ytdlbot/state "
+        "/home/botuser/.cache/yt-dlp"
+    ]
+    assert services["bot"]["depends_on"]["volume-init"]["condition"] == (
+        "service_completed_successfully"
+    )
+    assert services["tg-api"]["depends_on"]["volume-init"]["condition"] == (
+        "service_completed_successfully"
+    )
 
 
 def test_compose_uses_versioned_images_and_readiness_healthcheck() -> None:
@@ -33,10 +48,21 @@ def test_compose_uses_versioned_images_and_readiness_healthcheck() -> None:
         image = service.get("image")
         if image is not None:
             assert ":latest" not in image
-    assert services["bot"]["image"] == "ghcr.io/${GHCR_REPO}:${APP_RELEASE}"
-    assert services["bgutil-pot"]["image"].endswith(":2.0.0")
-    assert services["tg-api"]["image"].endswith(":10.3")
-    assert services["redis"]["image"].endswith(":7.4.11-alpine")
+    immutable_bot = "${BOT_IMAGE:?Set BOT_IMAGE to an immutable image@sha256:digest}"
+    assert services["bot"]["image"] == immutable_bot
+    assert services["volume-init"]["image"] == immutable_bot
+    assert services["bgutil-pot"]["image"] == (
+        "brainicism/bgutil-ytdlp-pot-provider:2.0.0@sha256:"
+        "ed86b6fdd5e430ddd7c8ce1adb55e1ab54db7c7dbc1bcbf3a82454a85b971164"
+    )
+    assert services["tg-api"]["image"] == (
+        "aiogram/telegram-bot-api:10.3@sha256:"
+        "a299091598537528755c1245f54696598352f0d8ea00b1067087f522524029c2"
+    )
+    assert services["redis"]["image"] == (
+        "redis:7.4.11-alpine@sha256:"
+        "520775a41a63e77e06c73e35d2fd9cc15921a609516818796b4ecbb813078bc7"
+    )
     assert services["bot"]["healthcheck"]["test"] == [
         "CMD",
         "curl",
@@ -60,11 +86,17 @@ def test_runtime_dependencies_are_exactly_pinned_and_image_does_not_self_update(
 
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "FROM python:3.12-slim" not in dockerfile
-    assert "FROM python:3.12.14-slim-bookworm" in dockerfile
+    pinned_python = (
+        "python:3.12.14-slim-bookworm@sha256:"
+        "392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e"
+    )
+    assert dockerfile.count(f"FROM {pinned_python}") == 2
     assert "yt-dlp -U" not in dockerfile
     assert "yt_dlp -U" not in dockerfile
     assert "mkdir -p /srv/ytdlbot/media /srv/ytdlbot/state" in dockerfile
     assert "chown -R botuser:botuser /srv/ytdlbot" in dockerfile
+    assert "groupadd --gid 10001 botuser" in dockerfile
+    assert "useradd --uid 10001 --gid 10001" in dockerfile
 
 
 def test_example_environment_selects_exact_decimal_2000_mb_local_profile() -> None:

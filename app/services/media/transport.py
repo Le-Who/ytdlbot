@@ -811,10 +811,9 @@ class MediaTransport:
             await self._cancel_process_task(task)
             raise
         finally:
-            metrics.transcode_cpu_seconds.inc(
+            metrics.transform_workload_duration_seconds.inc(
                 max(0.0, self.clock() - transform_started),
-                operation="ffmpeg",
-                measurement="wall_time_proxy",
+                operation="transport",
             )
 
     async def _cancel_process_task(self, task: asyncio.Future[int]) -> None:
@@ -932,7 +931,17 @@ class MediaTransport:
                 return final_path, written
             finally:
                 await self._close_response(response, deadline)
-        except BaseException:
+        except BaseException as error:
+            if written > 0:
+                metrics.race_wasted_bytes.inc(
+                    written,
+                    stage="stream",
+                    outcome=(
+                        "cancelled"
+                        if isinstance(error, asyncio.CancelledError)
+                        else "failed"
+                    ),
+                )
             partial_path.unlink(missing_ok=True)
             final_path.unlink(missing_ok=True)
             raise

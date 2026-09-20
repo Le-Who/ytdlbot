@@ -2,7 +2,7 @@ services:
   bot:
     # Образ собирается в GitHub Actions и публикуется в GHCR.
     # На VPS только docker pull — никакой локальной сборки.
-    image: ghcr.io/${GHCR_REPO}:${APP_RELEASE}
+    image: "${BOT_IMAGE:?Set BOT_IMAGE to an immutable image@sha256:digest}"
     restart: always
     env_file: .env
     environment:
@@ -18,6 +18,8 @@ services:
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
+      volume-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       tg-api:
@@ -44,7 +46,7 @@ services:
   # YouTube POT (Proof-of-Origin Token) server — generates tokens to bypass
   # "Sign in to confirm you're not a bot" checks. Eliminates need for YouTube cookies.
   bgutil-pot:
-    image: brainicism/bgutil-ytdlp-pot-provider:2.0.0
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.0@sha256:ed86b6fdd5e430ddd7c8ce1adb55e1ab54db7c7dbc1bcbf3a82454a85b971164
     restart: always
     deploy:
       resources:
@@ -53,7 +55,7 @@ services:
           cpus: "0.2"
 
   tg-api:
-    image: aiogram/telegram-bot-api:10.3
+    image: aiogram/telegram-bot-api:10.3@sha256:a299091598537528755c1245f54696598352f0d8ea00b1067087f522524029c2
     restart: always
     environment:
       - TELEGRAM_API_ID=${TELEGRAM_API_ID}
@@ -62,6 +64,9 @@ services:
     volumes:
       - tg-api-data:/var/lib/telegram-bot-api
       - media:/srv/ytdlbot/media:ro
+    depends_on:
+      volume-init:
+        condition: service_completed_successfully
     # Порт не публикуется наружу — bot обращается по имени сервиса внутри сети
     deploy:
       resources:
@@ -70,7 +75,7 @@ services:
           cpus: "0.4"
 
   redis:
-    image: redis:7.4.11-alpine
+    image: redis:7.4.11-alpine@sha256:520775a41a63e77e06c73e35d2fd9cc15921a609516818796b4ecbb813078bc7
     restart: always
     command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
@@ -81,6 +86,18 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  volume-init:
+    image: "${BOT_IMAGE:?Set BOT_IMAGE to an immutable image@sha256:digest}"
+    user: "0:0"
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - chown -R 10001:10001 /srv/ytdlbot/media /srv/ytdlbot/state /home/botuser/.cache/yt-dlp
+    volumes:
+      - media:/srv/ytdlbot/media
+      - state:/srv/ytdlbot/state
+      - bot_cache:/home/botuser/.cache/yt-dlp
 
 volumes:
   tg-api-data:

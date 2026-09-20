@@ -33,6 +33,55 @@ async def test_store_uses_wal_busy_timeout_and_explicit_schema_version(tmp_path)
 
 
 @pytest.mark.asyncio
+async def test_write_probe_rolls_back_without_retaining_changes(tmp_path):
+    path = tmp_path / "jobs.sqlite3"
+    store = JobStore(path)
+    assert await store.acquire_worker("worker-ready", lease_seconds=30)
+    connection = sqlite3.connect(path)
+    before = tuple(
+        connection.execute(
+            "SELECT owner_id, expires_at FROM worker_lease WHERE singleton = 1"
+        ).fetchone()
+    )
+    connection.close()
+
+    await store.write_probe()
+
+    connection = sqlite3.connect(path)
+    after = tuple(
+        connection.execute(
+            "SELECT owner_id, expires_at FROM worker_lease WHERE singleton = 1"
+        ).fetchone()
+    )
+    connection.close()
+    assert after == before
+
+
+@pytest.mark.asyncio
+async def test_write_probe_requires_a_live_worker_lease(tmp_path):
+    store = JobStore(tmp_path / "jobs.sqlite3")
+    await store.initialize()
+
+    with pytest.raises(RuntimeError, match="worker lease"):
+        await store.write_probe()
+
+
+@pytest.mark.asyncio
+async def test_write_probe_respects_busy_timeout_when_writer_is_locked(tmp_path):
+    path = tmp_path / "jobs.sqlite3"
+    store = JobStore(path, busy_timeout_ms=10)
+    assert await store.acquire_worker("worker-ready", lease_seconds=30)
+    writer = sqlite3.connect(path, isolation_level=None)
+    writer.execute("BEGIN IMMEDIATE")
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="locked"):
+            await store.write_probe()
+    finally:
+        writer.rollback()
+        writer.close()
+
+
+@pytest.mark.asyncio
 async def test_update_id_is_deduplicated_and_payload_keeps_only_telegram_update(
     tmp_path,
 ):

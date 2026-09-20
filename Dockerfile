@@ -1,5 +1,5 @@
 # ── Stage 1: Builder ──────────────────────────────────────────────
-FROM python:3.12.14-slim-bookworm AS builder
+FROM python:3.12.14-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e AS builder
 
 WORKDIR /build
 
@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────
-FROM python:3.12.14-slim-bookworm
+FROM python:3.12.14-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
 
 WORKDIR /app
 
@@ -50,7 +50,8 @@ ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
 
 # Non-root user and writable project-scoped named-volume mount points.
-RUN useradd -m -s /bin/bash botuser \
+RUN groupadd --gid 10001 botuser \
+  && useradd --uid 10001 --gid 10001 --create-home --shell /bin/bash botuser \
   && mkdir -p /srv/ytdlbot/media /srv/ytdlbot/state \
   && chown -R botuser:botuser /srv/ytdlbot
 USER botuser

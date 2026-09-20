@@ -1,16 +1,18 @@
 """Media conversion service — GIF and slideshow-to-video via ffmpeg."""
 
-import json
-import os
-import uuid
 import asyncio
+import json
 import logging
+import os
 import struct
+import time
+import uuid
 from typing import Optional
 
 from app.core import state
 from app.core.config import TEMP_DIR
-from app.core.process import process_supervisor
+from app.core.metrics import metrics
+from app.core.process import ProcessResult, process_supervisor
 from app.core.utils import safe_remove
 
 logger = logging.getLogger("app.services.converter")
@@ -40,6 +42,33 @@ _SPLIT_SEGMENT_BYTES = int(47 * 1024 * 1024)  # 47 MB
 
 # Maximum total size we're willing to split (avoids spawning dozens of parts).
 _SPLIT_MAX_INPUT_BYTES = int(500 * 1024 * 1024)  # 500 MB
+
+
+async def _run_transform_process(
+    command: list[str],
+    *,
+    operation: str,
+    stdout_pipe: bool = True,
+    stderr_pipe: bool = True,
+    timeout: float | None = None,
+    cleanup_paths: tuple[str, ...] = (),
+) -> ProcessResult:
+    """Run one FFmpeg transform and record truthful wall-clock workload."""
+
+    started = time.monotonic()
+    try:
+        return await process_supervisor.run(
+            command,
+            stdout_pipe=stdout_pipe,
+            stderr_pipe=stderr_pipe,
+            timeout=timeout,
+            cleanup_paths=cleanup_paths,
+        )
+    finally:
+        metrics.transform_workload_duration_seconds.inc(
+            max(0.0, time.monotonic() - started),
+            operation=operation,
+        )
 
 
 def find_thumbnail(video_path: str) -> Optional[str]:
@@ -132,8 +161,9 @@ async def split_video_stream_copy(
     ]
 
     try:
-        process_result = await process_supervisor.run(
+        process_result = await _run_transform_process(
             cmd,
+            operation="split",
             stdout_pipe=False,
             timeout=120.0,
         )
@@ -347,8 +377,9 @@ async def compress_video_to_size(
 
     async def _run(cmd: list[str], label: str) -> tuple[int, str]:
         try:
-            process_result = await process_supervisor.run(
+            process_result = await _run_transform_process(
                 cmd,
+                operation=f"video_compress_{label}",
                 stdout_pipe=False,
                 timeout=_FFMPEG_TIMEOUT,
                 cleanup_paths=(output_path,) if label == "pass2" else (),
@@ -504,8 +535,9 @@ class MediaConverter:
             output_path,
         ]
         try:
-            result = await process_supervisor.run(
+            result = await _run_transform_process(
                 command,
+                operation="remux_opus",
                 stdout_pipe=False,
                 timeout=_FFMPEG_TIMEOUT,
                 cleanup_paths=(output_path,),
@@ -546,8 +578,9 @@ class MediaConverter:
             output_path,
         ]
         try:
-            result = await process_supervisor.run(
+            result = await _run_transform_process(
                 command,
+                operation="mp3",
                 stdout_pipe=False,
                 timeout=_FFMPEG_TIMEOUT,
                 cleanup_paths=(output_path,),
@@ -604,8 +637,9 @@ class MediaConverter:
         ]
 
         try:
-            process_result = await process_supervisor.run(
+            process_result = await _run_transform_process(
                 cmd,
+                operation="gif_copy" if use_copy else "gif_transcode",
                 stdout_pipe=False,
                 timeout=_FFMPEG_TIMEOUT,
                 cleanup_paths=(gif_path,),
@@ -633,8 +667,6 @@ class MediaConverter:
         gif_path = video_path.rsplit(".", 1)[0] + "_gif.mp4"
 
         try:
-            from app.core.metrics import metrics as _m
-
             # Probe codec to decide copy vs transcode
             codec = await _probe_video_codec(video_path)
             use_copy = codec in _MP4_SAFE_CODECS if codec else False
@@ -646,7 +678,7 @@ class MediaConverter:
                 )
 
             async with state.conversion_sem:
-                with _m.conversion_duration.time(type="gif"):
+                with metrics.conversion_duration.time(type="gif"):
                     rc, stderr_text = await MediaConverter._run_gif_ffmpeg(
                         video_path,
                         gif_path,
@@ -668,7 +700,7 @@ class MediaConverter:
                         )
 
             if rc != 0:
-                _m.conversion_failures.inc(type="gif")
+                metrics.conversion_failures.inc(type="gif")
                 logger.error(
                     "FFmpeg conversion failed (rc=%d): %s",
                     rc,
@@ -745,8 +777,13 @@ class MediaConverter:
 
         async def _run(cmd: list[str]) -> tuple[int, str]:
             try:
-                process_result = await process_supervisor.run(
+                process_result = await _run_transform_process(
                     cmd,
+                    operation=(
+                        "native_gif_palette"
+                        if cmd is pass1_cmd
+                        else "native_gif_render"
+                    ),
                     stdout_pipe=False,
                     timeout=_FFMPEG_TIMEOUT,
                     cleanup_paths=(cmd[-1],),
@@ -896,13 +933,12 @@ class MediaConverter:
                 cmd.extend(video_args)
                 cmd.extend(["-movflags", "+faststart", output_path])
 
-            from app.core.metrics import metrics as _m
-
             async with state.conversion_sem:
-                with _m.conversion_duration.time(type="slideshow"):
+                with metrics.conversion_duration.time(type="slideshow"):
                     try:
-                        process_result = await process_supervisor.run(
+                        process_result = await _run_transform_process(
                             cmd,
+                            operation="slideshow",
                             stdout_pipe=False,
                             timeout=300.0,
                             cleanup_paths=(output_path,),

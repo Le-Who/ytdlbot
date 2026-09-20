@@ -14,6 +14,9 @@ from app.api import routes
 from app.core import state
 from app.core.media_cache import CachedDelivery, MediaCache
 from app.core.metrics import MetricsCollector
+from app.core.process import ProcessResult
+from app.services import converter as converter_module
+from app.services.converter import MediaConverter
 from app.services.media import delivery as delivery_module
 from app.services.media import pipeline as pipeline_module
 from app.services.media import race as race_module
@@ -140,7 +143,7 @@ def test_media_pipeline_metrics_render_all_operational_series() -> None:
     collector.race_wasted_bytes.inc(4_096, provider="slow-provider")
     collector.retries.inc(reason="timeout")
     collector.provider_wins.inc(provider="fast-provider")
-    collector.transcode_cpu_seconds.inc(1.5, operation="remux")
+    collector.transform_workload_duration_seconds.inc(1.5, operation="remux")
     collector.queue_depth.set(2, queue="download")
     collector.orphan_processes.set(1)
 
@@ -153,11 +156,12 @@ def test_media_pipeline_metrics_render_all_operational_series() -> None:
         "ytdlbot_media_race_wasted_bytes_total",
         "ytdlbot_media_retries_total",
         "ytdlbot_media_provider_wins_total",
-        "ytdlbot_media_transcode_cpu_seconds_total",
+        "ytdlbot_media_transform_workload_duration_seconds_total",
         "ytdlbot_media_queue_depth",
         "ytdlbot_media_orphan_processes",
     )
     assert all(series in rendered for series in expected_series)
+    assert "transcode_cpu" not in rendered
     assert (
         'ytdlbot_media_pipeline_duration_seconds{phase="resolve",quantile="0.5"} '
         "0.250" in rendered
@@ -337,10 +341,43 @@ async def test_delivery_retry_and_transport_waste_and_transcode_are_recorded(
         ({"backend": "telegram", "reason": "telegram_delivery"}, 1.0)
     ]
     assert sum(value for _, value in collector.race_wasted_bytes.collect()) in sizes
-    assert collector.transcode_cpu_seconds.collect()[0][0] == {
-        "measurement": "wall_time_proxy",
-        "operation": "ffmpeg",
+    assert collector.transform_workload_duration_seconds.collect()[0][0] == {
+        "operation": "transport",
     }
+
+
+@pytest.mark.asyncio
+async def test_converter_gif_and_slideshow_record_transform_workload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collector = MetricsCollector()
+    monkeypatch.setattr(converter_module, "metrics", collector, raising=False)
+    monkeypatch.setattr(state, "conversion_sem", asyncio.Semaphore(1))
+    monkeypatch.setattr(
+        converter_module,
+        "_probe_video_codec",
+        AsyncMock(return_value="vp9"),
+    )
+
+    async def run(command, **kwargs):
+        del kwargs
+        Path(command[-1]).write_bytes(b"converted")
+        return ProcessResult(returncode=0, stdout=b"", stderr=b"")
+
+    monkeypatch.setattr(converter_module.process_supervisor, "run", run)
+    video = tmp_path / "source.webm"
+    image = tmp_path / "image.jpg"
+    video.write_bytes(b"video")
+    image.write_bytes(b"image")
+
+    assert await MediaConverter.convert_to_gif_ffmpeg(str(video)) is not None
+    assert await MediaConverter.images_to_video([str(image)]) is not None
+
+    operations = {
+        labels["operation"]
+        for labels, _ in collector.transform_workload_duration_seconds.collect()
+    }
+    assert operations == {"gif_transcode", "slideshow"}
 
 
 @pytest.mark.asyncio
@@ -384,3 +421,92 @@ async def test_first_byte_latency_ignores_empty_chunks_and_has_bounded_labels(
         if labels.get("phase") == "first_byte"
     ]
     assert first_byte == [({"phase": "first_byte"}, 1)]
+
+
+@pytest.mark.asyncio
+async def test_failed_stream_counts_partial_wasted_bytes_with_bounded_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collector = MetricsCollector()
+    monkeypatch.setattr(transport_module, "metrics", collector)
+    chunk = b"\x00\x00\x00\x18ftypisom"
+
+    class Response:
+        status_code = 200
+        headers = {"content-type": "video/mp4"}
+
+        async def iter_bytes(self, chunk_size: int):
+            del chunk_size
+            yield chunk
+            raise OSError("stream failed")
+
+        async def close(self) -> None:
+            pass
+
+    transport = MediaTransport(output_dir=tmp_path)
+    opened = SimpleNamespace(
+        response=Response(),
+        url="https://cdn.example/video.mp4?secret=never-a-label",
+        started_at=transport.clock(),
+    )
+    monkeypatch.setattr(transport, "_request", AsyncMock(return_value=opened))
+
+    with pytest.raises(OSError, match="stream failed"):
+        await transport._stream_source(
+            MediaSource(format_id="18", url=opened.url),
+            _Reservation(),  # type: ignore[arg-type]
+            already_written=0,
+            deadline=transport.clock() + 1,
+        )
+
+    assert collector.race_wasted_bytes.collect() == [
+        ({"outcome": "failed", "stage": "stream"}, float(len(chunk)))
+    ]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_stream_counts_partial_wasted_bytes_before_cleanup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collector = MetricsCollector()
+    monkeypatch.setattr(transport_module, "metrics", collector)
+    chunk = b"\x00\x00\x00\x18ftypisom"
+    waiting = asyncio.Event()
+
+    class Response:
+        status_code = 200
+        headers = {"content-type": "video/mp4"}
+
+        async def iter_bytes(self, chunk_size: int):
+            del chunk_size
+            yield chunk
+            waiting.set()
+            await asyncio.Event().wait()
+
+        async def close(self) -> None:
+            pass
+
+    transport = MediaTransport(output_dir=tmp_path)
+    opened = SimpleNamespace(
+        response=Response(),
+        url="https://cdn.example/video.mp4",
+        started_at=transport.clock(),
+    )
+    monkeypatch.setattr(transport, "_request", AsyncMock(return_value=opened))
+    task = asyncio.create_task(
+        transport._stream_source(
+            MediaSource(format_id="18", url=opened.url),
+            _Reservation(),  # type: ignore[arg-type]
+            already_written=0,
+            deadline=transport.clock() + 1,
+        )
+    )
+    await asyncio.wait_for(waiting.wait(), timeout=1)
+
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert collector.race_wasted_bytes.collect() == [
+        ({"outcome": "cancelled", "stage": "stream"}, float(len(chunk)))
+    ]

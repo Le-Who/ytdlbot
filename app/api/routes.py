@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from app.constants import AUDIO_FORMAT_ID, CHUNK_SIZE, GIF_FORMAT_ID
 from app.core import config, state
 from app.core.config import DL_TIMEOUT_HTTP, MAX_DL_MB, TELEGRAM_SECRET_TOKEN
+from app.core.job_store import JobStore
 from app.core.logging import set_correlation_id
 from app.core.metrics import metrics
 from app.core.models import DownloadContext
@@ -21,6 +22,8 @@ from app.core.process import run_subprocess
 logger = logging.getLogger("app.api")
 router = APIRouter()
 _HTTP_LEASE_RENEW_SECONDS = 5 * 60
+_LOCAL_API_PROBE_TIMEOUT_SECONDS = 2.0
+_DURABLE_STORE_PROBE_TIMEOUT_SECONDS = 1.0
 
 
 class DurableUpdateStore(Protocol):
@@ -31,6 +34,8 @@ class DurableUpdateStore(Protocol):
     def journal_mode(self) -> Awaitable[str]: ...
 
     def busy_timeout(self) -> Awaitable[int]: ...
+
+    def write_probe(self) -> Awaitable[None]: ...
 
 
 _job_store: DurableUpdateStore | None = None
@@ -63,15 +68,36 @@ def _delivery_profile() -> tuple[str, int]:
     )
 
 
+async def _local_bot_api_functional() -> bool:
+    if not config.TELEGRAM_LOCAL_ENDPOINT or state.bot_app is None:
+        return False
+    try:
+        await asyncio.wait_for(
+            state.bot_app.bot.get_me(),
+            timeout=_LOCAL_API_PROBE_TIMEOUT_SECONDS,
+        )
+    except Exception as error:  # noqa: BLE001 - dependency readiness boundary
+        logger.warning(
+            "Authenticated Local Bot API readiness probe failed",
+            extra={"error_type": type(error).__name__},
+        )
+        return False
+    return True
+
+
 async def _durable_store_health() -> dict[str, object]:
     store = _job_store
     if store is None:
         return {"ready": False}
     try:
-        schema_version, journal_mode, busy_timeout_ms = await asyncio.gather(
-            store.schema_version(),
-            store.journal_mode(),
-            store.busy_timeout(),
+        schema_version, journal_mode, busy_timeout_ms, _ = await asyncio.wait_for(
+            asyncio.gather(
+                store.schema_version(),
+                store.journal_mode(),
+                store.busy_timeout(),
+                store.write_probe(),
+            ),
+            timeout=_DURABLE_STORE_PROBE_TIMEOUT_SECONDS,
         )
     except Exception as error:  # noqa: BLE001 - dependency readiness boundary
         logger.warning(
@@ -79,12 +105,17 @@ async def _durable_store_health() -> dict[str, object]:
             extra={"error_type": type(error).__name__},
         )
         return {"ready": False}
-    ready = schema_version > 0 and journal_mode == "wal" and busy_timeout_ms > 0
+    ready = (
+        schema_version == JobStore.CURRENT_SCHEMA_VERSION
+        and journal_mode == "wal"
+        and busy_timeout_ms > 0
+    )
     return {
         "ready": ready,
         "schema_version": schema_version,
         "journal_mode": journal_mode,
         "busy_timeout_ms": busy_timeout_ms,
+        "writable": True,
     }
 
 
@@ -92,10 +123,9 @@ async def _durable_store_health() -> dict[str, object]:
 async def health_ready() -> JSONResponse:
     durable_store = await _durable_store_health()
     local_configured = bool(config.TELEGRAM_LOCAL_ENDPOINT)
-    # Application.initialize() performs Telegram's authenticated getMe call.
-    # main publishes state.bot_app only after that startup probe and bot start
-    # succeed, so no token needs to enter this response or its logs.
-    local_functional = local_configured and state.bot_app is not None
+    # getMe is both authenticated and bounded. Neither the token nor exception
+    # text enters this response or its logs.
+    local_functional = await _local_bot_api_functional()
     local_bot_api = {
         "required": config.TELEGRAM_LOCAL_REQUIRED,
         "configured": local_configured,

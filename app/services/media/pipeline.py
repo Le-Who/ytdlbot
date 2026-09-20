@@ -222,11 +222,21 @@ class MediaPipeline:
     ) -> DeliveryReceipt:
         """Record the complete delivery boundary around one pipeline request."""
 
+        return await self._record_delivery(
+            request,
+            self._deliver_request(request, target, **delivery_options),
+        )
+
+    async def _record_delivery(
+        self,
+        request: MediaRequest,
+        operation: Awaitable[DeliveryReceipt],
+    ) -> DeliveryReceipt:
+        """Apply consistent result and end-to-end timing to every public route."""
+
         started = time.monotonic()
         try:
-            receipt = await self._deliver_request(
-                request, target, **delivery_options
-            )
+            receipt = await operation
         except BaseException:
             metrics.pipeline_results.inc(
                 status="error", platform=request.platform
@@ -298,6 +308,23 @@ class MediaPipeline:
         candidate: MediaCandidate,
         **delivery_options: Any,
     ) -> DeliveryReceipt:
+        return await self._record_delivery(
+            request,
+            self._deliver_candidate_request(
+                request,
+                target,
+                candidate,
+                **delivery_options,
+            ),
+        )
+
+    async def _deliver_candidate_request(
+        self,
+        request: MediaRequest,
+        target: DeliveryTarget,
+        candidate: MediaCandidate,
+        **delivery_options: Any,
+    ) -> DeliveryReceipt:
         """Run an already-authorized direct item through validation and delivery.
 
         Instagram story/highlight selection already performed the authenticated
@@ -359,6 +386,21 @@ class MediaPipeline:
             return await self._with_lease_renewal(materialized, send())
 
     async def deliver_slideshow_video(
+        self,
+        request: MediaRequest,
+        target: DeliveryTarget,
+        **delivery_options: Any,
+    ) -> DeliveryReceipt:
+        return await self._record_delivery(
+            request,
+            self._deliver_slideshow_video_request(
+                request,
+                target,
+                **delivery_options,
+            ),
+        )
+
+    async def _deliver_slideshow_video_request(
         self,
         request: MediaRequest,
         target: DeliveryTarget,

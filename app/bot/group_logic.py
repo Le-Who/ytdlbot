@@ -10,6 +10,7 @@ from app.core.config import MAX_TG_UPLOAD_MB
 from app.core.utils import extract_url_from_update
 from app.services.downloader import MediaSender
 from app.core.models import DownloadContext
+from app.core.process import process_owner_scope
 from app.core.texts import Texts
 from app.services.ytdlp.parsers import _is_tiktok
 from app.services.media.pipeline import (
@@ -160,18 +161,20 @@ async def handle_group_message(
     if url_type != "unknown":
         from app.bot.messages import _handle_instagram
 
-        await _handle_instagram(
-            update,
-            context,
-            url,
-            uuid.uuid4().hex[:8],
-            section,
-            url_type,
-            ig_target,
-            ig_item_id,
-            status_msg=status_msg,
-            caller_scope="group",
-        )
+        instagram_token = uuid.uuid4().hex[:8]
+        with process_owner_scope(instagram_token):
+            await _handle_instagram(
+                update,
+                context,
+                url,
+                instagram_token,
+                section,
+                url_type,
+                ig_target,
+                ig_item_id,
+                status_msg=status_msg,
+                caller_scope="group",
+            )
         return
 
     # Generate token for this operation (used for file cache & callbacks)
@@ -229,7 +232,8 @@ async def handle_group_message(
         # For non-TikTok URLs (or if we skipped TikTok block), run extraction
         if not is_tiktok_url:
             try:
-                result = await state.ytdlp.list_formats(url)
+                with process_owner_scope(token):
+                    result = await state.ytdlp.list_formats(url)
                 is_slideshow = result.is_slideshow
                 tiktok_auth_error = result.tiktok_auth_error
                 info_json_path = result.info_json_path
@@ -327,7 +331,8 @@ async def handle_group_message(
             if file_path and (not file_path.startswith("http")):
                 from app.services.orchestrator import extract_video_meta, TG_SAFE_CODECS
 
-                meta = await extract_video_meta(file_path)
+                with process_owner_scope(token):
+                    meta = await extract_video_meta(file_path)
                 vcodec = meta.get("vcodec")
                 pix_fmt = meta.get("pix_fmt")
                 codec_tag = meta.get("codec_tag", "")
@@ -365,18 +370,20 @@ async def handle_group_message(
                 if file_path and not file_path.startswith("http"):
                     from app.services.orchestrator import ensure_telegram_compatible
 
-                    file_path = await ensure_telegram_compatible(file_path)
+                    with process_owner_scope(token):
+                        file_path = await ensure_telegram_compatible(file_path)
 
             if file_path:
                 state.file_cache[token] = file_path
         elif video_format == "gallerydl_fallback":
             from app.services.gallery_dl.service import GalleryDlService
 
-            file_path, error = await GalleryDlService.download_video(
-                url,
-                state.ytdlp.cookies_path,
-                state.ytdlp.tiktok_proxy,
-            )
+            with process_owner_scope(token):
+                file_path, error = await GalleryDlService.download_video(
+                    url,
+                    state.ytdlp.cookies_path,
+                    state.ytdlp.tiktok_proxy,
+                )
             if file_path:
                 state.file_cache[token] = file_path
         elif video_format == "pinterest_native":
@@ -523,24 +530,26 @@ async def on_group_slideshow(
                 return
             try:
                 if is_photo_mode:
-                    receipt = await pipeline.deliver(
-                        request,
-                        DeliveryTarget(str(chat_id), caller_scope="group"),
-                        caption=f"👤 {user_tag}",
-                        parse_mode="HTML",
-                    )
+                    with process_owner_scope(token):
+                        receipt = await pipeline.deliver(
+                            request,
+                            DeliveryTarget(str(chat_id), caller_scope="group"),
+                            caption=f"👤 {user_tag}",
+                            parse_mode="HTML",
+                        )
                     success = receipt.success
                     error_text = next(
                         (item.error for item in receipt.items if item.error),
                         Texts.GROUP_SEND_ERROR,
                     )
                 else:
-                    receipt = await pipeline.deliver_slideshow_video(
-                        request,
-                        DeliveryTarget(str(chat_id), caller_scope="group"),
-                        caption=f"👤 {user_tag}",
-                        parse_mode="HTML",
-                    )
+                    with process_owner_scope(token):
+                        receipt = await pipeline.deliver_slideshow_video(
+                            request,
+                            DeliveryTarget(str(chat_id), caller_scope="group"),
+                            caption=f"👤 {user_tag}",
+                            parse_mode="HTML",
+                        )
                     success = receipt.success
                     error_text = next(
                         (item.error for item in receipt.items if item.error),
@@ -585,7 +594,8 @@ async def on_group_slideshow(
                 result = None
                 error = "⚠️ Ошибка загрузки слайдшоу из внешнего API."
         else:
-            result, error = await MediaSender.download_slideshow(page_url)
+            with process_owner_scope(token):
+                result, error = await MediaSender.download_slideshow(page_url)
 
         if error or not result:
             # Slideshow download failed — try TikWM as video fallback
@@ -666,9 +676,10 @@ async def on_group_slideshow(
                 # Convert to video
                 await q.edit_message_text(Texts.SLIDESHOW_CONVERTING)
 
-                video_path = await MediaSender.images_to_video(
-                    result.images, result.audio
-                )
+                with process_owner_scope(token):
+                    video_path = await MediaSender.images_to_video(
+                        result.images, result.audio
+                    )
                 if not video_path:
                     await q.edit_message_text(Texts.SLIDESHOW_ERROR)
                     return

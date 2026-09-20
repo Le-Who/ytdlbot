@@ -3,6 +3,7 @@ from unittest.mock import AsyncMock
 """Tests for on_message handler — the core user flow."""
 
 import unittest
+from types import SimpleNamespace
 
 
 class AsyncMockCache(dict):
@@ -130,6 +131,43 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
         # user_data should have page_url set
         self.assertEqual(self.context.user_data["page_url"], url)
         self.assertEqual(self.context.user_data["title"], "Cached Video Title")
+
+    async def test_uncached_list_formats_binds_parse_cancellation_owner(self):
+        from app.core.process import current_process_owner
+        from app.services.ytdlp.models import ExtractionResult
+
+        url = "https://youtube.com/watch?v=owner123"
+        self.update.message.text = url
+        status_msg = AsyncMock()
+        self.update.message.reply_text = AsyncMock(return_value=status_msg)
+
+        async def list_formats(_url):
+            self.assertEqual(current_process_owner(), "parseown")
+            return ExtractionResult(
+                title="Owned parse",
+                formats=[],
+                special_format=None,
+                duration_str="0:01",
+                is_slideshow=False,
+                info_json_path=None,
+                thumbnail_url=None,
+            )
+
+        ytdlp = MagicMock()
+        ytdlp.list_formats = AsyncMock(side_effect=list_formats)
+        with (
+            patch.object(state, "media_pipeline", None),
+            patch.object(state, "ytdlp", ytdlp),
+            patch.object(
+                messages.uuid,
+                "uuid4",
+                return_value=SimpleNamespace(hex="parseown"),
+            ),
+            patch.object(messages, "build_format_keyboard", return_value=MagicMock()),
+        ):
+            await messages.on_message(self.update, self.context)
+
+        self.assertEqual(self.context.user_data["parse_token"], "parseown")
 
     async def test_tiktok_api_failure_assigns_synthetic_cache_value(self):
         """TikTok fallback must not read the local ``cached`` before assignment."""

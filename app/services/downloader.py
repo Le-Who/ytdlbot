@@ -27,7 +27,11 @@ from app.core.config import (
     YOUTUBE_PIPE_MODE,
 )
 from app.core.utils import safe_remove
-from app.core.process import ProcessOwnerCancelled, run_subprocess
+from app.core.process import (
+    ProcessOwnerCancelled,
+    current_process_owner,
+    run_subprocess,
+)
 from app.core.policy import size_allowed
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 
@@ -133,7 +137,7 @@ class VideoDownloader:
             _metrics().active_downloads.inc()
 
             PROGRESS_RE = re.compile(rb"\[download\]\s+([\d\.]+)%[^E]*ETA\s+([\d:]+)")
-            
+
             async def _handle_progress(line: bytes) -> None:
                 if not progress_callback:
                     return
@@ -153,7 +157,7 @@ class VideoDownloader:
             async with run_subprocess(
                 cmd,
                 stderr_callback=on_stderr,
-                owner=token,
+                owner=current_process_owner() or token,
             ) as handle:
                 proc = handle.proc
                 assert proc.stdout is not None

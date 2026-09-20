@@ -27,7 +27,7 @@ from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID, SLIDESHOW_PHOTO_FORMAT
 from app.bot.keyboards import build_format_keyboard
 from app.core.texts import Texts
 from app.core.logging import set_correlation_id
-from app.core.process import process_supervisor
+from app.core.process import process_owner_scope, process_supervisor
 from app.services.downloader import MediaSender
 from app.core.models import DownloadContext
 from app.services.orchestrator import DownloadOrchestrator
@@ -403,7 +403,8 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
     try:
         # 2. Convert (Strip Audio)
-        gif_path = await MediaSender.convert_to_gif_ffmpeg(video_path)
+        with process_owner_scope(token):
+            gif_path = await MediaSender.convert_to_gif_ffmpeg(video_path)
     finally:
         state.processing_gifs.discard(token)
 
@@ -475,6 +476,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     is_api = prefix == "apislide"
+    process_token: str | None = None
 
     if is_api:
         try:
@@ -482,6 +484,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         except ValueError:
             return
 
+        process_token = parse_token
         payload = await state.link_cache.get(parse_token)
         if not payload:
             await _edit_or_reply(q, Texts.LINK_EXPIRED)
@@ -518,6 +521,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
         data = context.user_data
         assert data is not None
+        process_token = data.get("parse_token")
         page_url = data.get("page_url")
         if not page_url:
             await _edit_or_reply(q, Texts.DATA_EXPIRED_RESEND)
@@ -554,22 +558,28 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 return
             try:
                 if is_photo_mode:
-                    receipt = await pipeline.deliver(
-                        request,
-                        DeliveryTarget(str(q.message.chat_id), caller_scope="callback"),
-                        caption="📸",
-                    )
+                    with process_owner_scope(process_token):
+                        receipt = await pipeline.deliver(
+                            request,
+                            DeliveryTarget(
+                                str(q.message.chat_id), caller_scope="callback"
+                            ),
+                            caption="📸",
+                        )
                     success = receipt.success
                     error_text = next(
                         (item.error for item in receipt.items if item.error),
                         Texts.SEND_ERROR,
                     )
                 else:
-                    receipt = await pipeline.deliver_slideshow_video(
-                        request,
-                        DeliveryTarget(str(q.message.chat_id), caller_scope="callback"),
-                        caption="🎬",
-                    )
+                    with process_owner_scope(process_token):
+                        receipt = await pipeline.deliver_slideshow_video(
+                            request,
+                            DeliveryTarget(
+                                str(q.message.chat_id), caller_scope="callback"
+                            ),
+                            caption="🎬",
+                        )
                     success = receipt.success
                     error_text = next(
                         (item.error for item in receipt.items if item.error),
@@ -610,7 +620,8 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 result = None
                 error = "⚠️ Ошибка загрузки слайдшоу из внешнего API."
         else:
-            result, error = await MediaSender.download_slideshow(page_url)
+            with process_owner_scope(process_token):
+                result, error = await MediaSender.download_slideshow(page_url)
 
         if error or not result:
             await _edit_or_reply(q, error or Texts.SLIDESHOW_ERROR)
@@ -648,9 +659,10 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 # Convert to video and send
                 await _edit_or_reply(q, Texts.SLIDESHOW_CONVERTING)
 
-                video_path = await MediaSender.images_to_video(
-                    result.images, result.audio
-                )
+                with process_owner_scope(process_token):
+                    video_path = await MediaSender.images_to_video(
+                        result.images, result.audio
+                    )
 
                 if not video_path:
                     await _edit_or_reply(q, Texts.SLIDESHOW_ERROR)
@@ -859,7 +871,8 @@ async def on_save_as_gif_file(
             )
             gif_path = video_path
         else:
-            gif_path = await MediaConverter.convert_to_native_gif(video_path)
+            with process_owner_scope(token):
+                gif_path = await MediaConverter.convert_to_native_gif(video_path)
 
         if not gif_path:
             try:

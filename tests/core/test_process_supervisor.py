@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from app.core.process import ProcessOwnerCancelled, ProcessSupervisor
+from app.core.process import ProcessHandle, ProcessOwnerCancelled, ProcessSupervisor
 
 
 async def _wait_for_file(path: Path) -> None:
@@ -105,6 +105,145 @@ async def test_nested_processes_for_same_owner_share_one_bounded_lease():
 
     assert result.returncode == 0
     assert result.stdout.strip() == b"child"
+
+
+@pytest.mark.asyncio
+async def test_scoped_owner_cancels_implicit_child_process(tmp_path: Path):
+    from app.core.process import process_owner_scope
+
+    ready = tmp_path / "scoped-ready"
+    supervisor = ProcessSupervisor(max_processes=1)
+    with process_owner_scope("request-token"):
+        task = asyncio.create_task(
+            supervisor.run(
+                [
+                    sys.executable,
+                    "-c",
+                    f"import pathlib,time;pathlib.Path({str(ready)!r}).touch();time.sleep(60)",
+                ]
+            )
+        )
+    await _wait_for_file(ready)
+
+    await supervisor.cancel_owner("request-token")
+    await asyncio.wait_for(task, timeout=2)
+
+    assert supervisor.processes_for("request-token") == ()
+
+
+@pytest.mark.asyncio
+async def test_explicit_owner_overrides_scoped_owner(tmp_path: Path):
+    from app.core.process import process_owner_scope
+
+    ready = tmp_path / "explicit-ready"
+    supervisor = ProcessSupervisor(max_processes=1)
+    with process_owner_scope("request-token"):
+        task = asyncio.create_task(
+            supervisor.run(
+                [
+                    sys.executable,
+                    "-c",
+                    f"import pathlib,time;pathlib.Path({str(ready)!r}).touch();time.sleep(60)",
+                ],
+                owner="explicit-owner",
+            )
+        )
+    await _wait_for_file(ready)
+
+    await supervisor.cancel_owner("request-token")
+    assert not task.done()
+    await supervisor.cancel_owner("explicit-owner")
+    await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_token_cancels_long_gallery_dl_service_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from app.core.process import process_owner_scope
+    from app.services.gallery_dl import service as gallery_service
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    ready = tmp_path / "gallery-ready"
+    supervisor = ProcessSupervisor(max_processes=1)
+
+    class GalleryProcessProxy:
+        def run(self, _command, **kwargs):
+            output_dir = Path(tuple(kwargs["cleanup_paths"])[0])
+            script = (
+                "import pathlib,socket,time;"
+                f"pathlib.Path({str(output_dir / 'item.part')!r}).touch();"
+                "s=socket.socket();"
+                f"s.bind(('127.0.0.1',{port}));s.listen();"
+                f"pathlib.Path({str(ready)!r}).touch();"
+                "time.sleep(60)"
+            )
+            return supervisor.run([sys.executable, "-c", script], **kwargs)
+
+    monkeypatch.setattr(gallery_service, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(gallery_service, "process_supervisor", GalleryProcessProxy())
+    with process_owner_scope("gallery-token"):
+        task = asyncio.create_task(
+            gallery_service.GalleryDlService.download_video(
+                "https://example.invalid/video"
+            )
+        )
+    await _wait_for_file(ready)
+
+    started = time.monotonic()
+    await supervisor.cancel_owner("gallery-token")
+    await asyncio.wait_for(task, timeout=max(0.1, 2 - (time.monotonic() - started)))
+
+    assert not list(tmp_path.glob("gdl_video_*"))
+    with socket.socket() as replacement:
+        replacement.bind(("127.0.0.1", port))
+
+
+@pytest.mark.asyncio
+async def test_token_cancels_long_ffmpeg_conversion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    from app.core.process import process_owner_scope
+    from app.services import converter
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    ready = tmp_path / "ffmpeg-ready"
+    source = tmp_path / "audio.webm"
+    output = tmp_path / "audio.mp3"
+    source.write_bytes(b"source")
+    supervisor = ProcessSupervisor(max_processes=1)
+
+    class FfmpegProcessProxy:
+        def run(self, _command, **kwargs):
+            script = (
+                "import pathlib,socket,time;"
+                f"pathlib.Path({str(output)!r}).write_bytes(b'partial');"
+                "s=socket.socket();"
+                f"s.bind(('127.0.0.1',{port}));s.listen();"
+                f"pathlib.Path({str(ready)!r}).touch();"
+                "time.sleep(60)"
+            )
+            return supervisor.run([sys.executable, "-c", script], **kwargs)
+
+    monkeypatch.setattr(converter, "process_supervisor", FfmpegProcessProxy())
+    with process_owner_scope("ffmpeg-token"):
+        task = asyncio.create_task(converter.MediaConverter.convert_to_mp3(str(source)))
+    await _wait_for_file(ready)
+
+    started = time.monotonic()
+    await supervisor.cancel_owner("ffmpeg-token")
+    result = await asyncio.wait_for(
+        task, timeout=max(0.1, 2 - (time.monotonic() - started))
+    )
+
+    assert result is None
+    assert not output.exists()
+    with socket.socket() as replacement:
+        replacement.bind(("127.0.0.1", port))
 
 
 @pytest.mark.asyncio
@@ -292,6 +431,41 @@ async def test_windows_assignment_failure_kills_process_and_closes_job(monkeypat
     proc.kill.assert_called_once()
     assert closed == [99]
     assert supervisor.processes_for("failed-job") == ()
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Object behavior")
+@pytest.mark.asyncio
+async def test_windows_cancel_and_finish_serialize_job_handle_teardown(monkeypatch):
+    proc = AsyncMock()
+    proc.returncode = 0
+    proc.wait = AsyncMock(return_value=0)
+    queried = 0
+    closed: list[int] = []
+
+    def active_processes(handle: int) -> int:
+        nonlocal queried
+        assert handle == 99
+        queried += 1
+        return 1 if queried == 1 else 0
+
+    monkeypatch.setattr("app.core.process._terminate_windows_job", lambda _job: True)
+    monkeypatch.setattr(
+        "app.core.process._windows_job_active_processes", active_processes
+    )
+    monkeypatch.setattr(
+        "app.core.process._close_windows_job", lambda handle: closed.append(handle)
+    )
+    handle = ProcessHandle(
+        proc=proc,
+        owner="race",
+        process_group_id=1,
+        windows_job=99,
+    )
+
+    for _ in range(20):
+        await asyncio.gather(handle.cancel(), handle.close_tree())
+
+    assert closed == [99]
 
 
 @pytest.mark.asyncio

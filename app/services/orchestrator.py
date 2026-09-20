@@ -14,7 +14,7 @@ from app.core.utils import safe_remove
 from app.core.policy import size_allowed
 from app.core.texts import Texts
 from app.core.models import DownloadContext
-from app.core.process import process_supervisor
+from app.core.process import process_owner_scope, process_supervisor
 from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 from app.services.downloader import MediaSender
 from app.services.tikwm import TikWMService
@@ -310,6 +310,29 @@ class DownloadOrchestrator:
 
     @staticmethod
     async def process_download(
+        token: str,
+        chat_id: int,
+        bot: Bot,
+        payload: DownloadContext,
+        fmt_size: Optional[int],
+        update_ui: Callable[[str, Optional[object]], Awaitable[None]],
+        kb_error: object,
+        caller_scope: str = "callback",
+    ) -> bool:
+        with process_owner_scope(token):
+            return await DownloadOrchestrator._process_download_owned(
+                token,
+                chat_id,
+                bot,
+                payload,
+                fmt_size,
+                update_ui,
+                kb_error,
+                caller_scope,
+            )
+
+    @staticmethod
+    async def _process_download_owned(
         token: str,
         chat_id: int,
         bot: Bot,

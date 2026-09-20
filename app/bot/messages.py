@@ -12,9 +12,9 @@ from app.core.config import MAX_TG_UPLOAD_MB, ENABLE_COBALT_TIKTOK
 from app.core.user_prefs import get_prefs
 from app.core.models import DownloadContext
 from app.core.metrics import metrics as _m
+from app.core.process import process_owner_scope
 from app.bot.commands import cmd_mp3, _MP4_FORMAT as _fmt_pref, _fast_download
 from app.services.instagram import (
-    is_instagram_url,
     parse_instagram_url,
     InstagramService,
 )
@@ -161,19 +161,29 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     # ── Instagram Early Intercept ────────────────────────────────────────
     url_type, ig_target, ig_item_id = parse_instagram_url(text)
     if state.media_pipeline is not None and url_type in {"unknown", "post"}:
-        await _deliver_private_pipeline(update, context, text, section)
+        with process_owner_scope(parse_token):
+            await _deliver_private_pipeline(update, context, text, section)
         return
     if url_type != "unknown":
-        await _handle_instagram(
-            update, context, text, parse_token, section, url_type, ig_target, ig_item_id
-        )
+        with process_owner_scope(parse_token):
+            await _handle_instagram(
+                update,
+                context,
+                text,
+                parse_token,
+                section,
+                url_type,
+                ig_target,
+                ig_item_id,
+            )
         return
     # ── End Instagram Intercept ──────────────────────────────────────────
 
     # ── Twitter / X Early Intercept ──────────────────────────────────────
     is_twitter_url = "x.com" in text.lower() or "twitter.com" in text.lower()
     if is_twitter_url:
-        handled = await _handle_twitter(update, context, text, parse_token, section)
+        with process_owner_scope(parse_token):
+            handled = await _handle_twitter(update, context, text, parse_token, section)
         if handled:
             return
     # ── End Twitter / X Intercept ────────────────────────────────────────
@@ -354,7 +364,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
                             import time as _time
 
                             _ext_start = _time.monotonic()
-                            result = await state.ytdlp.list_formats(text)
+                            with process_owner_scope(parse_token):
+                                result = await state.ytdlp.list_formats(text)
                             title = result.title
                             formats = result.formats
                             special_format = result.special_format
@@ -423,6 +434,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     data["info_json_path"] = info_json_path if not is_slideshow else None
     data["thumbnail_url"] = thumbnail_url
     data["section"] = section
+    data["parse_token"] = parse_token
 
     if is_slideshow:
         # Save specific api state for the slideshow
@@ -502,7 +514,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if file_path and (not file_path.startswith("http")):
             from app.services.orchestrator import extract_video_meta, TG_SAFE_CODECS
 
-            meta = await extract_video_meta(file_path)
+            with process_owner_scope(parse_token):
+                meta = await extract_video_meta(file_path)
             vcodec = meta.get("vcodec")
             pix_fmt = meta.get("pix_fmt")
             codec_tag = meta.get("codec_tag", "")
@@ -545,7 +558,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         if file_path and not file_path.startswith("http"):
             from app.services.orchestrator import ensure_telegram_compatible
 
-            file_path = await ensure_telegram_compatible(file_path)
+            with process_owner_scope(parse_token):
+                file_path = await ensure_telegram_compatible(file_path)
 
         from app.bot.keyboards import build_video_keyboard
 

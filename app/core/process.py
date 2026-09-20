@@ -16,9 +16,11 @@ from collections.abc import (
     Coroutine,
     Hashable,
     Iterable,
+    Iterator,
     Sequence,
 )
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
+from contextvars import ContextVar
 from ctypes import wintypes
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -29,6 +31,26 @@ _CREATE_SUSPENDED = 0x00000004
 _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
+_process_owner: ContextVar[Hashable | None] = ContextVar(
+    "media_process_owner", default=None
+)
+
+
+@contextmanager
+def process_owner_scope(owner: Hashable | None) -> Iterator[None]:
+    """Bind a stable request owner for every nested supervised subprocess."""
+    if owner is None:
+        yield
+        return
+    binding = _process_owner.set(owner)
+    try:
+        yield
+    finally:
+        _process_owner.reset(binding)
+
+
+def current_process_owner() -> Hashable | None:
+    return _process_owner.get()
 
 
 class _IoCounters(ctypes.Structure):
@@ -194,10 +216,11 @@ class ProcessHandle:
     stderr_task: asyncio.Task[None] | None = None
     cancel_requested: bool = False
     finished: bool = False
-    _cancel_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _tree_closed: bool = False
+    _teardown_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     async def cancel(self) -> None:
-        async with self._cancel_lock:
+        async with self._teardown_lock:
             if self.cancel_requested:
                 return
             self.cancel_requested = True
@@ -214,6 +237,8 @@ class ProcessHandle:
                     await asyncio.wait_for(self.proc.wait(), timeout=0.5)
                 except TimeoutError:
                     pass
+                return
+            if self.proc.returncode is not None:
                 return
             try:
                 completed = await asyncio.to_thread(
@@ -291,11 +316,15 @@ class ProcessHandle:
             await asyncio.sleep(0.01)
 
     async def close_tree(self) -> None:
-        if self.windows_job is not None:
-            _terminate_windows_job(self.windows_job)
-            await self._wait_for_windows_job_exit()
-            _close_windows_job(self.windows_job)
-            self.windows_job = None
+        async with self._teardown_lock:
+            if self._tree_closed:
+                return
+            if self.windows_job is not None:
+                _terminate_windows_job(self.windows_job)
+                await self._wait_for_windows_job_exit()
+                _close_windows_job(self.windows_job)
+                self.windows_job = None
+            self._tree_closed = True
 
     async def wait(self) -> int:
         return await self.proc.wait()
@@ -331,6 +360,9 @@ class ProcessSupervisor:
     def _owner(owner: Hashable | None) -> Hashable:
         if owner is not None:
             return owner
+        bound_owner = current_process_owner()
+        if bound_owner is not None:
+            return bound_owner
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("a process owner is required outside an asyncio task")
@@ -492,8 +524,8 @@ class ProcessSupervisor:
                         self._by_owner.pop(handle.owner, None)
         async with state.active_processes_lock:
             state.active_processes.discard(handle.proc)
-        await asyncio.shield(handle.close_tree())
         if first_finish:
+            await asyncio.shield(handle.close_tree())
             self._process_slots.release()
             await self._release_owner_slot(handle.owner)
 

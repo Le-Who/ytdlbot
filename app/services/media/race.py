@@ -99,7 +99,7 @@ async def race_candidates(
     """Return the first validated candidate, respecting all request constraints.
 
     Two cheap workers hold their slots through Retry-After waits. A single
-    delayed heavy worker may execute one route. Adapters can consume the same
+    delayed heavy worker may invoke one route once. Adapters can consume the same
     RaceConfig.connect_timeout when they construct their HTTP clients.
     """
     if config is None:
@@ -145,7 +145,8 @@ async def race_candidates(
                 )
                 delay = error.retry_after
                 if (
-                    error.kind is FailureKind.TRANSIENT
+                    not route.provider.is_heavy
+                    and error.kind is FailureKind.TRANSIENT
                     and delay is not None
                     and 0 < delay < deadline - clock()
                     and not finished.done()

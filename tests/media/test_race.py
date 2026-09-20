@@ -379,6 +379,29 @@ async def test_failed_heavy_route_does_not_start_second_heavy_provider():
     assert clock.sleepers == []
 
 
+async def test_heavy_retry_after_cannot_consume_a_second_resolve_invocation():
+    clock = ManualClock()
+    provider = Provider(
+        "local",
+        clock,
+        error=ProviderError(FailureKind.TRANSIENT, retry_after=2),
+        is_heavy=True,
+    )
+    reserve = Provider("reserve-local", clock, is_heavy=True)
+    task = start(clock, [provider, reserve])
+    await clock.advance(1.5)
+    finished_after_first_attempt = task.done()
+    await clock.advance(2)
+    result = await result_of(task)
+    assert provider.starts == [1.5]
+    assert reserve.starts == []
+    assert result.winner is None
+    assert finished_after_first_attempt
+    assert len(result.failures) == 1
+    assert result.failures[0].retry_after == 2
+    assert clock.sleepers == []
+
+
 async def test_retry_loop_stops_immediately_when_third_failure_opens_breaker():
     clock = ManualClock()
     breaker = CircuitBreaker(clock=clock)

@@ -13,7 +13,7 @@ import json
 import math
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, cast
@@ -45,6 +45,7 @@ from .transport import MaterializedItem, MediaTransport
 from .validation import validate_candidate
 
 ArtifactValidator = Callable[[MediaRequest, MaterializedItem], Awaitable[None]]
+SlideshowConverter = Callable[[list[str], str | None], Awaitable[str | None]]
 
 if TYPE_CHECKING:
     from app.core.media_cache import MediaCache
@@ -136,6 +137,16 @@ class _ReadyMaterialization:
     users: int
 
 
+class _EphemeralReservation:
+    """Adapter for a derived artifact cleaned by its owning pipeline operation."""
+
+    def renew(self) -> None:
+        return None
+
+    async def release(self) -> None:
+        return None
+
+
 class MediaPipeline:
     """Resolve, materialize, validate, and deliver a canonical media request."""
 
@@ -151,6 +162,7 @@ class MediaPipeline:
         refreshers: Mapping[str, Any] | None = None,
         enforce_route_matrix: bool = False,
         lease_renew_interval: float = 5 * 60,
+        slideshow_converter: SlideshowConverter | None = None,
     ) -> None:
         if not math.isfinite(lease_renew_interval) or lease_renew_interval <= 0:
             raise ValueError("lease renewal interval must be finite and positive")
@@ -163,6 +175,7 @@ class MediaPipeline:
         self.refreshers = dict(refreshers or {})
         self.enforce_route_matrix = enforce_route_matrix
         self.lease_renew_interval = lease_renew_interval
+        self.slideshow_converter = slideshow_converter or _convert_slideshow
         # Domain separation is intentional: the same textual key can never make
         # a resolve factory subscribe to its own materialization flight.
         self._resolve_flights: SingleFlightGroup[str, ResolvedMedia] = (
@@ -184,6 +197,18 @@ class MediaPipeline:
         if resolved.request is request:
             return resolved
         return replace(resolved, request=request)
+
+    async def cached_item_count(self, request: MediaRequest) -> int | None:
+        """Return stable cached cardinality without invoking any provider."""
+        if self.media_cache is None:
+            return None
+        try:
+            metadata = await self.media_cache.get_metadata(request)
+        except Exception:  # noqa: BLE001 - cache is optional acceleration
+            return None
+        if metadata is None or metadata.item_count <= 0:
+            return None
+        return metadata.item_count
 
     async def deliver(
         self,
@@ -299,15 +324,173 @@ class MediaPipeline:
 
             return await self._with_lease_renewal(materialized, send())
 
+    async def deliver_slideshow_video(
+        self,
+        request: MediaRequest,
+        target: DeliveryTarget,
+        **delivery_options: Any,
+    ) -> DeliveryReceipt:
+        """Materialize a photo album and its soundtrack into one validated video."""
+        _validate_delivery_scope(request, target)
+        source_request = replace(
+            request,
+            kind=MediaKind.AUTO,
+            clip=ClipInterval(),
+            album_selection=(),
+        )
+        video_request = replace(
+            source_request,
+            kind=MediaKind.VIDEO,
+            exact=True,
+        )
+        cached_receipt = await self._deliver_cached(
+            video_request, target, delivery_options
+        )
+        if cached_receipt is not None:
+            if cached_receipt.success:
+                return cached_receipt
+            if not cached_receipt.retryable_items:
+                return cached_receipt
+
+        resolved = await self.resolve(source_request)
+        if not resolved.candidates:
+            raise MediaResolutionError("slideshow contains no materializable candidate")
+        candidate = resolved.candidates[0]
+        if len(candidate.items) < 2 or any(
+            item.kind is not MediaKind.PHOTO for item in candidate.items
+        ):
+            raise MediaResolutionError("slideshow video requires a photo album")
+        image_candidate = _materialization_candidates((candidate,))[0]
+        image_resolved = replace(
+            resolved,
+            request=source_request,
+            items=image_candidate.items,
+            candidates=(image_candidate,),
+        )
+        soundtrack = _slideshow_soundtrack(candidate, source_request)
+
+        async with AsyncExitStack() as stack:
+            images = await stack.enter_async_context(
+                self.open_materialized(source_request, resolved=image_resolved)
+            )
+            materialized = [images]
+            audio_path: str | None = None
+            if soundtrack is not None:
+                audio_request, audio_candidate = soundtrack
+                audio_resolved = ResolvedMedia(
+                    request=audio_request,
+                    items=audio_candidate.items,
+                    candidates=(audio_candidate,),
+                    provider=resolved.provider,
+                    attempted_providers=resolved.attempted_providers,
+                )
+                audio = await stack.enter_async_context(
+                    self.open_materialized(audio_request, resolved=audio_resolved)
+                )
+                if len(audio.paths) != 1:
+                    raise ArtifactValidationError(
+                        "slideshow soundtrack materialized more than one file"
+                    )
+                materialized.append(audio)
+                audio_path = str(audio.paths[0])
+
+            async def convert_validate_deliver() -> DeliveryReceipt:
+                output = await self.slideshow_converter(
+                    [str(path) for path in images.paths], audio_path
+                )
+                if not output:
+                    raise MediaPipelineError("slideshow video conversion failed")
+                video_path = Path(output)
+                try:
+                    if not video_path.is_file() or video_path.stat().st_size <= 0:
+                        raise ArtifactValidationError(
+                            "slideshow conversion produced no output"
+                        )
+                    video_item = MediaItem(
+                        media_id=video_request.media_id,
+                        kind=MediaKind.VIDEO,
+                        url=video_request.canonical_url,
+                        container="mp4",
+                        filesize_bytes=video_path.stat().st_size,
+                    )
+                    video_candidate = MediaCandidate(
+                        candidate_id=f"{candidate.candidate_id}:slideshow-video",
+                        url=video_request.canonical_url,
+                        has_video=True,
+                        has_audio=audio_path is not None,
+                        container="mp4",
+                        filesize_bytes=video_path.stat().st_size,
+                        provider=resolved.provider,
+                        backend_family="pipeline-slideshow",
+                        media_id=video_request.media_id,
+                        kind=MediaKind.VIDEO,
+                        items=(video_item,),
+                        auth_scope=video_request.auth_scope,
+                    )
+                    derived = MaterializedItem(
+                        (video_path,),
+                        video_path.stat().st_size,
+                        video_candidate,
+                        cast(Any, _EphemeralReservation()),
+                    )
+                    await self.artifact_validator(video_request, derived)
+                    await self._store_metadata(
+                        ResolvedMedia(
+                            request=video_request,
+                            items=(video_item,),
+                            candidates=(video_candidate,),
+                            provider=resolved.provider,
+                        )
+                    )
+                    if cached_receipt is not None:
+                        retry = await self.delivery.retry_failed(
+                            cached_receipt,
+                            derived,
+                            target,
+                            request=video_request,
+                            **delivery_options,
+                        )
+                        return _merge_receipts(cached_receipt, retry)
+                    receipt = await self.delivery.deliver(
+                        derived,
+                        target,
+                        request=video_request,
+                        **delivery_options,
+                    )
+                    if receipt.retryable_items:
+                        retried = await self.delivery.retry_failed(
+                            receipt,
+                            derived,
+                            target,
+                            request=video_request,
+                            **delivery_options,
+                        )
+                        return _merge_receipts(receipt, retried)
+                    return receipt
+                finally:
+                    video_path.unlink(missing_ok=True)
+
+            return await self._with_lease_renewals(
+                tuple(materialized), convert_validate_deliver()
+            )
+
     async def _with_lease_renewal(
         self,
         materialized: MaterializedItem,
         operation: Awaitable[DeliveryReceipt],
     ) -> DeliveryReceipt:
+        return await self._with_lease_renewals((materialized,), operation)
+
+    async def _with_lease_renewals(
+        self,
+        materialized: Sequence[MaterializedItem],
+        operation: Awaitable[DeliveryReceipt],
+    ) -> DeliveryReceipt:
         async def renew() -> None:
             while True:
                 await asyncio.sleep(self.lease_renew_interval)
-                materialized.renew_lease()
+                for item in materialized:
+                    item.renew_lease()
 
         delivery_task = asyncio.ensure_future(operation)
         renewal_task = asyncio.create_task(renew())
@@ -1241,6 +1424,74 @@ def _materialization_candidates(
         )
         normalized.append(replace(candidate, sources=sources))
     return tuple(normalized)
+
+
+def _slideshow_soundtrack(
+    candidate: MediaCandidate,
+    request: MediaRequest,
+) -> tuple[MediaRequest, MediaCandidate] | None:
+    item_urls = {item.url for item in candidate.items}
+    source = next(
+        (
+            source
+            for source in candidate.sources
+            if source.format_id.lower() == "audio"
+            or (source.url not in item_urls and source.audio_codec is not None)
+        ),
+        None,
+    )
+    if source is None:
+        return None
+    audio_request = replace(
+        request,
+        kind=MediaKind.AUDIO,
+        audio_format=None,
+        audio_language=None,
+        clip=ClipInterval(),
+        album_selection=(),
+        exact=False,
+    )
+    audio_source = replace(
+        source,
+        format_id="audio",
+        video_codec=None,
+        audio_codec=None,
+    )
+    audio_item = MediaItem(
+        media_id=f"{request.media_id}:audio",
+        kind=MediaKind.AUDIO,
+        url=source.url,
+        duration_seconds=candidate.duration_seconds,
+        container=source.container,
+        filesize_bytes=source.filesize_bytes,
+    )
+    audio_candidate = replace(
+        candidate,
+        candidate_id=f"{candidate.candidate_id}:audio",
+        url=source.url,
+        width=None,
+        height=None,
+        has_video=False,
+        has_audio=True,
+        audio_formats=(),
+        audio_languages=(),
+        container=source.container,
+        filesize_bytes=source.filesize_bytes,
+        sources=(audio_source,),
+        items=(audio_item,),
+        kind=MediaKind.AUDIO,
+        mux_mode=None,
+        refresh=None,
+        quality_label=None,
+        quality_limited=False,
+    )
+    return audio_request, audio_candidate
+
+
+async def _convert_slideshow(images: list[str], audio_path: str | None) -> str | None:
+    from app.services.converter import MediaConverter
+
+    return await MediaConverter.images_to_video(images, audio_path)
 
 
 def _merge_receipts(

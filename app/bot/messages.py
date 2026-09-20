@@ -86,8 +86,13 @@ async def _deliver_private_pipeline(
     )
     try:
         if request.platform == "tiktok" and request.kind.value == "auto":
-            resolved = await pipeline.resolve(request)
-            if len(resolved.items) > 1:
+            cached_count = await pipeline.cached_item_count(request)
+            items = ()
+            if cached_count is None:
+                items = (await pipeline.resolve(request)).items
+            if (cached_count is not None and cached_count > 1) or (
+                len(items) > 1 and all(item.kind.value == "photo" for item in items)
+            ):
                 token = uuid.uuid4().hex
                 await state.link_cache.set(
                     token,
@@ -98,8 +103,8 @@ async def _deliver_private_pipeline(
                         api_source="pipeline",
                         api_json={
                             "media_id": request.media_id,
-                            "item_count": len(resolved.items),
-                            "item_kinds": [item.kind.value for item in resolved.items],
+                            "item_count": cached_count or len(items),
+                            "item_kinds": [item.kind.value for item in items],
                         },
                         section=section,
                     ),

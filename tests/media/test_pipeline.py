@@ -222,6 +222,106 @@ async def test_cache_miss_races_resolvers_then_delivers_one_valid_winner(
 
 
 @pytest.mark.asyncio
+async def test_slideshow_video_uses_soundtrack_validation_delivery_and_lease_heartbeat(
+    tmp_path: Path,
+):
+    request = build_media_request(
+        "https://www.tiktok.com/@tester/photo/123",
+        caller_scope="group",
+        exact=False,
+    )
+    image_one = tmp_path / "one.jpg"
+    image_two = tmp_path / "two.jpg"
+    soundtrack = tmp_path / "soundtrack.mp3"
+    video = tmp_path / "slideshow.mp4"
+    for path in (image_one, image_two, soundtrack):
+        path.write_bytes(b"source")
+    items = (
+        MediaItem("123:0", MediaKind.PHOTO, "https://cdn.example/one.jpg"),
+        MediaItem("123:1", MediaKind.PHOTO, "https://cdn.example/two.jpg"),
+    )
+    candidate = MediaCandidate(
+        candidate_id="album",
+        url=items[0].url,
+        has_video=False,
+        has_audio=True,
+        sources=(
+            MediaSource("0", items[0].url, container="image"),
+            MediaSource("1", items[1].url, container="image"),
+            MediaSource(
+                "audio",
+                "https://cdn.example/music.mp3",
+                audio_codec="unknown",
+                container="mp3",
+            ),
+        ),
+        provider="tikwm",
+        media_id="123",
+        kind=MediaKind.ALBUM,
+        items=items,
+    )
+    reservations: list[_Reservation] = []
+
+    class Transport:
+        async def materialize(self, materialize_request, candidates, **kwargs):
+            selected = candidates[0]
+            reservation = _Reservation()
+            reservations.append(reservation)
+            paths = (
+                (soundtrack,)
+                if materialize_request.kind is MediaKind.AUDIO
+                else (image_one, image_two)
+            )
+            return MaterializedItem(paths, 6 * len(paths), selected, reservation)
+
+    converter_calls = []
+
+    async def convert(images, audio_path):
+        converter_calls.append((images, audio_path))
+        video.write_bytes(b"derived-video")
+        return str(video)
+
+    class Delivery(_Delivery):
+        async def deliver(self, media, target, **kwargs):
+            await asyncio.sleep(0.035)
+            return await super().deliver(media, target, **kwargs)
+
+    validator_calls = []
+
+    async def validate(validation_request, media):
+        validator_calls.append((validation_request, media))
+
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(_Provider("tikwm", candidate))]),
+        Transport(),
+        Delivery(),
+        artifact_validator=validate,
+        slideshow_converter=convert,
+        lease_renew_interval=0.01,
+    )
+
+    receipt = await pipeline.deliver_slideshow_video(
+        request,
+        DeliveryTarget("9", caller_scope="group"),
+        caption="👤 @tester",
+    )
+
+    assert receipt.success
+    assert converter_calls == [([str(image_one), str(image_two)], str(soundtrack))]
+    assert [call[0].kind for call in validator_calls] == [
+        MediaKind.AUTO,
+        MediaKind.AUDIO,
+        MediaKind.VIDEO,
+    ]
+    derived = validator_calls[-1][1]
+    assert derived.candidate.kind is MediaKind.VIDEO
+    assert derived.candidate.has_audio
+    assert all(reservation.renewed >= 3 for reservation in reservations)
+    assert all(reservation.released == 1 for reservation in reservations)
+    assert not video.exists()
+
+
+@pytest.mark.asyncio
 async def test_resolve_and_materialize_use_separate_singleflight_domains(
     tmp_path: Path,
 ):

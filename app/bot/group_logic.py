@@ -88,8 +88,13 @@ async def handle_group_message(
         )
         try:
             if request.platform == "tiktok":
-                resolved = await state.media_pipeline.resolve(request)
-                if len(resolved.items) > 1:
+                cached_count = await state.media_pipeline.cached_item_count(request)
+                items = ()
+                if cached_count is None:
+                    items = (await state.media_pipeline.resolve(request)).items
+                if (cached_count is not None and cached_count > 1) or (
+                    len(items) > 1 and all(item.kind.value == "photo" for item in items)
+                ):
                     token = uuid.uuid4().hex
                     await state.link_cache.set(
                         token,
@@ -101,10 +106,8 @@ async def handle_group_message(
                             api_source="pipeline",
                             api_json={
                                 "media_id": request.media_id,
-                                "item_count": len(resolved.items),
-                                "item_kinds": [
-                                    item.kind.value for item in resolved.items
-                                ],
+                                "item_count": cached_count or len(items),
+                                "item_kinds": [item.kind.value for item in items],
                             },
                             section=section,
                         ),
@@ -369,8 +372,7 @@ async def handle_group_message(
         elif video_format == "gallerydl_fallback":
             from app.services.gallery_dl.service import GalleryDlService
 
-            file_path, error = await asyncio.to_thread(
-                GalleryDlService.download_video,
+            file_path, error = await GalleryDlService.download_video(
                 url,
                 state.ytdlp.cookies_path,
                 state.ytdlp.tiktok_proxy,
@@ -509,7 +511,6 @@ async def on_group_slideshow(
             request = build_media_request(
                 page_url,
                 kind="auto",
-                clip=payload.section,
                 caller_scope="group",
                 exact=False,
             )
@@ -533,30 +534,17 @@ async def on_group_slideshow(
                         Texts.GROUP_SEND_ERROR,
                     )
                 else:
-                    async with pipeline.open_materialized(request) as materialized:
-                        materialized.renew_lease()
-                        video_path = await MediaSender.images_to_video(
-                            [str(path) for path in materialized.paths], None
-                        )
-                        if not video_path:
-                            await q.edit_message_text(Texts.SLIDESHOW_ERROR)
-                            return
-                        materialized.renew_lease()
-                        gif_token = uuid.uuid4().hex
-                        state.file_cache[gif_token] = video_path
-                        from app.bot.keyboards import build_video_keyboard
-
-                        success = await MediaSender.send_file(
-                            context.bot,
-                            chat_id,
-                            video_path,
-                            is_audio=False,
-                            is_gif=False,
-                            caption=f"👤 {user_tag}",
-                            parse_mode="HTML",
-                            reply_markup=build_video_keyboard(gif_token),
-                        )
-                    error_text = Texts.GROUP_SEND_ERROR
+                    receipt = await pipeline.deliver_slideshow_video(
+                        request,
+                        DeliveryTarget(str(chat_id), caller_scope="group"),
+                        caption=f"👤 {user_tag}",
+                        parse_mode="HTML",
+                    )
+                    success = receipt.success
+                    error_text = next(
+                        (item.error for item in receipt.items if item.error),
+                        Texts.GROUP_SEND_ERROR,
+                    )
             except MediaPipelineError as error:
                 await q.edit_message_text(str(error))
                 return

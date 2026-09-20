@@ -543,7 +543,6 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             request = build_media_request(
                 page_url,
                 kind="auto",
-                clip=payload.section,
                 caller_scope="callback",
                 exact=False,
             )
@@ -563,25 +562,16 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                         Texts.SEND_ERROR,
                     )
                 else:
-                    async with pipeline.open_materialized(request) as materialized:
-                        materialized.renew_lease()
-                        video_path = await MediaSender.images_to_video(
-                            [str(path) for path in materialized.paths], None
-                        )
-                        if not video_path:
-                            await _edit_or_reply(q, Texts.SLIDESHOW_ERROR)
-                            return
-                        materialized.renew_lease()
-                        try:
-                            success = await MediaSender.send_file(
-                                context.bot,
-                                q.message.chat_id,
-                                video_path,
-                                caption="🎬",
-                            )
-                        finally:
-                            await asyncio.to_thread(safe_remove, video_path)
-                    error_text = Texts.SEND_ERROR
+                    receipt = await pipeline.deliver_slideshow_video(
+                        request,
+                        DeliveryTarget(str(q.message.chat_id), caller_scope="callback"),
+                        caption="🎬",
+                    )
+                    success = receipt.success
+                    error_text = next(
+                        (item.error for item in receipt.items if item.error),
+                        Texts.SEND_ERROR,
+                    )
             except MediaPipelineError as error:
                 await _edit_or_reply(q, str(error))
                 return

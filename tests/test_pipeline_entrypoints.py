@@ -701,6 +701,9 @@ async def test_new_tiktok_album_offers_pipeline_slideshow_choice_without_deliver
             self.requests = []
             self.deliveries = 0
 
+        async def cached_item_count(self, request):
+            return None
+
         async def resolve(self, request):
             self.requests.append(request)
             return ResolvedMedia(
@@ -787,6 +790,80 @@ async def test_new_tiktok_album_offers_pipeline_slideshow_choice_without_deliver
 
 
 @pytest.mark.asyncio
+async def test_warm_tiktok_cache_is_checked_before_album_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.bot import group_logic, messages
+
+    url = "https://www.tiktok.com/@tester/video/123"
+
+    class Pipeline:
+        def __init__(self) -> None:
+            self.cache_checks = 0
+            self.deliveries = 0
+
+        async def cached_item_count(self, request):
+            self.cache_checks += 1
+            return 1
+
+        async def resolve(self, request):
+            raise AssertionError("warm TikTok cache must be checked before providers")
+
+        async def deliver(self, request, target, **kwargs):
+            self.deliveries += 1
+            return DeliveryReceipt(target, (), DeliveryStatus.SUCCESS)
+
+    pipeline = Pipeline()
+    limiter = SimpleNamespace(
+        allow_user=AsyncMock(return_value=True),
+        allow_chat=AsyncMock(return_value=True),
+    )
+    monkeypatch.setattr(messages.state, "media_pipeline", pipeline)
+    monkeypatch.setattr(messages.state, "limiter", limiter)
+    monkeypatch.setattr(messages, "get_prefs", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        messages, "extract_url_from_update", lambda message: (url, None)
+    )
+    monkeypatch.setattr(
+        group_logic, "extract_url_from_update", lambda message: (url, None)
+    )
+    monkeypatch.setattr(
+        "app.services.instagram.parse_instagram_url",
+        lambda value: ("unknown", None, None),
+    )
+    monkeypatch.setattr(
+        messages, "parse_instagram_url", lambda value: ("unknown", None, None)
+    )
+
+    def update_for(chat_id: int):
+        status = SimpleNamespace(
+            message_id=100,
+            delete=AsyncMock(),
+            edit_text=AsyncMock(),
+        )
+        message = MagicMock()
+        message.text = url
+        message.reply_text = AsyncMock(return_value=status)
+        message.delete = AsyncMock()
+        return SimpleNamespace(
+            effective_user=SimpleNamespace(
+                id=7,
+                username="tester",
+                mention_html=lambda: "tester",
+            ),
+            effective_chat=SimpleNamespace(id=chat_id),
+            message=message,
+        )
+
+    context = SimpleNamespace(bot=SimpleNamespace(send_chat_action=AsyncMock()))
+    await messages.on_message(update_for(9), context)
+    await group_logic.handle_group_message(update_for(10), context)
+
+    assert pipeline.cache_checks == 2
+    assert pipeline.deliveries == 2
+
+
+@pytest.mark.asyncio
 async def test_private_pipeline_slideshow_photo_callback_delivers_via_pipeline(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -856,7 +933,7 @@ async def test_private_pipeline_slideshow_photo_callback_delivers_via_pipeline(
     assert len(pipeline.calls) == 1
     request, target, _ = pipeline.calls[0]
     assert request.kind is MediaKind.AUTO
-    assert request.clip == ClipInterval(10, 20)
+    assert request.clip == ClipInterval()
     assert request.caller_scope == target.caller_scope == "callback"
     query.delete_message.assert_awaited_once()
     legacy_download.assert_not_awaited()
@@ -864,26 +941,21 @@ async def test_private_pipeline_slideshow_photo_callback_delivers_via_pipeline(
 
 
 @pytest.mark.asyncio
-async def test_group_pipeline_slideshow_video_materializes_before_conversion(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+async def test_group_pipeline_slideshow_video_is_delivered_by_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
 ):
     from app.bot import group_logic
 
     url = "https://www.tiktok.com/@tester/photo/123"
     token = "pipeline-group-slide"
-    first = tmp_path / "1.jpg"
-    second = tmp_path / "2.jpg"
-    first.write_bytes(b"one")
-    second.write_bytes(b"two")
 
     class Pipeline:
         def __init__(self) -> None:
-            self.requests = []
+            self.calls = []
 
-        @asynccontextmanager
-        async def open_materialized(self, request):
-            self.requests.append(request)
-            yield SimpleNamespace(paths=(first, second), renew_lease=lambda: None)
+        async def deliver_slideshow_video(self, request, target, **kwargs):
+            self.calls.append((request, target, kwargs))
+            return DeliveryReceipt(target, (), DeliveryStatus.SUCCESS)
 
     class Queue:
         released = False
@@ -912,13 +984,9 @@ async def test_group_pipeline_slideshow_video_materializes_before_conversion(
         SimpleNamespace(get=AsyncMock(return_value=payload)),
     )
     monkeypatch.setattr(group_logic.state, "download_queue", queue)
-    convert = AsyncMock(return_value=str(tmp_path / "slideshow.mp4"))
-    send = AsyncMock(return_value=True)
     legacy_download = AsyncMock(
         side_effect=AssertionError("pipeline slideshow must not use legacy download")
     )
-    monkeypatch.setattr(group_logic.MediaSender, "images_to_video", convert)
-    monkeypatch.setattr(group_logic.MediaSender, "send_file", send)
     monkeypatch.setattr(group_logic.MediaSender, "download_slideshow", legacy_download)
 
     query = MagicMock()
@@ -937,12 +1005,11 @@ async def test_group_pipeline_slideshow_video_materializes_before_conversion(
 
     await group_logic.on_group_slideshow(SimpleNamespace(callback_query=query), context)
 
-    assert len(pipeline.requests) == 1
-    request = pipeline.requests[0]
+    assert len(pipeline.calls) == 1
+    request, target, options = pipeline.calls[0]
     assert request.kind is MediaKind.AUTO
-    assert request.clip == ClipInterval(10, 20)
     assert request.caller_scope == "group"
-    convert.assert_awaited_once_with([str(first), str(second)], None)
-    send.assert_awaited_once()
+    assert target.destination == "9"
+    assert options["caption"] == "👤 @tester"
     legacy_download.assert_not_awaited()
     assert queue.released

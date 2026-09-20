@@ -60,6 +60,7 @@ def test_cache_key_isolates_scopes_and_all_delivery_equivalence_fields():
     [
         "https://example.com/watch?v=abc123",
         "ftp://youtube.com/watch?v=abc123",
+        "https://youtube.com:invalid/watch?v=abc123",
         "not a url",
         "https://youtube.com/watch",
     ],
@@ -68,6 +69,13 @@ def test_unsupported_or_malformed_urls_raise_typed_error(url: str):
     """Catches non-YouTube or incomplete URLs entering the canonical contract."""
     with pytest.raises(UnsupportedMediaUrlError):
         canonicalize_media_url(url)
+
+
+@pytest.mark.parametrize("clip_value", ["NaN", "inf", "-inf"])
+def test_non_finite_clip_time_raises_typed_error(clip_value: str):
+    """Catches non-standard JSON cache identities from invalid clip times."""
+    with pytest.raises(UnsupportedMediaUrlError):
+        MediaRequest.from_url(f"https://youtube.com/watch?v=abc123&t={clip_value}")
 
 
 def test_contracts_are_immutable():

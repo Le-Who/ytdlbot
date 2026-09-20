@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Self
@@ -191,13 +192,15 @@ def request_cache_key(request: MediaRequest) -> str:
 def _parse_media_url(url: str) -> tuple[str, str, str, ClipInterval]:
     try:
         parsed = urlsplit(url)
+        hostname = parsed.hostname
+        _ = parsed.port
     except ValueError as error:
         raise UnsupportedMediaUrlError("malformed media URL") from error
 
-    if parsed.scheme.lower() not in {"http", "https"} or not parsed.hostname:
+    if parsed.scheme.lower() not in {"http", "https"} or not hostname:
         raise UnsupportedMediaUrlError("media URL must use HTTP(S) and include a host")
 
-    host = parsed.hostname.lower().rstrip(".")
+    host = hostname.lower().rstrip(".")
     query = parse_qs(parsed.query, keep_blank_values=True)
     path_parts = [part for part in parsed.path.split("/") if part]
 
@@ -240,8 +243,8 @@ def _parse_time(value: str | None) -> float | None:
         seconds = float(value)
     except ValueError:
         seconds = _parse_clock_time(value)
-    if seconds < 0:
-        raise UnsupportedMediaUrlError("clip times must not be negative")
+    if not math.isfinite(seconds) or seconds < 0:
+        raise UnsupportedMediaUrlError("clip times must be finite and non-negative")
     return int(seconds) if seconds.is_integer() else seconds
 
 

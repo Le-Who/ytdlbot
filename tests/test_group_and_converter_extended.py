@@ -229,9 +229,9 @@ class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
 
         _gif_path = tmp.name.rsplit(".", 1)[0] + "_gif.mp4"
 
-        mock_proc = MagicMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+        from app.core.process import ProcessResult
+
+        process_result = ProcessResult(returncode=0, stdout=b"", stderr=b"")
 
         mock_sem = asyncio.Semaphore(1)
         mock_metrics = MagicMock()
@@ -241,14 +241,14 @@ class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
         with (
             patch("app.services.converter.state") as mock_state,
             patch(
-                "app.services.converter.asyncio.create_subprocess_exec",
+                "app.services.converter.process_supervisor.run",
                 new_callable=AsyncMock,
             ) as mock_exec,
             patch("app.services.converter.os.path.exists") as mock_exists,
             patch("app.services.converter.os.path.getsize", return_value=1000),
         ):
             mock_state.conversion_sem = mock_sem
-            mock_exec.return_value = mock_proc
+            mock_exec.return_value = process_result
             mock_exists.side_effect = lambda p: (
                 True
             )  # both video_path and gif_path exist
@@ -270,9 +270,11 @@ class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
         tmp.write(b"fake video")
         tmp.close()
 
-        mock_proc = MagicMock()
-        mock_proc.returncode = 1
-        mock_proc.communicate = AsyncMock(return_value=(b"", b"error output"))
+        from app.core.process import ProcessResult
+
+        process_result = ProcessResult(
+            returncode=1, stdout=b"", stderr=b"error output"
+        )
 
         mock_sem = asyncio.Semaphore(1)
         mock_metrics = MagicMock()
@@ -282,12 +284,12 @@ class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
         with (
             patch("app.services.converter.state") as mock_state,
             patch(
-                "app.services.converter.asyncio.create_subprocess_exec",
+                "app.services.converter.process_supervisor.run",
                 new_callable=AsyncMock,
             ) as mock_exec,
         ):
             mock_state.conversion_sem = mock_sem
-            mock_exec.return_value = mock_proc
+            mock_exec.return_value = process_result
 
             with patch("app.core.metrics.metrics", mock_metrics):
                 result = await MediaConverter.convert_to_gif_ffmpeg(tmp.name)

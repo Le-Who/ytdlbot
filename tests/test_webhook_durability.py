@@ -285,7 +285,6 @@ async def test_lifespan_cleans_partial_startup_failure(
     monkeypatch.setattr(main_module, "JobStore", lambda: store)
     monkeypatch.setattr(main_module, "DurableUpdateWorker", RecordingWorker)
     monkeypatch.setattr(main_module, "janitor_loop", background)
-    monkeypatch.setattr(main_module, "auto_updater_loop", background)
     monkeypatch.setattr(
         main_module, "_build_telegram_application_builder", build_application
     )
@@ -317,7 +316,10 @@ async def test_lifespan_cleans_partial_startup_failure(
         else:
             worker = created_workers[0]
             assert worker._task is None
-            assert background_tasks and all(task.done() for task in background_tasks)
+            # Runtime dependency updates belong to the immutable image build;
+            # only the janitor may be launched as a background maintenance task.
+            assert len(background_tasks) == 1
+            assert all(task.done() for task in background_tasks)
             assert store.close_calls == 1
         assert await store.acquire_worker("worker-b") is True
         await store.release_worker("worker-b")

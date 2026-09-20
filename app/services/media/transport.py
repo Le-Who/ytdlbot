@@ -27,6 +27,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 from curl_cffi import CurlOpt
 from curl_cffi.requests import AsyncSession, Response
 
+from app.core.metrics import metrics
 from app.core.process import run_subprocess
 from app.core.resource_budget import DiskBudget, DiskReservation
 
@@ -593,6 +594,10 @@ class MediaTransport:
                         if winner is None:
                             winner = result
                         else:
+                            metrics.race_wasted_bytes.inc(
+                                result.size_bytes,
+                                provider=result.candidate.provider or "unknown",
+                            )
                             await result.release(delete=True)
                 if winner is not None:
                     break
@@ -602,6 +607,10 @@ class MediaTransport:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             for gathered_result in results:
                 if isinstance(gathered_result, MaterializedItem):
+                    metrics.race_wasted_bytes.inc(
+                        gathered_result.size_bytes,
+                        provider=gathered_result.candidate.provider or "unknown",
+                    )
                     await gathered_result.release(delete=True)
         return winner, errors
 
@@ -779,6 +788,7 @@ class MediaTransport:
     async def _run_transform(
         self, command: list[str], partial_path: Path, deadline: float
     ) -> int:
+        transform_started = self.clock()
         process_timeout = self._remaining(deadline)
         task: asyncio.Future[int] = asyncio.ensure_future(
             self.process_runner(command, process_timeout)
@@ -800,6 +810,12 @@ class MediaTransport:
         except Exception:
             await self._cancel_process_task(task)
             raise
+        finally:
+            metrics.transcode_cpu_seconds.inc(
+                max(0.0, self.clock() - transform_started),
+                operation="ffmpeg",
+                measurement="wall_time_proxy",
+            )
 
     async def _cancel_process_task(self, task: asyncio.Future[int]) -> None:
         if task.done():
@@ -876,9 +892,14 @@ class MediaTransport:
                         except TimeoutError as error:
                             phase = "first byte" if first else "stream progress"
                             raise TransferTimeout(f"media {phase} timed out") from error
-                        first = False
                         if not chunk:
                             continue
+                        if first:
+                            metrics.pipeline_duration.observe(
+                                max(0.0, self.clock() - opened.started_at),
+                                phase="first_byte",
+                            )
+                            first = False
                         written += len(chunk)
                         self._check_actual_size(already_written + written)
                         reserve_timeout = self._remaining(deadline)

@@ -2,13 +2,14 @@ from unittest.mock import AsyncMock
 
 """Tests for extract_video_meta helper in callbacks.py."""
 
+import asyncio
 import json
 import os
-import asyncio
 import tempfile
 import unittest
 from unittest.mock import patch
 
+from app.core.process import ProcessResult
 from app.services.orchestrator import extract_video_meta
 
 
@@ -40,11 +41,10 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
         try:
             # Mock ffprobe to also return empty (no ffprobe available in test)
             with patch(
-                "asyncio.create_subprocess_exec", new_callable=AsyncMock
-            ) as mock_proc:
-                proc_mock = AsyncMock()
-                proc_mock.communicate.return_value = (b"", b"")
-                mock_proc.return_value = proc_mock
+                "app.services.orchestrator.process_supervisor.run",
+                new_callable=AsyncMock,
+                return_value=ProcessResult(0, b"", b""),
+            ):
 
                 meta = await extract_video_meta("/fake/video.mp4", info_json_path=path)
                 # width/height from JSON should still be set
@@ -67,11 +67,10 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
         )
 
         with patch(
-            "asyncio.create_subprocess_exec", new_callable=AsyncMock
-        ) as mock_proc:
-            proc_mock = AsyncMock()
-            proc_mock.communicate.return_value = (ffprobe_output.encode(), b"")
-            mock_proc.return_value = proc_mock
+            "app.services.orchestrator.process_supervisor.run",
+            new_callable=AsyncMock,
+            return_value=ProcessResult(0, ffprobe_output.encode(), b""),
+        ):
 
             meta = await extract_video_meta("/fake/video.mp4")
             self.assertEqual(meta["duration"], 90)
@@ -80,7 +79,11 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
 
     async def test_no_info_json_no_ffprobe(self):
         """Neither info JSON nor ffprobe available → returns all None."""
-        with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError):
+        with patch(
+            "app.services.orchestrator.process_supervisor.run",
+            new_callable=AsyncMock,
+            side_effect=FileNotFoundError,
+        ):
             meta = await extract_video_meta("/fake/video.mp4")
             self.assertIsNone(meta["duration"])
             self.assertIsNone(meta["width"])
@@ -88,7 +91,11 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
 
     async def test_info_json_path_nonexistent(self):
         """info_json_path points to a missing file → proceeds to ffprobe."""
-        with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError):
+        with patch(
+            "app.services.orchestrator.process_supervisor.run",
+            new_callable=AsyncMock,
+            side_effect=FileNotFoundError,
+        ):
             meta = await extract_video_meta(
                 "/fake/video.mp4",
                 info_json_path="/nonexistent/info.json",
@@ -102,7 +109,11 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
             path = f.name
 
         try:
-            with patch("asyncio.create_subprocess_exec", side_effect=FileNotFoundError):
+            with patch(
+                "app.services.orchestrator.process_supervisor.run",
+                new_callable=AsyncMock,
+                side_effect=FileNotFoundError,
+            ):
                 meta = await extract_video_meta("/fake/video.mp4", info_json_path=path)
                 self.assertIsNone(meta["duration"])
         finally:
@@ -111,11 +122,10 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
     async def test_ffprobe_timeout(self):
         """ffprobe exceeding timeout → returns gracefully."""
         with patch(
-            "asyncio.create_subprocess_exec", new_callable=AsyncMock
-        ) as mock_proc:
-            proc_mock = AsyncMock()
-            proc_mock.communicate = AsyncMock(side_effect=asyncio.TimeoutError)
-            mock_proc.return_value = proc_mock
+            "app.services.orchestrator.process_supervisor.run",
+            new_callable=AsyncMock,
+            side_effect=asyncio.TimeoutError,
+        ):
 
             meta = await extract_video_meta("/fake/video.mp4")
             self.assertIsNone(meta["duration"])

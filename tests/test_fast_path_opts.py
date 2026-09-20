@@ -8,6 +8,8 @@ import tempfile
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from app.core.process import ProcessResult
+
 
 class TestFindThumbnail(unittest.TestCase):
     """Tests for converter.find_thumbnail() – OPT-1."""
@@ -282,9 +284,9 @@ class TestSplitVideoStreamCopy(unittest.IsolatedAsyncioTestCase):
     async def test_returns_none_on_ffmpeg_failure(self):
         from app.services.converter import split_video_stream_copy
 
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 1
-        mock_proc.communicate = AsyncMock(return_value=(b"", b"ffmpeg error"))
+        process_result = ProcessResult(
+            returncode=1, stdout=b"", stderr=b"ffmpeg error"
+        )
 
         with patch("os.path.exists", return_value=True):
             with patch("os.path.getsize", return_value=100 * 1024 * 1024):
@@ -294,8 +296,9 @@ class TestSplitVideoStreamCopy(unittest.IsolatedAsyncioTestCase):
                     return_value={"duration_s": 300.0},
                 ):
                     with patch(
-                        "asyncio.create_subprocess_exec",
-                        return_value=mock_proc,
+                        "app.services.converter.process_supervisor.run",
+                        new_callable=AsyncMock,
+                        return_value=process_result,
                     ):
                         result = await split_video_stream_copy("/fake/video.mp4")
         self.assertIsNone(result)
@@ -379,13 +382,17 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
             ],
         }
 
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(
-            return_value=(json.dumps(fake_probe).encode(), b"")
+        process_result = ProcessResult(
+            returncode=0,
+            stdout=json.dumps(fake_probe).encode(),
+            stderr=b"",
         )
 
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(
+            "app.services.orchestrator.process_supervisor.run",
+            new_callable=AsyncMock,
+            return_value=process_result,
+        ):
             result = await extract_video_meta("/fake/video.mp4")
 
         self.assertEqual(result.get("duration"), 42)
@@ -435,12 +442,16 @@ class TestEnsureTelegramCompatible(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         }
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(
-            return_value=(json.dumps(fake_probe).encode(), b"")
+        process_result = ProcessResult(
+            returncode=0,
+            stdout=json.dumps(fake_probe).encode(),
+            stderr=b"",
         )
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        with patch(
+            "app.services.orchestrator.process_supervisor.run",
+            new_callable=AsyncMock,
+            return_value=process_result,
+        ):
             result = await ensure_telegram_compatible("/fake/h264.mp4")
         self.assertEqual(result, "/fake/h264.mp4")
 
@@ -460,25 +471,26 @@ class TestEnsureTelegramCompatible(unittest.IsolatedAsyncioTestCase):
                 }
             ],
         }
-        probe_proc = AsyncMock()
-        probe_proc.returncode = 0
-        probe_proc.communicate = AsyncMock(
-            return_value=(json.dumps(fake_probe).encode(), b"")
+        probe_result = ProcessResult(
+            returncode=0,
+            stdout=json.dumps(fake_probe).encode(),
+            stderr=b"",
         )
-        ffmpeg_proc = AsyncMock()
-        ffmpeg_proc.returncode = 1  # simulate failure
-        ffmpeg_proc.communicate = AsyncMock(return_value=(b"", b"error"))
+        ffmpeg_result = ProcessResult(returncode=1, stdout=b"", stderr=b"error")
 
         call_count = 0
 
-        async def fake_exec(*args, **kwargs):
+        async def fake_run(*args, **kwargs):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return probe_proc  # ffprobe
-            return ffmpeg_proc  # ffmpeg re-encode
+                return probe_result  # ffprobe
+            return ffmpeg_result  # ffmpeg re-encode
 
-        with patch("asyncio.create_subprocess_exec", side_effect=fake_exec):
+        with patch(
+            "app.services.orchestrator.process_supervisor.run",
+            side_effect=fake_run,
+        ):
             result = await ensure_telegram_compatible("/fake/hevc.mp4")
 
         # On re-encode failure should fall back to original path
@@ -507,10 +519,12 @@ class TestProbeFullMeta(unittest.IsolatedAsyncioTestCase):
 
     async def test_returns_none_duration_on_bad_output(self):
         from app.services.converter import _probe_full_meta
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        process_result = ProcessResult(returncode=0, stdout=b"", stderr=b"")
+        with patch(
+            "app.services.converter.process_supervisor.run",
+            new_callable=AsyncMock,
+            return_value=process_result,
+        ):
             result = await _probe_full_meta("/fake/video.mp4")
         self.assertIsNone(result["duration_s"])
 
@@ -524,10 +538,14 @@ class TestProbeFullMeta(unittest.IsolatedAsyncioTestCase):
                 {"codec_type": "audio", "bit_rate": "192000"},
             ],
         }
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(return_value=(json.dumps(fake).encode(), b""))
-        with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+        process_result = ProcessResult(
+            returncode=0, stdout=json.dumps(fake).encode(), stderr=b""
+        )
+        with patch(
+            "app.services.converter.process_supervisor.run",
+            new_callable=AsyncMock,
+            return_value=process_result,
+        ):
             result = await _probe_full_meta("/fake/video.mp4")
         self.assertAlmostEqual(result["duration_s"], 120.5, places=1)
         self.assertEqual(result["audio_kbps"], 192)
@@ -535,7 +553,9 @@ class TestProbeFullMeta(unittest.IsolatedAsyncioTestCase):
     async def test_returns_defaults_on_exception(self):
         from app.services.converter import _probe_full_meta
         with patch(
-            "asyncio.create_subprocess_exec", side_effect=OSError("no ffprobe")
+            "app.services.converter.process_supervisor.run",
+            new_callable=AsyncMock,
+            side_effect=OSError("no ffprobe"),
         ):
             result = await _probe_full_meta("/fake/video.mp4")
         self.assertIsNone(result["duration_s"])
@@ -548,9 +568,7 @@ class TestSplitVideoCompletePath(unittest.IsolatedAsyncioTestCase):
     async def test_returns_sorted_parts_on_success(self):
         from app.services.converter import split_video_stream_copy
 
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
+        process_result = ProcessResult(returncode=0, stdout=b"", stderr=b"")
 
         fake_parts = ["/tmp/ytdlbot/split_abc123_000.mp4", "/tmp/ytdlbot/split_abc123_001.mp4"]
 
@@ -561,7 +579,11 @@ class TestSplitVideoCompletePath(unittest.IsolatedAsyncioTestCase):
                     new_callable=AsyncMock,
                     return_value={"duration_s": 300.0, "audio_kbps": 128},
                 ):
-                    with patch("asyncio.create_subprocess_exec", return_value=mock_proc):
+                    with patch(
+                        "app.services.converter.process_supervisor.run",
+                        new_callable=AsyncMock,
+                        return_value=process_result,
+                    ):
                         with patch("glob.glob", return_value=fake_parts):
                             result = await split_video_stream_copy("/fake/video.mp4")
 

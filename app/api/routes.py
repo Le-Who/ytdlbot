@@ -7,12 +7,13 @@ from typing import Any, Protocol
 from urllib.parse import quote, urlsplit
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import PlainTextResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from app.constants import AUDIO_FORMAT_ID, CHUNK_SIZE, GIF_FORMAT_ID
-from app.core import state
+from app.core import config, state
 from app.core.config import DL_TIMEOUT_HTTP, MAX_DL_MB, TELEGRAM_SECRET_TOKEN
 from app.core.logging import set_correlation_id
+from app.core.metrics import metrics
 from app.core.models import DownloadContext
 from app.core.policy import max_media_file_bytes
 from app.core.process import run_subprocess
@@ -24,6 +25,12 @@ _HTTP_LEASE_RENEW_SECONDS = 5 * 60
 
 class DurableUpdateStore(Protocol):
     def accept_update(self, payload: Mapping[str, Any]) -> Awaitable[object]: ...
+
+    def schema_version(self) -> Awaitable[int]: ...
+
+    def journal_mode(self) -> Awaitable[str]: ...
+
+    def busy_timeout(self) -> Awaitable[int]: ...
 
 
 _job_store: DurableUpdateStore | None = None
@@ -41,9 +48,93 @@ async def health():
     return {"ok": True}
 
 
+@router.get("/health/live")
+async def health_live() -> dict[str, bool]:
+    """Process liveness only; dependencies deliberately do not affect it."""
+
+    return {"ok": True}
+
+
+def _delivery_profile() -> tuple[str, int]:
+    if config.TELEGRAM_LOCAL_ENDPOINT:
+        return "local_bot_api", config.MAX_MEDIA_FILE_MB
+    return "telegram_cloud", min(
+        config.MAX_MEDIA_FILE_MB, config.TELEGRAM_CLOUD_MAX_FILE_MB
+    )
+
+
+async def _durable_store_health() -> dict[str, object]:
+    store = _job_store
+    if store is None:
+        return {"ready": False}
+    try:
+        schema_version, journal_mode, busy_timeout_ms = await asyncio.gather(
+            store.schema_version(),
+            store.journal_mode(),
+            store.busy_timeout(),
+        )
+    except Exception as error:  # noqa: BLE001 - dependency readiness boundary
+        logger.warning(
+            "Durable store readiness probe failed",
+            extra={"error_type": type(error).__name__},
+        )
+        return {"ready": False}
+    ready = schema_version > 0 and journal_mode == "wal" and busy_timeout_ms > 0
+    return {
+        "ready": ready,
+        "schema_version": schema_version,
+        "journal_mode": journal_mode,
+        "busy_timeout_ms": busy_timeout_ms,
+    }
+
+
+@router.get("/health/ready")
+async def health_ready() -> JSONResponse:
+    durable_store = await _durable_store_health()
+    local_configured = bool(config.TELEGRAM_LOCAL_ENDPOINT)
+    # Application.initialize() performs Telegram's authenticated getMe call.
+    # main publishes state.bot_app only after that startup probe and bot start
+    # succeed, so no token needs to enter this response or its logs.
+    local_functional = local_configured and state.bot_app is not None
+    local_bot_api = {
+        "required": config.TELEGRAM_LOCAL_REQUIRED,
+        "configured": local_configured,
+        "functional_probe": local_functional,
+    }
+    profile, active_limit_mb = _delivery_profile()
+    ready = bool(durable_store["ready"]) and (
+        not config.TELEGRAM_LOCAL_REQUIRED or local_functional
+    )
+    body = {
+        "ready": ready,
+        "release": config.APP_RELEASE,
+        "max_media_file_mb": config.MAX_MEDIA_FILE_MB,
+        "delivery_profile": {
+            "name": profile,
+            "upload_limit_mb": active_limit_mb,
+        },
+        "durable_store": durable_store,
+        "local_bot_api": local_bot_api,
+    }
+    return JSONResponse(body, status_code=200 if ready else 503)
+
+
 @router.get("/metrics")
 async def metrics_endpoint():
-    from app.core.metrics import metrics
+    profile, active_limit_mb = _delivery_profile()
+    metrics.queue_depth.set(state.download_queue.queue_depth, queue="download")
+    metrics.queue_depth.set(state.api_queue.queue_depth, queue="api")
+    async with state.active_processes_lock:
+        orphan_count = sum(
+            process.returncode is not None for process in state.active_processes
+        )
+    metrics.orphan_processes.set(orphan_count)
+    metrics.delivery_profile_info.set(
+        1,
+        release=config.APP_RELEASE,
+        profile=profile,
+        upload_limit_mb=str(active_limit_mb),
+    )
 
     return PlainTextResponse(metrics.render(), media_type="text/plain; version=0.0.4")
 

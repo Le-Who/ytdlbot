@@ -2,12 +2,17 @@ services:
   bot:
     # Образ собирается в GitHub Actions и публикуется в GHCR.
     # На VPS только docker pull — никакой локальной сборки.
-    image: ghcr.io/${GHCR_REPO}:latest
+    image: ghcr.io/${GHCR_REPO}:${APP_RELEASE}
     restart: always
     env_file: .env
     environment:
       - REDIS_URL=redis://redis:6379/0
       - TELEGRAM_LOCAL_ENDPOINT=http://tg-api:8081
+      - TELEGRAM_LOCAL_REQUIRED=1
+      - MAX_MEDIA_FILE_MB=2000
+      - MEDIA_DIR=/srv/ytdlbot/media
+      - YTDLBOT_JOB_DB=/srv/ytdlbot/state/jobs.sqlite3
+      - APP_RELEASE=${APP_RELEASE}
       - POT_PROVIDER_URL=http://bgutil-pot:4416
     # Хостовый Caddy проксирует vid.tri.mom → 127.0.0.1:8000
     ports:
@@ -21,6 +26,15 @@ services:
         condition: service_started
     volumes:
       - bot_cache:/home/botuser/.cache/yt-dlp
+      - media:/srv/ytdlbot/media
+      - state:/srv/ytdlbot/state
+    healthcheck:
+      test:
+        ["CMD", "curl", "--fail", "--silent", "http://localhost:8000/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
     deploy:
       resources:
         limits:
@@ -30,7 +44,7 @@ services:
   # YouTube POT (Proof-of-Origin Token) server — generates tokens to bypass
   # "Sign in to confirm you're not a bot" checks. Eliminates need for YouTube cookies.
   bgutil-pot:
-    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    image: brainicism/bgutil-ytdlp-pot-provider:2.0.0
     restart: always
     deploy:
       resources:
@@ -39,7 +53,7 @@ services:
           cpus: "0.2"
 
   tg-api:
-    image: aiogram/telegram-bot-api:latest
+    image: aiogram/telegram-bot-api:10.3
     restart: always
     environment:
       - TELEGRAM_API_ID=${TELEGRAM_API_ID}
@@ -47,6 +61,7 @@ services:
       - TELEGRAM_LOCAL=1
     volumes:
       - tg-api-data:/var/lib/telegram-bot-api
+      - media:/srv/ytdlbot/media:ro
     # Порт не публикуется наружу — bot обращается по имени сервиса внутри сети
     deploy:
       resources:
@@ -55,7 +70,7 @@ services:
           cpus: "0.4"
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4.11-alpine
     restart: always
     command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
@@ -71,3 +86,5 @@ volumes:
   tg-api-data:
   redis-data:
   bot_cache:
+  media:
+  state:

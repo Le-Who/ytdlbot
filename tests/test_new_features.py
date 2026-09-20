@@ -2,14 +2,11 @@
 
 1. extract_url_from_update (Reply-to URL resolution)
 2. user_prefs (get/set/clear)
-3. auto_updater_loop (background task)
-4. Tiered semaphore selection logic
+3. Tiered semaphore selection logic
 """
 
-import asyncio
 import unittest
-from unittest.mock import AsyncMock, MagicMock, patch
-
+from unittest.mock import MagicMock
 
 # ── Feature 2: extract_url_from_update ───────────────────────────────────────
 
@@ -176,66 +173,6 @@ class TestUserPrefs(unittest.IsolatedAsyncioTestCase):
         self.assertIn("best", VALID_QUALITIES)
         self.assertIsNone(VALID_QUALITIES["best"])
         self.assertEqual(VALID_QUALITIES["720"], 720)
-
-
-# ── Feature 1: auto_updater ──────────────────────────────────────────────────
-
-
-class TestAutoUpdater(unittest.IsolatedAsyncioTestCase):
-    async def test_run_update_captures_old_and_new_version(self):
-        from app.tasks.auto_updater import _run_update
-
-        with patch("app.tasks.auto_updater.asyncio.create_subprocess_exec") as mock_exec:
-            proc = MagicMock()
-            proc.returncode = 0
-            proc.communicate = AsyncMock(return_value=(b"Update available\n", b""))
-            mock_exec.return_value = proc
-
-            # _get_ytdlp_version is called twice (before and after)
-            with patch(
-                "app.tasks.auto_updater._get_ytdlp_version",
-                new=AsyncMock(side_effect=["2026.03.01", "2026.04.01"]),
-            ):
-                before, after = await _run_update()
-
-            self.assertEqual(before, "2026.03.01")
-            self.assertEqual(after, "2026.04.01")
-
-    async def test_get_ytdlp_version_returns_unknown_on_failure(self):
-        from app.tasks.auto_updater import _get_ytdlp_version
-
-        with patch(
-            "app.tasks.auto_updater.asyncio.create_subprocess_exec",
-            side_effect=OSError("not found"),
-        ):
-            version = await _get_ytdlp_version()
-
-        self.assertEqual(version, "unknown")
-
-    async def test_updater_loop_stops_on_event(self):
-        """The loop must terminate promptly when stop_event is set."""
-        from app.tasks.auto_updater import auto_updater_loop
-
-        stop_event = asyncio.Event()
-        stop_event.set()  # Already set — loop should exit immediately after first run
-
-        with patch(
-            "app.tasks.auto_updater._do_update", new=AsyncMock()
-        ) as mock_do:
-            await asyncio.wait_for(auto_updater_loop(stop_event), timeout=5)
-
-        # _do_update should have been called exactly once (startup run)
-        mock_do.assert_called_once()
-
-    async def test_update_does_not_crash_on_exception(self):
-        """_do_update must not propagate exceptions — only log them."""
-        from app.tasks.auto_updater import _do_update
-
-        with patch(
-            "app.tasks.auto_updater._run_update",
-            new=AsyncMock(side_effect=RuntimeError("simulated error")),
-        ):
-            await _do_update()  # Must not raise
 
 
 # ── Feature 5: Tiered Semaphore Selection ────────────────────────────────────

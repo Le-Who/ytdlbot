@@ -28,6 +28,7 @@ from app.core.job_store import (
     current_delivery_outcome,
     record_current_delivery,
 )
+from app.core.metrics import metrics
 from app.core.policy import DECIMAL_MB
 
 from .models import (
@@ -281,6 +282,10 @@ class TelegramDelivery:
             for asset in self._normalize_assets(media)
             if asset.item_index in failed_indexes
         ]
+        if retry_assets:
+            metrics.retries.inc(
+                len(retry_assets), reason="telegram_delivery", backend="telegram"
+            )
         return await self.deliver(retry_assets, target, **kwargs)
 
     async def _deliver_one(

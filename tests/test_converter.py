@@ -1,9 +1,9 @@
 """Tests for app.services.converter — MediaConverter."""
 
 import unittest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
-
+from app.core.process import ProcessResult
 from app.services.converter import MediaConverter
 
 
@@ -22,16 +22,13 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def _make_proc(returncode=0, stdout=b"", stderr=b""):
-        proc = AsyncMock()
-        proc.returncode = returncode
-        proc.communicate = AsyncMock(return_value=(stdout, stderr))
-        return proc
+        return ProcessResult(returncode=returncode, stdout=stdout, stderr=stderr)
 
     # ── convert_to_gif_ffmpeg ─────────────────────────────────────────
 
     @patch("app.services.converter.os.path.exists", return_value=True)
     @patch("app.services.converter.os.path.getsize", return_value=1024)
-    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter.process_supervisor.run", new_callable=AsyncMock)
     @patch("app.services.converter._probe_video_codec", new_callable=AsyncMock)
     async def test_convert_to_gif_h264_uses_copy(
         self, mock_probe, mock_exec, mock_size, mock_exists
@@ -45,13 +42,13 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "/tmp/video_gif.mp4")
         # ffmpeg should have been called once (copy mode)
         mock_exec.assert_called_once()
-        cmd_args = mock_exec.call_args[0]
+        cmd_args = mock_exec.call_args[0][0]
         self.assertIn("-c:v", cmd_args)
         self.assertIn("copy", cmd_args)
 
     @patch("app.services.converter.os.path.exists", return_value=True)
     @patch("app.services.converter.os.path.getsize", return_value=1024)
-    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter.process_supervisor.run", new_callable=AsyncMock)
     @patch("app.services.converter._probe_video_codec", new_callable=AsyncMock)
     async def test_convert_to_gif_vp9_uses_libx264(
         self, mock_probe, mock_exec, mock_size, mock_exists
@@ -64,13 +61,13 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "/tmp/video_gif.mp4")
         mock_exec.assert_called_once()
-        cmd_args = mock_exec.call_args[0]
+        cmd_args = mock_exec.call_args[0][0]
         self.assertIn("libx264", cmd_args)
 
     @patch("app.services.converter.os.path.exists", return_value=True)
     @patch("app.services.converter.os.path.getsize", return_value=1024)
     @patch("app.services.converter.safe_remove")
-    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter.process_supervisor.run", new_callable=AsyncMock)
     @patch("app.services.converter._probe_video_codec", new_callable=AsyncMock)
     async def test_convert_to_gif_copy_fails_fallback_to_transcode(
         self, mock_probe, mock_exec, mock_safe_remove, mock_size, mock_exists
@@ -88,11 +85,11 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "/tmp/video_gif.mp4")
         self.assertEqual(mock_exec.call_count, 2)
         # Second call should use libx264
-        second_call_args = mock_exec.call_args_list[1][0]
+        second_call_args = mock_exec.call_args_list[1][0][0]
         self.assertIn("libx264", second_call_args)
 
     @patch("app.services.converter.os.path.exists", side_effect=[True, False])
-    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter.process_supervisor.run", new_callable=AsyncMock)
     @patch("app.services.converter._probe_video_codec", new_callable=AsyncMock)
     async def test_convert_to_gif_ffmpeg_failure(
         self, mock_probe, mock_exec, mock_exists
@@ -107,7 +104,7 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
 
     @patch("app.services.converter.os.path.exists", return_value=True)
     @patch("app.services.converter.os.path.getsize", return_value=1024)
-    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter.process_supervisor.run", new_callable=AsyncMock)
     @patch("app.services.converter._probe_video_codec", new_callable=AsyncMock)
     async def test_convert_to_gif_probe_fails_falls_back_to_transcode(
         self, mock_probe, mock_exec, mock_size, mock_exists
@@ -120,24 +117,21 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "/tmp/video_gif.mp4")
         mock_exec.assert_called_once()
-        cmd_args = mock_exec.call_args[0]
+        cmd_args = mock_exec.call_args[0][0]
         self.assertIn("libx264", cmd_args)
 
     # ── images_to_video ───────────────────────────────────────────────
 
     @patch("app.services.converter.os.path.exists", return_value=True)
     @patch("app.services.converter.os.path.getsize", return_value=1024)
-    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter.process_supervisor.run", new_callable=AsyncMock)
     @patch("app.services.converter.open", new_callable=unittest.mock.mock_open)
     @patch("app.services.converter.safe_remove")
     async def test_images_to_video_success_with_audio(
         self, mock_safe_remove, mock_open_file, mock_exec, mock_size, mock_exists
     ):
         """Test successful slideshow generation from images and audio."""
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_exec.return_value = mock_proc
+        mock_exec.return_value = self._make_proc(0)
 
         images = ["/tmp/img1.jpg", "/tmp/img2.jpg"]
 
@@ -152,17 +146,14 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
 
     @patch("app.services.converter.os.path.exists", return_value=True)
     @patch("app.services.converter.os.path.getsize", return_value=1024)
-    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter.process_supervisor.run", new_callable=AsyncMock)
     @patch("app.services.converter.open", new_callable=unittest.mock.mock_open)
     @patch("app.services.converter.safe_remove")
     async def test_images_to_video_success_no_audio(
         self, mock_safe_remove, mock_open_file, mock_exec, mock_size, mock_exists
     ):
         """Test successful slideshow generation from images only (no audio)."""
-        mock_proc = AsyncMock()
-        mock_proc.returncode = 0
-        mock_proc.communicate = AsyncMock(return_value=(b"", b""))
-        mock_exec.return_value = mock_proc
+        mock_exec.return_value = self._make_proc(0)
 
         images = ["/tmp/img1.jpg", "/tmp/img2.jpg"]
 
@@ -174,7 +165,7 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
         self.assertTrue("slideshow_5678.mp4" in result)
 
         # Audio args should not be in the command
-        cmd_args = mock_exec.call_args[0]
+        cmd_args = mock_exec.call_args[0][0]
         self.assertNotIn("-c:a", cmd_args)
 
 
@@ -194,15 +185,12 @@ class TestConvertToNativeGif(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def _make_proc(returncode=0, stderr=b""):
-        proc = AsyncMock()
-        proc.returncode = returncode
-        proc.communicate = AsyncMock(return_value=(b"", stderr))
-        return proc
+        return ProcessResult(returncode=returncode, stdout=b"", stderr=stderr)
 
     @patch("app.services.converter.safe_remove")
     @patch("app.services.converter.os.path.getsize", return_value=4096)
     @patch("app.services.converter.os.path.exists", return_value=True)
-    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter.process_supervisor.run", new_callable=AsyncMock)
     async def test_convert_to_native_gif_success(
         self, mock_exec, mock_exists, mock_size, mock_safe_remove
     ):
@@ -222,7 +210,7 @@ class TestConvertToNativeGif(unittest.IsolatedAsyncioTestCase):
 
     @patch("app.services.converter.safe_remove")
     @patch("app.services.converter.os.path.exists", return_value=True)
-    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter.process_supervisor.run", new_callable=AsyncMock)
     async def test_convert_to_native_gif_palettegen_failure(
         self, mock_exec, mock_exists, mock_safe_remove
     ):
@@ -238,7 +226,7 @@ class TestConvertToNativeGif(unittest.IsolatedAsyncioTestCase):
     @patch("app.services.converter.safe_remove")
     @patch("app.services.converter.os.path.getsize", return_value=0)
     @patch("app.services.converter.os.path.exists", return_value=True)
-    @patch("app.services.converter.asyncio.create_subprocess_exec")
+    @patch("app.services.converter.process_supervisor.run", new_callable=AsyncMock)
     async def test_convert_to_native_gif_empty_output(
         self, mock_exec, mock_exists, mock_size, mock_safe_remove
     ):

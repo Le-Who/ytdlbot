@@ -24,7 +24,6 @@ from app.core import config, state
 from app.core.drain import DrainController, DurableUpdateWorker
 from app.core.job_store import JobStore, mark_current_job_failed
 from app.core.logging import set_correlation_id, setup_logging
-from app.tasks.auto_updater import auto_updater_loop
 from app.tasks.janitor import janitor_loop
 
 setup_logging()
@@ -337,8 +336,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await job_store.initialize()
         janitor_task = asyncio.create_task(janitor_loop(stop_event))
         background_tasks = (janitor_task,)
-        updater_task = asyncio.create_task(auto_updater_loop(stop_event))
-        background_tasks += (updater_task,)
 
         await bot_app.initialize()
         from app.services.media.pipeline import build_default_pipeline
@@ -382,7 +379,7 @@ api = FastAPI(lifespan=lifespan)
 api.include_router(api_router)
 
 
-@api.middleware("http")  # type: ignore[untyped-decorator]
+@api.middleware("http")
 async def add_security_headers(request: Request, call_next: Any) -> Any:
     set_correlation_id(request.headers.get("X-Correlation-ID"))
     response = await call_next(request)

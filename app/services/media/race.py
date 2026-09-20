@@ -7,6 +7,8 @@ import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 
+from app.core.metrics import metrics
+
 from .models import MediaCandidate, MediaRequest
 from .registry import FailureKind, ProviderError, ProviderRoute
 from .validation import CandidateValidationResult
@@ -160,6 +162,11 @@ async def race_candidates(
                     and not finished.done()
                     and route.is_available(request)
                 ):
+                    metrics.retries.inc(
+                        reason="provider_retry_after",
+                        provider=provider,
+                        platform=request.platform,
+                    )
                     await sleep(delay)
                     continue
                 return ran
@@ -238,6 +245,10 @@ async def race_candidates(
             )
         )
         winner = CandidateWinner(winner.provider, winner.candidate, alternatives)
+        metrics.provider_wins.inc(
+            provider=winner.provider,
+            platform=request.platform,
+        )
     return RaceResult(
         winner,
         tuple(failures),

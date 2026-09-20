@@ -1,5 +1,5 @@
 # ── Stage 1: Builder ──────────────────────────────────────────────
-FROM python:3.12-slim AS builder
+FROM python:3.12.14-slim-bookworm AS builder
 
 WORKDIR /build
 
@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────
-FROM python:3.12-slim
+FROM python:3.12.14-slim-bookworm
 
 WORKDIR /app
 
@@ -49,13 +49,15 @@ COPY app ./app
 ENV PYTHONUNBUFFERED=1
 ENV PORT=8000
 
-# Non-root user
-RUN useradd -m -s /bin/bash botuser
+# Non-root user and writable project-scoped named-volume mount points.
+RUN useradd -m -s /bin/bash botuser \
+  && mkdir -p /srv/ytdlbot/media /srv/ytdlbot/state \
+  && chown -R botuser:botuser /srv/ytdlbot
 USER botuser
 
-# Health check — uses /health endpoint
+# Health check — readiness includes durable storage and required Local Bot API
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -f http://localhost:${PORT}/health || exit 1
+  CMD curl -f http://localhost:${PORT}/health/ready || exit 1
 
 # Graceful shutdown
 STOPSIGNAL SIGINT

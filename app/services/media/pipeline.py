@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import re
+import time
 from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass, replace
@@ -20,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
+from app.core.metrics import metrics
 from app.core.models import DownloadContext
 from app.core.process import run_subprocess
 
@@ -190,9 +192,12 @@ class MediaPipeline:
     async def resolve(self, request: MediaRequest) -> ResolvedMedia:
         work_request = _public_work_request(request)
         key = f"resolve:{work_request.cache_key}"
-        resolved = await self._resolve_flights.do(
-            key, lambda: self._resolve_once(work_request)
-        )
+        with metrics.pipeline_duration.time(
+            phase="resolve", platform=work_request.platform
+        ):
+            resolved = await self._resolve_flights.do(
+                key, lambda: self._resolve_once(work_request)
+            )
         if resolved.request is request:
             return resolved
         return replace(resolved, request=request)
@@ -215,6 +220,36 @@ class MediaPipeline:
         target: DeliveryTarget,
         **delivery_options: Any,
     ) -> DeliveryReceipt:
+        """Record the complete delivery boundary around one pipeline request."""
+
+        started = time.monotonic()
+        try:
+            receipt = await self._deliver_request(
+                request, target, **delivery_options
+            )
+        except BaseException:
+            metrics.pipeline_results.inc(
+                status="error", platform=request.platform
+            )
+            raise
+        else:
+            metrics.pipeline_results.inc(
+                status=receipt.status.value, platform=request.platform
+            )
+            return receipt
+        finally:
+            metrics.pipeline_duration.observe(
+                time.monotonic() - started,
+                phase="total",
+                platform=request.platform,
+            )
+
+    async def _deliver_request(
+        self,
+        request: MediaRequest,
+        target: DeliveryTarget,
+        **delivery_options: Any,
+    ) -> DeliveryReceipt:
         """Deliver from file-id cache first, then do one shared media pipeline."""
         _validate_delivery_scope(request, target)
         cached_receipt = await self._deliver_cached(request, target, delivery_options)
@@ -228,7 +263,7 @@ class MediaPipeline:
 
             async def send() -> DeliveryReceipt:
                 if cached_receipt is not None:
-                    retry = await self.delivery.retry_failed(
+                    retry = await self._retry_delivery(
                         cached_receipt,
                         materialized,
                         target,
@@ -237,14 +272,14 @@ class MediaPipeline:
                     )
                     return _merge_receipts(cached_receipt, retry)
 
-                receipt = await self.delivery.deliver(
+                receipt = await self._deliver_media(
                     materialized,
                     target,
                     request=request,
                     **delivery_options,
                 )
                 if receipt.retryable_items:
-                    retried = await self.delivery.retry_failed(
+                    retried = await self._retry_delivery(
                         receipt,
                         materialized,
                         target,
@@ -294,7 +329,7 @@ class MediaPipeline:
 
             async def send() -> DeliveryReceipt:
                 if cached_receipt is not None:
-                    retry = await self.delivery.retry_failed(
+                    retry = await self._retry_delivery(
                         cached_receipt,
                         materialized,
                         target,
@@ -302,7 +337,7 @@ class MediaPipeline:
                         **delivery_options,
                     )
                     return _merge_receipts(cached_receipt, retry)
-                receipt = await self.delivery.deliver(
+                receipt = await self._deliver_media(
                     materialized,
                     target,
                     request=request,
@@ -311,7 +346,7 @@ class MediaPipeline:
                 if receipt.retryable_items:
                     receipt = _merge_receipts(
                         receipt,
-                        await self.delivery.retry_failed(
+                        await self._retry_delivery(
                             receipt,
                             materialized,
                             target,
@@ -447,7 +482,7 @@ class MediaPipeline:
                         )
                     )
                     if cached_receipt is not None:
-                        retry = await self.delivery.retry_failed(
+                        retry = await self._retry_delivery(
                             cached_receipt,
                             derived,
                             target,
@@ -455,14 +490,14 @@ class MediaPipeline:
                             **delivery_options,
                         )
                         return _merge_receipts(cached_receipt, retry)
-                    receipt = await self.delivery.deliver(
+                    receipt = await self._deliver_media(
                         derived,
                         target,
                         request=video_request,
                         **delivery_options,
                     )
                     if receipt.retryable_items:
-                        retried = await self.delivery.retry_failed(
+                        retried = await self._retry_delivery(
                             receipt,
                             derived,
                             target,
@@ -599,7 +634,10 @@ class MediaPipeline:
                         raise
                     return completed
 
-                item = await self._materialize_flights.do(key, materialize_once)
+                with metrics.pipeline_duration.time(
+                    phase="materialize", platform=work_request.platform
+                ):
+                    item = await self._materialize_flights.do(key, materialize_once)
             item.renew_lease()
             yield item
         finally:
@@ -742,9 +780,43 @@ class MediaPipeline:
                 )
         except Exception:  # noqa: BLE001 - cache acceleration is non-authoritative
             return None
-        return await self.delivery.deliver(
+        metrics.media_cache_events.inc(
+            len(assets), event="file_id_hit", platform=request.platform
+        )
+        return await self._deliver_media(
             tuple(assets), target, request=request, **dict(options)
         )
+
+    async def _deliver_media(
+        self,
+        media: MaterializedItem | DeliveryAsset | Sequence[DeliveryAsset],
+        target: DeliveryTarget,
+        *,
+        request: MediaRequest,
+        **options: Any,
+    ) -> DeliveryReceipt:
+        with metrics.pipeline_duration.time(
+            phase="deliver", platform=request.platform
+        ):
+            return await self.delivery.deliver(
+                media, target, request=request, **options
+            )
+
+    async def _retry_delivery(
+        self,
+        receipt: DeliveryReceipt,
+        media: MaterializedItem | DeliveryAsset | Sequence[DeliveryAsset],
+        target: DeliveryTarget,
+        *,
+        request: MediaRequest,
+        **options: Any,
+    ) -> DeliveryReceipt:
+        with metrics.pipeline_duration.time(
+            phase="deliver", platform=request.platform, attempt="retry"
+        ):
+            return await self.delivery.retry_failed(
+                receipt, media, target, request=request, **options
+            )
 
     async def _store_metadata(self, resolved: ResolvedMedia) -> None:
         if self.media_cache is None:

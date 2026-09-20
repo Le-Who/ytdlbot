@@ -3,12 +3,13 @@
 Provides Prometheus-compatible text format via `render_metrics()`.
 """
 
-import time
 import contextlib
-import threading
 import logging
-from collections import defaultdict
-from typing import Generator, Union
+import math
+import threading
+import time
+from collections import defaultdict, deque
+from collections.abc import Generator
 
 logger = logging.getLogger("app.core.metrics")
 
@@ -75,12 +76,16 @@ class _Histogram:
         self._lock = threading.Lock()
         self._counts: dict[tuple, int] = defaultdict(int)
         self._sums: dict[tuple, float] = defaultdict(float)
+        self._samples: dict[tuple, deque[float]] = defaultdict(
+            lambda: deque(maxlen=2_048)
+        )
 
     def observe(self, duration: float, **labels: str) -> None:
         key = tuple(sorted(labels.items()))
         with self._lock:
             self._counts[key] += 1
             self._sums[key] += duration
+            self._samples[key].append(duration)
 
     @contextlib.contextmanager
     def time(self, **labels: str) -> Generator[None, None, None]:
@@ -98,6 +103,26 @@ class _Histogram:
             return [
                 (dict(k), self._counts.get(k, 0), self._sums.get(k, 0.0)) for k in keys
             ]
+
+    def quantiles(self) -> list[tuple[dict, float, float]]:
+        """Return bounded in-process p50/p95 samples for release diagnostics."""
+
+        values: list[tuple[dict, float, float]] = []
+        with self._lock:
+            for labels, samples in self._samples.items():
+                ordered = sorted(samples)
+                if not ordered:
+                    continue
+                for quantile in (0.5, 0.95):
+                    index = max(
+                        0,
+                        min(
+                            len(ordered) - 1,
+                            math.ceil(len(ordered) * quantile) - 1,
+                        ),
+                    )
+                    values.append((dict(labels), quantile, ordered[index]))
+        return values
 
 
 class MetricsCollector:
@@ -139,15 +164,47 @@ class MetricsCollector:
             "ytdlbot_conversion_failures_total",
             "Failed ffmpeg conversions",
         )
-        self.ytdlp_updates_total = _Counter(
-            "ytdlbot_ytdlp_updates_total",
-            "Total yt-dlp self-update runs that produced a new version",
+        self.pipeline_results = _Counter(
+            "ytdlbot_media_pipeline_results_total",
+            "Media pipeline results by delivery status",
+        )
+        self.media_cache_events = _Counter(
+            "ytdlbot_media_cache_events_total",
+            "Media cache events including Telegram file_id hits",
+        )
+        self.race_wasted_bytes = _Counter(
+            "ytdlbot_media_race_wasted_bytes_total",
+            "Bytes downloaded by losing or abandoned provider attempts",
+        )
+        self.retries = _Counter(
+            "ytdlbot_media_retries_total",
+            "Media pipeline retries by reason",
+        )
+        self.provider_wins = _Counter(
+            "ytdlbot_media_provider_wins_total",
+            "Winning provider selections",
+        )
+        self.transcode_cpu_seconds = _Counter(
+            "ytdlbot_media_transcode_cpu_seconds_total",
+            "Measured transform workload seconds; label identifies the proxy",
         )
 
         # Gauges
         self.active_downloads = _Gauge(
             "ytdlbot_active_downloads",
             "Currently active downloads",
+        )
+        self.queue_depth = _Gauge(
+            "ytdlbot_media_queue_depth",
+            "Current waiters by bounded media queue",
+        )
+        self.orphan_processes = _Gauge(
+            "ytdlbot_media_orphan_processes",
+            "Exited media subprocesses still registered with the supervisor",
+        )
+        self.delivery_profile_info = _Gauge(
+            "ytdlbot_delivery_profile_info",
+            "Active Telegram delivery profile, upload limit, and release",
         )
 
         # Histograms (phase timing)
@@ -167,6 +224,10 @@ class MetricsCollector:
             "ytdlbot_upload_duration_seconds",
             "Time spent uploading to Telegram",
         )
+        self.pipeline_duration = _Histogram(
+            "ytdlbot_media_pipeline_duration_seconds",
+            "Media pipeline latency by resolve/first-byte/materialize/deliver phase",
+        )
 
     def render(self) -> str:
         """Render all metrics in Prometheus text exposition format."""
@@ -179,7 +240,7 @@ class MetricsCollector:
         lines.append(f"ytdlbot_uptime_seconds {uptime:.1f}")
         lines.append("")
 
-        counter_and_gauge_metrics: list[Union[_Counter, _Gauge]] = [
+        counter_and_gauge_metrics: list[_Counter | _Gauge] = [
             self.downloads_total,
             self.downloads_success,
             self.downloads_failed,
@@ -188,8 +249,16 @@ class MetricsCollector:
             self.parse_requests,
             self.parse_cancellations,
             self.conversion_failures,
-            self.ytdlp_updates_total,
+            self.pipeline_results,
+            self.media_cache_events,
+            self.race_wasted_bytes,
+            self.retries,
+            self.provider_wins,
+            self.transcode_cpu_seconds,
             self.active_downloads,
+            self.queue_depth,
+            self.orphan_processes,
+            self.delivery_profile_info,
         ]
         for metric in counter_and_gauge_metrics:
             is_gauge = isinstance(metric, _Gauge)
@@ -217,6 +286,7 @@ class MetricsCollector:
             self.download_duration,
             self.conversion_duration,
             self.upload_duration,
+            self.pipeline_duration,
         ]:
             lines.append(f"# HELP {hist.name} {hist.help_text}")
             lines.append(f"# TYPE {hist.name} summary")
@@ -225,6 +295,13 @@ class MetricsCollector:
                 lines.append(f"{hist.name}_count 0")
                 lines.append(f"{hist.name}_sum 0")
             else:
+                for labels, quantile, value in hist.quantiles():
+                    quantile_labels = {**labels, "quantile": str(quantile)}
+                    label_str = ",".join(
+                        f'{key}="{item}"'
+                        for key, item in sorted(quantile_labels.items())
+                    )
+                    lines.append(f"{hist.name}{{{label_str}}} {value:.3f}")
                 for labels, count, total in hist_entries:
                     if labels:
                         label_str = ",".join(
@@ -256,6 +333,7 @@ class MetricsCollector:
             self.download_duration,
             self.conversion_duration,
             self.upload_duration,
+            self.pipeline_duration,
         ]:
             entries = hist.collect()
             total_count = sum(c for _, c, _ in entries)

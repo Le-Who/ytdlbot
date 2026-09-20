@@ -18,10 +18,31 @@ os.makedirs(MEDIA_DIR, exist_ok=True)
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 BASE_URL = os.getenv("BASE_URL", "").strip().rstrip("/")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
+APP_RELEASE = os.getenv("APP_RELEASE", "dev").strip() or "dev"
 TELEGRAM_SECRET_TOKEN: str = os.getenv(
     "TELEGRAM_SECRET_TOKEN"
 ) or secrets.token_urlsafe(32)
 TELEGRAM_LOCAL_ENDPOINT = os.getenv("TELEGRAM_LOCAL_ENDPOINT", "").strip().rstrip("/")
+
+
+def _boolean(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be a boolean")
+
+
+# Production Compose sets this explicitly.  Defaulting to the presence of a
+# local endpoint keeps development/cloud-only compatibility while preventing a
+# configured Local Bot API from being treated as an optional optimization.
+TELEGRAM_LOCAL_REQUIRED = _boolean(
+    "TELEGRAM_LOCAL_REQUIRED", bool(TELEGRAM_LOCAL_ENDPOINT)
+)
 
 LINK_TTL_MINUTES = int(os.getenv("LINK_TTL_MINUTES", "60"))
 ENABLE_TELEGRAM_UPLOAD = os.getenv("ENABLE_TELEGRAM_UPLOAD", "1").strip() == "1"
@@ -92,8 +113,6 @@ LIMITER_TOKEN_REFILL_PER_SEC = float(os.getenv("LIMITER_TOKEN_REFILL_PER_SEC", "
 
 MAX_TEMP_AGE_SECONDS = int(os.getenv("MAX_TEMP_AGE_SECONDS", "3600"))
 JANITOR_INTERVAL_SECONDS = int(os.getenv("JANITOR_INTERVAL_SECONDS", "300"))
-YTDLP_UPDATE_INTERVAL_HOURS = int(os.getenv("YTDLP_UPDATE_INTERVAL_HOURS", "24"))
-
 DL_TIMEOUT_TELEGRAM = int(os.getenv("DL_TIMEOUT_TELEGRAM", "600"))
 DL_TIMEOUT_HTTP = int(os.getenv("DL_TIMEOUT_HTTP", "900"))
 

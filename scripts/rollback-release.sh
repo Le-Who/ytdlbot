@@ -45,6 +45,8 @@ previous_compose=$(manifest_field COMPOSE_FILE)
 previous_override=$(manifest_field OVERRIDE_FILE)
 previous_health_contract=$(manifest_field HEALTH_CONTRACT)
 previous_health_url=$(manifest_field HEALTH_URL)
+previous_current_manifest_state=$(manifest_field CURRENT_MANIFEST_STATE)
+previous_current_manifest=$(manifest_field CURRENT_MANIFEST_FILE)
 [ "$previous_project" = "$COMPOSE_PROJECT" ] ||
   fail "Rollback project mismatch."
 [ "$previous_compose" = "$DEPLOY_STATE_DIR/rollback-compose.yml" ] ||
@@ -55,6 +57,16 @@ previous_health_url=$(manifest_field HEALTH_URL)
   fail "Rollback Compose configuration is unavailable or unsafe."
 [ -f "$previous_override" ] && [ ! -L "$previous_override" ] ||
   fail "Rollback bot image override is unavailable or unsafe."
+[ "$previous_current_manifest" = "$DEPLOY_STATE_DIR/rollback-current.manifest" ] ||
+  fail "Rollback current manifest path is outside managed state."
+case "$previous_current_manifest_state" in
+  present)
+    [ -f "$previous_current_manifest" ] && [ ! -L "$previous_current_manifest" ] ||
+      fail "Rollback current manifest is unavailable or unsafe."
+    ;;
+  absent) ;;
+  *) fail "Rollback current manifest state is invalid." ;;
+esac
 case "$previous_health_contract:$previous_health_url" in
   "release-ready:$LOCAL_READY_URL"|"legacy-health:${LOCAL_READY_URL%/health/ready}/health") ;;
   *) fail "Rollback health contract is invalid." ;;
@@ -103,6 +115,14 @@ else:
     healthy = payload.get("ready") is True and payload.get("release") == expected
 raise SystemExit(0 if healthy else 1)
 ' "$previous_release" "$previous_health_contract"; then
+    current_manifest="$DEPLOY_STATE_DIR/current.manifest"
+    if [ "$previous_current_manifest_state" = present ]; then
+      current_manifest_tmp="$current_manifest.rollback.tmp.$$"
+      cp "$previous_current_manifest" "$current_manifest_tmp"
+      "$MV_BIN" -f "$current_manifest_tmp" "$current_manifest"
+    else
+      rm -f "$current_manifest"
+    fi
     printf 'Rollback restored release %s.\n' "$previous_release"
     exit 0
   fi

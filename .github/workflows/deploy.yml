@@ -247,19 +247,34 @@ jobs:
             staging_dir="$PROJECT_ROOT/.incoming/$DEPLOY_UPLOAD_ID"
             releases_root="$PROJECT_ROOT/releases"
             release_dir="$releases_root/$RELEASE_SHA"
-            test -d "$staging_dir"
-            test ! -L "$staging_dir"
-            test "$(stat -c '%u' "$staging_dir")" = "$(id -u)"
-            test "$(readlink -f "$staging_dir")" = "$staging_dir"
-            actual_files="$(cd "$staging_dir" && find . -type f -print | LC_ALL=C sort)"
+            payload_files='docker-compose.yml
+            release.manifest
+            scripts/bootstrap-production.sh
+            scripts/deploy-release.sh
+            scripts/preflight-production.sh
+            scripts/rollback-release.sh'
             expected_files="$(printf '%s\n' ./docker-compose.yml ./release.manifest ./scripts/bootstrap-production.sh ./scripts/deploy-release.sh ./scripts/preflight-production.sh ./scripts/rollback-release.sh | LC_ALL=C sort)"
-            test "$actual_files" = "$expected_files"
-            test -z "$(find "$staging_dir" -type l -print -quit)"
-            grep -Fx "RELEASE_SHA=$RELEASE_SHA" "$staging_dir/release.manifest"
-            grep -Fx "BOT_IMAGE=$BOT_IMAGE" "$staging_dir/release.manifest"
-            grep -Fx "COMPOSE_PROJECT=$COMPOSE_PROJECT" "$staging_dir/release.manifest"
-            expected_compose_sha="$(sed -n 's/^COMPOSE_SHA256=//p' "$staging_dir/release.manifest")"
-            test "$(sha256sum "$staging_dir/docker-compose.yml" | awk '{print $1}')" = "$expected_compose_sha"
+            verify_release_payload() {
+              payload_root=$1
+              test -d "$payload_root"
+              test ! -L "$payload_root"
+              test "$(stat -c '%u' "$payload_root")" = "$(id -u)"
+              test "$(readlink -f "$payload_root")" = "$payload_root"
+              actual_files="$(cd "$payload_root" && find . -type f -print | LC_ALL=C sort)"
+              test "$actual_files" = "$expected_files"
+              test -z "$(find "$payload_root" -type l -print -quit)"
+              test "$(stat -c '%u' "$payload_root/scripts")" = "$(id -u)"
+              for relative_path in $payload_files; do
+                test "$(stat -c '%u' "$payload_root/$relative_path")" = "$(id -u)"
+              done
+              test "$(grep -Fxc "RELEASE_SHA=$RELEASE_SHA" "$payload_root/release.manifest")" = 1
+              test "$(grep -Fxc "BOT_IMAGE=$BOT_IMAGE" "$payload_root/release.manifest")" = 1
+              test "$(grep -Fxc "COMPOSE_PROJECT=$COMPOSE_PROJECT" "$payload_root/release.manifest")" = 1
+              test "$(grep -Ec '^COMPOSE_SHA256=[0-9a-f]{64}$' "$payload_root/release.manifest")" = 1
+              expected_compose_sha="$(sed -n 's/^COMPOSE_SHA256=//p' "$payload_root/release.manifest")"
+              test "$(sha256sum "$payload_root/docker-compose.yml" | awk '{print $1}')" = "$expected_compose_sha"
+            }
+            verify_release_payload "$staging_dir"
             if test -e "$releases_root" || test -L "$releases_root"; then
               test -d "$releases_root"
               test ! -L "$releases_root"
@@ -267,7 +282,18 @@ jobs:
               mkdir -m 700 "$releases_root"
             fi
             test "$(stat -c '%u' "$releases_root")" = "$(id -u)"
-            test ! -e "$release_dir"
-            test ! -L "$release_dir"
-            mv "$staging_dir" "$release_dir"
+            if test -e "$release_dir" || test -L "$release_dir"; then
+              verify_release_payload "$release_dir"
+              for relative_path in $payload_files; do
+                staging_sha="$(sha256sum "$staging_dir/$relative_path" | awk '{print $1}')"
+                release_sha="$(sha256sum "$release_dir/$relative_path" | awk '{print $1}')"
+                if test "$staging_sha" != "$release_sha"; then
+                  printf 'Existing immutable release payload differs: %s\n' "$relative_path" >&2
+                  exit 1
+                fi
+              done
+            else
+              test ! -L "$release_dir"
+              mv "$staging_dir" "$release_dir"
+            fi
             sh "$release_dir/scripts/deploy-release.sh"

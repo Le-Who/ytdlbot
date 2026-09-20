@@ -135,6 +135,17 @@ fi
 rollback_compose_tmp="$DEPLOY_STATE_DIR/rollback-compose.yml.tmp.$$"
 rollback_manifest_tmp="$DEPLOY_STATE_DIR/rollback.manifest.tmp.$$"
 rollback_override_tmp="$DEPLOY_STATE_DIR/rollback-bot.override.yml.tmp.$$"
+current_manifest="$DEPLOY_STATE_DIR/current.manifest"
+rollback_current_manifest="$DEPLOY_STATE_DIR/rollback-current.manifest"
+previous_current_manifest_state=absent
+if [ -e "$current_manifest" ] || [ -L "$current_manifest" ]; then
+  [ -f "$current_manifest" ] && [ ! -L "$current_manifest" ] ||
+    fail "Current release manifest is unsafe."
+  rollback_current_tmp="$rollback_current_manifest.tmp.$$"
+  cp "$current_manifest" "$rollback_current_tmp"
+  mv -f "$rollback_current_tmp" "$rollback_current_manifest"
+  previous_current_manifest_state=present
+fi
 cp "$PROJECT_ROOT/docker-compose.yml" "$rollback_compose_tmp"
 mv -f "$rollback_compose_tmp" "$DEPLOY_STATE_DIR/rollback-compose.yml"
 {
@@ -151,6 +162,8 @@ mv -f "$rollback_override_tmp" "$DEPLOY_STATE_DIR/rollback-bot.override.yml"
   printf 'OVERRIDE_FILE=%s\n' "$DEPLOY_STATE_DIR/rollback-bot.override.yml"
   printf 'HEALTH_CONTRACT=%s\n' "$previous_health_contract"
   printf 'HEALTH_URL=%s\n' "$previous_health_url"
+  printf 'CURRENT_MANIFEST_STATE=%s\n' "$previous_current_manifest_state"
+  printf 'CURRENT_MANIFEST_FILE=%s\n' "$rollback_current_manifest"
 } >"$rollback_manifest_tmp"
 mv -f "$rollback_manifest_tmp" "$DEPLOY_STATE_DIR/rollback.manifest"
 
@@ -234,9 +247,9 @@ if payload.get("ok") is not True or actual != expected:
     raise SystemExit(1)
 ' >/dev/null
 
-current_manifest_tmp="$DEPLOY_STATE_DIR/current.manifest.tmp.$$"
+current_manifest_tmp="$current_manifest.tmp.$$"
 cp "$RELEASE_DIR/release.manifest" "$current_manifest_tmp"
-"$MV_BIN" -f "$current_manifest_tmp" "$DEPLOY_STATE_DIR/current.manifest"
+"$MV_BIN" -f "$current_manifest_tmp" "$current_manifest"
 ROLLBACK_ARMED=0
 printf 'Activated immutable release %s for project %s.\n' \
   "$RELEASE_SHA" "$COMPOSE_PROJECT"

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 BASH = next(
@@ -36,6 +37,59 @@ def _bash_path(path: Path) -> str:
 def _write_executable(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8", newline="\n")
     path.chmod(0o755)
+
+
+def _activation_workflow_script() -> str:
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
+    )
+    steps = workflow["jobs"]["deploy"]["steps"]
+    return next(
+        step["with"]["script"]
+        for step in steps
+        if step.get("name") == "Activate immutable release over verified SSH"
+    )
+
+
+def _write_uploaded_release(path: Path, activation_count: Path) -> None:
+    scripts = path / "scripts"
+    scripts.mkdir(parents=True)
+    compose = "services:\n  bot:\n    image: ${BOT_IMAGE}\n"
+    (path / "docker-compose.yml").write_text(compose, encoding="utf-8", newline="\n")
+    compose_sha = hashlib.sha256(compose.encode()).hexdigest()
+    (path / "release.manifest").write_text(
+        "\n".join(
+            (
+                f"RELEASE_SHA={RELEASE_SHA}",
+                f"BOT_IMAGE={BOT_IMAGE}",
+                "COMPOSE_PROJECT=verified-project",
+                f"COMPOSE_SHA256={compose_sha}",
+            )
+        )
+        + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    _write_executable(
+        scripts / "deploy-release.sh",
+        f"""#!/bin/sh
+set -eu
+count_file='{_bash_path(activation_count)}'
+count=0
+if [ -f "$count_file" ]; then count=$(cat "$count_file"); fi
+count=$((count + 1))
+printf '%s' "$count" > "$count_file"
+if [ "${{FAKE_FAIL_FIRST_ACTIVATION:-0}}" = 1 ] && [ "$count" -eq 1 ]; then
+  exit 42
+fi
+""",
+    )
+    for name in (
+        "bootstrap-production.sh",
+        "preflight-production.sh",
+        "rollback-release.sh",
+    ):
+        _write_executable(scripts / name, "#!/bin/sh\nexit 0\n")
 
 
 @dataclass
@@ -260,6 +314,11 @@ if [ "${FAKE_SIGNAL_AFTER_CONFIG_SWAP:-0}" = 1 ] && [ "$destination" = "$PROJECT
   kill -TERM "$PPID"
   sleep 0.1
 fi
+if [ "${FAKE_SIGNAL_AT_MANIFEST_COMMIT:-0}" = 1 ] && [ "$destination" = "$PROJECT_ROOT/.deploy/current.manifest" ] && [ ! -e "$FAKE_STATE_DIR/manifest-signal-sent" ]; then
+  : > "$FAKE_STATE_DIR/manifest-signal-sent"
+  kill -TERM "$PPID"
+  sleep 0.1
+fi
 """,
     )
 
@@ -475,6 +534,47 @@ def test_signal_after_active_config_swap_restores_previous_release(
     assert fake_host.runtime_image.read_text(encoding="utf-8") == PREVIOUS_IMAGE
 
 
+def test_manual_rollback_restores_authoritative_previous_current_manifest(
+    fake_host: FakeHost,
+) -> None:
+    current_manifest = fake_host.root / ".deploy" / "current.manifest"
+    previous_manifest = (
+        f"RELEASE_SHA={PREVIOUS_RELEASE}\n"
+        f"BOT_IMAGE={PREVIOUS_IMAGE}\n"
+        "COMPOSE_PROJECT=verified-project\n"
+    )
+    current_manifest.write_text(previous_manifest, encoding="utf-8")
+
+    deploy = fake_host.run()
+    assert deploy.returncode == 0, deploy.stderr
+    assert (
+        current_manifest.read_bytes()
+        == (fake_host.release_dir / "release.manifest").read_bytes()
+    )
+
+    rollback = fake_host.run("rollback-release.sh")
+
+    assert rollback.returncode == 0, rollback.stderr
+    assert current_manifest.read_text(encoding="utf-8") == previous_manifest
+    assert fake_host.runtime_release.read_text(encoding="utf-8") == PREVIOUS_RELEASE
+    assert fake_host.runtime_image.read_text(encoding="utf-8") == PREVIOUS_IMAGE
+
+
+def test_signal_after_candidate_manifest_commit_restores_legacy_absence(
+    fake_host: FakeHost,
+) -> None:
+    current_manifest = fake_host.root / ".deploy" / "current.manifest"
+    assert not current_manifest.exists()
+
+    result = fake_host.run(FAKE_SIGNAL_AT_MANIFEST_COMMIT="1")
+
+    assert result.returncode != 0
+    assert (fake_host.state_dir / "manifest-signal-sent").exists()
+    assert not current_manifest.exists()
+    assert fake_host.runtime_release.read_text(encoding="utf-8") == PREVIOUS_RELEASE
+    assert fake_host.runtime_image.read_text(encoding="utf-8") == PREVIOUS_IMAGE
+
+
 def test_rollback_override_pins_previous_image_despite_hardcoded_compose(
     fake_host: FakeHost,
 ) -> None:
@@ -631,6 +731,81 @@ def test_workflow_smokes_immutable_image_and_promotes_trusted_staging() -> None:
     assert 'test ! -L "$staging_dir"' in workflow
     assert "/.incoming/" in workflow
     assert 'mv "$staging_dir" "$release_dir"' in workflow
+
+
+@pytest.mark.parametrize("initial_failure", ["interrupted-promotion", "activation"])
+def test_same_sha_promotion_reuses_only_an_identical_immutable_release(
+    tmp_path: Path,
+    initial_failure: str,
+) -> None:
+    project_root = tmp_path / "opt" / "ytdlbot"
+    incoming = project_root / ".incoming"
+    release_dir = project_root / "releases" / RELEASE_SHA
+    activation_count = tmp_path / "activation-count"
+    incoming.mkdir(parents=True)
+    release_dir.parent.mkdir()
+    script = _activation_workflow_script()
+    base_env = os.environ | {
+        "PROJECT_ROOT": _bash_path(project_root),
+        "RELEASE_SHA": RELEASE_SHA,
+        "EXPECTED_BRANCH_SHA": RELEASE_SHA,
+        "BOT_IMAGE": BOT_IMAGE,
+        "COMPOSE_PROJECT": "verified-project",
+        "PUBLIC_BASE_URL": "https://bot.example",
+    }
+
+    def run(upload_id: str, **overrides: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [str(BASH), "-c", script],
+            env=base_env | {"DEPLOY_UPLOAD_ID": upload_id} | overrides,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=10,
+            check=False,
+        )
+
+    first_staging = incoming / "upload-first"
+    _write_uploaded_release(first_staging, activation_count)
+    if initial_failure == "interrupted-promotion":
+        first_staging.replace(release_dir)
+        expected_activations = "1"
+    else:
+        first = run("upload-first", FAKE_FAIL_FIRST_ACTIVATION="1")
+        assert first.returncode == 42, (first.stdout, first.stderr)
+        assert activation_count.read_text(encoding="utf-8") == "1"
+        expected_activations = "2"
+
+    release_hashes = {
+        path.relative_to(release_dir): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in release_dir.rglob("*")
+        if path.is_file()
+    }
+    mismatched_staging = incoming / "upload-mismatch"
+    _write_uploaded_release(mismatched_staging, activation_count)
+    with (mismatched_staging / "scripts" / "rollback-release.sh").open("a") as file:
+        file.write("# changed payload\n")
+
+    mismatch = run("upload-mismatch")
+
+    assert mismatch.returncode != 0
+    assert {
+        path.relative_to(release_dir): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in release_dir.rglob("*")
+        if path.is_file()
+    } == release_hashes
+
+    retry_staging = incoming / "upload-retry"
+    _write_uploaded_release(retry_staging, activation_count)
+    retry = run("upload-retry")
+
+    assert retry.returncode == 0, retry.stderr
+    assert activation_count.read_text(encoding="utf-8") == expected_activations
+    assert {
+        path.relative_to(release_dir): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in release_dir.rglob("*")
+        if path.is_file()
+    } == release_hashes
 
 
 def test_all_first_party_actions_are_pinned_to_full_commit_sha() -> None:

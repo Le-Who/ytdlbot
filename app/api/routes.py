@@ -312,10 +312,6 @@ async def telegram_webhook(request: Request) -> dict[str, bool]:
 
     store = _job_store
     if store is None:
-        # A server cannot receive traffic before its lifespan has completed.
-        # This branch keeps import-only route tests side-effect free.
-        if state.bot_app is None:
-            return {"ok": True}
         raise HTTPException(
             503, "Durable inbox is unavailable", headers={"Retry-After": "1"}
         )

@@ -18,6 +18,10 @@ class WorkerLeaseLost(RuntimeError):
     pass
 
 
+class RetryableDeliveryFailed(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class DrainResult:
     completed: int
@@ -118,20 +122,29 @@ class DurableUpdateWorker:
         owner_id: str | None = None,
         poll_interval: float = 0.25,
         lease_seconds: float = 30,
+        maintenance_interval: float = 5 * 60,
+        restart_delay: float = 1,
     ) -> None:
         if poll_interval <= 0:
             raise ValueError("poll_interval must be positive")
         if lease_seconds <= 0:
             raise ValueError("lease_seconds must be positive")
+        if maintenance_interval <= 0:
+            raise ValueError("maintenance_interval must be positive")
+        if restart_delay <= 0:
+            raise ValueError("restart_delay must be positive")
         self.store = store
         self.drain_controller = drain_controller
         self.process_update = process_update
         self.owner_id = owner_id or uuid.uuid4().hex
         self.poll_interval = poll_interval
         self.lease_seconds = lease_seconds
+        self.maintenance_interval = maintenance_interval
+        self.restart_delay = restart_delay
         self.last_completed_job_id: str | None = None
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
+        self._maintenance_task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         if self._task is not None and not self._task.done():
@@ -142,11 +155,24 @@ class DurableUpdateWorker:
         )
         if not acquired:
             raise RuntimeError("durable update worker already has an active owner")
+        await self._requeue_startup_failures()
+        await self._run_maintenance_once()
         self._stop.clear()
         self._task = asyncio.create_task(
-            self._run(),
+            self._supervise(),
             name=f"durable-update-worker-{self.owner_id[:8]}",
         )
+        self._maintenance_task = asyncio.create_task(
+            self._run_maintenance(),
+            name=f"durable-update-maintenance-{self.owner_id[:8]}",
+        )
+
+    async def _requeue_startup_failures(self) -> None:
+        batch_size = 100
+        while True:
+            requeued = await self.store.requeue_failed_deliveries(limit=batch_size)
+            if requeued < batch_size:
+                return
 
     async def stop(self) -> None:
         task = self._task
@@ -154,13 +180,75 @@ class DurableUpdateWorker:
             await self.store.release_worker(self.owner_id)
             return
         if not self.drain_controller.draining:
-            await self.drain_controller.drain(deadline_seconds=0)
+            try:
+                await self.drain_controller.drain(deadline_seconds=0)
+            except Exception as error:  # noqa: BLE001 - shutdown must continue
+                logger.error(
+                    "Durable worker drain failed during stop",
+                    extra={"error_type": type(error).__name__},
+                )
         self._stop.set()
         try:
             await task
         finally:
+            try:
+                if self._maintenance_task is not None:
+                    await self._maintenance_task
+                    self._maintenance_task = None
+            finally:
+                await self._release_worker()
+                self._task = None
+
+    async def _supervise(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await self._run()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                logger.error(
+                    "Durable update worker failed; retrying",
+                    extra={"error_type": type(error).__name__},
+                )
+            await self._release_worker()
+            if await self._wait_for_restart():
+                return
+            await self._reacquire_worker()
+
+    async def _reacquire_worker(self) -> None:
+        while not self._stop.is_set():
+            try:
+                acquired = await self.store.acquire_worker(
+                    self.owner_id,
+                    lease_seconds=self.lease_seconds,
+                )
+            except Exception as error:
+                logger.error(
+                    "Durable update worker reacquire failed",
+                    extra={"error_type": type(error).__name__},
+                )
+                acquired = False
+            if acquired:
+                return
+            if await self._wait_for_restart():
+                return
+
+    async def _release_worker(self) -> None:
+        try:
             await self.store.release_worker(self.owner_id)
-            self._task = None
+        except Exception as error:
+            logger.error(
+                "Durable update worker release failed",
+                extra={"error_type": type(error).__name__},
+            )
+
+    async def _wait_for_restart(self) -> bool:
+        try:
+            await asyncio.wait_for(self._stop.wait(), timeout=self.restart_delay)
+        except TimeoutError:
+            return False
+        return True
 
     async def _run(self) -> None:
         while not self._stop.is_set():
@@ -214,6 +302,8 @@ class DurableUpdateWorker:
                 raise RuntimeError(
                     f"Telegram handler failed: {type(execution.error).__name__}"
                 ) from execution.error
+            if await self.store.has_failed_deliveries(job.id):
+                raise RetryableDeliveryFailed("delivery has known failed items")
         except asyncio.CancelledError:
             await self.store.checkpoint(job.id, job.checkpoint, owner_id=self.owner_id)
             current = asyncio.current_task()
@@ -222,6 +312,16 @@ class DurableUpdateWorker:
         except WorkerLeaseLost:
             await self.store.checkpoint(job.id, job.checkpoint, owner_id=self.owner_id)
             raise
+        except RetryableDeliveryFailed as error:
+            failed = await self.store.fail(
+                job.id,
+                str(error),
+                owner_id=self.owner_id,
+            )
+            if not failed:
+                raise WorkerLeaseLost(
+                    "durable job lease was lost before recording delivery failure"
+                )
         except Exception as error:
             logger.exception(
                 "Durable update failed",
@@ -266,3 +366,21 @@ class DurableUpdateWorker:
             await asyncio.wait_for(self._stop.wait(), timeout=self.poll_interval)
         except TimeoutError:
             pass
+
+    async def _run_maintenance(self) -> None:
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(
+                    self._stop.wait(), timeout=self.maintenance_interval
+                )
+            except TimeoutError:
+                await self._run_maintenance_once()
+
+    async def _run_maintenance_once(self) -> None:
+        try:
+            await self.store.purge_expired_payloads(limit=1_000)
+        except Exception as error:
+            logger.error(
+                "Durable payload maintenance failed",
+                extra={"error_type": type(error).__name__},
+            )

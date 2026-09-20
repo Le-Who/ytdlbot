@@ -3,7 +3,7 @@ import html
 import logging
 import os
 import traceback
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -38,6 +38,66 @@ async def stop_telegram_ingress(bot_app: Any, *, webhook_enabled: bool) -> None:
         return
     assert bot_app.updater is not None
     await bot_app.updater.stop()
+
+
+async def shutdown_runtime(
+    *,
+    drain_controller: DrainController,
+    durable_worker: DurableUpdateWorker,
+    stop_event: asyncio.Event,
+    background_tasks: tuple[asyncio.Task[None], ...],
+    bot_app: Any,
+    webhook_enabled: bool,
+    job_store: JobStore,
+    redis_client: Any,
+    drain_timeout_seconds: float,
+) -> None:
+    """Attempt every shutdown phase even when an earlier phase fails."""
+
+    async def attempt(
+        label: str,
+        operation: Callable[[], Awaitable[Any]],
+    ) -> None:
+        try:
+            await operation()
+        except Exception as error:
+            logger.error(
+                "Shutdown phase failed",
+                extra={"phase": label, "error_type": type(error).__name__},
+            )
+
+    await attempt(
+        "durable drain",
+        lambda: drain_controller.drain(deadline_seconds=drain_timeout_seconds),
+    )
+    await attempt("durable worker", durable_worker.stop)
+    stop_event.set()
+    background_results = await asyncio.gather(
+        *background_tasks,
+        return_exceptions=True,
+    )
+    for task, result in zip(background_tasks, background_results, strict=True):
+        if isinstance(result, BaseException):
+            logger.error(
+                "Background task failed during shutdown",
+                extra={"task": task.get_name(), "error_type": type(result).__name__},
+            )
+    await attempt(
+        "Telegram ingress",
+        lambda: stop_telegram_ingress(
+            bot_app,
+            webhook_enabled=webhook_enabled,
+        ),
+    )
+    await attempt("Telegram application stop", bot_app.stop)
+    await attempt("Telegram application shutdown", bot_app.shutdown)
+
+    state.media_pipeline = None
+    configure_job_store(None)
+    await attempt("job store close", job_store.close)
+    if redis_client:
+        await attempt("Redis close", redis_client.aclose)
+        logger.info("Redis connection closed ✅")
 
 
 def _build_telegram_application_builder() -> Any:
@@ -297,28 +357,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             allowed_updates=["message", "callback_query"]
         )
 
-    yield
-
-    logger.info("Shutting down...")
-    await drain_controller.drain(
-        deadline_seconds=float(os.getenv("DRAIN_TIMEOUT_SECONDS", "30"))
-    )
-    await durable_worker.stop()
-    stop_event.set()
-    await janitor_task
-    await updater_task
-    await stop_telegram_ingress(bot_app, webhook_enabled=bool(config.WEBHOOK_URL))
-
-    await bot_app.stop()
-    await bot_app.shutdown()
-    state.media_pipeline = None
-    configure_job_store(None)
-    await job_store.close()
-
-    # Redis lifecycle: clean close connection pool
-    if state.redis_client:
-        await state.redis_client.aclose()
-        logger.info("Redis connection closed ✅")
+    try:
+        yield
+    finally:
+        logger.info("Shutting down...")
+        await shutdown_runtime(
+            drain_controller=drain_controller,
+            durable_worker=durable_worker,
+            stop_event=stop_event,
+            background_tasks=(janitor_task, updater_task),
+            bot_app=bot_app,
+            webhook_enabled=bool(config.WEBHOOK_URL),
+            job_store=job_store,
+            redis_client=state.redis_client,
+            drain_timeout_seconds=float(os.getenv("DRAIN_TIMEOUT_SECONDS", "30")),
+        )
 
 
 api = FastAPI(lifespan=lifespan)

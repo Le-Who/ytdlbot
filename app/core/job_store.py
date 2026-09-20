@@ -349,8 +349,26 @@ class JobStore:
         outcome = await self.delivery_outcome(job_id, item_key=item_key)
         return outcome not in {DeliveryOutcome.SUCCESS, DeliveryOutcome.UNCERTAIN}
 
-    async def purge_expired_payloads(self) -> int:
-        return await self._run(self._purge_expired_payloads_sync, self._clock())
+    async def has_failed_deliveries(self, job_id: str | int) -> bool:
+        return await self._run(self._has_failed_deliveries_sync, str(job_id))
+
+    async def requeue_failed_deliveries(self, *, limit: int = 100) -> int:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        return await self._run(
+            self._requeue_failed_deliveries_sync,
+            limit,
+            self._clock(),
+        )
+
+    async def purge_expired_payloads(self, *, limit: int = 1_000) -> int:
+        if limit <= 0:
+            raise ValueError("limit must be positive")
+        return await self._run(
+            self._purge_expired_payloads_sync,
+            self._clock(),
+            limit,
+        )
 
     async def _run(self, operation: Callable[..., _T], *args: Any) -> _T:
         await self.initialize()
@@ -820,15 +838,58 @@ class JobStore:
             connection.close()
         return DeliveryOutcome(row["outcome"]) if row is not None else None
 
-    def _purge_expired_payloads_sync(self, now: float) -> int:
+    def _has_failed_deliveries_sync(self, job_id: str) -> bool:
+        connection = self._connect()
+        try:
+            row = connection.execute(
+                "SELECT 1 FROM deliveries WHERE job_id = ? AND outcome = 'failed' "
+                "LIMIT 1",
+                (job_id,),
+            ).fetchone()
+        finally:
+            connection.close()
+        return row is not None
+
+    def _requeue_failed_deliveries_sync(self, limit: int, now: float) -> int:
+        with self._transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT job_id FROM jobs
+                WHERE state = 'failed'
+                  AND EXISTS (
+                      SELECT 1 FROM deliveries
+                      WHERE deliveries.job_id = jobs.job_id
+                        AND deliveries.outcome = 'failed'
+                  )
+                ORDER BY updated_at, update_id
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            if rows:
+                job_ids = [str(row["job_id"]) for row in rows]
+                placeholders = ",".join("?" for _ in job_ids)
+                connection.execute(
+                    f"""
+                    UPDATE jobs
+                    SET state = 'checkpointed', error = NULL, updated_at = ?
+                    WHERE job_id IN ({placeholders}) AND state = 'failed'
+                    """,
+                    (now, *job_ids),
+                )
+        return len(rows)
+
+    def _purge_expired_payloads_sync(self, now: float, limit: int) -> int:
         with self._transaction() as connection:
             rows = connection.execute(
                 """
                 SELECT job_id, update_id FROM jobs
                 WHERE state IN ('completed', 'failed')
                   AND payload_expires_at <= ?
+                ORDER BY payload_expires_at, update_id
+                LIMIT ?
                 """,
-                (now,),
+                (now, limit),
             ).fetchall()
             for row in rows:
                 connection.execute(

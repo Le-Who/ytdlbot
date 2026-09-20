@@ -1,36 +1,44 @@
+import asyncio
+import html
+import logging
 import os
 import uuid
-import asyncio
-import logging
-import html
 from typing import Any
+
 from telegram import (
-    Update,
-    Message,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     InputMediaPhoto,
     LinkPreviewOptions,
+    Message,
+    Update,
 )
+from telegram.error import BadRequest, NetworkError
 from telegram.ext import ContextTypes
 
+from app.bot.keyboards import build_format_keyboard
+from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID, SLIDESHOW_PHOTO_FORMAT_ID
 from app.core import state
 from app.core.config import (
     BASE_URL,
-    LINK_TTL_MINUTES,
     ENABLE_TELEGRAM_UPLOAD,
+    LINK_TTL_MINUTES,
 )
+from app.core.job_store import (
+    DeliveryOutcome,
+    begin_current_delivery,
+    current_delivery_outcome,
+    record_current_delivery,
+)
+from app.core.logging import set_correlation_id
+from app.core.models import DownloadContext
+from app.core.process import process_owner_scope, process_supervisor
+from app.core.texts import Texts
 from app.core.utils import (
     safe_remove,
 )
-from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID, SLIDESHOW_PHOTO_FORMAT_ID
-from app.bot.keyboards import build_format_keyboard
-from app.core.texts import Texts
-from app.core.logging import set_correlation_id
-from app.core.process import process_owner_scope, process_supervisor
 from app.services.downloader import MediaSender
-from app.core.models import DownloadContext
-from app.services.orchestrator import DownloadOrchestrator
+from app.services.media.models import DeliveryTarget
 from app.services.media.pipeline import (
     CallbackDataError,
     MediaPipelineError,
@@ -38,7 +46,7 @@ from app.services.media.pipeline import (
     decode_callback_payload,
     encode_callback_data,
 )
-from app.services.media.models import DeliveryTarget
+from app.services.orchestrator import DownloadOrchestrator
 
 __all__ = [
     "on_back",
@@ -51,6 +59,39 @@ __all__ = [
 ]
 
 logger = logging.getLogger("app.bot.callbacks")
+
+
+def _gif_document_delivery_key(chat_id: int, cache_key: str) -> str:
+    return f"gif-document:{chat_id}:{cache_key}"
+
+
+async def _send_gif_document_durable(
+    bot: Any,
+    item_key: str,
+    **kwargs: Any,
+) -> tuple[DeliveryOutcome, Any | None]:
+    prior = await current_delivery_outcome(item_key)
+    if prior in {DeliveryOutcome.SUCCESS, DeliveryOutcome.UNCERTAIN}:
+        return prior, None
+    await begin_current_delivery((item_key,))
+    try:
+        sent = await bot.send_document(**kwargs)
+    except BadRequest:
+        await record_current_delivery(item_key, DeliveryOutcome.FAILED)
+        return DeliveryOutcome.FAILED, None
+    except NetworkError:
+        await record_current_delivery(item_key, DeliveryOutcome.UNCERTAIN)
+        return DeliveryOutcome.UNCERTAIN, None
+    except Exception:
+        await record_current_delivery(item_key, DeliveryOutcome.FAILED)
+        return DeliveryOutcome.FAILED, None
+    message_id = getattr(sent, "message_id", None)
+    await record_current_delivery(
+        item_key,
+        DeliveryOutcome.SUCCESS,
+        delivery_id=str(message_id) if isinstance(message_id, int) else None,
+    )
+    return DeliveryOutcome.SUCCESS, sent
 
 
 async def _edit_or_reply(
@@ -595,9 +636,9 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             return
 
         if is_api:
-            from app.services.gallery_dl.service import SlideshowResult
-
             from typing import Any
+
+            from app.services.gallery_dl.service import SlideshowResult
 
             image_paths: Any = []
             audio_path: Any = None
@@ -634,6 +675,7 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
                 total = len(result.images)
                 import math
+
                 from app.services.sender import MAX_TELEGRAM_ALBUM_SIZE
 
                 total_batches = math.ceil(total / MAX_TELEGRAM_ALBUM_SIZE)
@@ -706,8 +748,9 @@ async def on_save_as_gif_file(
     6. Cache the document.file_id in link_cache for future requests.
     7. Update button state to ✅ done.
     """
-    from app.services.converter import MediaConverter
     from telegram import InputFile
+
+    from app.services.converter import MediaConverter
 
     q = update.callback_query
     assert q is not None and isinstance(q.message, Message) and q.data is not None
@@ -730,6 +773,7 @@ async def on_save_as_gif_file(
 
         h = hashlib.md5(page_url.encode()).hexdigest()
         cache_key = f"gifdoc_{h}"
+    delivery_key = _gif_document_delivery_key(q.message.chat_id, cache_key)
 
     # -- 1. Immediate UX feedback --
     try:
@@ -739,8 +783,9 @@ async def on_save_as_gif_file(
 
     # Spinner: update button label to show work in progress
     try:
-        from app.bot.keyboards import build_sent_gif_keyboard
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        from app.bot.keyboards import build_sent_gif_keyboard
 
         spinner_kb = InlineKeyboardMarkup(
             [
@@ -756,11 +801,17 @@ async def on_save_as_gif_file(
     except Exception as e:
         logger.debug("Spinner button update failed: %s", e)
 
+    prior_delivery = await current_delivery_outcome(delivery_key)
+    if prior_delivery in {DeliveryOutcome.SUCCESS, DeliveryOutcome.UNCERTAIN}:
+        return
+
     # -- 2. Check Global Redis cache for previously uploaded native GIF --
     cached_doc_id = await state.gifdoc_cache.get(cache_key)
     if cached_doc_id and isinstance(cached_doc_id, str):
         try:
-            await context.bot.send_document(
+            outcome, _ = await _send_gif_document_durable(
+                context.bot,
+                delivery_key,
                 chat_id=q.message.chat_id,
                 document=cached_doc_id,
                 caption="🎞 Нативный .gif файл",
@@ -768,6 +819,10 @@ async def on_save_as_gif_file(
                 read_timeout=60,
                 write_timeout=60,
             )
+            if outcome is DeliveryOutcome.UNCERTAIN:
+                return
+            if outcome is DeliveryOutcome.FAILED:
+                raise BadRequest("cached Telegram file_id was rejected")
             # Update button to done
             try:
                 done_kb = InlineKeyboardMarkup(
@@ -883,23 +938,29 @@ async def on_save_as_gif_file(
 
         # -- 6. Send as document (reply to animation) --
         try:
-            doc_input = InputFile(
-                open(gif_path, "rb"), filename=f"animation_{token[:8]}.gif"
-            )
-
-            sent = await context.bot.send_document(
-                chat_id=q.message.chat_id,
-                document=doc_input,
-                caption="🎞 Нативный .gif файл",
-                reply_to_message_id=q.message.message_id,
-                disable_content_type_detection=True,
-                read_timeout=120,
-                write_timeout=120,
-                connect_timeout=30,
-            )
+            with open(gif_path, "rb") as source:
+                doc_input = InputFile(source, filename=f"animation_{token[:8]}.gif")
+                outcome, sent = await _send_gif_document_durable(
+                    context.bot,
+                    delivery_key,
+                    chat_id=q.message.chat_id,
+                    document=doc_input,
+                    caption="🎞 Нативный .gif файл",
+                    reply_to_message_id=q.message.message_id,
+                    disable_content_type_detection=True,
+                    read_timeout=120,
+                    write_timeout=120,
+                    connect_timeout=30,
+                )
+            if outcome is not DeliveryOutcome.SUCCESS:
+                try:
+                    await q.message.reply_text(Texts.GIF_FILE_ERROR, do_quote=True)
+                except Exception:
+                    pass
+                return
 
             # -- 7. Cache the Telegram file_id purely by URL hash for 7-days instant future re-sends --
-            if sent and sent.document:
+            if sent is not None and sent.document:
                 await state.gifdoc_cache.set(cache_key, sent.document.file_id)
                 logger.info(
                     "on_save_as_gif_file: cached gif doc_file_id globally (%s)",

@@ -179,7 +179,7 @@ class TelegramDelivery:
         results: dict[str, DeliveredItem] = {}
         pending_assets: list[DeliveryAsset] = []
         for asset in assets:
-            item_key = _durable_item_key(target, asset)
+            item_key = _durable_item_key(target, asset, request=request)
             prior = await current_delivery_outcome(item_key)
             if prior is DeliveryOutcome.SUCCESS:
                 results[item_key] = DeliveredItem(
@@ -203,7 +203,9 @@ class TelegramDelivery:
         units = _delivery_units(tuple(pending_assets))
         for unit_index, unit in enumerate(units):
             await begin_current_delivery(
-                tuple(_durable_item_key(target, asset) for asset in unit)
+                tuple(
+                    _durable_item_key(target, asset, request=request) for asset in unit
+                )
             )
             group_options = dict(options)
             if unit_index or results:
@@ -225,7 +227,7 @@ class TelegramDelivery:
                     options=group_options,
                 )
             for asset, item in zip(unit, delivered, strict=True):
-                item_key = _durable_item_key(target, asset)
+                item_key = _durable_item_key(target, asset, request=request)
                 await record_current_delivery(
                     item_key,
                     _durable_outcome(item.status),
@@ -234,7 +236,10 @@ class TelegramDelivery:
                 results[item_key] = item
         return self._receipt(
             target,
-            tuple(results[_durable_item_key(target, asset)] for asset in assets),
+            tuple(
+                results[_durable_item_key(target, asset, request=request)]
+                for asset in assets
+            ),
         )
 
     async def retry_failed(
@@ -734,7 +739,16 @@ def _send_method(kind: MediaKind) -> tuple[str, str]:
         raise ValueError(f"unsupported Telegram media kind: {kind}") from error
 
 
-def _durable_item_key(target: DeliveryTarget, asset: DeliveryAsset) -> str:
+def _durable_item_key(
+    target: DeliveryTarget,
+    asset: DeliveryAsset,
+    *,
+    request: MediaRequest | None,
+) -> str:
+    if request is not None:
+        return (
+            f"{target.destination}:request:{request.cache_key}:{asset.item_index or 0}"
+        )
     return f"{target.destination}:{asset.item_index or 0}:{asset.item.media_id}"
 
 

@@ -1092,16 +1092,42 @@ def test_same_sha_promotion_reuses_only_an_identical_immutable_release(
     incoming = project_root / ".incoming"
     release_dir = project_root / "releases" / RELEASE_SHA
     activation_count = tmp_path / "activation-count"
+    deploy_state = project_root / ".deploy"
+    fake_bin = tmp_path / "fake-bin"
     incoming.mkdir(parents=True)
     release_dir.parent.mkdir()
+    deploy_state.mkdir()
+    fake_bin.mkdir()
+    _write_executable(
+        fake_bin / "docker",
+        """#!/bin/sh
+set -eu
+if [ "$1" = login ]; then
+  token=''
+  IFS= read -r token || [ -n "$token" ]
+  [ "$token" = test-token ]
+  printf '{"auths":{"ghcr.io":{"auth":"fixture"}}}\n' > "$DOCKER_CONFIG/config.json"
+  exit 0
+fi
+if [ "$1" = logout ]; then
+  [ "$2" = ghcr.io ]
+  printf '{"auths":{}}\n' > "$DOCKER_CONFIG/config.json"
+  exit 0
+fi
+exit 99
+""",
+    )
     script = _activation_workflow_script()
     base_env = os.environ | {
+        "PATH": f"{_bash_path(fake_bin)}:{os.environ['PATH']}",
         "PROJECT_ROOT": _bash_path(project_root),
         "RELEASE_SHA": RELEASE_SHA,
         "EXPECTED_BRANCH_SHA": RELEASE_SHA,
         "BOT_IMAGE": BOT_IMAGE,
         "COMPOSE_PROJECT": "verified-project",
         "PUBLIC_BASE_URL": "https://bot.example",
+        "GHCR_USERNAME": "test-user",
+        "GHCR_TOKEN": "test-token",
     }
 
     def run(upload_id: str, **overrides: str) -> subprocess.CompletedProcess[str]:
@@ -1144,6 +1170,7 @@ def test_same_sha_promotion_reuses_only_an_identical_immutable_release(
         for path in release_dir.rglob("*")
         if path.is_file()
     } == release_hashes
+    assert list(deploy_state.glob("registry-auth.*")) == []
 
     retry_staging = incoming / "upload-retry"
     _write_uploaded_release(retry_staging, activation_count)
@@ -1156,6 +1183,7 @@ def test_same_sha_promotion_reuses_only_an_identical_immutable_release(
         for path in release_dir.rglob("*")
         if path.is_file()
     } == release_hashes
+    assert list(deploy_state.glob("registry-auth.*")) == []
 
 
 def test_all_first_party_actions_are_pinned_to_full_commit_sha() -> None:

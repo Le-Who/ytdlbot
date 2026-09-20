@@ -151,8 +151,16 @@ jobs:
           VPS_HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
         run: |
           set -euo pipefail
-          [[ "$PROJECT_ROOT" =~ ^/[A-Za-z0-9._/-]+$ ]]
-          [[ "$PROJECT_ROOT" != "/" && "$PROJECT_ROOT" != *"//"* ]]
+          case "$PROJECT_ROOT" in
+            /*) ;;
+            *) echo "PROJECT_ROOT must be absolute." >&2; exit 2 ;;
+          esac
+          case "$PROJECT_ROOT" in
+            /|//*|*/|*//*|*/./*|*/.|*/../*|*/..|*[!A-Za-z0-9._/-]*)
+              echo "PROJECT_ROOT must be a normalized shell-safe project path." >&2
+              exit 2
+              ;;
+          esac
           [[ "$COMPOSE_PROJECT" =~ ^[A-Za-z0-9_.-]+$ ]]
           [[ "$PUBLIC_BASE_URL" =~ ^https://[^/[:space:]]+$ ]]
           [[ "$BOT_IMAGE" =~ ^[A-Za-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]]

@@ -43,14 +43,20 @@ def _write_executable(path: Path, body: str) -> None:
 
 
 def _activation_workflow_script() -> str:
+    return _workflow_run_script(
+        "Activate immutable release over verified SSH", "script"
+    )
+
+
+def _workflow_run_script(step_name: str, field: str = "run") -> str:
     workflow = yaml.safe_load(
         (ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8")
     )
     steps = workflow["jobs"]["deploy"]["steps"]
     return next(
-        step["with"]["script"]
+        step[field] if field == "run" else step["with"][field]
         for step in steps
-        if step.get("name") == "Activate immutable release over verified SSH"
+        if step.get("name") == step_name
     )
 
 
@@ -776,7 +782,10 @@ def test_workflows_gate_exact_sha_build_once_and_validate_known_host() -> None:
     assert "digest: ${{ steps.build.outputs.digest }}" in deploy_workflow
     assert "git/ref/heads/vps" in deploy_workflow
     assert "fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}" in deploy_workflow
-    assert "PROJECT_ROOT: ${{ vars.VPS_PROJECT_PATH || '/opt/ytdlbot' }}" in deploy_workflow
+    assert (
+        "PROJECT_ROOT: ${{ vars.VPS_PROJECT_PATH || '/opt/ytdlbot' }}"
+        in deploy_workflow
+    )
     assert (
         "PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL || secrets.BASE_URL }}"
         in deploy_workflow
@@ -787,6 +796,68 @@ def test_workflows_gate_exact_sha_build_once_and_validate_known_host() -> None:
     assert "release-payload/scripts/bootstrap-migrate-production.sh" in deploy_workflow
     assert "release-payload/scripts/deploy-release.sh" in deploy_workflow
     assert 'source: "release-payload/*"' not in deploy_workflow
+
+
+@pytest.mark.parametrize(
+    "project_root",
+    (
+        "/opt/ytdlbot/../other",
+        "/opt/ytdlbot/./other",
+        "/opt/ytdlbot/",
+        "/opt//ytdlbot",
+        "/opt/ytdl bot",
+        "/opt/ytdlbot\tother",
+        "/opt/ytdlbot\nother",
+    ),
+)
+def test_workflow_rejects_noncanonical_project_root_before_ssh(
+    project_root: str,
+) -> None:
+    script = _workflow_run_script("Validate protected deployment inputs")
+    result = subprocess.run(
+        [str(BASH), "-c", script],
+        env=os.environ
+        | {
+            "PROJECT_ROOT": project_root,
+            "COMPOSE_PROJECT": "verified-project",
+            "PUBLIC_BASE_URL": "https://bot.example",
+            "BOT_IMAGE": BOT_IMAGE,
+            "VPS_HOST_FINGERPRINT": "SHA256:" + "A" * 43,
+        },
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert result.returncode != 0
+
+
+@pytest.mark.parametrize(
+    "project_root",
+    ("/opt/ytdlbot", "/srv/ytdlbot.prod-1", "/var/lib/ytdl_bot"),
+)
+def test_workflow_accepts_normalized_safe_absolute_project_root(
+    project_root: str,
+) -> None:
+    script = _workflow_run_script("Validate protected deployment inputs")
+    result = subprocess.run(
+        [str(BASH), "-c", script],
+        env=os.environ
+        | {
+            "PROJECT_ROOT": project_root,
+            "COMPOSE_PROJECT": "verified-project",
+            "PUBLIC_BASE_URL": "https://bot.example",
+            "BOT_IMAGE": BOT_IMAGE,
+            "VPS_HOST_FINGERPRINT": "SHA256:" + "A" * 43,
+        },
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_clean_ci_installs_all_pinned_test_dependencies() -> None:

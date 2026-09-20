@@ -6,7 +6,7 @@ import textwrap
 
 import pytest
 
-from app.services.media.singleflight import SingleFlightGroup
+from app.services.media.singleflight import SingleFlightGroup, SingleFlightReentryError
 
 
 @pytest.mark.asyncio
@@ -224,3 +224,93 @@ async def test_repeated_cancellation_cannot_interrupt_unsubscribe_cleanup():
     finally:
         release.set()
         await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_direct_same_key_factory_reentry_still_fails_fast():
+    """Catches the lifetime-marker change weakening direct recursion rejection."""
+    group: SingleFlightGroup[str, str] = SingleFlightGroup()
+
+    async def reenter() -> str:
+        return await group.do("same", lambda: asyncio.sleep(0, result="unreachable"))
+
+    with pytest.raises(SingleFlightReentryError, match="reentrant singleflight"):
+        await group.do("same", reenter)
+    assert group.inflight_count == group.subscriber_count == 0
+
+
+@pytest.mark.asyncio
+async def test_detached_child_can_reuse_key_after_factory_success():
+    """Catches an inherited factory marker rejecting work after its flight ended."""
+    group: SingleFlightGroup[str, str] = SingleFlightGroup()
+    release_child = asyncio.Event()
+    child_holder: list[asyncio.Task[str]] = []
+
+    async def delayed_child() -> str:
+        await release_child.wait()
+        return await group.do("same", lambda: asyncio.sleep(0, result="later"))
+
+    async def factory() -> str:
+        child_holder.append(asyncio.create_task(delayed_child()))
+        return "outer"
+
+    assert await group.do("same", factory) == "outer"
+    assert group.inflight_count == group.subscriber_count == 0
+    release_child.set()
+
+    assert await asyncio.wait_for(child_holder[0], timeout=1) == "later"
+    assert group.inflight_count == group.subscriber_count == 0
+
+
+@pytest.mark.asyncio
+async def test_detached_child_can_reuse_key_after_factory_failure():
+    """Catches a failed factory leaving an active marker in inherited context."""
+    group: SingleFlightGroup[str, str] = SingleFlightGroup()
+    release_child = asyncio.Event()
+    child_holder: list[asyncio.Task[str]] = []
+
+    async def delayed_child() -> str:
+        await release_child.wait()
+        return await group.do("same", lambda: asyncio.sleep(0, result="later"))
+
+    async def factory() -> str:
+        child_holder.append(asyncio.create_task(delayed_child()))
+        raise RuntimeError("factory failed")
+
+    with pytest.raises(RuntimeError, match="factory failed"):
+        await group.do("same", factory)
+    assert group.inflight_count == group.subscriber_count == 0
+    release_child.set()
+
+    assert await asyncio.wait_for(child_holder[0], timeout=1) == "later"
+    assert group.inflight_count == group.subscriber_count == 0
+
+
+@pytest.mark.asyncio
+async def test_detached_child_can_reuse_key_after_factory_cancellation():
+    """Catches cancellation leaving an inherited factory marker permanently active."""
+    group: SingleFlightGroup[str, str] = SingleFlightGroup()
+    factory_started = asyncio.Event()
+    release_child = asyncio.Event()
+    child_holder: list[asyncio.Task[str]] = []
+
+    async def delayed_child() -> str:
+        await release_child.wait()
+        return await group.do("same", lambda: asyncio.sleep(0, result="later"))
+
+    async def factory() -> str:
+        child_holder.append(asyncio.create_task(delayed_child()))
+        factory_started.set()
+        await asyncio.Event().wait()
+        return "unreachable"
+
+    subscriber = asyncio.create_task(group.do("same", factory))
+    await factory_started.wait()
+    subscriber.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await subscriber
+    assert group.inflight_count == group.subscriber_count == 0
+    release_child.set()
+
+    assert await asyncio.wait_for(child_holder[0], timeout=1) == "later"
+    assert group.inflight_count == group.subscriber_count == 0

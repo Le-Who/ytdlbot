@@ -776,6 +776,12 @@ def test_workflows_gate_exact_sha_build_once_and_validate_known_host() -> None:
     assert "digest: ${{ steps.build.outputs.digest }}" in deploy_workflow
     assert "git/ref/heads/vps" in deploy_workflow
     assert "fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}" in deploy_workflow
+    assert "PROJECT_ROOT: ${{ vars.VPS_PROJECT_PATH || '/opt/ytdlbot' }}" in deploy_workflow
+    assert (
+        "PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL || secrets.BASE_URL }}"
+        in deploy_workflow
+    )
+    assert "secrets.VPS_PROJECT_PATH" not in deploy_workflow
     assert "release-payload/docker-compose.yml" in deploy_workflow
     assert "release-payload/release.manifest" in deploy_workflow
     assert "release-payload/scripts/bootstrap-migrate-production.sh" in deploy_workflow

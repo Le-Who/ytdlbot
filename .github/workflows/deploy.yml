@@ -116,8 +116,8 @@ jobs:
       cancel-in-progress: false
     env:
       COMPOSE_PROJECT: ${{ vars.COMPOSE_PROJECT || 'ytdlbot' }}
-      PROJECT_ROOT: ${{ secrets.VPS_PROJECT_PATH }}
-      PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
+      PROJECT_ROOT: ${{ vars.VPS_PROJECT_PATH || '/opt/ytdlbot' }}
+      PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL || secrets.BASE_URL }}
       BOT_IMAGE: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
       DEPLOY_UPLOAD_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -182,7 +182,7 @@ jobs:
         if: steps.freshness.outputs.should_deploy == 'true'
         uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17
         env:
-          PROJECT_ROOT: ${{ secrets.VPS_PROJECT_PATH }}
+          PROJECT_ROOT: ${{ vars.VPS_PROJECT_PATH || '/opt/ytdlbot' }}
           DEPLOY_UPLOAD_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         with:
           host: ${{ secrets.VPS_HOST }}
@@ -220,7 +220,7 @@ jobs:
           port: ${{ secrets.VPS_PORT || '22' }}
           fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
           source: "release-payload/docker-compose.yml,release-payload/release.manifest,release-payload/scripts/bootstrap-migrate-production.sh,release-payload/scripts/bootstrap-production.sh,release-payload/scripts/deploy-release.sh,release-payload/scripts/preflight-production.sh,release-payload/scripts/rollback-release.sh"
-          target: "${{ secrets.VPS_PROJECT_PATH }}/.incoming/${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
+          target: "${{ vars.VPS_PROJECT_PATH || '/opt/ytdlbot' }}/.incoming/${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}"
           strip_components: 1
           rm: false
 
@@ -228,12 +228,12 @@ jobs:
         if: steps.freshness.outputs.should_deploy == 'true'
         uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17
         env:
-          PROJECT_ROOT: ${{ secrets.VPS_PROJECT_PATH }}
+          PROJECT_ROOT: ${{ vars.VPS_PROJECT_PATH || '/opt/ytdlbot' }}
           RELEASE_SHA: ${{ github.sha }}
           EXPECTED_BRANCH_SHA: ${{ steps.freshness.outputs.branch_sha }}
           BOT_IMAGE: ${{ needs.build.outputs.image }}@${{ needs.build.outputs.digest }}
           COMPOSE_PROJECT: ${{ vars.COMPOSE_PROJECT || 'ytdlbot' }}
-          PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
+          PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL || secrets.BASE_URL }}
           DEPLOY_UPLOAD_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
         with:
           host: ${{ secrets.VPS_HOST }}

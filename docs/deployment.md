@@ -91,6 +91,14 @@ Legacy `MAX_DL_MB` and `MAX_TG_UPLOAD_MB` are accepted only as an explicit,
 non-conflicting migration to `MAX_MEDIA_FILE_MB`. They are not separate runtime
 limits.
 
+The protected GitHub deployment job requires `VPS_HOST`, `VPS_USERNAME`,
+`VPS_SSH_KEY`, and the out-of-band verified `VPS_HOST_FINGERPRINT`. It reads the
+public origin from `PUBLIC_BASE_URL`, falling back to the legacy `BASE_URL`
+secret during migration. The project root is the repository variable
+`VPS_PROJECT_PATH` when set and otherwise the fixed `/opt/ytdlbot`; it is never
+derived from the uploaded release directory. Configure required reviewers on
+the `production` GitHub environment before authorizing the first release.
+
 ## Readiness and Local Bot API degradation
 
 - `/health/live` proves that the process serves HTTP.

@@ -82,14 +82,16 @@ redis_volume="${COMPOSE_PROJECT}_redis-data"
 init_state=$(docker inspect --format '{{.State.Status}}|{{.State.ExitCode}}' "$init_container")
 [ "$init_state" = "exited|0" ] ||
   fail "Bootstrap volume initializer has not completed successfully."
-docker compose -p "$COMPOSE_PROJECT" exec -T bot python -c '
-import os
+docker compose -p "$COMPOSE_PROJECT" exec -T --user 0:0 bot python -c '
+import stat
 from pathlib import Path
 
 for raw in ("/srv/ytdlbot/media", "/srv/ytdlbot/state"):
     path = Path(raw)
-    stat = path.stat()
-    if (stat.st_uid, stat.st_gid) != (10001, 10001) or not os.access(path, os.W_OK):
+    metadata = path.stat()
+    if (metadata.st_uid, metadata.st_gid) != (10001, 10001):
+        raise SystemExit(1)
+    if metadata.st_mode & stat.S_IWUSR == 0:
         raise SystemExit(1)
 ' >/dev/null || fail "Bootstrap media/state ownership evidence failed."
 

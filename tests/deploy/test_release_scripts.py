@@ -274,7 +274,16 @@ if [ "$1" = compose ]; then
       exit
       ;;
     *'exec -T bot python'*getWebhookInfo*) [ "${FAKE_WEBHOOK_FAILURE:-0}" != 1 ]; exit ;;
-    *'exec -T bot python'*) [ "${FAKE_OWNERSHIP_FAILURE:-0}" != 1 ]; exit ;;
+    *'exec -T --user 0:0 bot python'*)
+      [ "${FAKE_OWNERSHIP_FAILURE:-0}" != 1 ] || exit 1
+      [ "${FAKE_VOLUME_UID_GID:-10001:10001}" = 10001:10001 ] || exit 1
+      case "${FAKE_VOLUME_MODE:-0700}" in 0[2367]??) exit 0 ;; *) exit 1 ;; esac
+      ;;
+    *'exec -T bot python'*)
+      [ "${FAKE_OWNERSHIP_FAILURE:-0}" != 1 ] || exit 1
+      [ "${FAKE_LEGACY_BOT_UID_GID:-10001:10001}" = "${FAKE_VOLUME_UID_GID:-10001:10001}" ] || exit 1
+      case "${FAKE_VOLUME_MODE:-0700}" in 0[2367]??) exit 0 ;; *) exit 1 ;; esac
+      ;;
   esac
 fi
 exit 4
@@ -514,6 +523,28 @@ def test_bootstrap_gate_records_only_verified_existing_topology(
     assert not any(" up " in command for command in fake_host.commands())
 
 
+def test_bootstrap_gate_validates_future_owner_from_legacy_uid_as_root(
+    fake_host: FakeHost,
+) -> None:
+    evidence = fake_host.root / ".deploy" / "bootstrap.manifest"
+    evidence.unlink()
+
+    result = fake_host.run(
+        "bootstrap-production.sh",
+        BOOTSTRAP_MODE="record",
+        FAKE_LEGACY_BOT_UID_GID="1000:1000",
+        FAKE_VOLUME_UID_GID="10001:10001",
+        FAKE_VOLUME_MODE="0700",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert evidence.exists()
+    assert any(
+        "exec -T --user 0:0 bot python" in command
+        for command in fake_host.commands()
+    )
+
+
 def test_first_release_bootstrap_migrates_only_bot_and_local_api(
     fake_host: FakeHost,
 ) -> None:
@@ -576,6 +607,8 @@ def test_first_release_bootstrap_rejects_a_different_compose_project_root(
         ("FAKE_TG_SESSION_MOUNT", "wrong_session|true"),
         ("FAKE_REDIS_MOUNT", "wrong_redis|true"),
         ("FAKE_OWNERSHIP_FAILURE", "1"),
+        ("FAKE_VOLUME_UID_GID", "1000:1000"),
+        ("FAKE_VOLUME_MODE", "0500"),
     ),
 )
 def test_routine_deploy_rejects_unbootstrapped_mount_or_ownership(

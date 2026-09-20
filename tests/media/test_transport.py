@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import os
+import threading
 import time
 from collections.abc import AsyncIterator, Iterable, Mapping
 from dataclasses import dataclass, field, replace
@@ -9,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-from app.core.resource_budget import DiskBudget, InsufficientDiskSpace
+from app.core import resource_budget
+from app.core.resource_budget import DiskBudget, InsufficientDiskSpace, media_lease_path
 from app.services.media.models import (
     ClipInterval,
     MediaCandidate,
@@ -31,6 +34,7 @@ from app.services.media.transport import (
     URLPolicy,
     redact_url,
 )
+from app.tasks import janitor
 
 
 class Resolver:
@@ -1028,6 +1032,84 @@ async def test_close_failure_after_promotion_removes_final_and_lease(
 
     assert not list(tmp_path.glob("media_*"))
     assert not list(tmp_path.glob("*.lease"))
+
+
+@pytest.mark.parametrize("transform_output", [False, True])
+@pytest.mark.asyncio
+async def test_file_promotion_holds_destination_lock_against_janitor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    transform_output: bool,
+) -> None:
+    observations: list[tuple[int, bool, bool]] = []
+    deletion_results: dict[Path, int] = {}
+    recorded: set[Path] = set()
+    real_replace = os.replace
+
+    def record(final_path: Path) -> None:
+        if final_path in deletion_results and final_path not in recorded:
+            observations.append(
+                (
+                    deletion_results[final_path],
+                    final_path.exists(),
+                    media_lease_path(final_path).exists(),
+                )
+            )
+            recorded.add(final_path)
+
+    def racing_replace(
+        source: str | os.PathLike[str], destination: str | os.PathLike[str]
+    ) -> None:
+        source_path = Path(source)
+        destination_path = Path(destination)
+        real_replace(source, destination)
+        if (
+            destination_path.name.startswith("media_")
+            and destination_path.name.endswith(".lease")
+            and not destination_path.name.endswith(".part.lease")
+        ):
+            record(Path(str(destination_path).removesuffix(".lease")))
+        if (
+            source_path.name.startswith("media_")
+            and source_path.name.endswith(".part")
+            and destination_path == source_path.with_suffix("")
+        ):
+            deleted: list[int] = []
+
+            def purge() -> None:
+                deleted.append(janitor._aggressive_purge_temp(str(tmp_path)))
+
+            purge_thread = threading.Thread(target=purge)
+            purge_thread.start()
+            purge_thread.join(timeout=1)
+            assert not purge_thread.is_alive()
+            deletion_results[destination_path] = deleted[0]
+            if media_lease_path(destination_path).exists():
+                record(destination_path)
+
+    monkeypatch.setattr(resource_budget.os, "replace", racing_replace)
+    runner = RecordingProcessRunner() if transform_output else None
+    media, _ = transport(
+        tmp_path,
+        [FakeResponse(), FakeResponse()],
+        process_runner=runner,
+    )
+    candidate = source_candidate(size=24)
+    if transform_output:
+        candidate = replace(candidate, mux_mode="copy", container="mp4")
+
+    item = None
+    caught: FileNotFoundError | None = None
+    try:
+        item = await media.materialize(request(), [candidate])
+    except FileNotFoundError as error:
+        caught = error
+
+    expected_promotions = 2 if transform_output else 1
+    assert observations == [(0, True, True)] * expected_promotions
+    assert caught is None
+    assert item is not None
+    await item.release(delete=True)
 
 
 @pytest.mark.asyncio

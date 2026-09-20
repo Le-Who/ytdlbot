@@ -605,8 +605,7 @@ class MediaTransport:
                 signature = transformed.read(self.probe_bytes)
             self._check_signature(signature, {})
             self._remaining(deadline)
-            os.replace(partial_path, final_path)
-            reservation.rebind(partial_path, final_path)
+            reservation.promote(partial_path, final_path)
             for path in inputs:
                 path.unlink(missing_ok=True)
                 reservation.unbind(path)
@@ -787,8 +786,7 @@ class MediaTransport:
                     raise DownloadFailed("media response was empty")
                 self._check_signature(bytes(signature), response.headers)
                 self._remaining(deadline)
-                os.replace(partial_path, final_path)
-                reservation.rebind(partial_path, final_path)
+                reservation.promote(partial_path, final_path)
                 return final_path, written
             finally:
                 await self._close_response(response, deadline)

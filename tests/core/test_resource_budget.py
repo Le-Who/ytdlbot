@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from app.core import resource_budget
 from app.core.resource_budget import (
     DiskBudget,
     InsufficientDiskSpace,
@@ -259,3 +260,71 @@ def test_janitor_acquires_target_lock_after_enumeration_before_deleting(
     assert (deleted, orphan) == (0, 0)
     assert target.exists()
     assert not Path(f"{target}.lease.lock").exists()
+
+
+@pytest.mark.asyncio
+async def test_promotion_marker_failure_preserves_source_lease_and_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    budget = DiskBudget(tmp_path, capacity_bytes=100)
+    reservation = await budget.reserve(10, owner="request")
+    partial = tmp_path / "media_item.mp4.part"
+    final = tmp_path / "media_item.mp4"
+    partial.write_bytes(b"data")
+    reservation.bind(partial)
+    real_replace = os.replace
+
+    def fail_destination_marker(
+        source: str | os.PathLike[str], destination: str | os.PathLike[str]
+    ) -> None:
+        if Path(destination) == Path(f"{final}.lease"):
+            raise OSError("marker write failed")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(resource_budget.os, "replace", fail_destination_marker)
+
+    with pytest.raises(OSError, match="marker write failed"):
+        reservation.promote(partial, final)
+
+    assert partial.exists()
+    assert is_active_media_lease(partial)
+    assert not final.exists()
+    assert not Path(f"{final}.lease").exists()
+    assert not list(tmp_path.glob("*.lease.*.tmp"))
+    assert budget.reserved_bytes == 10
+    await reservation.release()
+    assert budget.reserved_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_promotion_rename_failure_removes_destination_lease(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    budget = DiskBudget(tmp_path, capacity_bytes=100)
+    reservation = await budget.reserve(10, owner="request")
+    partial = tmp_path / "media_item.mp4.part"
+    final = tmp_path / "media_item.mp4"
+    partial.write_bytes(b"data")
+    reservation.bind(partial)
+    real_replace = os.replace
+
+    def fail_media_rename(
+        source: str | os.PathLike[str], destination: str | os.PathLike[str]
+    ) -> None:
+        if Path(source) == partial and Path(destination) == final:
+            raise OSError("rename failed")
+        real_replace(source, destination)
+
+    monkeypatch.setattr(resource_budget.os, "replace", fail_media_rename)
+
+    with pytest.raises(OSError, match="rename failed"):
+        reservation.promote(partial, final)
+
+    assert partial.exists()
+    assert is_active_media_lease(partial)
+    assert not final.exists()
+    assert not Path(f"{final}.lease").exists()
+    assert not list(tmp_path.glob("*.lease.*.tmp"))
+    assert budget.reserved_bytes == 10
+    await reservation.release()
+    assert budget.reserved_bytes == 0

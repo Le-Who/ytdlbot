@@ -9,7 +9,7 @@ import shutil
 import time
 import uuid
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 
 
@@ -148,23 +148,67 @@ class DiskReservation:
     def bind(self, path: str | os.PathLike[str]) -> None:
         if self._released:
             raise RuntimeError("reservation already released")
-        resolved = Path(path).resolve()
-        if not resolved.is_relative_to(self.budget.root):
-            raise ValueError("leased path must remain under the media root")
+        resolved = self._resolve_path(path)
         self._write_marker(resolved)
         self._paths.add(resolved)
 
     def rebind(
         self, old_path: str | os.PathLike[str], new_path: str | os.PathLike[str]
     ) -> None:
-        old = Path(old_path).resolve()
-        new = Path(new_path).resolve()
-        if old in self._paths:
-            self._assert_marker_owner(old)
-        self.bind(new)
-        if old in self._paths:
-            self._remove_marker_if_owned(old)
-            self._paths.remove(old)
+        if self._released:
+            raise RuntimeError("reservation already released")
+        old = self._resolve_path(old_path)
+        new = self._resolve_path(new_path)
+        with _marker_locks(old, new):
+            self._rebind_locked(old, new)
+
+    def promote(
+        self, old_path: str | os.PathLike[str], new_path: str | os.PathLike[str]
+    ) -> None:
+        """Atomically promote a bound partial while its destination is locked."""
+        if self._released:
+            raise RuntimeError("reservation already released")
+        old = self._resolve_path(old_path)
+        new = self._resolve_path(new_path)
+        if old == new:
+            raise ValueError("promotion paths must differ")
+        with _marker_locks(old, new):
+            if old not in self._paths:
+                raise LeaseOwnershipError("promotion source is not bound")
+            if new in self._paths:
+                raise LeaseOwnershipError("promotion destination is already bound")
+            self._assert_marker_owner_locked(old)
+            renamed = False
+            try:
+                self._write_marker_locked(new)
+                self._paths.add(new)
+                os.replace(old, new)
+                renamed = True
+                self._remove_marker_if_owned_locked(old)
+                self._paths.remove(old)
+            except Exception:
+                if not renamed and not old.exists() and new.exists():
+                    renamed = True
+                if renamed:
+                    try:
+                        os.replace(new, old)
+                    except OSError:
+                        # The destination still has our lease and remains tracked;
+                        # request cleanup can safely remove it after this failure.
+                        pass
+                    else:
+                        renamed = False
+                        try:
+                            self._write_marker_locked(old)
+                            self._paths.add(old)
+                        except OSError:
+                            old.unlink(missing_ok=True)
+                            self._remove_marker_if_owned_locked(old)
+                            self._paths.discard(old)
+                if not renamed:
+                    self._remove_marker_if_owned_locked(new)
+                    self._paths.discard(new)
+                raise
 
     def renew(self) -> None:
         if self._released:
@@ -198,34 +242,79 @@ class DiskReservation:
     def _write_marker(self, path: Path, *, require_owner: bool = False) -> None:
         marker = media_lease_path(path)
         with _marker_lock(marker):
-            current_owner, current_expiry = _marker_identity(marker)
-            if (
-                current_owner is not None
-                and current_owner != self.owner
-                and (require_owner or current_expiry > time.time())
-            ):
-                raise LeaseOwnershipError("media lease belongs to another owner")
-            temporary = marker.with_name(f"{marker.name}.{self.owner}.tmp")
-            payload = {
-                "owner": self.owner,
-                "expires_at": time.time() + self.lease_ttl,
-            }
-            temporary.write_text(json.dumps(payload), encoding="utf-8")
-            os.replace(temporary, marker)
+            self._write_marker_locked(path, require_owner=require_owner)
 
     def _assert_marker_owner(self, path: Path) -> None:
         marker = media_lease_path(path)
         with _marker_lock(marker):
-            owner, _ = _marker_identity(marker)
-            if owner != self.owner:
-                raise LeaseOwnershipError("media lease belongs to another owner")
+            self._assert_marker_owner_locked(path)
 
     def _remove_marker_if_owned(self, path: Path) -> None:
         marker = media_lease_path(path)
         with _marker_lock(marker):
-            owner, _ = _marker_identity(marker)
-            if owner == self.owner:
-                marker.unlink(missing_ok=True)
+            self._remove_marker_if_owned_locked(path)
+
+    def _resolve_path(self, path: str | os.PathLike[str]) -> Path:
+        resolved = Path(path).resolve()
+        if not resolved.is_relative_to(self.budget.root):
+            raise ValueError("leased path must remain under the media root")
+        return resolved
+
+    def _rebind_locked(self, old: Path, new: Path) -> None:
+        if old not in self._paths:
+            self._write_marker_locked(new)
+            self._paths.add(new)
+            return
+        self._assert_marker_owner_locked(old)
+        self._write_marker_locked(new)
+        self._paths.add(new)
+        try:
+            self._remove_marker_if_owned_locked(old)
+        except Exception:
+            self._remove_marker_if_owned_locked(new)
+            self._paths.discard(new)
+            raise
+        self._paths.remove(old)
+
+    def _write_marker_locked(self, path: Path, *, require_owner: bool = False) -> None:
+        marker = media_lease_path(path)
+        current_owner, current_expiry = _marker_identity(marker)
+        if (
+            current_owner is not None
+            and current_owner != self.owner
+            and (require_owner or current_expiry > time.time())
+        ):
+            raise LeaseOwnershipError("media lease belongs to another owner")
+        temporary = marker.with_name(f"{marker.name}.{self.owner}.tmp")
+        payload = {
+            "owner": self.owner,
+            "expires_at": time.time() + self.lease_ttl,
+        }
+        try:
+            temporary.write_text(json.dumps(payload), encoding="utf-8")
+            os.replace(temporary, marker)
+        finally:
+            temporary.unlink(missing_ok=True)
+
+    def _assert_marker_owner_locked(self, path: Path) -> None:
+        owner, _ = _marker_identity(media_lease_path(path))
+        if owner != self.owner:
+            raise LeaseOwnershipError("media lease belongs to another owner")
+
+    def _remove_marker_if_owned_locked(self, path: Path) -> None:
+        marker = media_lease_path(path)
+        owner, _ = _marker_identity(marker)
+        if owner == self.owner:
+            marker.unlink(missing_ok=True)
+
+
+@contextmanager
+def _marker_locks(*paths: Path) -> Iterator[None]:
+    markers = sorted({media_lease_path(path) for path in paths}, key=os.fspath)
+    with ExitStack() as stack:
+        for marker in markers:
+            stack.enter_context(_marker_lock(marker))
+        yield
 
 
 def _marker_identity(marker: Path) -> tuple[str | None, float]:

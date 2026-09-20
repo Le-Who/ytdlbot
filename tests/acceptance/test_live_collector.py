@@ -704,3 +704,35 @@ def test_command_adapter_keeps_sensitive_values_off_argv_and_errors(
     with pytest.raises(collector.ObservationError) as raised:
         adapter.identity()
     assert "do-not-echo" not in str(raised.value)
+
+
+def test_isolated_adapter_gets_cleanup_grace_beyond_case_deadline(
+    collector: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_timeout: list[float] = []
+
+    def successful_run(
+        command: list[str], **kwargs: Any
+    ) -> subprocess.CompletedProcess[str]:
+        observed_timeout.append(float(kwargs["timeout"]))
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({"observation": _observation()}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(collector.subprocess, "run", successful_run)
+    adapter = collector.JsonCommandAdapter(["trusted-adapter"])
+    adapter.observe_isolated(
+        case=collector.CaseSpec(
+            case_id="short-01",
+            kind="short",
+            url="https://www.youtube.com/shorts/approvedshort01",
+        ),
+        correlation_id="safe-correlation",
+        timeout_seconds=3.0,
+    )
+
+    assert observed_timeout == [23.0]

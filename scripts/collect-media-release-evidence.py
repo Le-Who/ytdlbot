@@ -212,7 +212,7 @@ class JsonCommandAdapter:
                 "correlation_id": correlation_id,
                 "timeout_seconds": timeout_seconds,
             },
-            timeout_seconds=timeout_seconds + 5.0,
+            timeout_seconds=timeout_seconds + 20.0,
         )
         observation = result.get("observation")
         if not isinstance(observation, dict):

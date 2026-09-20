@@ -44,9 +44,41 @@ network_name=$3
 source_container=$4
 image_id=$5
 bootstrap=$6
+run_timeout=$7
 exec 9>"$lock_path"
 flock -n 9 || exit 75
-exec docker run --rm -i \
+
+container_absent() {
+  ! docker inspect "$container_name" >/dev/null 2>&1
+}
+
+remove_owned_container() {
+  if container_absent; then
+    return 0
+  fi
+  label=$(docker inspect --format '{{index .Config.Labels "ytdlbot.media-evidence"}}' "$container_name" 2>/dev/null) || return 91
+  [ "$label" = "legacy-isolated" ] || return 92
+  docker rm -f "$container_name" >/dev/null 2>&1 || return 93
+  attempt=0
+  while [ "$attempt" -lt 30 ]; do
+    if container_absent; then
+      return 0
+    fi
+    attempt=$((attempt + 1))
+    sleep 0.1
+  done
+  return 94
+}
+
+cleanup_interrupt() {
+  trap - INT TERM HUP
+  remove_owned_container || exit 76
+  exit 130
+}
+
+trap cleanup_interrupt INT TERM HUP
+set +e
+timeout --foreground --signal=TERM --kill-after=3s "${run_timeout}s" docker run --rm -i \
   --name "$container_name" \
   --network "$network_name" \
   --memory 2147483648 --cpus 1.4 --pids-limit 128 \
@@ -59,6 +91,8 @@ exec docker run --rm -i \
   --env YTDLP_COOKIES_B64= --env TIKTOK_COOKIES_B64= \
   --env FACEBOOK_COOKIES_B64= --env VK_COOKIES_B64= \
   --env TIKTOK_PROXY= --env VK_PROXY= \
+  --env HTTP_PROXY= --env HTTPS_PROXY= --env ALL_PROXY= --env NO_PROXY= \
+  --env http_proxy= --env https_proxy= --env all_proxy= --env no_proxy= \
   --env IG_SESSION_B64= --env IG_SESSIONS_B64= \
   --env COBALT_API_KEY= \
   --env TMPDIR=/tmp/ytdlbot-evidence \
@@ -66,6 +100,37 @@ exec docker run --rm -i \
   --env POT_PROVIDER_URL=http://bgutil-pot:4416 \
   --entrypoint /opt/venv/bin/python \
   "$image_id" -c "$bootstrap"
+status=$?
+set -e
+trap - INT TERM HUP
+if [ "$status" -ne 0 ]; then
+  remove_owned_container || exit 76
+fi
+exit "$status"
+"""
+
+_LEGACY_CLEANUP_SHELL = r"""
+set -euo pipefail
+lock_path=$1
+container_name=$2
+exec 9>"$lock_path"
+flock -w 2 9 || exit 75
+
+if ! docker inspect "$container_name" >/dev/null 2>&1; then
+  exit 0
+fi
+label=$(docker inspect --format '{{index .Config.Labels "ytdlbot.media-evidence"}}' "$container_name" 2>/dev/null) || exit 91
+[ "$label" = "legacy-isolated" ] || exit 92
+docker rm -f "$container_name" >/dev/null 2>&1 || exit 93
+attempt=0
+while [ "$attempt" -lt 30 ]; do
+  if ! docker inspect "$container_name" >/dev/null 2>&1; then
+    exit 0
+  fi
+  attempt=$((attempt + 1))
+  sleep 0.1
+done
+exit 94
 """
 
 
@@ -705,22 +770,32 @@ class DockerRuntime:
         stdin = f"{len(source)}\n{source}{body}"
         lock_path = f"/run/lock/{self.project_name}-media-evidence.lock"
         network_name = f"{self.project_name}_default"
-        raw = self._run(
-            [
-                "/bin/bash",
-                "-c",
-                _LEGACY_RUN_SHELL,
-                "--",
-                lock_path,
-                container_name,
-                network_name,
-                source_container_id,
-                image_id,
-                _LEGACY_BOOTSTRAP,
-            ],
-            input_text=stdin,
-            timeout=timeout,
-        )
+        try:
+            raw = self._run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    _LEGACY_RUN_SHELL,
+                    "--",
+                    lock_path,
+                    container_name,
+                    network_name,
+                    source_container_id,
+                    image_id,
+                    _LEGACY_BOOTSTRAP,
+                    str(timeout),
+                ],
+                input_text=stdin,
+                timeout=timeout + 8.0,
+            )
+        except (AdapterTimeout, KeyboardInterrupt):
+            try:
+                self._remove_legacy_container(container_name)
+            except AdapterError as cleanup_error:
+                raise AdapterError(
+                    "legacy evidence cleanup could not prove container removal"
+                ) from cleanup_error
+            raise
         try:
             decoded = json.loads(raw)
         except (json.JSONDecodeError, TypeError) as exc:
@@ -729,25 +804,30 @@ class DockerRuntime:
             raise AdapterError("legacy evidence runner returned an invalid object")
         return cast(dict[str, Any], decoded)
 
-    def stop_legacy_container(self, container_name: str) -> bool:
+    def _remove_legacy_container(self, container_name: str) -> None:
         if not re.fullmatch(r"ytdlbot-media-evidence-[a-z0-9-]{1,40}", container_name):
             raise AdapterError("invalid legacy evidence container name")
-        label = self._run(
-            [
-                "docker",
-                "inspect",
-                "--format",
-                "{{index .Config.Labels \"ytdlbot.media-evidence\"}}",
-                container_name,
-            ],
-            timeout=5.0,
-        )
-        if label != "legacy-isolated":
-            raise AdapterError("refusing to stop an unowned container")
-        stopped = self._run(
-            ["docker", "stop", "--time", "5", container_name], timeout=10.0
-        )
-        return stopped == container_name
+        lock_path = f"/run/lock/{self.project_name}-media-evidence.lock"
+        try:
+            self._run(
+                [
+                    "/bin/bash",
+                    "-c",
+                    _LEGACY_CLEANUP_SHELL,
+                    "--",
+                    lock_path,
+                    container_name,
+                ],
+                timeout=7.0,
+            )
+        except (AdapterError, AdapterTimeout) as exc:
+            raise AdapterError(
+                "legacy evidence cleanup could not prove container removal"
+            ) from exc
+
+    def stop_legacy_container(self, container_name: str) -> bool:
+        self._remove_legacy_container(container_name)
+        return True
 
     def correlated_logs(self, *, since: str, correlation_id: str) -> str:
         raw = self.logs_since(since=since)

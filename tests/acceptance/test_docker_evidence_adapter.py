@@ -694,6 +694,17 @@ def test_legacy_one_shot_uses_attested_image_isolated_env_and_stdin_payload(
     assert "REDIS_URL=" in command[2]
     assert "WEBHOOK_URL=" in command[2]
     assert "YTDLP_COOKIES_B64=" in command[2]
+    for proxy_name in (
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+    ):
+        assert f"--env {proxy_name}=" in command[2]
     assert "--tmpfs" in command[2]
     assert "flock -n" in command[2]
     assert image_id in command
@@ -708,3 +719,100 @@ def test_process_matcher_recognizes_baseline_python_ytdlp_binary(
 ) -> None:
     helper = adapter_module._CONTAINER_HELPER
     assert '"/opt/venv/bin/yt-dlp"' in helper
+
+
+@pytest.mark.parametrize("interruption", ["timeout", "keyboard"])
+def test_legacy_interruption_removes_exact_owned_container_before_return(
+    adapter_module: Any,
+    tmp_path: Path,
+    interruption: str,
+) -> None:
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text(
+        "services: {bot: {image: example.invalid/bot}}\n", encoding="utf-8"
+    )
+    container_name = "ytdlbot-media-evidence-deadline"
+    state = {"alive": False}
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if len(commands) == 1:
+            state["alive"] = True
+            if interruption == "timeout":
+                raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+            raise KeyboardInterrupt
+        assert state["alive"] is True
+        assert container_name in command
+        state["alive"] = False
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    runtime = adapter_module.DockerRuntime(
+        project_dir=tmp_path,
+        project_name="verified-project",
+        compose_file=compose,
+        run_command=fake_run,
+    )
+
+    expected_error = (
+        adapter_module.AdapterTimeout if interruption == "timeout" else KeyboardInterrupt
+    )
+    with pytest.raises(expected_error):
+        runtime.legacy_container_call(
+            "run-once",
+            {"case": {"url": "https://www.youtube.com/watch?v=deadline01"}},
+            image_id="sha256:" + "b" * 64,
+            source_container_id="a" * 64,
+            container_name=container_name,
+            timeout=1,
+        )
+
+    assert state["alive"] is False
+    assert len(commands) == 2
+
+
+@pytest.mark.parametrize("cleanup_failure", ["exit", "timeout"])
+def test_legacy_timeout_cleanup_failure_is_fail_closed(
+    adapter_module: Any,
+    tmp_path: Path,
+    cleanup_failure: str,
+) -> None:
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text(
+        "services: {bot: {image: example.invalid/bot}}\n", encoding="utf-8"
+    )
+    container_name = "ytdlbot-media-evidence-cleanup-failure"
+    state = {"alive": False}
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        commands.append(command)
+        if len(commands) == 1:
+            state["alive"] = True
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        if cleanup_failure == "timeout":
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 76, stdout="", stderr="secret")
+
+    runtime = adapter_module.DockerRuntime(
+        project_dir=tmp_path,
+        project_name="verified-project",
+        compose_file=compose,
+        run_command=fake_run,
+    )
+
+    with pytest.raises(
+        adapter_module.AdapterError, match="cleanup could not prove"
+    ) as raised:
+        runtime.legacy_container_call(
+            "run-once",
+            {"case": {"url": "https://www.youtube.com/watch?v=deadline02"}},
+            image_id="sha256:" + "b" * 64,
+            source_container_id="a" * 64,
+            container_name=container_name,
+            timeout=1,
+        )
+
+    assert state["alive"] is True
+    assert len(commands) == 2
+    assert "secret" not in str(raised.value)

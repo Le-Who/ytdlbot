@@ -182,12 +182,16 @@ printf '{}\n' | python3 scripts/media-acceptance-docker-adapter.py \
 ```
 
 The no-send legacy preflight starts the same isolated image with Redis, webhook,
-cookies, proxy credentials, and provider credentials cleared. It verifies the
+cookies, provider credentials, platform proxy settings, and every standard
+upper/lowercase HTTP proxy environment variable cleared. It verifies the
 orchestrator import, Local Bot API configuration, administrative delivery target,
 legacy 900 MB policy, and 2 GiB cgroup limit, then exits without processing or
 sending media. A project-scoped `flock` and deterministic labelled container name
 prevent overlapping one-shot runners. The container is read-only and has private
-tmpfs-backed temp and cache directories.
+tmpfs-backed temp and cache directories. On timeout or interruption the adapter
+force-removes only the exact labelled evidence container and polls until Docker
+proves it absent while the project lock is still held. Failure to prove absence
+is a hard failure; the unresolved `IN_FLIGHT` reservation still blocks replay.
 
 After preflight, collect exactly one smoke record. `window-1` is retained only as
 the schema-compatible bounded run identifier; it is not one of three statistical

@@ -9,6 +9,7 @@ receives only bounded counters, closed outcomes, and sanitized capability data.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -30,7 +31,42 @@ PROJECT_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}")
 CONTAINER_RE = re.compile(r"[0-9a-f]{12,64}")
 RELEASE_RE = re.compile(r"[0-9a-f]{40}")
 PROVIDER_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
-LEGACY_QUIET_SECONDS = 2.0
+CORRELATION_RE = re.compile(r"[A-Za-z0-9:_.-]{1,200}")
+_LEGACY_BOOTSTRAP = (
+    "import sys; n=int(sys.stdin.readline()); "
+    "source=sys.stdin.read(n); exec(compile(source, '<legacy-evidence>', 'exec'))"
+)
+_LEGACY_RUN_SHELL = r"""
+set -euo pipefail
+lock_path=$1
+container_name=$2
+network_name=$3
+source_container=$4
+image_id=$5
+bootstrap=$6
+exec 9>"$lock_path"
+flock -n 9 || exit 75
+exec docker run --rm -i \
+  --name "$container_name" \
+  --network "$network_name" \
+  --memory 2147483648 --cpus 1.4 --pids-limit 128 \
+  --read-only \
+  --tmpfs /tmp/ytdlbot-evidence:rw,nosuid,nodev,size=2147483648 \
+  --tmpfs /home/botuser/.cache:rw,nosuid,nodev,size=536870912 \
+  --label ytdlbot.media-evidence=legacy-isolated \
+  --env-file <(docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$source_container") \
+  --env REDIS_URL= --env WEBHOOK_URL= --env TELEGRAM_SECRET_TOKEN= \
+  --env YTDLP_COOKIES_B64= --env TIKTOK_COOKIES_B64= \
+  --env FACEBOOK_COOKIES_B64= --env VK_COOKIES_B64= \
+  --env TIKTOK_PROXY= --env VK_PROXY= \
+  --env IG_SESSION_B64= --env IG_SESSIONS_B64= \
+  --env COBALT_API_KEY= \
+  --env TMPDIR=/tmp/ytdlbot-evidence \
+  --env TELEGRAM_LOCAL_ENDPOINT=http://tg-api:8081 \
+  --env POT_PROVIDER_URL=http://bgutil-pot:4416 \
+  --entrypoint /opt/venv/bin/python \
+  "$image_id" -c "$bootstrap"
+"""
 
 
 class AdapterError(RuntimeError):
@@ -123,7 +159,13 @@ def media_child_processes():
         if not decoded:
             continue
         executable = Path(decoded[0]).name
-        python_ytdlp = len(decoded) >= 3 and decoded[1:3] == ["-m", "yt_dlp"]
+        python_ytdlp = (
+            len(decoded) >= 3 and decoded[1:3] == ["-m", "yt_dlp"]
+        ) or (
+            len(decoded) >= 2
+            and executable.startswith("python")
+            and decoded[1] == "/opt/venv/bin/yt-dlp"
+        )
         if executable in {"yt-dlp", "ffmpeg", "ffprobe", "aria2c"} or python_ytdlp:
             count += 1
     return {"supported": True, "count": count}
@@ -631,6 +673,82 @@ class DockerRuntime:
             raise AdapterError("container helper returned an invalid object")
         return cast(dict[str, Any], decoded)
 
+    def legacy_container_call(
+        self,
+        action: str,
+        payload: Mapping[str, Any],
+        *,
+        image_id: str,
+        source_container_id: str,
+        container_name: str,
+        timeout: float,
+    ) -> dict[str, Any]:
+        if action not in {"preflight", "run-once"}:
+            raise AdapterError("invalid legacy isolated action")
+        if not re.fullmatch(r"ytdlbot-media-evidence-[a-z0-9-]{1,40}", container_name):
+            raise AdapterError("invalid legacy evidence container name")
+        if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+            raise AdapterError("invalid legacy image identity")
+        if not CONTAINER_RE.fullmatch(source_container_id):
+            raise AdapterError("invalid source container identity")
+        harness_path = Path(__file__).with_name("legacy-media-evidence-harness.py")
+        try:
+            source = harness_path.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise AdapterError("legacy evidence harness is unavailable") from exc
+        compile(source, os.fspath(harness_path), "exec")
+        body = json.dumps(
+            {"action": action, **dict(payload)},
+            separators=(",", ":"),
+            ensure_ascii=True,
+        )
+        stdin = f"{len(source)}\n{source}{body}"
+        lock_path = f"/run/lock/{self.project_name}-media-evidence.lock"
+        network_name = f"{self.project_name}_default"
+        raw = self._run(
+            [
+                "/bin/bash",
+                "-c",
+                _LEGACY_RUN_SHELL,
+                "--",
+                lock_path,
+                container_name,
+                network_name,
+                source_container_id,
+                image_id,
+                _LEGACY_BOOTSTRAP,
+            ],
+            input_text=stdin,
+            timeout=timeout,
+        )
+        try:
+            decoded = json.loads(raw)
+        except (json.JSONDecodeError, TypeError) as exc:
+            raise AdapterError("legacy evidence runner returned invalid JSON") from exc
+        if not isinstance(decoded, dict):
+            raise AdapterError("legacy evidence runner returned an invalid object")
+        return cast(dict[str, Any], decoded)
+
+    def stop_legacy_container(self, container_name: str) -> bool:
+        if not re.fullmatch(r"ytdlbot-media-evidence-[a-z0-9-]{1,40}", container_name):
+            raise AdapterError("invalid legacy evidence container name")
+        label = self._run(
+            [
+                "docker",
+                "inspect",
+                "--format",
+                "{{index .Config.Labels \"ytdlbot.media-evidence\"}}",
+                container_name,
+            ],
+            timeout=5.0,
+        )
+        if label != "legacy-isolated":
+            raise AdapterError("refusing to stop an unowned container")
+        stopped = self._run(
+            ["docker", "stop", "--time", "5", container_name], timeout=10.0
+        )
+        return stopped == container_name
+
     def correlated_logs(self, *, since: str, correlation_id: str) -> str:
         raw = self.logs_since(since=since)
         # Raw log text is used in memory only and is never returned or printed.
@@ -738,6 +856,52 @@ class ProductionDockerAdapter:
 
     def preflight(self, update: dict[str, Any] | None = None) -> dict[str, Any]:
         identity = self.runtime.identity()
+        if identity.image_id != self.expected_image_id:
+            raise AdapterError("live bot image ID does not match expected image ID")
+        if identity.memory_limit_bytes != EXPECTED_MEMORY_BYTES:
+            raise AdapterError("bot container memory limit is not the expected 2 GiB")
+        if self.runtime_profile == "legacy-baseline":
+            probe = self.runtime.legacy_container_call(
+                "preflight",
+                {},
+                image_id=self.expected_image_id,
+                source_container_id=identity.container_id,
+                container_name="ytdlbot-media-evidence-preflight",
+                timeout=30.0,
+            )
+            required = {
+                "safe": True,
+                "orchestrator_imported": True,
+                "redis_isolated": True,
+                "webhook_not_started": True,
+                "admin_chat_configured": True,
+                "local_bot_api_configured": True,
+                "memory_limit_bytes": EXPECTED_MEMORY_BYTES,
+            }
+            if any(probe.get(key) != value for key, value in required.items()):
+                raise AdapterError("legacy isolated runner preflight failed")
+            max_media_file_mb = int(probe.get("max_media_file_mb") or 0)
+            if max_media_file_mb <= 0:
+                raise AdapterError("legacy media policy is unavailable")
+            return {
+                "ready": True,
+                "runtime_profile": self.runtime_profile,
+                "release": self.expected_release,
+                "health_contract": "/health",
+                "max_media_file_mb": max_media_file_mb,
+                "local_bot_api_ready": True,
+                "job_store_supported": False,
+                "container_id": identity.container_id[:12],
+                "image_id": identity.image_id,
+                "image_reference": identity.image_id,
+                "identity_binding": "legacy-deployment-attestation",
+                "current_memory_limit_bytes": identity.memory_limit_bytes,
+                "production_ip_attested": True,
+                "cache_modes": ["isolated-process"],
+                "bounded_cancel_supported": True,
+                "provider_attempt_capability": "unavailable",
+                "collection_mode": "isolated-one-shot",
+            }
         probe = self.runtime.container_call(
             "preflight", {"update": update or self._sample_update()}, timeout=15.0
         )
@@ -752,10 +916,6 @@ class ProductionDockerAdapter:
             raise AdapterError("active-download quiescence metric is unavailable")
         if int(probe.get("rss_bytes") or 0) <= 0:
             raise AdapterError("process RSS probe is unavailable")
-        if identity.memory_limit_bytes != EXPECTED_MEMORY_BYTES:
-            raise AdapterError("bot container memory limit is not the expected 2 GiB")
-        if identity.image_id != self.expected_image_id:
-            raise AdapterError("live bot image ID does not match expected image ID")
         if self.runtime_profile == "candidate":
             if not re.fullmatch(
                 r"[^\s]+@sha256:[0-9a-f]{64}", identity.configured_image
@@ -775,17 +935,6 @@ class ProductionDockerAdapter:
                 raise AdapterError("candidate readiness contract failed")
             if probe.get("queue_depth_present") is not True:
                 raise AdapterError("candidate queue quiescence metric is unavailable")
-        else:
-            if probe.get("legacy_healthy") is not True:
-                raise AdapterError("legacy baseline health check failed")
-            if probe.get("legacy_metrics_present") is not True:
-                raise AdapterError("legacy baseline metrics are unavailable")
-            if probe.get("process_fence_supported") is not True:
-                raise AdapterError("legacy process isolation fence is unavailable")
-            if int(probe.get("media_child_processes") or 0) != 0:
-                raise AdapterError("legacy pipeline is not quiescent")
-            if self.runtime.telegram_connection_count() != 0:
-                raise AdapterError("legacy pipeline is not quiescent")
         cache_modes = probe.get("cache_modes")
         required_cache_mode = (
             "media-cache" if self.runtime_profile == "candidate" else "legacy-inf"
@@ -828,8 +977,40 @@ class ProductionDockerAdapter:
     def identity(self) -> dict[str, Any]:
         return self.preflight()
 
+    def observe_isolated(
+        self,
+        *,
+        case: Mapping[str, Any],
+        correlation_id: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        if self.runtime_profile != "legacy-baseline":
+            raise AdapterError("isolated pair collection is legacy-only")
+        identity = self.runtime.identity()
+        if identity.image_id != self.expected_image_id:
+            raise AdapterError("live bot image ID does not match expected image ID")
+        if set(case) != {"case_id", "kind", "url"}:
+            raise AdapterError("legacy case input is invalid")
+        if not CORRELATION_RE.fullmatch(correlation_id):
+            raise AdapterError("legacy correlation is invalid")
+        digest = hashlib.sha256(correlation_id.encode("utf-8")).hexdigest()[:16]
+        result = self.runtime.legacy_container_call(
+            "run-once",
+            {"case": dict(case), "correlation_id": correlation_id},
+            image_id=self.expected_image_id,
+            source_container_id=identity.container_id,
+            container_name=f"ytdlbot-media-evidence-{digest}",
+            timeout=timeout_seconds,
+        )
+        observation = result.get("observation")
+        if not isinstance(observation, dict):
+            raise AdapterError("legacy isolated observation is invalid")
+        return cast(dict[str, Any], observation)
+
     def evict_case(self, payload: Mapping[str, Any]) -> bool:
         self.preflight()
+        if self.runtime_profile == "legacy-baseline":
+            return True
         result = self.runtime.container_call("evict-case", payload, timeout=30.0)
         expected_mode = (
             "media-cache" if self.runtime_profile == "candidate" else "legacy-inf"
@@ -947,14 +1128,8 @@ class ProductionDockerAdapter:
         return attempts
 
     @staticmethod
-    def _exact_downloaded_measurement(
-        correlated_logs: str, *, runtime_profile: str
-    ) -> dict[str, Any]:
-        field = (
-            "bytes_downloaded"
-            if runtime_profile == "candidate"
-            else "delivered_file_size_bytes"
-        )
+    def _exact_downloaded_measurement(correlated_logs: str) -> dict[str, Any]:
+        field = "bytes_downloaded"
         values: set[int] = set()
         for line in correlated_logs.splitlines():
             try:
@@ -962,11 +1137,7 @@ class ProductionDockerAdapter:
             except (ValueError, TypeError, json.JSONDecodeError):
                 continue
             value = payload.get(field)
-            allowed_events = (
-                {"media-measurement", "delivery-success"}
-                if runtime_profile == "candidate"
-                else {"delivery", "telegram-delivery"}
-            )
+            allowed_events = {"media-measurement", "delivery-success"}
             if payload.get("event") not in allowed_events:
                 continue
             if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
@@ -979,11 +1150,7 @@ class ProductionDockerAdapter:
             }
         return {
             "availability": "measured",
-            "method": (
-                "structured-request-bytes"
-                if runtime_profile == "candidate"
-                else "legacy-correlated-delivered-size"
-            ),
+            "method": "structured-request-bytes",
             "value": next(iter(values)),
         }
 
@@ -1006,8 +1173,6 @@ class ProductionDockerAdapter:
                 "file_id_hits",
                 "providers",
                 "provider_attempts",
-                "legacy",
-                "legacy_results",
             )
         }
         return json.dumps(observed, sort_keys=True, separators=(",", ":"))
@@ -1020,20 +1185,9 @@ class ProductionDockerAdapter:
         )
         first_metrics = cast(Mapping[str, Any], first["metrics"])
         first_job = cast(Mapping[str, Any], first["job"])
-        if not self._metrics_idle(first_metrics) or (
-            self.runtime_profile == "candidate" and first_job.get("active_jobs") != 0
-        ):
+        if not self._metrics_idle(first_metrics) or first_job.get("active_jobs") != 0:
             raise AdapterError("media runtime is not quiescent")
-        if self.runtime_profile == "legacy-baseline" and not self._legacy_fences_idle(
-            first
-        ):
-            raise AdapterError("legacy pipeline is not quiescent")
-        quiet_seconds = (
-            LEGACY_QUIET_SECONDS
-            if self.runtime_profile == "legacy-baseline"
-            else 0.25
-        )
-        self._sleep(min(quiet_seconds, max(0.01, deadline - self._clock())))
+        self._sleep(min(0.25, max(0.01, deadline - self._clock())))
         second = self.runtime.container_call(
             "snapshot", request, timeout=min(15.0, max(0.01, deadline - self._clock()))
         )
@@ -1041,25 +1195,11 @@ class ProductionDockerAdapter:
         second_job = cast(Mapping[str, Any], second["job"])
         if (
             not self._metrics_idle(second_metrics)
-            or (
-                self.runtime_profile == "candidate"
-                and second_job.get("active_jobs") != 0
-            )
+            or second_job.get("active_jobs") != 0
             or self._activity_signature(first) != self._activity_signature(second)
         ):
             raise AdapterError("media runtime did not remain quiescent for quiet grace")
-        if self.runtime_profile == "legacy-baseline" and not self._legacy_fences_idle(
-            second
-        ):
-            raise AdapterError("legacy pipeline is not quiescent")
         return second
-
-    def _legacy_fences_idle(self, snapshot: Mapping[str, Any]) -> bool:
-        if snapshot.get("process_fence_supported") is not True:
-            return False
-        if int(snapshot.get("media_child_processes") or 0) != 0:
-            return False
-        return self.runtime.telegram_connection_count() == 0
 
     @staticmethod
     def _http_failures(correlated_logs: str) -> list[dict[str, Any]]:
@@ -1085,134 +1225,6 @@ class ProductionDockerAdapter:
             failures.append({"status": status, "cause": cause})
         return failures
 
-    @staticmethod
-    def _legacy_first_byte_seconds(
-        correlated_logs: str, started: float
-    ) -> float | None:
-        for line in correlated_logs.splitlines():
-            lowered = line.lower()
-            if "first_byte" not in lowered and "first byte" not in lowered:
-                continue
-            try:
-                event = json.loads(line[line.index("{") :])
-                raw_timestamp = event.get("timestamp") or event.get("time")
-                if isinstance(raw_timestamp, (int, float)):
-                    return max(0.0, float(raw_timestamp) - started)
-                if isinstance(raw_timestamp, str):
-                    observed = datetime.fromisoformat(
-                        raw_timestamp.replace("Z", "+00:00")
-                    ).timestamp()
-                    return max(0.0, observed - started)
-            except (ValueError, TypeError, json.JSONDecodeError):
-                continue
-        return None
-
-    @staticmethod
-    def _legacy_terminal_outcome(
-        before_metrics: Mapping[str, Any],
-        after_metrics: Mapping[str, Any],
-        logs: str,
-    ) -> str | None:
-        before_results = cast(Mapping[str, Any], before_metrics["legacy_results"])
-        after_results = cast(Mapping[str, Any], after_metrics["legacy_results"])
-        deltas = {
-            name: int(after_results.get(name, 0)) - int(before_results.get(name, 0))
-            for name in ("total", "success", "failed")
-        }
-        if any(delta < 0 or delta > 1 for delta in deltas.values()):
-            raise AdapterError("legacy request counters cannot be attributed uniquely")
-        if deltas["total"] != 1 or deltas["success"] + deltas["failed"] != 1:
-            return None
-        if deltas["failed"] == 1:
-            return "failed"
-
-        before_legacy = cast(Mapping[str, Any], before_metrics["legacy"])
-        after_legacy = cast(Mapping[str, Any], after_metrics["legacy"])
-        upload_delta = int(
-            after_legacy["ytdlbot_upload_duration_seconds"]["count"]
-        ) - int(before_legacy["ytdlbot_upload_duration_seconds"]["count"])
-        if upload_delta < 0 or upload_delta > 20:
-            raise AdapterError("legacy upload attempts cannot be attributed uniquely")
-        if upload_delta == 0:
-            return None
-        lowered = logs.lower()
-        if any(
-            marker in lowered
-            for marker in (
-                "send error",
-                "network error sending file",
-                "floodwait sending file",
-            )
-        ):
-            return "failed"
-        return "success"
-
-    @staticmethod
-    def _legacy_result_attributed(
-        before_metrics: Mapping[str, Any], after_metrics: Mapping[str, Any]
-    ) -> bool:
-        before = cast(Mapping[str, Any], before_metrics["legacy_results"])
-        after = cast(Mapping[str, Any], after_metrics["legacy_results"])
-        total = int(after.get("total", 0)) - int(before.get("total", 0))
-        success = int(after.get("success", 0)) - int(before.get("success", 0))
-        failed = int(after.get("failed", 0)) - int(before.get("failed", 0))
-        return total == 1 and success + failed == 1
-
-    @staticmethod
-    def _legacy_phase_metrics(
-        before_metrics: Mapping[str, Any],
-        after_metrics: Mapping[str, Any],
-        *,
-        first_byte_seconds: float | None,
-    ) -> tuple[dict[str, dict[str, float | int]], bool]:
-        before = cast(Mapping[str, Any], before_metrics["legacy"])
-        after = cast(Mapping[str, Any], after_metrics["legacy"])
-
-        def delta(name: str) -> tuple[int, float]:
-            return (
-                int(after[name]["count"]) - int(before[name]["count"]),
-                float(after[name]["sum"]) - float(before[name]["sum"]),
-            )
-
-        resolve_count, resolve_sum = delta("ytdlbot_extraction_duration_seconds")
-        download_count, download_sum = delta("ytdlbot_download_duration_seconds")
-        conversion_count, conversion_sum = delta("ytdlbot_conversion_duration_seconds")
-        deliver_count, deliver_sum = delta("ytdlbot_upload_duration_seconds")
-        materialize_count = download_count + conversion_count
-        valid = (
-            resolve_count in {0, 1}
-            and download_count in {0, 1}
-            and conversion_count in {0, 1}
-            and 0 <= deliver_count <= 20
-            and min(resolve_sum, download_sum, conversion_sum, deliver_sum) >= 0
-        )
-        phase_metrics = {
-            "resolve": {
-                "before_count": 0,
-                "before_sum": 0.0,
-                "after_count": 1 if resolve_count == 1 else 0,
-                "after_sum": max(0.0, resolve_sum),
-            },
-            "first_byte": {
-                "before_count": 0,
-                "before_sum": 0.0,
-                "after_count": 1 if first_byte_seconds is not None else 0,
-                "after_sum": first_byte_seconds or 0.0,
-            },
-            "materialize": {
-                "before_count": 0,
-                "before_sum": 0.0,
-                "after_count": 1 if materialize_count >= 1 else 0,
-                "after_sum": max(0.0, download_sum + conversion_sum),
-            },
-            "deliver": {
-                "before_count": 0,
-                "before_sum": 0.0,
-                "after_count": 1 if deliver_count >= 1 else 0,
-                "after_sum": max(0.0, deliver_sum),
-            },
-        }
-        return phase_metrics, valid
 
     def observe(
         self,
@@ -1221,6 +1233,10 @@ class ProductionDockerAdapter:
         correlation_id: str,
         timeout_seconds: float,
     ) -> dict[str, Any]:
+        if self.runtime_profile == "legacy-baseline":
+            raise AdapterError(
+                "legacy live observation is disabled; use the isolated smoke runner"
+            )
         self.preflight(update)
         started = self._clock()
         deadline = started + timeout_seconds
@@ -1247,7 +1263,6 @@ class ProductionDockerAdapter:
         rss_samples = [int(before["rss_bytes"])]
         latest = before
         logs = ""
-        legacy_outcome: str | None = None
         try:
             while True:
                 remaining = deadline - self._clock()
@@ -1257,63 +1272,10 @@ class ProductionDockerAdapter:
                     "snapshot", request, timeout=min(15.0, remaining)
                 )
                 rss_samples.append(int(latest["rss_bytes"]))
-                if self.runtime_profile == "legacy-baseline":
-                    logs = self.runtime.logs_since(since=log_since)
-                    candidate_outcome = self._legacy_terminal_outcome(
-                        cast(Mapping[str, Any], before["metrics"]),
-                        cast(Mapping[str, Any], latest["metrics"]),
-                        logs,
-                    )
-                    terminal = False
-                    if (
-                        candidate_outcome is not None
-                        and self._metrics_idle(
-                            cast(Mapping[str, Any], latest["metrics"])
-                        )
-                        and self._legacy_fences_idle(latest)
-                    ):
-                        terminal_signature = self._activity_signature(latest)
-                        self._sleep(
-                            min(
-                                LEGACY_QUIET_SECONDS,
-                                max(0.01, deadline - self._clock()),
-                            )
-                        )
-                        settled = self.runtime.container_call(
-                            "snapshot",
-                            request,
-                            timeout=min(
-                                15.0, max(0.01, deadline - self._clock())
-                            ),
-                        )
-                        rss_samples.append(int(settled["rss_bytes"]))
-                        settled_logs = self.runtime.logs_since(since=log_since)
-                        settled_outcome = self._legacy_terminal_outcome(
-                            cast(Mapping[str, Any], before["metrics"]),
-                            cast(Mapping[str, Any], settled["metrics"]),
-                            settled_logs,
-                        )
-                        if (
-                            settled_outcome == candidate_outcome
-                            and self._activity_signature(settled)
-                            == terminal_signature
-                            and self._metrics_idle(
-                                cast(Mapping[str, Any], settled["metrics"])
-                            )
-                            and self._legacy_fences_idle(settled)
-                        ):
-                            latest = settled
-                            logs = settled_logs
-                            legacy_outcome = settled_outcome
-                            terminal = True
-                        else:
-                            latest = settled
-                            logs = settled_logs
-                else:
-                    logs = self.runtime.correlated_logs(
-                        since=log_since, correlation_id=correlation_id
-                    )
-                    terminal = self._terminal(latest, before)
+                logs = self.runtime.correlated_logs(
+                    since=log_since, correlation_id=correlation_id
+                )
+                terminal = self._terminal(latest, before)
                 if terminal:
                     break
                 self._sleep(min(0.25, max(0.01, remaining)))
@@ -1329,39 +1291,24 @@ class ProductionDockerAdapter:
                 raise AdapterError("webhook was not durably accepted")
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
-        logs = (
-            self.runtime.logs_since(since=log_since)
-            if self.runtime_profile == "legacy-baseline"
-            else self.runtime.correlated_logs(
-                since=log_since, correlation_id=correlation_id
-            )
+        logs = self.runtime.correlated_logs(
+            since=log_since, correlation_id=correlation_id
         )
         before_metrics = cast(Mapping[str, Any], before["metrics"])
         after_metrics = cast(Mapping[str, Any], latest["metrics"])
-        job_state: str | None
-        if self.runtime_profile == "legacy-baseline":
-            if legacy_outcome is None:
-                raise AdapterError("legacy terminal outcome is unavailable")
-            phase_metrics, legacy_phases_valid = self._legacy_phase_metrics(
-                before_metrics,
-                after_metrics,
-                first_byte_seconds=self._legacy_first_byte_seconds(logs, started),
-            )
-        else:
-            legacy_phases_valid = True
-            phase_metrics = {
-                phase: {
-                    "before_count": int(before_metrics["phases"][phase]["count"]),
-                    "before_sum": float(before_metrics["phases"][phase]["sum"]),
-                    "after_count": int(after_metrics["phases"][phase]["count"]),
-                    "after_sum": float(after_metrics["phases"][phase]["sum"]),
-                }
-                for phase in PHASES
+        phase_metrics = {
+            phase: {
+                "before_count": int(before_metrics["phases"][phase]["count"]),
+                "before_sum": float(before_metrics["phases"][phase]["sum"]),
+                "after_count": int(after_metrics["phases"][phase]["count"]),
+                "after_sum": float(after_metrics["phases"][phase]["sum"]),
             }
-            raw_first_byte_delta = (
-                phase_metrics["first_byte"]["after_count"]
-                - phase_metrics["first_byte"]["before_count"]
-            )
+            for phase in PHASES
+        }
+        raw_first_byte_delta = (
+            phase_metrics["first_byte"]["after_count"]
+            - phase_metrics["first_byte"]["before_count"]
+        )
         before_hits = int(before_metrics["file_id_hits"])
         after_hits = int(after_metrics["file_id_hits"])
         bypassed = []
@@ -1378,18 +1325,6 @@ class ProductionDockerAdapter:
                 "availability": "measured",
                 "method": "file-id-cache",
             }
-        elif self.runtime_profile == "legacy-baseline":
-            if self._legacy_first_byte_seconds(logs, started) is None:
-                unavailable_phases.append("first_byte")
-                first_byte_measurement = {
-                    "availability": "unavailable",
-                    "method": "unavailable",
-                }
-            else:
-                first_byte_measurement = {
-                    "availability": "measured",
-                    "method": "legacy-correlated-progress",
-                }
         elif raw_first_byte_delta == 1:
             first_byte_measurement = {
                 "availability": "measured",
@@ -1412,9 +1347,7 @@ class ProductionDockerAdapter:
                 "value": 0,
             }
             if after_hits - before_hits == 1
-            else self._exact_downloaded_measurement(
-                logs, runtime_profile=self.runtime_profile
-            )
+            else self._exact_downloaded_measurement(logs)
         )
         job = cast(Mapping[str, Any], latest["job"])
         deliveries = job.get("deliveries", [])
@@ -1425,17 +1358,14 @@ class ProductionDockerAdapter:
             and item.get("finalized") is True
             and item.get("response_confirmed") is True
         ]
-        if self.runtime_profile == "legacy-baseline":
-            delivery_outcomes = [legacy_outcome]
-            before_results: Mapping[str, Any] = {"success": 0}
-            after_results: Mapping[str, Any] = {
-                "success": 1 if legacy_outcome == "success" else 0,
-                "failed": 1 if legacy_outcome == "failed" else 0,
-            }
-        elif deliveries:
+        if deliveries:
             delivery_outcomes = [str(item["outcome"]) for item in deliveries]
-            before_results = cast(Mapping[str, Any], before_metrics["results"])
-            after_results = cast(Mapping[str, Any], after_metrics["results"])
+            before_results: Mapping[str, Any] = cast(
+                Mapping[str, Any], before_metrics["results"]
+            )
+            after_results: Mapping[str, Any] = cast(
+                Mapping[str, Any], after_metrics["results"]
+            )
         else:
             result_delta = {
                 key: int(after_metrics["results"].get(key, 0))
@@ -1448,24 +1378,13 @@ class ProductionDockerAdapter:
             ]
             before_results = cast(Mapping[str, Any], before_metrics["results"])
             after_results = cast(Mapping[str, Any], after_metrics["results"])
-        if self.runtime_profile == "legacy-baseline":
-            successful = (
-                legacy_outcome == "success"
-                and legacy_phases_valid
-                and all(
-                    phase_metrics[phase]["after_count"] == 1
-                    for phase in ("resolve", "materialize", "deliver")
-                )
-            )
-            job_state = "completed" if successful else "failed"
-        else:
-            successful = (
-                job.get("state") == "completed"
-                and bool(deliveries)
-                and len(confirmed_deliveries) == len(deliveries)
-                and all(item.get("outcome") == "success" for item in deliveries)
-            )
-            job_state = job.get("state")
+        successful = (
+            job.get("state") == "completed"
+            and bool(deliveries)
+            and len(confirmed_deliveries) == len(deliveries)
+            and all(item.get("outcome") == "success" for item in deliveries)
+        )
+        job_state = job.get("state")
         events = ["webhook-accepted"]
         events.append("job-completed" if job_state == "completed" else "job-failed")
         if successful:
@@ -1480,20 +1399,10 @@ class ProductionDockerAdapter:
                 http_failures.append(failure)
         return {
             "attribution_confirmed": (
-                (
-                    legacy_outcome in {"success", "failed"}
-                    and legacy_phases_valid
-                    and self._legacy_result_attributed(before_metrics, after_metrics)
-                    and self._metrics_idle(after_metrics)
-                    and self._legacy_fences_idle(latest)
-                )
-                if self.runtime_profile == "legacy-baseline"
-                else (
-                    job.get("other_jobs") == 0
-                    and job.get("active_jobs") == 0
-                    and self._metrics_idle(after_metrics)
-                    and self._metric_result_delta(before_results, after_results) == 1
-                )
+                job.get("other_jobs") == 0
+                and job.get("active_jobs") == 0
+                and self._metrics_idle(after_metrics)
+                and self._metric_result_delta(before_results, after_results) == 1
             ),
             "bypassed_phases": bypassed,
             "unavailable_phases": unavailable_phases,
@@ -1514,20 +1423,7 @@ class ProductionDockerAdapter:
             "job_state": job_state,
             "delivery_outcomes": delivery_outcomes,
             "http_failures": http_failures,
-            "failure_stage": (
-                (
-                    "deliver"
-                    if phase_metrics["deliver"]["after_count"] > 0
-                    else (
-                        "materialize"
-                        if phase_metrics["materialize"]["after_count"] > 0
-                        else "resolve"
-                    )
-                )
-                if self.runtime_profile == "legacy-baseline"
-                and legacy_outcome == "failed"
-                else job.get("failure_stage")
-            ),
+            "failure_stage": job.get("failure_stage"),
             "independent_route": self._route_outcome(
                 cast(Mapping[str, Any], before_metrics["providers"]),
                 cast(Mapping[str, Any], after_metrics["providers"]),
@@ -1545,6 +1441,13 @@ class ProductionDockerAdapter:
 
     def cancel(self, correlation_id: str) -> bool:
         self.runtime.identity()
+        if self.runtime_profile == "legacy-baseline":
+            if not CORRELATION_RE.fullmatch(correlation_id):
+                raise AdapterError("legacy correlation is invalid")
+            digest = hashlib.sha256(correlation_id.encode("utf-8")).hexdigest()[:16]
+            return self.runtime.stop_legacy_container(
+                f"ytdlbot-media-evidence-{digest}"
+            )
         result = self.runtime.container_call(
             "cancel", {"correlation_id": correlation_id}, timeout=15.0
         )
@@ -1577,7 +1480,15 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--external-free-provider", action="append", default=[])
     parser.add_argument("--external-configured-provider", action="append", default=[])
     parser.add_argument(
-        "action", choices=("preflight", "identity", "evict-case", "observe", "cancel")
+        "action",
+        choices=(
+            "preflight",
+            "identity",
+            "evict-case",
+            "observe",
+            "observe-isolated",
+            "cancel",
+        ),
     )
     return parser
 
@@ -1625,6 +1536,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 correlation_id=payload["correlation_id"],
                 timeout_seconds=float(payload["timeout_seconds"]),
             )
+        elif args.action == "observe-isolated":
+            output = {
+                "observation": adapter.observe_isolated(
+                    case=payload["case"],
+                    correlation_id=str(payload["correlation_id"]),
+                    timeout_seconds=float(payload["timeout_seconds"]),
+                )
+            }
         else:
             output = {"cancelled": adapter.cancel(str(payload["correlation_id"]))}
         print(json.dumps(output, separators=(",", ":"), sort_keys=True))

@@ -203,7 +203,7 @@
           "properties": {
             "availability": {"enum": ["measured", "unavailable"]},
             "method": {
-              "enum": ["structured-request-bytes", "legacy-correlated-delivered-size", "file-id-cache", "unavailable"]
+              "enum": ["structured-request-bytes", "legacy-correlated-delivered-size", "legacy-isolated-delivered-size", "file-id-cache", "unavailable"]
             }
           },
           "allOf": [

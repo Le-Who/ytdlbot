@@ -110,21 +110,24 @@ proxy merely to produce a green report.
 
 ## Controlled Task 14 run
 
-The approved 24-link set is run from the production VPS in exactly three time
-windows identified by the fixed, non-secret ordinals `window-1`, `window-2`,
-and `window-3`. Free-form or token-shaped window identifiers are rejected.
-Every case is exercised once with a cold cache and once with a warm cache in
-each window. Shorts and ordinary videos are reported separately.
+The currently authorized production check is a bounded representative smoke,
+not the multi-hour statistical experiment originally proposed for Task 14. It
+runs only the first approved Short once with an isolated cold state. It does not
+run a warm repeat, the other 23 links, or three time windows. The resulting
+report must mark latency p50/p95, the 25% improvement target, and statistical
+success rate as `NOT_MEASURED` and `accepted=false`; the single delivery result
+must never be extrapolated into a release-performance claim.
 
-Run the collector only from the trusted production host, in a private directory,
-against the already running bot container. The checked-in
-`scripts/media-acceptance-docker-adapter.py` is the security boundary around that
-container: its helper reads `BOT_TOKEN`, `ADMIN_CHAT_ID`, and
-`TELEGRAM_SECRET_TOKEN` and posts the webhook inside `bot`. Those values never
-enter adapter output or the collector process. The adapter samples the container
-and Prometheus endpoint and returns only the closed, sanitized JSON contract
-described below. Do not put a secret, a candidate URL, or a signed media URL in a
-command argument or environment variable.
+Run the collector only from the trusted production host in a private directory.
+For `legacy-baseline`, `scripts/media-acceptance-docker-adapter.py` starts a
+one-shot container from the exact attested image. It does not post to the running
+bot, start the application lifespan, install a webhook, or share the production
+Redis/cache state. The one-shot imports the legacy orchestrator and processes one
+case synchronously; process exit is its terminal boundary. `BOT_TOKEN` and
+`ADMIN_CHAT_ID` enter that container only through process substitution from the
+running bot's environment. They never enter host stdout, an evidence file, or a
+command argument. Do not put a secret, candidate URL, or signed media URL in an
+environment variable or command argument.
 
 First run the no-send preflight. Use `legacy-baseline` for the existing legacy
 image (`/health`, legacy timing counters, `inf:<exact URL>` cache) and `candidate`
@@ -178,130 +181,82 @@ printf '{}\n' | python3 scripts/media-acceptance-docker-adapter.py \
   preflight
 ```
 
-The legacy gate records the actual health/media policy instead of pretending it
-has candidate readiness or a 2,000 MB upload limit. A webhook HTTP 200 is only
-asynchronous acceptance. The legacy image has no correlation-aware success log:
-observation therefore accepts exactly one download total plus one success/failed
-delta only while the whole pipeline is isolated. A download failure may finish
-before delivery; a download success is not terminal until the upload-duration
-counter records an HTTP attempt. The adapter then waits another quiet grace with
-stable terminal counters, no yt-dlp/ffmpeg child, and no established Bot API
-`:8081` connection. Missing fence capability stops the run.
+The no-send legacy preflight starts the same isolated image with Redis, webhook,
+cookies, proxy credentials, and provider credentials cleared. It verifies the
+orchestrator import, Local Bot API configuration, administrative delivery target,
+legacy 900 MB policy, and 2 GiB cgroup limit, then exits without processing or
+sending media. A project-scoped `flock` and deterministic labelled container name
+prevent overlapping one-shot runners. The container is read-only and has private
+tmpfs-backed temp and cache directories.
 
-One invocation collects or resumes one window. Use the actual tested release SHA
-and a different real UTC period for each fixed window (the example shows
-`window-1`; repeat later for `window-2` and `window-3` with their own timestamp):
+After preflight, collect exactly one smoke record. `window-1` is retained only as
+the schema-compatible bounded run identifier; it is not one of three statistical
+windows:
 
 ```sh
 install -d -m 0700 /var/lib/ytdlbot/media-evidence
-RELEASE_SHA=0123456789abcdef0123456789abcdef01234567
-EXPECTED_IMAGE_ID=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
-ADAPTER="python3 scripts/media-acceptance-docker-adapter.py --project-dir /opt/ytdlbot --project-name ytdlbot --compose-file docker-compose.yml --expected-release ${RELEASE_SHA} --expected-image-id ${EXPECTED_IMAGE_ID} --runtime-profile candidate"
+BASELINE_SHA=5c1aaa1b786a92e979f80b09033b71978cbae701
+BASELINE_IMAGE_ID=sha256:2b109643e8cb04386b2508d112cbab02b1648e2b02f1827356039a59448ef3cf
+ADAPTER="python3 scripts/media-acceptance-docker-adapter.py --project-dir /opt/ytdlbot --project-name ytdlbot --compose-file docker-compose.yml --expected-release ${BASELINE_SHA} --expected-image-id ${BASELINE_IMAGE_ID} --legacy-attestation /var/lib/ytdlbot/media-evidence/legacy-attestation.json --runtime-profile legacy-baseline"
 python3 scripts/collect-media-release-evidence.py collect-window \
   --manifest tests/fixtures/youtube-acceptance.json \
-  --output "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-window-1.json" \
+  --output "/var/lib/ytdlbot/media-evidence/${BASELINE_SHA}-smoke.json" \
   --window window-1 \
-  --release-sha "$RELEASE_SHA" \
-  --correlation-prefix "media-release-${RELEASE_SHA}" \
-  --timeout-seconds 900 \
+  --release-sha "$BASELINE_SHA" \
+  --correlation-prefix "media-smoke-${BASELINE_SHA}" \
+  --timeout-seconds 300 \
   --collected-at 2026-09-20T12:00:00Z \
-  --adapter-command "$ADAPTER"
+  --adapter-command "$ADAPTER" \
+  --plan smoke
+
+python3 scripts/collect-media-release-evidence.py finalize-smoke \
+  --window-file "/var/lib/ytdlbot/media-evidence/${BASELINE_SHA}-smoke.json" \
+  --output "/var/lib/ytdlbot/media-evidence/${BASELINE_SHA}-smoke-report.json" \
+  --collected-at 2026-09-20T12:10:00Z
 ```
 
-Append `--external-free-provider <metric-label>` or
-`--external-configured-provider <metric-label>` to `ADAPTER` only for a route
-whose class was reviewed for that release. An external winner without an approved
-classification aborts collection; the adapter does not silently report it as an
-unattempted route. Omitting both flags is therefore safe when only local `ytdlp`
-is eligible, but it cannot close the independent-route acceptance criterion.
+Legacy independent-provider telemetry is explicitly unavailable. The smoke report
+therefore cannot satisfy independent-route or comparative release acceptance.
 
-Before webhook submission, the output is atomically replaced with an `IN_FLIGHT`
-reservation containing deterministic update/correlation IDs. After an SSH loss,
-timeout, or unknown submit result, resume hard-stops and never resubmits that
-pair. `Future.cancel()` is not application cancellation. Only after an operator
-has independently proved that the webhook was not accepted may they append an
-audited reconciliation and permit a retry:
+Before the one-shot container starts, the output is atomically replaced with an
+`IN_FLIGHT` reservation containing deterministic update/correlation IDs. After
+an SSH loss, timeout, or unknown result, resume hard-stops and never launches the
+case again. `Future.cancel()` is not application cancellation. A timeout asks the
+adapter to stop only the deterministic, correctly labelled evidence container;
+the reservation remains unresolved either way. Only after an operator has
+independently reconciled the result may they record an audited decision:
 
 ```sh
 python3 scripts/collect-media-release-evidence.py reconcile-in-flight \
-  --output "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-window-1.json" \
+  --output "/var/lib/ytdlbot/media-evidence/${BASELINE_SHA}-smoke.json" \
   --decision confirmed-not-accepted \
   --audited-by release-owner \
   --reconciled-at 2026-09-20T12:15:00Z
 ```
 
-The output is also atomically replaced after every successful case/cache record,
-so a normal resume skips completed pairs. Once all three windows contain 48
-records, merge and validate them with:
+The adapter protocol is JSON on standard input/output. In smoke mode the
+collector invokes `identity`, `observe-isolated`, and, only after a timeout,
+`cancel`. Nonzero exit, invalid JSON, or output outside the closed enums fails
+without echoing adapter stdout/stderr. The case URL travels only over stdin. The
+isolated harness measures its own cgroup CPU and sums `VmRSS` for its process
+tree, wraps the real legacy Telegram sender to confirm terminal delivery, and
+reports only a closed sanitized observation. It never starts `app.main`, never
+calls webhook APIs, never uses production Redis, never runs `FLUSHDB` or a cache
+scan, and never deletes a shared media directory.
 
-```sh
-python3 scripts/collect-media-release-evidence.py finalize \
-  --manifest tests/fixtures/youtube-acceptance.json \
-  --schema tests/fixtures/media-release-evidence.schema.json \
-  --window-file "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-window-1.json" \
-  --window-file "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-window-2.json" \
-  --window-file "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-window-3.json" \
-  --output "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}.json" \
-  --collected-at 2026-09-22T18:00:00Z
-```
-
-The adapter protocol is JSON on standard input/output. The collector invokes
-`<adapter> identity`, `evict-case`, `observe`, and `cancel`; nonzero exit, invalid
-JSON, or output outside the closed enums fails the run without echoing adapter
-stdout/stderr. `identity` returns only the verified release/container/image
-identity and binding method, runtime profile, positive cgroup memory limit,
-capabilities, and
-`production_ip_attested=true`; it never returns a token or chat ID. `evict-case`
-receives the case URL on standard input. In `legacy-baseline` it deletes only
-`inf:<exact URL>`. In `candidate` it additionally derives the exact metadata,
-default signed-URL, and item-zero Telegram file-ID keys through the running
-MediaCache implementation. It never uses `FLUSHDB`, Redis scan/pattern deletion,
-a whole-media-directory deletion, or affects another case. If exact attribution
-is unavailable it returns `safe=false`, and the collector stops before
-submitting the cold webhook.
-
-`observe` receives the secret-free synthesized Telegram update on standard
-input. The in-container helper inserts the configured administrative chat and
-secret, posts the update with the supplied `X-Correlation-ID`, samples before/after
-Prometheus counters and per-phase sums/counts, follows sanitized correlated job
-and delivery events, reads cgroup CPU usage, and sums `VmRSS` for every PID in
-the container cgroup. It must return
-`attribution_confirmed=true` only when the deltas belong to that case and a
-terminal outcome is confirmed: candidate runs require a finalized successful
-JobStore delivery with its returned message ID plus the success metric; legacy
-runs use the real download result and upload-duration counters under the process
-and Bot API network fences described above. Before every run, candidate must
-have no accepted/running/checkpointed jobs and no active media work; legacy must
-also have zero active downloads, no media child process, and no active Bot API
-upload connection. Relevant global counters must remain unchanged for a quiet
-grace interval. The collector rejects any phase/result delta or unrelated job
-that reveals concurrent pipeline activity, including work accepted before the
-evidence case. HTTP details are reduced to
-status 403/429 plus the schema's cause enum, and provider data is reduced to the
-independent route class. `cancel` attempts only an exact correlation-owned
-application cancellation. The current runtime exposes no such hook, so a timeout
-returns `cancelled=false`; the collector stops the entire window and does not
-start another case. Fake-Docker tests exercise both runtime profiles without a
-Docker daemon.
-
-There is intentionally no fallback that guesses cold-cache state, attributes a
-process-wide metric during concurrent traffic, derives CPU from wall time,
-labels temporary-directory growth as downloaded bytes or first-byte latency, or
-declares delivery from a downloaded file. Candidate first-byte uses the Task 11
-metric only when its delta is attributable; legacy first-byte uses only a
-correlated progress event. Downloaded bytes use only a structured per-request
-byte value (legacy may use a correlated exact delivered file size). Otherwise
-the value is `null` with closed `unavailable` metadata and the comparison fails
-closed. If the production installation cannot provide exact case eviction,
-correlated job/delivery outcome, or bounded cancel, the run remains unverified
-rather than emitting nominal evidence.
+There is intentionally no fallback that guesses first-byte latency, derives CPU
+from wall time, labels temporary-directory growth as downloaded bytes, or calls
+a downloaded file a successful Telegram delivery. Legacy first-byte remains
+`unavailable`; downloaded bytes may use only the exact file size observed at the
+wrapped delivery boundary. Missing attribution stays `null` with closed
+`unavailable` metadata.
 
 A run counts as success only when the requested media is fully delivered through
 Telegram with the requested kind, quality/clip/audio policy, album completeness,
 and orientation. Resolver metadata or a downloaded file without confirmed
 delivery is not success.
 
-For each case and cache state, collect:
+The smoke record collects:
 
 - `resolve`, `first_byte`, `materialize`, and `deliver` latency in seconds;
 - confirmed `full_delivery` and the failure stage when false;
@@ -321,47 +276,44 @@ metadata; that is truthful evidence, but `measurement_complete=false` makes the
 release comparison fail. Failed runs may use `null` for stages they did not
 reach.
 
-Aggregate four cohorts: Shorts/cold, Shorts/warm, videos/cold, and videos/warm.
-For every stage report p50 and p95, sample count, full-delivery rate, 403/429 cause
-counts, bytes, CPU, peak-RSS p50/p95/max, and independent-route success rate.
-The evidence also records the exact runtime image identity/reference and binding
-method plus `current_memory_limit_bytes`; each cohort's
-`within_current_memory_limit` decision must equal whether its measured maximum
-RSS is at or below that limit and must be true for acceptance. This makes the
-same schema suitable for comparing baseline and candidate evidence without
-changing the current deployment limit. Keep per-window results so one favorable
-period cannot hide a later provider block.
+The smoke report performs no cohort aggregation. It preserves the exact runtime
+image identity/reference and binding method plus
+`current_memory_limit_bytes`. Only `representative_delivery_smoke` is measured;
+p50/p95, 25% improvement, and statistical success-rate decisions are explicitly
+not measured and not accepted.
 
 ## Redacted evidence format
 
-The machine-readable contract is
-[`media-release-evidence.schema.json`](../tests/fixtures/media-release-evidence.schema.json).
-The acceptance gate validates both files with the pinned Draft 2020-12
-`jsonschema` validator and format checks before applying cross-record semantic
-checks. It requires:
+The full multi-window contract remains documented by
+[`media-release-evidence.schema.json`](../tests/fixtures/media-release-evidence.schema.json),
+but it is not produced or accepted by the authorized smoke plan. A future full
+run would require separate approval because it is intentionally long-running.
+The pinned Draft 2020-12 validator and semantic checks continue to fail closed
+for any such supplied full report.
+
+The smoke report instead contains one redacted run and four explicit decisions:
+
+- `representative_delivery_smoke` is `MEASURED` and reflects only that run;
+- `latency_p50_p95` is `NOT_MEASURED` and not accepted;
+- `candidate_improvement_25_percent` is `NOT_MEASURED` and not accepted;
+- `statistical_success_rate` is `NOT_MEASURED` and not accepted.
+
+Both formats preserve:
 
 - exact release SHA and SHA-256 of the approved manifest;
 - exact runtime image ID/reference and legacy-attestation or candidate-digest binding;
-- `source = "production-vps"` and an explicit production-IP attestation;
-- exactly the three windows `window-1`, `window-2`, and `window-3`;
-- one cold and one warm record for every approved case in every window;
+- an explicit production-IP attestation;
 - the four stage latencies, full delivery, 403/429 causes, bytes, CPU, peak RSS,
   and independent-route outcome;
 - the positive `current_memory_limit_bytes` used by the deployment;
-- four Shorts/video × cold/warm summaries with latency p50/p95, peak-RSS
-  p50/p95/max, measurement completeness, and the derived within-limit decision;
 - affirmative redaction flags for URL hashing and removal of tokens, signed query
   strings, and cookies.
 
 HTTP failure causes and independent-route classes are closed enums, so a raw URL,
 token, or arbitrary provider response cannot be smuggled into a nominally
-redacted field. Each window must contain exactly one cold and one warm run for
-all 24 cases. `full_delivery` and `failure_stage` must agree, summary counts and
-rates must equal their underlying runs, and p50/p95 use nearest-rank values over
-the non-null stage samples in the corresponding Shorts/video and cold/warm
-cohort. Peak-RSS summaries use the same nearest-rank p50/p95 rule, their `max`
-must equal the largest cohort run, and acceptance rejects both an inconsistent
-decision and a candidate that exceeds the current memory limit.
+redacted field. `full_delivery` and `failure_stage` must agree. The smoke command
+accepts exactly one `short`/`cold` record and refuses to finalize an unresolved
+`IN_FLIGHT` reservation.
 
 The integration-marked evidence validator remains excluded by default. It runs
 only when explicitly selected and given `YOUTUBE_ACCEPTANCE_MANIFEST` plus
@@ -379,9 +331,9 @@ Only redacted evidence is eligible to enter
 keys, signed CDN query strings, chat/user identifiers, and unredacted URLs do not
 belong in Git.
 
-## Failure scenarios required in the controlled run
+## Failure scenarios covered offline
 
-In addition to the 24-link measurements, record behavior for:
+The focused offline contracts cover behavior for:
 
 - local extractor failure while an eligible independent route is available;
 - independent route failure while local extraction remains available;
@@ -397,11 +349,13 @@ In addition to the 24-link measurements, record behavior for:
 
 ## Release decision
 
-The comparison targets from the binding plan are decision criteria, not current
-claims: on platforms with two working providers, cold p95 should improve by at
-least 25% versus the production baseline; full-delivery success must not regress;
-CPU/RAM must remain within current limits; and racing must not create duplicate
-sends. A failed criterion invokes the documented image/config rollback.
+The comparison targets from the binding plan remain decision criteria, not
+current claims: on platforms with two working providers, cold p95 should improve
+by at least 25% versus the production baseline; full-delivery success must not
+regress; CPU/RAM must remain within current limits; and racing must not create
+duplicate sends. The one-case smoke cannot decide the first two criteria, so its
+report records them as `NOT_MEASURED`/not accepted and must not be used to approve
+a release on statistical grounds.
 
 Neither acceptance nor rollback rewinds SQLite or Redis data. Database migrations
 must remain backward-compatible with the previous bot image.

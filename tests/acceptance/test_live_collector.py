@@ -145,6 +145,57 @@ class FakeAdapter:
         return True
 
 
+class LegacySmokeAdapter(FakeAdapter):
+    def __init__(self, output: Path) -> None:
+        super().__init__()
+        self.output = output
+        self.smoke_cases: list[str] = []
+
+    def identity(self) -> dict[str, Any]:
+        result = super().identity()
+        result.update(
+            {
+                "runtime_profile": "legacy-baseline",
+                "image_reference": result["image_id"],
+                "identity_binding": "legacy-deployment-attestation",
+            }
+        )
+        return result
+
+    def observe_isolated(
+        self,
+        *,
+        case: Any,
+        correlation_id: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        del timeout_seconds
+        reservation = json.loads(self.output.read_text(encoding="utf-8"))["in_flight"]
+        assert reservation["state"] == "IN_FLIGHT"
+        assert reservation["cache_state"] == "cold"
+        assert reservation["correlation_id"] == correlation_id
+        self.smoke_cases.append(case.case_id)
+        observation = _observation()
+        observation["phase_metrics"]["first_byte"]["after_count"] = 10
+        observation["phase_metrics"]["first_byte"]["after_sum"] = 20.0
+        observation["unavailable_phases"] = ["first_byte"]
+        observation["measurement"]["first_byte"] = {
+            "availability": "unavailable",
+            "method": "unavailable",
+        }
+        observation["measurement"]["downloaded_bytes"]["method"] = (
+            "legacy-isolated-delivered-size"
+        )
+        observation["independent_route"] = {
+            "capability": "unavailable",
+            "provenance": "unavailable",
+            "attempted": None,
+            "succeeded": None,
+            "route_class": None,
+        }
+        return observation
+
+
 def _collect(
     collector: Any,
     tmp_path: Path,
@@ -215,6 +266,97 @@ def test_collects_exact_cold_warm_sequence_without_persisting_secrets_or_urls(
     }
     assert payload["image_id"] == "sha256:" + "b" * 64
     assert payload["in_flight"] is None
+
+
+def test_legacy_smoke_reserves_one_short_isolated_job_and_marks_no_statistics(
+    collector: Any,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "legacy-window.json"
+    adapter = LegacySmokeAdapter(output)
+
+    collector.collect_window(
+        manifest_path=MANIFEST_PATH,
+        output_path=output,
+        window_id="window-1",
+        release_sha="a" * 40,
+        adapter=adapter,
+        correlation_prefix="release-proof",
+        timeout_seconds=3.0,
+        collected_at="2026-09-20T12:00:00Z",
+        plan="smoke",
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert adapter.smoke_cases == ["short-01"]
+    assert not [call for call in adapter.calls if call[0] in {"evict", "observe"}]
+    assert [(run["case_id"], run["cache_state"]) for run in payload["runs"]] == [
+        ("short-01", "cold")
+    ]
+    assert payload["runs"][0]["measurement"]["first_byte"] == {
+        "availability": "unavailable",
+        "method": "unavailable",
+    }
+    assert payload["runs"][0]["independent_route"]["capability"] == "unavailable"
+    assert payload["in_flight"] is None
+
+    report = tmp_path / "smoke-report.json"
+    collector.finalize_smoke(
+        window_path=output,
+        output_path=report,
+        collected_at="2026-09-20T12:10:00Z",
+    )
+    finalized = json.loads(report.read_text(encoding="utf-8"))
+    assert finalized["plan"] == "smoke"
+    assert finalized["acceptance"] == {
+        "latency_p50_p95": {"measurement": "NOT_MEASURED", "accepted": False},
+        "candidate_improvement_25_percent": {
+            "measurement": "NOT_MEASURED",
+            "accepted": False,
+        },
+        "statistical_success_rate": {
+            "measurement": "NOT_MEASURED",
+            "accepted": False,
+        },
+        "representative_delivery_smoke": {
+            "measurement": "MEASURED",
+            "accepted": True,
+        },
+    }
+
+
+def test_legacy_smoke_crash_keeps_reservation_and_never_resubmits(
+    collector: Any,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "legacy-crash.json"
+
+    class CrashSmoke(LegacySmokeAdapter):
+        def observe_isolated(self, **kwargs: Any) -> dict[str, Any]:
+            reservation = json.loads(self.output.read_text(encoding="utf-8"))[
+                "in_flight"
+            ]
+            assert reservation["state"] == "IN_FLIGHT"
+            assert reservation["correlation_id"] == kwargs["correlation_id"]
+            raise collector.ObservationError("isolated outcome unknown")
+
+    kwargs = {
+        "manifest_path": MANIFEST_PATH,
+        "output_path": output,
+        "window_id": "window-1",
+        "release_sha": "a" * 40,
+        "correlation_prefix": "release-proof",
+        "timeout_seconds": 3.0,
+        "collected_at": "2026-09-20T12:00:00Z",
+        "plan": "smoke",
+    }
+    with pytest.raises(collector.ObservationError, match="unknown"):
+        collector.collect_window(adapter=CrashSmoke(output), **kwargs)
+
+    retry = LegacySmokeAdapter(output)
+    with pytest.raises(collector.EvidenceValidationError, match="IN_FLIGHT"):
+        collector.collect_window(adapter=retry, **kwargs)
+    assert retry.smoke_cases == []
 
 
 def test_resume_skips_completed_case_cache_pairs(

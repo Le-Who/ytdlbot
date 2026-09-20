@@ -80,6 +80,7 @@ class FakeRuntime:
         self.log_count = 0
         self.submitted = False
         self.telegram_connections = 0
+        self.legacy_calls: list[tuple[str, dict[str, Any], str]] = []
 
     def identity(self) -> Any:
         return self.module.DockerIdentity(
@@ -182,6 +183,103 @@ class FakeRuntime:
 
     def telegram_connection_count(self) -> int:
         return self.telegram_connections
+
+    def legacy_container_call(
+        self,
+        action: str,
+        payload: dict[str, Any],
+        *,
+        image_id: str,
+        source_container_id: str,
+        container_name: str,
+        timeout: float,
+    ) -> dict[str, Any]:
+        del timeout
+        self.legacy_calls.append((action, payload, container_name))
+        assert image_id == "sha256:" + "b" * 64
+        assert source_container_id == "a" * 64
+        if action == "preflight":
+            return {
+                "safe": True,
+                "orchestrator_imported": True,
+                "redis_isolated": True,
+                "webhook_not_started": True,
+                "admin_chat_configured": True,
+                "local_bot_api_configured": True,
+                "max_media_file_mb": 900,
+                "memory_limit_bytes": self.module.EXPECTED_MEMORY_BYTES,
+            }
+        assert action == "run-once"
+        observations: dict[str, dict[str, Any]] = {}
+        for cache_state in ("cold", "warm"):
+            observations[cache_state] = {
+                "attribution_confirmed": True,
+                "bypassed_phases": [],
+                "unavailable_phases": ["first_byte"],
+                "file_id_hits_before": 0,
+                "file_id_hits_after": 0,
+                "phase_metrics": {
+                    "resolve": {
+                        "before_count": 0,
+                        "before_sum": 0.0,
+                        "after_count": 1,
+                        "after_sum": 0.1,
+                    },
+                    "first_byte": {
+                        "before_count": 0,
+                        "before_sum": 0.0,
+                        "after_count": 0,
+                        "after_sum": 0.0,
+                    },
+                    "materialize": {
+                        "before_count": 0,
+                        "before_sum": 0.0,
+                        "after_count": 1,
+                        "after_sum": 0.3,
+                    },
+                    "deliver": {
+                        "before_count": 0,
+                        "before_sum": 0.0,
+                        "after_count": 1,
+                        "after_sum": 0.4,
+                    },
+                },
+                "pipeline_results_before": {"success": 0},
+                "pipeline_results_after": {"success": 1, "failed": 0},
+                "wasted_bytes_before": 0,
+                "wasted_bytes_after": 0,
+                "measurement": {
+                    "first_byte": {
+                        "availability": "unavailable",
+                        "method": "unavailable",
+                    },
+                    "downloaded_bytes": {
+                        "availability": "measured",
+                        "method": "legacy-correlated-delivered-size",
+                        "value": 900,
+                    },
+                },
+                "cpu_seconds_before": 0.0,
+                "cpu_seconds_after": 0.25,
+                "rss_bytes_samples": [10_000, 12_000],
+                "job_state": "completed",
+                "delivery_outcomes": ["success"],
+                "http_failures": [],
+                "failure_stage": None,
+                "independent_route": {
+                    "capability": "unavailable",
+                    "provenance": "unavailable",
+                    "attempted": None,
+                    "succeeded": None,
+                    "route_class": None,
+                },
+                "correlated_events": ["job-completed", "delivery-success"],
+            }
+        return {"observation": observations["cold"]}
+
+    def stop_legacy_container(self, container_name: str) -> bool:
+        self.legacy_calls.append(("stop", {}, container_name))
+        return True
 
     def logs_since(self, *, since: str) -> str:
         del since
@@ -297,7 +395,7 @@ def test_multiple_task11_first_byte_samples_fail_closed_without_directory_guess(
     assert "artifact_size_samples" not in result
 
 
-def test_legacy_profile_uses_real_baseline_counters_without_invented_success_log(
+def test_legacy_profile_uses_no_send_preflight_and_one_shot_smoke(
     adapter_module: Any,
 ) -> None:
     runtime = FakeRuntime(adapter_module, profile="legacy-baseline")
@@ -310,42 +408,23 @@ def test_legacy_profile_uses_real_baseline_counters_without_invented_success_log
             "deployment_sha": "e" * 40,
             "image_id": "sha256:" + "b" * 64,
         },
-        clock=lambda: 100.0,
-        sleep=lambda _: None,
     )
-    case = {
-        "case_id": "video-01",
-        "kind": "video",
-        "url": "https://www.youtube.com/watch?v=approved001",
-    }
 
     preflight = adapter.preflight()
-    assert preflight["health_contract"] == "/health"
-    assert preflight["max_media_file_mb"] == 900
-    assert preflight["job_store_supported"] is False
-    assert adapter.evict_case(case) is True
-    result = adapter.observe(
-        update=_update(),
-        correlation_id="proof:window-1:video-01:cold",
+    observation = adapter.observe_isolated(
+        case={
+            "case_id": "video-01",
+            "kind": "video",
+            "url": "https://www.youtube.com/watch?v=approved001",
+        },
+        correlation_id="proof:video-01:cold",
         timeout_seconds=10,
     )
 
-    eviction = next(
-        payload for action, payload in runtime.calls if action == "evict-case"
-    )
-    assert eviction == case
-    assert result["attribution_confirmed"] is True
-    assert result["job_state"] == "completed"
-    assert result["delivery_outcomes"] == ["success"]
-    assert result["phase_metrics"]["materialize"]["after_sum"] == pytest.approx(0.25)
-    assert result["measurement"]["downloaded_bytes"] == {
-        "availability": "unavailable",
-        "method": "unavailable",
-        "value": None,
-    }
-    assert result["measurement"]["first_byte"]["availability"] == "unavailable"
-    assert runtime.log_count >= 1
-    assert result["independent_route"]["capability"] == "unavailable"
+    assert preflight["collection_mode"] == "isolated-one-shot"
+    assert observation["job_state"] == "completed"
+    assert [call[0] for call in runtime.legacy_calls] == ["preflight", "run-once"]
+    assert not any(action == "submit" for action, _ in runtime.calls)
 
 
 def test_embedded_eviction_has_no_global_or_pattern_delete(adapter_module: Any) -> None:
@@ -456,153 +535,6 @@ def test_observe_refuses_nonquiescent_candidate_before_submit(
     assert not any(action == "submit" for action, _ in runtime.calls)
 
 
-def test_legacy_requires_zero_active_downloads_for_quiet_grace(
-    adapter_module: Any,
-) -> None:
-    class BusyRuntime(FakeRuntime):
-        def container_call(
-            self, action: str, payload: dict[str, Any], *, timeout: float
-        ) -> dict[str, Any]:
-            result = super().container_call(action, payload, timeout=timeout)
-            if action == "snapshot":
-                result["metrics"]["active_downloads"] = 1
-            return result
-
-    runtime = BusyRuntime(adapter_module, profile="legacy-baseline")
-    adapter = adapter_module.ProductionDockerAdapter(
-        runtime,
-        expected_release="e" * 40,
-        expected_image_id="sha256:" + "b" * 64,
-        runtime_profile="legacy-baseline",
-        legacy_attestation={
-            "deployment_sha": "e" * 40,
-            "image_id": "sha256:" + "b" * 64,
-        },
-        sleep=lambda _: None,
-    )
-    with pytest.raises(adapter_module.AdapterError, match="quiescent"):
-        adapter.observe(
-            update=_update(), correlation_id="proof:legacy-busy", timeout_seconds=10
-        )
-    assert not any(action == "submit" for action, _ in runtime.calls)
-
-
-def test_legacy_preflight_requires_process_and_tg_api_network_fences(
-    adapter_module: Any,
-) -> None:
-    runtime = FakeRuntime(adapter_module, profile="legacy-baseline")
-    runtime.telegram_connections = 1
-    adapter = adapter_module.ProductionDockerAdapter(
-        runtime,
-        expected_release="e" * 40,
-        expected_image_id="sha256:" + "b" * 64,
-        runtime_profile="legacy-baseline",
-        legacy_attestation={
-            "deployment_sha": "e" * 40,
-            "image_id": "sha256:" + "b" * 64,
-        },
-        sleep=lambda _: None,
-    )
-
-    with pytest.raises(adapter_module.AdapterError, match="pipeline is not quiescent"):
-        adapter.observe(
-            update=_update(), correlation_id="proof:legacy-network", timeout_seconds=10
-        )
-    assert not any(action == "submit" for action, _ in runtime.calls)
-
-
-def test_legacy_predelivery_403_failure_finishes_from_real_failed_counter(
-    adapter_module: Any,
-) -> None:
-    class FailingRuntime(FakeRuntime):
-        def container_call(
-            self, action: str, payload: dict[str, Any], *, timeout: float
-        ) -> dict[str, Any]:
-            result = super().container_call(action, payload, timeout=timeout)
-            if action == "snapshot" and self.submitted:
-                result["metrics"]["legacy_results"] = {
-                    "total": 1,
-                    "success": 0,
-                    "failed": 1,
-                }
-                for phase in (
-                    "ytdlbot_download_duration_seconds",
-                    "ytdlbot_conversion_duration_seconds",
-                    "ytdlbot_upload_duration_seconds",
-                ):
-                    result["metrics"]["legacy"][phase] = {"count": 0, "sum": 0.0}
-            return result
-
-        def logs_since(self, *, since: str) -> str:
-            del since
-            self.log_count += 1
-            return "yt-dlp download failed: HTTP Error 403: Forbidden"
-
-    runtime = FailingRuntime(adapter_module, profile="legacy-baseline")
-    adapter = adapter_module.ProductionDockerAdapter(
-        runtime,
-        expected_release="e" * 40,
-        expected_image_id="sha256:" + "b" * 64,
-        runtime_profile="legacy-baseline",
-        legacy_attestation={
-            "deployment_sha": "e" * 40,
-            "image_id": "sha256:" + "b" * 64,
-        },
-        clock=lambda: 100.0,
-        sleep=lambda _: None,
-    )
-
-    result = adapter.observe(
-        update=_update(), correlation_id="proof:legacy-failed", timeout_seconds=10
-    )
-
-    assert runtime.log_count >= 2
-    assert result["attribution_confirmed"] is True
-    assert result["job_state"] == "failed"
-    assert result["delivery_outcomes"] == ["failed"]
-    assert result["http_failures"] == [{"status": 403, "cause": "forbidden"}]
-    assert result["phase_metrics"]["deliver"]["after_count"] == 0
-
-
-def test_legacy_waits_for_post_terminal_child_and_upload_network_quiet(
-    adapter_module: Any,
-) -> None:
-    class SettlingRuntime(FakeRuntime):
-        def container_call(
-            self, action: str, payload: dict[str, Any], *, timeout: float
-        ) -> dict[str, Any]:
-            result = super().container_call(action, payload, timeout=timeout)
-            if action == "snapshot" and self.submitted and self.snapshot_count < 5:
-                result["media_child_processes"] = 1
-            return result
-
-        def telegram_connection_count(self) -> int:
-            if self.submitted and self.snapshot_count < 6:
-                return 1
-            return 0
-
-    runtime = SettlingRuntime(adapter_module, profile="legacy-baseline")
-    adapter = adapter_module.ProductionDockerAdapter(
-        runtime,
-        expected_release="e" * 40,
-        expected_image_id="sha256:" + "b" * 64,
-        runtime_profile="legacy-baseline",
-        legacy_attestation={
-            "deployment_sha": "e" * 40,
-            "image_id": "sha256:" + "b" * 64,
-        },
-        clock=lambda: 100.0,
-        sleep=lambda _: None,
-    )
-
-    result = adapter.observe(
-        update=_update(), correlation_id="proof:settling", timeout_seconds=10
-    )
-
-    assert result["job_state"] == "completed"
-    assert runtime.snapshot_count >= 6
-
-
 def test_candidate_missing_attempt_telemetry_is_explicitly_unavailable(
     adapter_module: Any,
 ) -> None:
@@ -705,3 +637,74 @@ def test_fake_docker_commands_are_project_scoped_and_keep_url_off_argv(
     assert "verified-project" in flattened_commands
     assert raw_url not in flattened_commands
     assert any(raw_url in (input_text or "") for _, input_text in commands)
+
+
+def test_legacy_one_shot_uses_attested_image_isolated_env_and_stdin_payload(
+    adapter_module: Any,
+    tmp_path: Path,
+) -> None:
+    compose = tmp_path / "docker-compose.yml"
+    compose.write_text(
+        "services: {bot: {image: example.invalid/bot}}\n", encoding="utf-8"
+    )
+    commands: list[tuple[list[str], str | None]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        commands.append((command, kwargs.get("input")))
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps(
+                {
+                    "safe": True,
+                    "orchestrator_imported": True,
+                    "redis_isolated": True,
+                    "webhook_not_started": True,
+                    "admin_chat_configured": True,
+                    "local_bot_api_configured": True,
+                    "max_media_file_mb": 900,
+                    "memory_limit_bytes": adapter_module.EXPECTED_MEMORY_BYTES,
+                }
+            ),
+            stderr="",
+        )
+
+    runtime = adapter_module.DockerRuntime(
+        project_dir=tmp_path,
+        project_name="verified-project",
+        compose_file=compose,
+        run_command=fake_run,
+    )
+    url = "https://www.youtube.com/watch?v=stdinonly01"
+    image_id = "sha256:" + "b" * 64
+
+    result = runtime.legacy_container_call(
+        "preflight",
+        {"case": {"url": url}},
+        image_id=image_id,
+        source_container_id="a" * 64,
+        container_name="ytdlbot-media-evidence-preflight",
+        timeout=10,
+    )
+
+    command, stdin = commands[-1]
+    assert command[:2] == ["/bin/bash", "-c"]
+    assert "--env-file <(" in command[2]
+    assert "docker inspect" in command[2]
+    assert "REDIS_URL=" in command[2]
+    assert "WEBHOOK_URL=" in command[2]
+    assert "YTDLP_COOKIES_B64=" in command[2]
+    assert "--tmpfs" in command[2]
+    assert "flock -n" in command[2]
+    assert image_id in command
+    assert url not in " ".join(command)
+    assert url in (stdin or "")
+    assert "uvicorn" not in " ".join(command)
+    assert result["safe"] is True
+
+
+def test_process_matcher_recognizes_baseline_python_ytdlp_binary(
+    adapter_module: Any,
+) -> None:
+    helper = adapter_module._CONTAINER_HELPER
+    assert '"/opt/venv/bin/yt-dlp"' in helper

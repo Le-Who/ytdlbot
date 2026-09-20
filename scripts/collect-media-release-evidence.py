@@ -69,6 +69,7 @@ FIRST_BYTE_METHODS = {
 DOWNLOADED_BYTES_METHODS = {
     "structured-request-bytes",
     "legacy-correlated-delivered-size",
+    "legacy-isolated-delivered-size",
     "file-id-cache",
     "unavailable",
 }
@@ -108,6 +109,14 @@ class EvidenceAdapter(Protocol):
         self,
         *,
         update: dict[str, Any],
+        correlation_id: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any]: ...
+
+    def observe_isolated(
+        self,
+        *,
+        case: CaseSpec,
         correlation_id: str,
         timeout_seconds: float,
     ) -> dict[str, Any]: ...
@@ -184,6 +193,31 @@ class JsonCommandAdapter:
             },
             timeout_seconds=timeout_seconds + 5.0,
         )
+
+    def observe_isolated(
+        self,
+        *,
+        case: CaseSpec,
+        correlation_id: str,
+        timeout_seconds: float,
+    ) -> dict[str, Any]:
+        result = self._invoke(
+            "observe-isolated",
+            {
+                "case": {
+                    "case_id": case.case_id,
+                    "kind": case.kind,
+                    "url": case.url,
+                },
+                "correlation_id": correlation_id,
+                "timeout_seconds": timeout_seconds,
+            },
+            timeout_seconds=timeout_seconds + 5.0,
+        )
+        observation = result.get("observation")
+        if not isinstance(observation, dict):
+            raise ObservationError("adapter isolated run returned invalid observation")
+        return cast(dict[str, Any], observation)
 
     def cancel(self, correlation_id: str) -> bool:
         result = self._invoke(
@@ -717,6 +751,7 @@ def collect_window(
     correlation_prefix: str,
     timeout_seconds: float,
     collected_at: str,
+    plan: str = "full",
 ) -> None:
     """Collect or resume one fixed window, atomically saving after every run."""
     if window_id not in WINDOW_IDS:
@@ -729,6 +764,8 @@ def collect_window(
         )
     if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
         raise EvidenceValidationError("timeout_seconds must be positive")
+    if plan not in {"full", "smoke"}:
+        raise EvidenceValidationError("plan must be full or smoke")
     if not correlation_prefix or any(
         character
         not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_."
@@ -785,8 +822,62 @@ def collect_window(
         identity_binding=identity_binding,
         case_kinds=case_kinds,
     )
+    existing_plan = state.get("plan")
+    if existing_plan not in {None, plan}:
+        raise EvidenceValidationError("resume plan does not match this collection")
+    state["plan"] = plan
     completed = {(run["case_id"], run["cache_state"]) for run in state["runs"]}
     unix_time = _unix_time(state["started_at"])
+    if runtime_profile == "legacy-baseline":
+        if plan != "smoke":
+            raise EvidenceValidationError(
+                "legacy baseline supports only the bounded smoke plan"
+            )
+        case = next(item for item in cases if item.kind == "short")
+        key = (case.case_id, "cold")
+        if key in completed:
+            return
+        correlation_id = f"{correlation_prefix}:{window_id}:{case.case_id}:cold"
+        update_id = _update_id(correlation_id)
+        state["in_flight"] = {
+            "case_id": case.case_id,
+            "kind": case.kind,
+            "cache_state": "cold",
+            "correlation_id": correlation_id,
+            "update_id": update_id,
+            "reserved_at": state["started_at"],
+            "state": "IN_FLIGHT",
+        }
+        _atomic_json(output_path, state)
+        try:
+            observation = adapter.observe_isolated(
+                case=case,
+                correlation_id=correlation_id,
+                timeout_seconds=timeout_seconds,
+            )
+        except (TimeoutError, subprocess.TimeoutExpired) as exc:
+            cancelled = adapter.cancel(correlation_id)
+            if not cancelled:
+                raise ObservationError(
+                    f"timeout cancellation could not be confirmed for {case.case_id}; "
+                    "IN_FLIGHT reconciliation required"
+                ) from exc
+            raise ObservationError(
+                f"{case.case_id} isolated smoke cancelled after timeout; "
+                "IN_FLIGHT reconciliation required"
+            ) from exc
+        state["runs"].append(
+            _run_from_observation(
+                case=case,
+                cache_state="cold",
+                observation=observation,
+            )
+        )
+        state["in_flight"] = None
+        _atomic_json(output_path, state)
+        return
+    if plan != "full":
+        raise EvidenceValidationError("candidate smoke plan is not implemented")
     for case in cases:
         for cache_state in CACHE_STATES:
             key = (case.case_id, cache_state)
@@ -840,6 +931,66 @@ def collect_window(
             state["in_flight"] = None
             completed.add(key)
             _atomic_json(output_path, state)
+
+
+def finalize_smoke(
+    *, window_path: Path, output_path: Path, collected_at: str
+) -> None:
+    """Finalize one representative delivery without statistical claims."""
+    _unix_time(collected_at)
+    state = _load_json(window_path)
+    if state.get("plan") != "smoke" or state.get("runtime_profile") != "legacy-baseline":
+        raise EvidenceValidationError("smoke report requires a legacy smoke window")
+    if state.get("in_flight") is not None:
+        raise EvidenceValidationError("cannot finalize an IN_FLIGHT smoke run")
+    runs = state.get("runs")
+    if (
+        not isinstance(runs, list)
+        or len(runs) != 1
+        or runs[0].get("kind") != "short"
+        or runs[0].get("cache_state") != "cold"
+    ):
+        raise EvidenceValidationError("smoke report requires exactly one short run")
+    smoke_accepted = runs[0].get("full_delivery") is True
+    report = {
+        "schema_version": 1,
+        "plan": "smoke",
+        "collected_at": collected_at,
+        "release_sha": state.get("release_sha"),
+        "manifest_sha256": state.get("manifest_sha256"),
+        "runtime_profile": state.get("runtime_profile"),
+        "image_id": state.get("image_id"),
+        "image_reference": state.get("image_reference"),
+        "identity_binding": state.get("identity_binding"),
+        "current_memory_limit_bytes": state.get("current_memory_limit_bytes"),
+        "production_ip_attested": state.get("production_ip_attested"),
+        "run": runs[0],
+        "acceptance": {
+            "latency_p50_p95": {
+                "measurement": "NOT_MEASURED",
+                "accepted": False,
+            },
+            "candidate_improvement_25_percent": {
+                "measurement": "NOT_MEASURED",
+                "accepted": False,
+            },
+            "statistical_success_rate": {
+                "measurement": "NOT_MEASURED",
+                "accepted": False,
+            },
+            "representative_delivery_smoke": {
+                "measurement": "MEASURED",
+                "accepted": smoke_accepted,
+            },
+        },
+        "redaction": {
+            "urls_hashed": True,
+            "tokens_removed": True,
+            "signed_queries_removed": True,
+            "cookies_removed": True,
+        },
+    }
+    _atomic_json(output_path, report)
 
 
 def _nearest_rank(values: list[float], percentile: float) -> float | None:
@@ -1048,12 +1199,17 @@ def _parser() -> argparse.ArgumentParser:
     collect.add_argument("--timeout-seconds", type=float, default=900.0)
     collect.add_argument("--collected-at", required=True)
     collect.add_argument("--adapter-command", required=True)
+    collect.add_argument("--plan", choices=("full", "smoke"), default="full")
     finalize = subparsers.add_parser("finalize")
     finalize.add_argument("--manifest", type=Path, required=True)
     finalize.add_argument("--schema", type=Path, required=True)
     finalize.add_argument("--window-file", type=Path, action="append", required=True)
     finalize.add_argument("--output", type=Path, required=True)
     finalize.add_argument("--collected-at", required=True)
+    finalize_smoke_parser = subparsers.add_parser("finalize-smoke")
+    finalize_smoke_parser.add_argument("--window-file", type=Path, required=True)
+    finalize_smoke_parser.add_argument("--output", type=Path, required=True)
+    finalize_smoke_parser.add_argument("--collected-at", required=True)
     reconcile = subparsers.add_parser("reconcile-in-flight")
     reconcile.add_argument("--output", type=Path, required=True)
     reconcile.add_argument(
@@ -1077,12 +1233,19 @@ def main(argv: Sequence[str] | None = None) -> int:
                 correlation_prefix=args.correlation_prefix,
                 timeout_seconds=args.timeout_seconds,
                 collected_at=args.collected_at,
+                plan=args.plan,
             )
         elif args.mode == "finalize":
             finalize_evidence(
                 manifest_path=args.manifest,
                 schema_path=args.schema,
                 window_paths=args.window_file,
+                output_path=args.output,
+                collected_at=args.collected_at,
+            )
+        elif args.mode == "finalize-smoke":
+            finalize_smoke(
+                window_path=args.window_file,
                 output_path=args.output,
                 collected_at=args.collected_at,
             )

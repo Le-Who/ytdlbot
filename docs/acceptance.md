@@ -116,6 +116,123 @@ and `window-3`. Free-form or token-shaped window identifiers are rejected.
 Every case is exercised once with a cold cache and once with a warm cache in
 each window. Shorts and ordinary videos are reported separately.
 
+Run the collector only from the trusted production host, in a private directory,
+against the already running bot container. The checked-in
+`scripts/media-acceptance-docker-adapter.py` is the security boundary around that
+container: its helper reads `BOT_TOKEN`, `ADMIN_CHAT_ID`, and
+`TELEGRAM_SECRET_TOKEN` and posts the webhook inside `bot`. Those values never
+enter adapter output or the collector process. The adapter samples the container
+and Prometheus endpoint and returns only the closed, sanitized JSON contract
+described below. Do not put a secret, a candidate URL, or a signed media URL in a
+command argument or environment variable.
+
+First run the no-send preflight. Use `legacy-baseline` for the existing legacy
+image (`/health`, legacy timing counters, `inf:<exact URL>` cache) and `candidate`
+for the new image (`/health/ready`, durable JobStore, Local Bot API, exact 2,000
+MB media policy, and MediaCache keys). Both profiles require the actual 2 GiB bot
+cgroup limit and a running `bot` belonging to the named Compose project. This
+candidate example does not submit an update:
+
+```sh
+RELEASE_SHA=0123456789abcdef0123456789abcdef01234567
+printf '{}\n' | python3 scripts/media-acceptance-docker-adapter.py \
+  --project-dir /srv/ytdlbot \
+  --project-name ytdlbot \
+  --compose-file docker-compose.yml \
+  --expected-release "$RELEASE_SHA" \
+  --runtime-profile candidate \
+  preflight
+```
+
+For a baseline preflight, change only `--runtime-profile` to
+`legacy-baseline` and set `RELEASE_SHA` to the exact baseline source SHA. The
+legacy gate records the actual health/media policy instead of pretending it has
+candidate readiness or a 2,000 MB upload limit. It still requires legacy timing
+counters plus correlated first-byte and terminal `sendVideo`/`sendDocument`
+success logs; without those signals it stops rather than fabricating stages.
+
+One invocation collects or resumes one window. Use the actual tested release SHA
+and a different real UTC period for each fixed window (the example shows
+`window-1`; repeat later for `window-2` and `window-3` with their own timestamp):
+
+```sh
+install -d -m 0700 /var/lib/ytdlbot/media-evidence
+RELEASE_SHA=0123456789abcdef0123456789abcdef01234567
+ADAPTER="python3 scripts/media-acceptance-docker-adapter.py --project-dir /srv/ytdlbot --project-name ytdlbot --compose-file docker-compose.yml --expected-release ${RELEASE_SHA} --runtime-profile candidate"
+python3 scripts/collect-media-release-evidence.py collect-window \
+  --manifest tests/fixtures/youtube-acceptance.json \
+  --output "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-window-1.json" \
+  --window window-1 \
+  --release-sha "$RELEASE_SHA" \
+  --correlation-prefix "media-release-${RELEASE_SHA}" \
+  --timeout-seconds 900 \
+  --collected-at 2026-09-20T12:00:00Z \
+  --adapter-command "$ADAPTER"
+```
+
+Append `--external-free-provider <metric-label>` or
+`--external-configured-provider <metric-label>` to `ADAPTER` only for a route
+whose class was reviewed for that release. An external winner without an approved
+classification aborts collection; the adapter does not silently report it as an
+unattempted route. Omitting both flags is therefore safe when only local `ytdlp`
+is eligible, but it cannot close the independent-route acceptance criterion.
+
+The output is atomically replaced after every case/cache record, so invoking the
+same command after an SSH interruption skips completed pairs. A timed-out pair is
+written as `cancelled` only after the adapter confirms cancellation; collection
+then stops for operator review. Once all three windows contain 48 records, merge
+and validate them with:
+
+```sh
+python3 scripts/collect-media-release-evidence.py finalize \
+  --manifest tests/fixtures/youtube-acceptance.json \
+  --schema tests/fixtures/media-release-evidence.schema.json \
+  --window-file "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-window-1.json" \
+  --window-file "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-window-2.json" \
+  --window-file "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-window-3.json" \
+  --output "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}.json" \
+  --collected-at 2026-09-22T18:00:00Z
+```
+
+The adapter protocol is JSON on standard input/output. The collector invokes
+`<adapter> identity`, `evict-case`, `observe`, and `cancel`; nonzero exit, invalid
+JSON, or output outside the closed enums fails the run without echoing adapter
+stdout/stderr. `identity` returns only the verified container/image identity,
+runtime profile, positive cgroup memory limit, capabilities, and
+`production_ip_attested=true`; it never returns a token or chat ID. `evict-case`
+receives the case URL on standard input. In `legacy-baseline` it deletes only
+`inf:<exact URL>`. In `candidate` it additionally derives the exact metadata,
+default signed-URL, and item-zero Telegram file-ID keys through the running
+MediaCache implementation. It never uses `FLUSHDB`, Redis scan/pattern deletion,
+a whole-media-directory deletion, or affects another case. If exact attribution
+is unavailable it returns `safe=false`, and the collector stops before
+submitting the cold webhook.
+
+`observe` receives the secret-free synthesized Telegram update on standard
+input. The in-container helper inserts the configured administrative chat and
+secret, posts the update with the supplied `X-Correlation-ID`, samples before/after
+Prometheus counters and per-phase sums/counts, follows sanitized correlated job
+and delivery events, samples the case's temporary artifact bytes, and reads
+cgroup process-CPU and RSS counters. It must return
+`attribution_confirmed=true` only when the deltas belong to that case and a
+terminal Telegram response is confirmed: candidate runs require a finalized
+successful JobStore delivery with its returned message ID plus the success
+metric; legacy runs require the correlated `sendVideo`/`sendDocument` success log
+plus unambiguous legacy metric deltas. The collector also rejects any phase/result
+delta that reveals concurrent pipeline activity. HTTP details are reduced to
+status 403/429 plus the schema's cause enum, and provider data is reduced to the
+independent route class. `cancel` attempts only an exact correlation-owned
+application cancellation. The current runtime exposes no such hook, so a timeout
+returns `cancelled=false`; the collector stops the entire window and does not
+start another case. Fake-Docker tests exercise both runtime profiles without a
+Docker daemon.
+
+There is intentionally no fallback that guesses cold-cache state, attributes a
+process-wide metric during concurrent traffic, derives CPU from wall time, or
+declares delivery from a downloaded file. If the production installation cannot
+provide exact case eviction, correlated job/delivery outcome, or bounded cancel,
+the run remains unverified rather than emitting nominal evidence.
+
 A run counts as success only when the requested media is fully delivered through
 Telegram with the requested kind, quality/clip/audio policy, album completeness,
 and orientation. Resolver metadata or a downloaded file without confirmed

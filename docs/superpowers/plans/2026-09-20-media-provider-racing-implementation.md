@@ -15,7 +15,7 @@
 - YouTube Shorts and ordinary YouTube video delivery are the primary acceptance criterion; success on other platforms cannot compensate for broken YouTube.
 - Production requires Local Bot API and one `MAX_MEDIA_FILE_MB=2000`, where MB means 1,000,000 bytes. Cloud mode is an explicit degraded profile, never a silent 45/50 MB policy.
 - Public links use no personal cookies. Authorized Instagram results stay isolated by auth scope.
-- At most two cheap external resolver attempts and at most one heavy local extractor run for one request.
+- At most two cheap external resolver attempts run simultaneously, and at most one heavy local extractor process is started for one request.
 - Provider credentials, Telegram tokens, cookies, and local paths never cross provider origins; logs omit signed query strings and cookies.
 - Exact mode never silently changes quality, audio format/language, clip interval, watermark policy, or album completeness.
 - Candidate search budgets are connect 3 s, provider resolve 8 s, total resolution 20 s; materialization has a separate deadline and 3 s stall timeout.

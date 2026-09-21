@@ -325,6 +325,98 @@ def test_legacy_smoke_reserves_one_short_isolated_job_and_marks_no_statistics(
     }
 
 
+def test_candidate_smoke_collects_one_cold_short_and_marks_no_statistics(
+    collector: Any,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "candidate-window.json"
+    adapter = FakeAdapter()
+
+    collector.collect_window(
+        manifest_path=MANIFEST_PATH,
+        output_path=output,
+        window_id="window-1",
+        release_sha="a" * 40,
+        adapter=adapter,
+        correlation_prefix="release-proof",
+        timeout_seconds=3.0,
+        collected_at="2026-09-20T12:00:00Z",
+        plan="smoke",
+    )
+
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert adapter.calls == [
+        ("evict", "short-01", None),
+        ("observe", "short-01", "cold"),
+    ]
+    assert [(run["case_id"], run["cache_state"]) for run in payload["runs"]] == [
+        ("short-01", "cold")
+    ]
+    assert payload["runtime_profile"] == "candidate"
+    assert payload["in_flight"] is None
+
+    report = tmp_path / "candidate-smoke-report.json"
+    collector.finalize_smoke(
+        window_path=output,
+        output_path=report,
+        collected_at="2026-09-20T12:10:00Z",
+    )
+    finalized = json.loads(report.read_text(encoding="utf-8"))
+    assert finalized["runtime_profile"] == "candidate"
+    assert finalized["acceptance"] == {
+        "latency_p50_p95": {"measurement": "NOT_MEASURED", "accepted": False},
+        "candidate_improvement_25_percent": {
+            "measurement": "NOT_MEASURED",
+            "accepted": False,
+        },
+        "statistical_success_rate": {
+            "measurement": "NOT_MEASURED",
+            "accepted": False,
+        },
+        "representative_delivery_smoke": {
+            "measurement": "MEASURED",
+            "accepted": True,
+        },
+    }
+
+
+def test_candidate_smoke_rejects_mismatched_resume_before_external_work(
+    collector: Any,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "candidate-window.json"
+    collector.collect_window(
+        manifest_path=MANIFEST_PATH,
+        output_path=output,
+        window_id="window-1",
+        release_sha="a" * 40,
+        adapter=FakeAdapter(),
+        correlation_prefix="release-proof",
+        timeout_seconds=3.0,
+        collected_at="2026-09-20T12:00:00Z",
+        plan="smoke",
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    payload["runs"][0]["case_id"] = "short-02"
+    output.write_text(json.dumps(payload), encoding="utf-8")
+    resumed = FakeAdapter()
+
+    with pytest.raises(collector.EvidenceValidationError, match="smoke plan"):
+        collector.collect_window(
+            manifest_path=MANIFEST_PATH,
+            output_path=output,
+            window_id="window-1",
+            release_sha="a" * 40,
+            adapter=resumed,
+            correlation_prefix="release-proof",
+            timeout_seconds=3.0,
+            collected_at="2026-09-20T12:00:00Z",
+            plan="smoke",
+        )
+
+    assert resumed.calls == []
+
+
 def test_legacy_smoke_crash_keeps_reservation_and_never_resubmits(
     collector: Any,
     tmp_path: Path,

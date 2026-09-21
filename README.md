@@ -189,7 +189,9 @@ zero downtime is not promised.
 
 See [docs/deployment.md](docs/deployment.md) for bootstrap, readiness, manual
 activation, rollback, and recovery commands. Rollback restores image and
-configuration but never rolls SQLite or Redis data backward.
+configuration but never rolls SQLite or Redis data backward. Production JSON
+logs opt into the existing shared Alloy/Loki stack without changing its other
+bot streams; the deployment guide documents the labels and redaction contract.
 
 ## Repository layout
 

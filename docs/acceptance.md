@@ -111,12 +111,12 @@ proxy merely to produce a green report.
 ## Controlled Task 14 run
 
 The currently authorized production check is a bounded representative smoke,
-not the multi-hour statistical experiment originally proposed for Task 14. It
-runs only the first approved Short once with an isolated cold state. It does not
-run a warm repeat, the other 23 links, or three time windows. The resulting
-report must mark latency p50/p95, the 25% improvement target, and statistical
-success rate as `NOT_MEASURED` and `accepted=false`; the single delivery result
-must never be extrapolated into a release-performance claim.
+not the multi-hour statistical experiment originally proposed for Task 14. For
+either runtime profile it runs only the first approved Short once with a cold
+state. It does not run a warm repeat, the other 23 links, or three time windows.
+The resulting report must mark latency p50/p95, the 25% improvement target, and
+statistical success rate as `NOT_MEASURED` and `accepted=false`; the single
+delivery result must never be extrapolated into a release-performance claim.
 
 Run the collector only from the trusted production host in a private directory.
 For `legacy-baseline`, `scripts/media-acceptance-docker-adapter.py` starts a
@@ -128,6 +128,13 @@ case synchronously; process exit is its terminal boundary. `BOT_TOKEN` and
 running bot's environment. They never enter host stdout, an evidence file, or a
 command argument. Do not put a secret, candidate URL, or signed media URL in an
 environment variable or command argument.
+
+For `candidate`, the collector first proves an exact digest/release binding,
+quiescent metrics, and exact case-scoped cache eviction. It then posts one
+synthetic update to the configured administrative delivery target and observes
+the durable job, correlated events, metrics, and delivery outcome. The atomic
+`IN_FLIGHT` reservation and audited-reconciliation rule are identical to the
+full collector, so an unknown submit outcome is never replayed automatically.
 
 First run the no-send preflight. Use `legacy-baseline` for the existing legacy
 image (`/health`, legacy timing counters, `inf:<exact URL>` cache) and `candidate`
@@ -153,6 +160,28 @@ printf '{}\n' | python3 scripts/media-acceptance-docker-adapter.py \
 discovered and trusted by the same collection command. Candidate preflight also
 requires `APP_RELEASE` to equal `RELEASE_SHA` and the configured image reference
 to be pinned by registry digest.
+
+After that no-send preflight, collect and finalize the one candidate smoke:
+
+```sh
+install -d -m 0700 /var/lib/ytdlbot/media-evidence
+ADAPTER="python3 scripts/media-acceptance-docker-adapter.py --project-dir /opt/ytdlbot --project-name ytdlbot --compose-file docker-compose.yml --expected-release ${RELEASE_SHA} --expected-image-id ${EXPECTED_IMAGE_ID} --runtime-profile candidate"
+python3 scripts/collect-media-release-evidence.py collect-window \
+  --manifest tests/fixtures/youtube-acceptance.json \
+  --output "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-smoke.json" \
+  --window window-1 \
+  --release-sha "$RELEASE_SHA" \
+  --correlation-prefix "media-smoke-${RELEASE_SHA}" \
+  --timeout-seconds 300 \
+  --collected-at 2026-09-20T22:20:00Z \
+  --adapter-command "$ADAPTER" \
+  --plan smoke
+
+python3 scripts/collect-media-release-evidence.py finalize-smoke \
+  --window-file "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-smoke.json" \
+  --output "/var/lib/ytdlbot/media-evidence/${RELEASE_SHA}-smoke-report.json" \
+  --collected-at 2026-09-20T22:25:00Z
+```
 
 The current VPS legacy baseline has this reviewed deployment/image pair. Create
 its explicit attestation in the private evidence directory:
@@ -219,8 +248,9 @@ python3 scripts/collect-media-release-evidence.py finalize-smoke \
   --collected-at 2026-09-20T12:10:00Z
 ```
 
-Legacy independent-provider telemetry is explicitly unavailable. The smoke report
-therefore cannot satisfy independent-route or comparative release acceptance.
+Legacy independent-provider telemetry is explicitly unavailable. Neither legacy
+nor candidate smoke can satisfy comparative or statistical release acceptance;
+the candidate smoke proves only its one representative delivery outcome.
 
 Before the one-shot container starts, the output is atomically replaced with an
 `IN_FLIGHT` reservation containing deterministic update/correlation IDs. After
@@ -295,7 +325,8 @@ run would require separate approval because it is intentionally long-running.
 The pinned Draft 2020-12 validator and semantic checks continue to fail closed
 for any such supplied full report.
 
-The smoke report instead contains one redacted run and four explicit decisions:
+The smoke report instead contains one redacted legacy or candidate run and four
+explicit decisions:
 
 - `representative_delivery_smoke` is `MEASURED` and reflects only that run;
 - `latency_p50_p95` is `NOT_MEASURED` and not accepted;

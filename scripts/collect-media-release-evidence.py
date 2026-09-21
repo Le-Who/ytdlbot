@@ -828,13 +828,19 @@ def collect_window(
     state["plan"] = plan
     completed = {(run["case_id"], run["cache_state"]) for run in state["runs"]}
     unix_time = _unix_time(state["started_at"])
+    smoke_case = next(item for item in cases if item.kind == "short")
+    smoke_key = (smoke_case.case_id, "cold")
+    if plan == "smoke" and not completed.issubset({smoke_key}):
+        raise EvidenceValidationError(
+            "resume runs do not match the exact one-case smoke plan"
+        )
     if runtime_profile == "legacy-baseline":
         if plan != "smoke":
             raise EvidenceValidationError(
                 "legacy baseline supports only the bounded smoke plan"
             )
-        case = next(item for item in cases if item.kind == "short")
-        key = (case.case_id, "cold")
+        case = smoke_case
+        key = smoke_key
         if key in completed:
             return
         correlation_id = f"{correlation_prefix}:{window_id}:{case.case_id}:cold"
@@ -876,61 +882,63 @@ def collect_window(
         state["in_flight"] = None
         _atomic_json(output_path, state)
         return
-    if plan != "full":
-        raise EvidenceValidationError("candidate smoke plan is not implemented")
-    for case in cases:
-        for cache_state in CACHE_STATES:
-            key = (case.case_id, cache_state)
-            if key in completed:
-                continue
-            if cache_state == "cold" and not adapter.evict_case(case):
-                raise UnsafeColdCacheError(
-                    f"exact case-scoped cache/artifact eviction unavailable for {case.case_id}"
-                )
-            correlation_id = (
-                f"{correlation_prefix}:{window_id}:{case.case_id}:{cache_state}"
+    run_specs = (
+        [(smoke_case, "cold")]
+        if plan == "smoke"
+        else [(case, cache_state) for case in cases for cache_state in CACHE_STATES]
+    )
+    for case, cache_state in run_specs:
+        key = (case.case_id, cache_state)
+        if key in completed:
+            continue
+        if cache_state == "cold" and not adapter.evict_case(case):
+            raise UnsafeColdCacheError(
+                f"exact case-scoped cache/artifact eviction unavailable for {case.case_id}"
             )
-            update = build_webhook_update(
-                case=case,
+        correlation_id = (
+            f"{correlation_prefix}:{window_id}:{case.case_id}:{cache_state}"
+        )
+        update = build_webhook_update(
+            case=case,
+            correlation_id=correlation_id,
+            unix_time=unix_time,
+        )
+        state["in_flight"] = {
+            "case_id": case.case_id,
+            "kind": case.kind,
+            "cache_state": cache_state,
+            "correlation_id": correlation_id,
+            "update_id": update["update_id"],
+            "reserved_at": state["started_at"],
+            "state": "IN_FLIGHT",
+        }
+        _atomic_json(output_path, state)
+        try:
+            observation = adapter.observe(
+                update=update,
                 correlation_id=correlation_id,
-                unix_time=unix_time,
+                timeout_seconds=timeout_seconds,
             )
-            state["in_flight"] = {
-                "case_id": case.case_id,
-                "kind": case.kind,
-                "cache_state": cache_state,
-                "correlation_id": correlation_id,
-                "update_id": update["update_id"],
-                "reserved_at": state["started_at"],
-                "state": "IN_FLIGHT",
-            }
-            _atomic_json(output_path, state)
-            try:
-                observation = adapter.observe(
-                    update=update,
-                    correlation_id=correlation_id,
-                    timeout_seconds=timeout_seconds,
-                )
-            except (TimeoutError, subprocess.TimeoutExpired) as exc:
-                cancelled = adapter.cancel(correlation_id)
-                if not cancelled:
-                    raise ObservationError(
-                        f"timeout cancellation could not be confirmed for {case.case_id}; "
-                        "IN_FLIGHT reconciliation required"
-                    ) from exc
+        except (TimeoutError, subprocess.TimeoutExpired) as exc:
+            cancelled = adapter.cancel(correlation_id)
+            if not cancelled:
                 raise ObservationError(
-                    f"{case.case_id} {cache_state} cancelled after timeout; "
+                    f"timeout cancellation could not be confirmed for {case.case_id}; "
                     "IN_FLIGHT reconciliation required"
                 ) from exc
-            run = _run_from_observation(
-                case=case,
-                cache_state=cache_state,
-                observation=observation,
-            )
-            state["runs"].append(run)
-            state["in_flight"] = None
-            completed.add(key)
-            _atomic_json(output_path, state)
+            raise ObservationError(
+                f"{case.case_id} {cache_state} cancelled after timeout; "
+                "IN_FLIGHT reconciliation required"
+            ) from exc
+        run = _run_from_observation(
+            case=case,
+            cache_state=cache_state,
+            observation=observation,
+        )
+        state["runs"].append(run)
+        state["in_flight"] = None
+        completed.add(key)
+        _atomic_json(output_path, state)
 
 
 def finalize_smoke(
@@ -939,8 +947,11 @@ def finalize_smoke(
     """Finalize one representative delivery without statistical claims."""
     _unix_time(collected_at)
     state = _load_json(window_path)
-    if state.get("plan") != "smoke" or state.get("runtime_profile") != "legacy-baseline":
-        raise EvidenceValidationError("smoke report requires a legacy smoke window")
+    if state.get("plan") != "smoke" or state.get("runtime_profile") not in {
+        "legacy-baseline",
+        "candidate",
+    }:
+        raise EvidenceValidationError("smoke report requires a bounded smoke window")
     if state.get("in_flight") is not None:
         raise EvidenceValidationError("cannot finalize an IN_FLIGHT smoke run")
     runs = state.get("runs")

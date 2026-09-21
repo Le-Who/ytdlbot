@@ -118,6 +118,23 @@ The 2,000 MB protocol ceiling is not a promise that disk, time, memory, or the
 source provider can handle every 2,000 MB item. The pipeline still reserves disk,
 streams with byte caps, and applies materialization and stall deadlines.
 
+## Shared Loki logging
+
+The bot opts into the existing host observability stack with the Compose label
+`com.gemaibot.logs=true`; routine deployment does not recreate or reconfigure
+Alloy, Loki, Grafana, or their Docker networks. Application and Uvicorn records
+use the same JSON envelope: `schema_version`, RFC 3339 `timestamp`, `service`,
+`environment`, lowercase `level`, and `message`, with bounded optional event,
+request, and release fields. The production stream is expected to have
+`service_name=ytdlbot`, `environment=production`, and `parse_status=valid` in
+Loki.
+
+Logs must not contain bot tokens, cookies, provider credentials, signed query
+strings, raw media URLs, or chat/user identifiers. Validate ingestion with a
+count query grouped by `service_name`, `environment`, `level`, and
+`parse_status`; do not dump raw production messages merely to prove that the
+stream exists.
+
 ## Durable inbox, drain, and restart behavior
 
 The webhook returns success only after `update_id` and the minimal retained update

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import os
 import threading
 import time
@@ -930,6 +931,68 @@ async def test_unclipped_split_video_audio_retains_copy_mux(
     assert command[command.index("-c") + 1] == "copy"
     assert "-ss" not in command
     assert "-t" not in command
+    await item.release(delete=True)
+
+
+@pytest.mark.asyncio
+async def test_materialization_logs_source_bytes_formats_and_phase_timings(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Catches successful downloads remaining opaque inside materialize latency."""
+    responses = [FakeResponse(), FakeResponse()]
+    media, _ = transport(tmp_path, responses)
+    candidate = source_candidate(size=24, candidate_id="18")
+
+    with caplog.at_level(logging.INFO, logger="app.services.media.transport"):
+        item = await media.materialize(request(), [candidate])
+
+    measurement = next(
+        record
+        for record in caplog.records
+        if getattr(record, "op", None) == "media-measurement"
+    )
+    assert measurement.bytes_downloaded == item.size_bytes
+    assert measurement.metrics == {
+        "provider": "fixture",
+        "format_ids": ["18"],
+        "width": None,
+        "height": None,
+        "container": None,
+        "video_codecs": [],
+        "audio_codecs": [],
+        "download_seconds": pytest.approx(0, abs=0.1),
+        "transform_seconds": 0.0,
+        "output_bytes": item.size_bytes,
+    }
+    await item.release(delete=True)
+
+
+@pytest.mark.asyncio
+async def test_parallel_small_candidates_log_only_winner_measurement(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Catches a losing parallel candidate creating an ambiguous byte measurement."""
+    responses = [FakeResponse(), FakeResponse(), FakeResponse(), FakeResponse()]
+    media, _ = transport(tmp_path, responses)
+    candidates = [
+        source_candidate(candidate_id="first", size=20_000_000),
+        source_candidate(
+            "https://other.example/second.mp4",
+            candidate_id="second",
+            size=20_000_000,
+        ),
+    ]
+
+    with caplog.at_level(logging.INFO, logger="app.services.media.transport"):
+        item = await media.materialize(request(), candidates)
+
+    measurements = [
+        record
+        for record in caplog.records
+        if getattr(record, "op", None) == "media-measurement"
+    ]
+    assert len(measurements) == 1
+    assert measurements[0].bytes_downloaded == item.size_bytes
     await item.release(delete=True)
 
 

@@ -2,12 +2,24 @@ import contextvars
 import json
 import logging
 import os
+import re
 import uuid
 from datetime import datetime, timezone
 
 correlation_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "correlation_id", default="-"
 )
+_TELEGRAM_BOT_TOKEN = re.compile(r"/bot[0-9]+:[A-Za-z0-9_-]+")
+
+
+def _redact(value: object) -> object:
+    if isinstance(value, str):
+        return _TELEGRAM_BOT_TOKEN.sub("/bot[REDACTED]", value)
+    if isinstance(value, dict):
+        return {key: _redact(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact(item) for item in value]
+    return value
 
 
 class JsonFormatter(logging.Formatter):
@@ -19,6 +31,7 @@ class JsonFormatter(logging.Formatter):
         )
         correlation_id = correlation_id_var.get()
         event = getattr(record, "event", None) or getattr(record, "op", None) or "log"
+        message = _redact(record.getMessage())
         payload = {
             "schema_version": 1,
             "timestamp": timestamp,
@@ -29,8 +42,8 @@ class JsonFormatter(logging.Formatter):
             "release": os.getenv("APP_RELEASE", "dev").strip() or "dev",
             "level": record.levelname.lower(),
             "logger": record.name,
-            "message": record.getMessage(),
-            "msg": record.getMessage(),
+            "message": message,
+            "msg": message,
             "event": event,
             "event_id": uuid.uuid4().hex,
             "request_id": correlation_id,
@@ -49,12 +62,13 @@ class JsonFormatter(logging.Formatter):
             "error",
             "path",
             "metrics",
+            "bytes_downloaded",
         ):
             if hasattr(record, key):
-                payload[key] = getattr(record, key)
+                payload[key] = _redact(getattr(record, key))
 
         if record.exc_info:
-            payload["exc_info"] = self.formatException(record.exc_info)
+            payload["exc_info"] = _redact(self.formatException(record.exc_info))
 
         return json.dumps(payload, ensure_ascii=False)
 
@@ -70,6 +84,8 @@ def setup_logging(level: int = logging.INFO) -> None:
         uvicorn_logger = logging.getLogger(name)
         uvicorn_logger.handlers.clear()
         uvicorn_logger.propagate = True
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def set_correlation_id(value: str | None = None) -> str:

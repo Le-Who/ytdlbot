@@ -71,6 +71,28 @@ def metadata(*, vertical=False, audio=True):
     return {"id": "example", "title": "Example", "duration": 60, "formats": formats}
 
 
+def video_format(
+    format_id: str,
+    *,
+    width: int,
+    height: int,
+    vcodec: str = "avc1.640028",
+    acodec: str = "none",
+    ext: str = "mp4",
+    filesize: int = 2_000,
+):
+    return {
+        "format_id": format_id,
+        "url": f"https://cdn.example/{format_id}",
+        "width": width,
+        "height": height,
+        "vcodec": vcodec,
+        "acodec": acodec,
+        "ext": ext,
+        "filesize": filesize,
+    }
+
+
 async def test_auto_request_uses_normal_video_resolution_path():
     """Catches the heavy fallback dropping requests whose kind was omitted."""
     provider = YtDlpProvider(extract=AsyncMock(return_value=metadata()))
@@ -106,6 +128,72 @@ async def test_vertical_shorts_keep_1080_short_edge():
         await provider.resolve(MediaRequest.from_url(URL, quality=QualityPolicy(1080)))
     )[0]
     assert (candidate.width, candidate.height) == (1080, 1920)
+
+
+async def test_fast_command_prefers_1080_source_over_4k():
+    """Catches /mp4 downloading a needlessly large highest-resolution source."""
+    info = metadata()
+    info["formats"].insert(
+        0,
+        video_format("401", width=3840, height=2160, filesize=8_000),
+    )
+    provider = YtDlpProvider(extract=AsyncMock(return_value=info))
+
+    candidates = await provider.resolve(
+        MediaRequest.from_url(URL, kind=MediaKind.VIDEO, caller_scope="command")
+    )
+
+    assert candidates[0].candidate_id == "137+140"
+    assert min(candidates[0].width or 0, candidates[0].height or 0) == 1080
+    assert any(candidate.candidate_id == "401+140" for candidate in candidates)
+
+
+async def test_fast_command_prefers_ready_compatible_mp4_at_same_quality():
+    """Catches /mp4 needlessly muxing when an equivalent ready MP4 exists."""
+    info = metadata()
+    info["formats"].append(
+        video_format(
+            "22",
+            width=1920,
+            height=1080,
+            acodec="mp4a.40.2",
+            filesize=1_050,
+        )
+    )
+    provider = YtDlpProvider(extract=AsyncMock(return_value=info))
+
+    candidate = (
+        await provider.resolve(
+            MediaRequest.from_url(URL, kind=MediaKind.VIDEO, caller_scope="command")
+        )
+    )[0]
+
+    assert candidate.candidate_id == "22"
+    assert candidate.container == "mp4"
+    assert candidate.mux_mode is None
+
+
+async def test_explicit_quality_is_not_rewritten_by_fast_command_profile():
+    """Catches the fast default overriding a user's explicit quality choice."""
+    info = metadata()
+    info["formats"].insert(
+        0,
+        video_format("401", width=3840, height=2160, filesize=8_000),
+    )
+    provider = YtDlpProvider(extract=AsyncMock(return_value=info))
+
+    candidate = (
+        await provider.resolve(
+            MediaRequest.from_url(
+                URL,
+                kind=MediaKind.VIDEO,
+                quality=QualityPolicy(2160),
+                caller_scope="command",
+            )
+        )
+    )[0]
+
+    assert candidate.candidate_id == "401+140"
 
 
 async def test_missing_audio_cannot_produce_usable_video():

@@ -62,6 +62,49 @@ def test_json_formatter_uses_safe_local_defaults(monkeypatch) -> None:
     assert payload["event"] == "log"
 
 
+def test_json_formatter_preserves_exact_download_measurement() -> None:
+    """Catches Loki dropping the request-attributed byte count."""
+    record = logging.LogRecord(
+        name="app.services.media.transport",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=60,
+        msg="media materialized",
+        args=(),
+        exc_info=None,
+    )
+    record.op = "media-measurement"
+    record.bytes_downloaded = 18_800_000
+    record.metrics = {"download_seconds": 12.5, "transform_seconds": 0.2}
+
+    payload = json.loads(JsonFormatter().format(record))
+
+    assert payload["event"] == "media-measurement"
+    assert payload["bytes_downloaded"] == 18_800_000
+    assert payload["metrics"]["download_seconds"] == 12.5
+
+
+def test_json_formatter_redacts_telegram_bot_tokens() -> None:
+    record = logging.LogRecord(
+        name="httpx",
+        level=logging.INFO,
+        pathname=__file__,
+        lineno=80,
+        msg=(
+            "HTTP Request: POST "
+            "https://api.telegram.org/bot123456:fake_SECRET-token/sendMessage"
+        ),
+        args=(),
+        exc_info=None,
+    )
+
+    payload = json.loads(JsonFormatter().format(record))
+
+    assert "123456:fake_SECRET-token" not in payload["message"]
+    assert payload["message"].endswith("/bot[REDACTED]/sendMessage")
+    assert payload["msg"] == payload["message"]
+
+
 def test_setup_logging_routes_uvicorn_records_through_json_formatter() -> None:
     root = logging.getLogger()
     names = ("uvicorn", "uvicorn.error", "uvicorn.access")
@@ -89,4 +132,24 @@ def test_setup_logging_routes_uvicorn_records_through_json_formatter() -> None:
         for logger, handlers, propagate, level in named_state:
             logger.handlers[:] = handlers
             logger.propagate = propagate
+            logger.setLevel(level)
+
+
+def test_setup_logging_suppresses_http_client_info_urls() -> None:
+    root = logging.getLogger()
+    names = ("httpx", "httpcore")
+    named = [logging.getLogger(name) for name in names]
+    root_state = (list(root.handlers), root.level)
+    named_state = [(logger, logger.level) for logger in named]
+    try:
+        for logger in named:
+            logger.setLevel(logging.NOTSET)
+
+        setup_logging()
+
+        assert all(logger.level == logging.WARNING for logger in named)
+    finally:
+        root.handlers[:] = root_state[0]
+        root.setLevel(root_state[1])
+        for logger, level in named_state:
             logger.setLevel(level)

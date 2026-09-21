@@ -13,6 +13,7 @@ from app.bot.commands import _fast_download, cmd_mp3
 from app.bot.keyboards import build_format_keyboard, build_slideshow_keyboard
 from app.core import state
 from app.core.config import ENABLE_COBALT_TIKTOK, MAX_TG_UPLOAD_MB
+from app.core.job_store import mark_current_job_failed
 from app.core.metrics import metrics as _m
 from app.core.models import DownloadContext
 from app.core.process import process_owner_scope
@@ -122,6 +123,15 @@ async def _deliver_private_pipeline(
             caption="🎵" if kind == "audio" else "📹",
         )
     except MediaPipelineError as error:
+        mark_current_job_failed(error)
+        logger.warning(
+            "media pipeline failed",
+            extra={
+                "op": "media-pipeline-failed",
+                "error_type": type(error).__name__,
+                "error": str(error),
+            },
+        )
         await status.edit_text(str(error))
         return
     if receipt.success:

@@ -135,6 +135,16 @@ count query grouped by `service_name`, `environment`, `level`, and
 `parse_status`; do not dump raw production messages merely to prove that the
 stream exists.
 
+Each successful materialization emits one correlated `media-measurement` event
+for the winning candidate only. `bytes_downloaded` is the exact sum of the
+materialized source streams; the nested `metrics` object records provider,
+format IDs, dimensions, codecs, container, output bytes, and separate download
+and transform durations. It contains no source URLs or signed query strings.
+Handled private-message pipeline failures emit `media-pipeline-failed` and mark
+the durable job failed instead of completed. The JSON formatter redacts Telegram
+bot-token path segments, and `httpx`/`httpcore` request lines are suppressed at
+INFO to keep Bot API URLs out of routine production logs.
+
 ## Durable inbox, drain, and restart behavior
 
 The webhook returns success only after `update_id` and the minimal retained update

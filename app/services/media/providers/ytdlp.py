@@ -30,6 +30,7 @@ from ..models import (
 from ..registry import FailureKind, ProviderError
 
 Extractor = Callable[[str], Awaitable[dict[str, Any]]]
+_FAST_COMMAND_MAX_EDGE = 1080
 
 
 class YtDlpProvider:
@@ -130,8 +131,7 @@ class YtDlpProvider:
                     if not _codec(sound, "vcodec"):
                         candidates.append(self._candidate(request, info, video, sound))
         candidates.sort(
-            key=lambda candidate: min(candidate.width or 0, candidate.height or 0),
-            reverse=True,
+            key=lambda candidate: _candidate_sort_key(request, candidate), reverse=True
         )
         return candidates
 
@@ -253,6 +253,48 @@ def _mp4_compatible(video: dict[str, Any], audio: dict[str, Any]) -> bool:
     return str(video.get("vcodec", "")).startswith(("avc", "h264")) and str(
         audio.get("acodec", "")
     ).startswith(("mp4a", "aac"))
+
+
+def _candidate_sort_key(
+    request: MediaRequest, candidate: MediaCandidate
+) -> tuple[int, ...]:
+    short_edge = min(candidate.width or 0, candidate.height or 0)
+    fast_command = (
+        request.kind is MediaKind.VIDEO
+        and request.caller_scope == "command"
+        and request.quality.max_edge is None
+    )
+    if not fast_command:
+        return (short_edge,)
+
+    if 0 < short_edge <= _FAST_COMMAND_MAX_EDGE:
+        resolution_band = 2
+        resolution_order = short_edge
+    elif short_edge > _FAST_COMMAND_MAX_EDGE:
+        resolution_band = 1
+        # Keep oversized formats only as fallbacks, nearest to 1080 first.
+        resolution_order = -short_edge
+    else:
+        resolution_band = 0
+        resolution_order = 0
+
+    compatible = int(_candidate_is_mp4_compatible(candidate))
+    ready = int(candidate.mux_mode is None and len(candidate.sources) == 1)
+    return resolution_band, resolution_order, compatible, ready
+
+
+def _candidate_is_mp4_compatible(candidate: MediaCandidate) -> bool:
+    if (candidate.container or "").lower() != "mp4":
+        return False
+    video_codecs = tuple(
+        (source.video_codec or "").lower() for source in candidate.sources
+    )
+    audio_codecs = tuple(
+        (source.audio_codec or "").lower() for source in candidate.sources
+    )
+    return any(codec.startswith(("avc", "h264")) for codec in video_codecs) and any(
+        codec.startswith(("mp4a", "aac")) for codec in audio_codecs
+    )
 
 
 def _source(fmt: dict[str, Any], info: dict[str, Any]) -> MediaSource:

@@ -472,6 +472,39 @@ async def test_private_and_group_messages_invoke_the_common_pipeline(
 
 
 @pytest.mark.asyncio
+async def test_private_pipeline_marks_handled_media_error_as_failed_job(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from app.bot import messages
+
+    error = MediaPipelineError("provider failed")
+
+    class FailingPipeline:
+        async def deliver(self, request, target, **kwargs):
+            raise error
+
+    mark_failed = MagicMock()
+    monkeypatch.setattr(messages.state, "media_pipeline", FailingPipeline())
+    monkeypatch.setattr(messages, "get_prefs", AsyncMock(return_value={}))
+    monkeypatch.setattr(messages, "mark_current_job_failed", mark_failed, raising=False)
+
+    status = SimpleNamespace(message_id=100, edit_text=AsyncMock())
+    message = MagicMock(reply_text=AsyncMock(return_value=status))
+    update = SimpleNamespace(
+        effective_user=SimpleNamespace(id=7),
+        effective_chat=SimpleNamespace(id=9),
+        message=message,
+    )
+
+    await messages._deliver_private_pipeline(
+        update, SimpleNamespace(), YOUTUBE_URL, None
+    )
+
+    mark_failed.assert_called_once_with(error)
+    status.edit_text.assert_awaited_once_with("provider failed")
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("caller_scope", "format_id", "expected_kind"),
     [

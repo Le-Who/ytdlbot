@@ -32,6 +32,9 @@ boundary and evidence format.
   across users for the same bot; authorized results remain isolated.
 - Exact media requests: quality, audio format/language, clip interval, watermark
   policy, media kind, album selection, and item order are not silently changed.
+- The fast `/mp4` command prefers the highest source up to a 1080-pixel short
+  edge and, at equal quality, a ready H.264/AAC MP4. Larger sources remain
+  fallback candidates; explicit quality choices are unchanged.
 - Video, audio, photo, animation, document, mixed album, MP3, MP4, GIF-file, and
   explicit slideshow delivery paths.
 - Cancellation-safe queue leases and supervised yt-dlp, gallery-dl, ffmpeg, and

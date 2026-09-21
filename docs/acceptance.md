@@ -300,7 +300,8 @@ The smoke record collects:
 - `resolve`, `first_byte`, `materialize`, and `deliver` latency in seconds;
 - confirmed `full_delivery` and the failure stage when false;
 - categorized HTTP 403 and 429 causes (never raw signed URLs or response secrets);
-- downloaded and wasted bytes;
+- downloaded and wasted bytes; candidate runs derive downloaded bytes from the
+  single correlated `media-measurement` event for the winning materialization;
 - measured process CPU seconds and peak resident memory as `peak_rss_bytes`;
   keep wall-clock transform workload separate when process CPU is unavailable;
 - whether independent-route attempt telemetry is available, its exact-metric or

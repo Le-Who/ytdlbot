@@ -465,6 +465,52 @@ async def test_fxtwitter_records_lower_quality_instead_of_claiming_equivalence()
 
 
 @pytest.mark.asyncio
+async def test_fxtwitter_treats_zero_gif_duration_as_unknown():
+    """FxTwitter reports zero for GIF duration when the value is unavailable."""
+    payload = fixture_json("fxtwitter-status.json")
+    gif = payload["status"]["media"]["all"][1]
+    gif["duration"] = 0
+    payload["status"]["media"]["all"] = [gif]
+    transport = RecordingTransport(response(payload=payload), ok_probe())
+
+    candidate = (
+        await FxTwitterProvider(transport=transport, min_interval=0).resolve(
+            request(
+                "twitter",
+                "https://x.com/user/status/123456789",
+                "123456789",
+                kind=MediaKind.ANIMATION,
+            )
+        )
+    )[0]
+
+    assert candidate.items[0].duration_seconds is None
+    assert candidate.duration_seconds is None
+
+
+@pytest.mark.asyncio
+async def test_fxtwitter_falls_back_to_quoted_media_when_outer_status_is_empty():
+    payload = fixture_json("fxtwitter-status.json")
+    quoted_video = payload["status"]["media"]["all"][2]
+    payload["status"]["media"] = {}
+    payload["status"]["quote"] = {"media": {"all": [quoted_video]}}
+    transport = RecordingTransport(response(payload=payload), ok_probe())
+
+    candidate = (
+        await FxTwitterProvider(transport=transport, min_interval=0).resolve(
+            request(
+                "twitter",
+                "https://x.com/user/status/123456789",
+                "123456789",
+            )
+        )
+    )[0]
+
+    assert candidate.url == "https://video.twimg.com/third-720.mp4"
+    assert (candidate.width, candidate.height) == (1280, 720)
+
+
+@pytest.mark.asyncio
 async def test_ssstik_extracts_live_hidden_token_and_ready_link_from_html_fixtures():
     """Catches hard-coding the historical tt token name or a brittle regex."""
     transport = RecordingTransport(

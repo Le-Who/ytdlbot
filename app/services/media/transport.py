@@ -215,6 +215,9 @@ class MaterializedItem:
     size_bytes: int
     candidate: MediaCandidate = field(repr=False)
     _reservation: DiskReservation = field(repr=False)
+    downloaded_bytes: int = field(default=0, repr=False)
+    download_seconds: float = field(default=0.0, repr=False)
+    transform_seconds: float = field(default=0.0, repr=False)
 
     async def release(self, *, delete: bool = False) -> None:
         try:
@@ -444,14 +447,15 @@ class MediaTransport:
             )
             errors.extend(parallel_errors)
             if winner is not None:
-                return winner
+                return self._record_measurement(request, winner)
             safe = safe[2:]
 
         for candidate in safe:
             if self.clock() >= materialization_deadline:
                 break
             try:
-                return await attempt(candidate)
+                item = await attempt(candidate)
+                return self._record_measurement(request, item)
             except MaterializationError as error:
                 errors.append(error)
         if len(errors) == 1:
@@ -459,6 +463,59 @@ class MediaTransport:
         summary = ", ".join(type(error).__name__ for error in errors)
         summary = summary or "no usable result"
         raise MaterializationError(f"materialization failed ({summary})")
+
+    @staticmethod
+    def _record_measurement(
+        request: MediaRequest, item: MaterializedItem
+    ) -> MaterializedItem:
+        candidate = item.candidate
+        provider = candidate.provider or "unknown"
+        metrics.download_duration.observe(
+            item.download_seconds,
+            platform=request.platform,
+            provider=provider,
+        )
+        if item.candidate.mux_mode is not None or _clip_requested(request):
+            metrics.conversion_duration.observe(
+                item.transform_seconds,
+                platform=request.platform,
+                type=candidate.mux_mode or "clip",
+            )
+        logger.info(
+            "media materialized",
+            extra={
+                "op": "media-measurement",
+                "bytes_downloaded": item.downloaded_bytes,
+                "duration_ms": round(
+                    (item.download_seconds + item.transform_seconds) * 1000, 3
+                ),
+                "metrics": {
+                    "provider": provider,
+                    "format_ids": [source.format_id for source in candidate.sources],
+                    "width": candidate.width,
+                    "height": candidate.height,
+                    "container": candidate.container,
+                    "video_codecs": sorted(
+                        {
+                            source.video_codec
+                            for source in candidate.sources
+                            if source.video_codec
+                        }
+                    ),
+                    "audio_codecs": sorted(
+                        {
+                            source.audio_codec
+                            for source in candidate.sources
+                            if source.audio_codec
+                        }
+                    ),
+                    "download_seconds": round(item.download_seconds, 6),
+                    "transform_seconds": round(item.transform_seconds, 6),
+                    "output_bytes": item.size_bytes,
+                },
+            },
+        )
+        return item
 
     async def adopt_local(
         self,
@@ -634,6 +691,7 @@ class MediaTransport:
         completed: list[Path] = []
         total = 0
         try:
+            download_started = self.clock()
             for source in sources:
                 if self.clock() >= deadline:
                     raise TransferTimeout("materialization deadline exceeded")
@@ -652,6 +710,11 @@ class MediaTransport:
                 )
                 completed.append(path)
                 total += written
+            download_seconds = max(0.0, self.clock() - download_started)
+            transform_required = candidate.mux_mode is not None or _clip_requested(
+                request
+            )
+            transform_started = self.clock()
             final_paths = await self._finalize_candidate(
                 request,
                 candidate,
@@ -660,10 +723,23 @@ class MediaTransport:
                 total,
                 deadline,
             )
+            transform_seconds = (
+                max(0.0, self.clock() - transform_started)
+                if transform_required
+                else 0.0
+            )
             final_size = sum(path.stat().st_size for path in final_paths)
             self._check_actual_size(final_size)
             self._remaining(deadline)
-            return MaterializedItem(final_paths, final_size, candidate, reservation)
+            return MaterializedItem(
+                final_paths,
+                final_size,
+                candidate,
+                reservation,
+                downloaded_bytes=total,
+                download_seconds=download_seconds,
+                transform_seconds=transform_seconds,
+            )
         except BaseException as error:
             if total > 0:
                 metrics.race_wasted_bytes.inc(

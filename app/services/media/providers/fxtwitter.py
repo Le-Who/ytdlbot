@@ -79,9 +79,18 @@ class FxTwitterProvider:
         if not isinstance(status, dict):
             raise ProviderError(FailureKind.PERMANENT, "FxTwitter status is missing")
         media = status.get("media")
-        if not isinstance(media, dict):
-            raise ProviderError(FailureKind.PERMANENT, "FxTwitter status has no media")
-        raw_items, order_complete = _ordered_media(media)
+        raw_items, order_complete = (
+            _ordered_media(media) if isinstance(media, dict) else ([], True)
+        )
+        if not raw_items:
+            quote_status = status.get("quote")
+            quoted_media = (
+                quote_status.get("media")
+                if isinstance(quote_status, dict)
+                else None
+            )
+            if isinstance(quoted_media, dict):
+                raw_items, order_complete = _ordered_media(quoted_media)
         if not raw_items:
             raise ProviderError(FailureKind.PERMANENT, "FxTwitter status has no media")
 
@@ -163,6 +172,8 @@ def _media_item(
     container = _container(selected.get("container") or raw.get("format"), url)
     size = _integer(selected.get("size")) or _integer(raw.get("filesize"))
     duration = _number(raw.get("duration"))
+    if duration is not None and duration <= 0:
+        duration = None
     item = MediaItem(
         f"{media_id}:{index}",
         kind,

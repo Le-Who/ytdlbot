@@ -146,6 +146,8 @@ candidate example does not submit an update:
 ```sh
 RELEASE_SHA=0123456789abcdef0123456789abcdef01234567
 EXPECTED_IMAGE_ID=sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+export APP_RELEASE="$RELEASE_SHA"
+export BOT_IMAGE=ghcr.io/<owner>/<repository>@sha256:<64-hex-registry-digest>
 printf '{}\n' | python3 scripts/media-acceptance-docker-adapter.py \
   --project-dir /opt/ytdlbot \
   --project-name ytdlbot \
@@ -159,7 +161,10 @@ printf '{}\n' | python3 scripts/media-acceptance-docker-adapter.py \
 `EXPECTED_IMAGE_ID` must come from the reviewed build/deployment record, not be
 discovered and trusted by the same collection command. Candidate preflight also
 requires `APP_RELEASE` to equal `RELEASE_SHA` and the configured image reference
-to be pinned by registry digest.
+to be pinned by registry digest. Export the non-secret `APP_RELEASE` and
+`BOT_IMAGE` values so Compose can resolve the immutable candidate file before it
+selects the already-running bot container; do not copy values out of the secret
+project environment.
 
 After that no-send preflight, collect and finalize the one candidate smoke:
 

@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "report_type": "production_release_validation",
+  "collected_at": "2026-09-20T22:18:17Z",
+  "release": {
+    "sha": "b4c37cabefb000e41f0ba7f9927bfd153bc0aa3c",
+    "image_reference": "ghcr.io/le-who/ytdlbot@sha256:11ac99c9ba068b4d43186136e09a74e206580ed8732c8afaecb932124147c732",
+    "image_id": "sha256:f2ff3e7d13bf523b4f726f4e10baa5f4b8c391a746a4c5f2718d92754426723f"
+  },
+  "workflow": {
+    "url": "https://github.com/Le-Who/ytdlbot/actions/runs/35540728939",
+    "attempt": 2,
+    "verify": {
+      "status": "success",
+      "duration_seconds": 48,
+      "repeated_in_attempt_2": false
+    },
+    "build": {
+      "status": "success",
+      "duration_seconds": 108,
+      "repeated_in_attempt_2": false
+    },
+    "deploy": {
+      "status": "success",
+      "duration_seconds": 24,
+      "reran_failed_job_only": true
+    }
+  },
+  "production": {
+    "container_running": true,
+    "container_healthy": true,
+    "release_identity_matches": true,
+    "ready": true,
+    "max_media_file_mb": 2000,
+    "local_bot_api_required": true,
+    "local_bot_api_functional": true,
+    "durable_store_ready": true,
+    "durable_store_schema_version": 4,
+    "registry_credentials_removed": true,
+    "neighbor_container_ids_unchanged": true,
+    "legacy_limit_keys_removed": [
+      "MAX_DL_MB",
+      "MAX_TG_UPLOAD_MB"
+    ],
+    "legacy_environment_backup": "env.before-media-limit-migration.20260920T221720Z"
+  },
+  "logging": {
+    "backend": "loki",
+    "query_window_minutes": 15,
+    "entries": 70,
+    "valid_json_entries": 70,
+    "invalid_json_entries": 0,
+    "labels": {
+      "service_name": "ytdlbot",
+      "environment": "production",
+      "level": "info",
+      "parse_status": "valid"
+    },
+    "raw_messages_collected": false
+  },
+  "acceptance": {
+    "legacy_representative_delivery_smoke": {
+      "measurement": "MEASURED",
+      "accepted": false,
+      "full_delivery": false,
+      "release_sha": "5c1aaa1b786a92e979f80b09033b71978cbae701"
+    },
+    "candidate_representative_delivery_smoke": {
+      "measurement": "MEASURED",
+      "accepted": true,
+      "tooling_commit": "557d6c06df7ff0dd5f3fe47e4a4328fd17f53fcc",
+      "timeout_seconds": 300,
+      "bounded_cancel_supported": false,
+      "full_delivery": true,
+      "case_id": "short-01",
+      "kind": "short",
+      "cache_state": "cold",
+      "failure_stage": null,
+      "latency_seconds": {
+        "resolve": 3.836,
+        "first_byte": null,
+        "materialize": 103.939,
+        "deliver": 0.652
+      },
+      "bytes_downloaded": null,
+      "bytes_wasted": 0,
+      "process_cpu_seconds": 67.65429900000004,
+      "peak_rss_bytes": 197320704,
+      "independent_route": {
+        "capability": "unavailable",
+        "provenance": "unavailable",
+        "attempted": null,
+        "succeeded": null,
+        "route_class": null
+      }
+    },
+    "candidate_live_matrix": {
+      "measurement": "NOT_MEASURED",
+      "accepted": false,
+      "reason": "The long-running 24-link cold/warm three-window matrix was explicitly excluded. The representative candidate smoke is not statistical evidence."
+    },
+    "latency_p50_p95": {
+      "measurement": "NOT_MEASURED",
+      "accepted": false
+    },
+    "candidate_improvement_25_percent": {
+      "measurement": "NOT_MEASURED",
+      "accepted": false
+    },
+    "statistical_success_rate": {
+      "measurement": "NOT_MEASURED",
+      "accepted": false
+    }
+  },
+  "redaction": {
+    "tokens_removed": true,
+    "cookies_removed": true,
+    "signed_queries_removed": true,
+    "raw_urls_removed": true,
+    "chat_and_user_identifiers_removed": true
+  }
+}

@@ -1072,6 +1072,53 @@ async def test_artifact_validation_failure_releases_materialized_lease(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_short_retries_next_quality_after_artifact_validation_failure(
+    tmp_path: Path,
+):
+    request = build_media_request(
+        "https://www.youtube.com/shorts/abc123", kind=MediaKind.VIDEO
+    )
+    first = replace(_candidate("ytdlp"), candidate_id="720")
+    second = replace(_candidate("ytdlp"), candidate_id="1080", width=1920, height=1080)
+
+    class ShortsProvider(_Provider):
+        async def resolve(self, request: MediaRequest) -> list[MediaCandidate]:
+            self.calls += 1
+            return [first, second]
+
+    class VariantTransport:
+        def __init__(self) -> None:
+            self.seen: list[tuple[str, ...]] = []
+            self.reservations: list[_Reservation] = []
+
+        async def materialize(self, request, candidates, **kwargs):
+            self.seen.append(tuple(candidate.candidate_id for candidate in candidates))
+            materialized, reservation = _materialized(tmp_path, candidates[0])
+            self.reservations.append(reservation)
+            return materialized
+
+    async def validate(request: MediaRequest, item: MaterializedItem) -> None:
+        if item.candidate.candidate_id == "720":
+            raise ArtifactValidationError("invalid 720 source")
+
+    provider = ShortsProvider("ytdlp", is_heavy=True)
+    transport = VariantTransport()
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(provider)]),
+        transport,
+        _Delivery(),
+        artifact_validator=validate,
+    )
+
+    receipt = await pipeline.deliver(request, DeliveryTarget("1"))
+
+    assert receipt.success
+    assert transport.seen == [("720", "1080"), ("1080",)]
+    assert provider.calls == 1
+    assert [lease.released for lease in transport.reservations] == [1, 1]
+
+
+@pytest.mark.asyncio
 async def test_delivery_cancellation_is_raised_only_after_lease_release(tmp_path: Path):
     class BlockingDelivery(_Delivery):
         def __init__(self) -> None:
@@ -1237,6 +1284,85 @@ async def test_final_artifact_validation_rejects_non_equivalent_output(
 
     with pytest.raises(ArtifactValidationError, match=message):
         await validate_materialized_artifact(media_request, materialized)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", [MediaKind.AUTO, MediaKind.VIDEO])
+async def test_silent_direct_fxtwitter_video_is_valid_without_audio_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: MediaKind
+):
+    """Catches a genuinely silent X MP4 being rejected as lost audio."""
+    request = build_media_request("https://x.com/user/status/123456789", kind=kind)
+    candidate = replace(
+        _candidate("fxtwitter"),
+        media_id=request.media_id,
+        url="https://video.twimg.com/silent.mp4",
+        sources=(
+            MediaSource("0", "https://video.twimg.com/silent.mp4", video_codec="h264"),
+        ),
+    )
+    materialized, _ = _materialized(tmp_path, candidate)
+    monkeypatch.setattr(
+        "app.services.media.pipeline._ffprobe",
+        AsyncMock(
+            return_value={
+                "streams": [
+                    {
+                        "codec_type": "video",
+                        "codec_name": "h264",
+                        "width": 1280,
+                        "height": 720,
+                    }
+                ],
+                "format": {"format_name": "mov,mp4", "duration": "9"},
+            }
+        ),
+    )
+
+    await validate_materialized_artifact(request, materialized)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_changes", "candidate_changes"),
+    [
+        ({"kind": MediaKind.AUDIO}, {}),
+        ({"audio_language": "en"}, {}),
+        ({"clip": ClipInterval(start_seconds=1)}, {}),
+        ({}, {"mux_mode": "copy"}),
+        ({}, {"provider": "ytdlp"}),
+    ],
+)
+async def test_missing_video_audio_still_rejected_outside_direct_fxtwitter_case(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    request_changes: dict[str, object],
+    candidate_changes: dict[str, object],
+):
+    request = replace(
+        build_media_request(
+            "https://x.com/user/status/123456789", kind=MediaKind.VIDEO
+        ),
+        **request_changes,
+    )
+    candidate = replace(
+        _candidate("fxtwitter"),
+        sources=(MediaSource("0", "https://video.twimg.com/video.mp4"),),
+        **candidate_changes,
+    )
+    materialized, _ = _materialized(tmp_path, candidate)
+    monkeypatch.setattr(
+        "app.services.media.pipeline._ffprobe",
+        AsyncMock(
+            return_value={
+                "streams": [{"codec_type": "video", "width": 1280, "height": 720}],
+                "format": {"format_name": "mov,mp4", "duration": "9"},
+            }
+        ),
+    )
+
+    with pytest.raises(ArtifactValidationError, match="required audio stream"):
+        await validate_materialized_artifact(request, materialized)
 
 
 @pytest.mark.asyncio

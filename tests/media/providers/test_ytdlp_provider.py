@@ -10,9 +10,15 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.services.media.models import MediaKind, MediaRequest, QualityPolicy
+from app.services.media.pipeline import MediaPipeline, build_media_request
 from app.services.media.providers.ytdlp import YtDlpProvider
 from app.services.media.race import RaceConfig, race_candidates
-from app.services.media.registry import FailureKind, ProviderError, ProviderRoute
+from app.services.media.registry import (
+    FailureKind,
+    ProviderError,
+    ProviderRegistry,
+    ProviderRoute,
+)
 from app.services.media.validation import validate_candidate
 from app.services.ytdlp.exceptions import AccessDeniedError
 from app.services.ytdlp.service import YtDlpService
@@ -128,6 +134,66 @@ async def test_vertical_shorts_keep_1080_short_edge():
         await provider.resolve(MediaRequest.from_url(URL, quality=QualityPolicy(1080)))
     )[0]
     assert (candidate.width, candidate.height) == (1080, 1920)
+
+
+@pytest.mark.parametrize(
+    ("excluded_formats", "expected"),
+    [
+        ((), "136+140"),
+        (("136",), "137+140"),
+        (("136", "137"), "308+140"),
+    ],
+)
+async def test_default_short_prefers_720_then_1080_through_pipeline(
+    excluded_formats: tuple[str, ...], expected: str
+):
+    """Catches canonicalization and public work scope losing the Shorts profile."""
+    info = metadata(vertical=True)
+    info["formats"] = [
+        fmt for fmt in info["formats"] if fmt["format_id"] not in excluded_formats
+    ]
+    info["formats"].insert(0, video_format("135", width=480, height=854, filesize=300))
+    info["formats"].insert(
+        0, video_format("308", width=1440, height=2560, filesize=16_000)
+    )
+    provider = YtDlpProvider(extract=AsyncMock(return_value=info))
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(provider)]), object(), object()
+    )
+
+    resolved = await pipeline.resolve(
+        build_media_request(
+            "https://www.youtube.com/shorts/example",
+            caller_scope="private",
+            exact=False,
+        )
+    )
+
+    assert resolved.candidates[0].candidate_id == expected
+
+
+@pytest.mark.parametrize(
+    ("url", "quality", "expected"),
+    [
+        ("https://www.youtube.com/shorts/example", 1080, "137+140"),
+        ("https://www.youtube.com/watch?v=example", None, "308+140"),
+    ],
+)
+async def test_short_preference_does_not_change_explicit_or_watch_quality(
+    url: str, quality: int | None, expected: str
+):
+    info = metadata(vertical=True)
+    info["formats"].insert(
+        0, video_format("308", width=1440, height=2560, filesize=16_000)
+    )
+    provider = YtDlpProvider(extract=AsyncMock(return_value=info))
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(provider)]), object(), object()
+    )
+
+    resolved = await pipeline.resolve(build_media_request(url, quality=quality))
+
+    assert resolved.candidates[0].candidate_id == expected
 
 
 async def test_fast_command_prefers_1080_source_over_4k():

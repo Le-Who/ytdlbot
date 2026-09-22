@@ -11,6 +11,9 @@ from typing import Self
 from urllib.parse import parse_qs, quote, urlsplit
 
 
+YOUTUBE_SHORT_DEFAULT_VARIANT = "youtube-short-default"
+
+
 class MediaKind(StrEnum):
     AUTO = "auto"
     VIDEO = "video"
@@ -100,12 +103,22 @@ class MediaRequest:
         deadline: float | None = None,
     ) -> Self:
         canonical_url, platform, media_id, parsed_clip = _parse_media_url(url)
+        quality_policy = quality or QualityPolicy()
+        if (
+            output_variant is None
+            and platform == "youtube"
+            and kind in {MediaKind.AUTO, MediaKind.VIDEO}
+            and quality_policy.max_edge is None
+        ):
+            path_parts = [part for part in urlsplit(url).path.split("/") if part]
+            if len(path_parts) >= 2 and path_parts[0] == "shorts":
+                output_variant = YOUTUBE_SHORT_DEFAULT_VARIANT
         return cls(
             canonical_url=canonical_url,
             platform=platform,
             media_id=media_id,
             kind=kind,
-            quality=quality or QualityPolicy(),
+            quality=quality_policy,
             audio_format=audio_format,
             audio_language=audio_language,
             clip=clip or parsed_clip,

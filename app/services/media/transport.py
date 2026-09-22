@@ -31,7 +31,13 @@ from app.core.metrics import metrics
 from app.core.process import run_subprocess
 from app.core.resource_budget import DiskBudget, DiskReservation
 
-from .models import MediaCandidate, MediaRequest, MediaSource, RefreshDescriptor
+from .models import (
+    MediaCandidate,
+    MediaRequest,
+    MediaSource,
+    RefreshDescriptor,
+    YOUTUBE_SHORT_DEFAULT_VARIANT,
+)
 from .validation import validate_candidate
 
 logger = logging.getLogger("app.services.media.transport")
@@ -441,7 +447,17 @@ class MediaTransport:
                     request, fresh, materialization_deadline
                 )
 
-        if len(safe) >= 2 and all(self._is_small(candidate) for candidate in safe[:2]):
+        same_short_edge = len(safe) >= 2 and min(
+            safe[0].width or 0, safe[0].height or 0
+        ) == min(safe[1].width or 0, safe[1].height or 0)
+        if (
+            len(safe) >= 2
+            and all(self._is_small(candidate) for candidate in safe[:2])
+            and (
+                request.output_variant != YOUTUBE_SHORT_DEFAULT_VARIANT
+                or same_short_edge
+            )
+        ):
             winner, parallel_errors = await self._race_small(
                 safe[:2], attempt, materialization_deadline
             )

@@ -26,6 +26,7 @@ from ..models import (
     MediaRequest,
     MediaSource,
     RefreshDescriptor,
+    YOUTUBE_SHORT_DEFAULT_VARIANT,
 )
 from ..registry import FailureKind, ProviderError
 
@@ -259,6 +260,25 @@ def _candidate_sort_key(
     request: MediaRequest, candidate: MediaCandidate
 ) -> tuple[int, ...]:
     short_edge = min(candidate.width or 0, candidate.height or 0)
+    if (
+        request.platform == "youtube"
+        and request.output_variant == YOUTUBE_SHORT_DEFAULT_VARIANT
+        and request.quality.max_edge is None
+    ):
+        if short_edge == 720:
+            preference = 4
+        elif short_edge == 1080:
+            preference = 3
+        elif 720 < short_edge < 1080:
+            preference = 2
+        elif short_edge > 1080:
+            preference = 1
+        else:
+            preference = 0
+        resolution_order = short_edge if short_edge <= 1080 else -short_edge
+        compatible = int(_candidate_is_mp4_compatible(candidate))
+        ready = int(candidate.mux_mode is None and len(candidate.sources) == 1)
+        return preference, resolution_order, compatible, ready
     fast_command = (
         request.kind is MediaKind.VIDEO
         and request.caller_scope == "command"

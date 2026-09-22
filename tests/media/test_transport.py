@@ -28,6 +28,7 @@ from app.services.media.transport import (
     CredentialRedirectError,
     DownloadFailed,
     MaterializationError,
+    MaterializedItem,
     MediaSizeExceeded,
     MediaTransport,
     TransferTimeout,
@@ -381,7 +382,9 @@ async def test_deadline_limited_dns_timeout_is_classified_from_its_budget(
         await asyncio.sleep(0.05)
         return ("93.184.216.34",)
 
-    fixed_clock = lambda: 100.0
+    def fixed_clock() -> float:
+        return 100.0
+
     media = MediaTransport(
         output_dir=tmp_path,
         client=FakeClient([]),
@@ -663,6 +666,54 @@ async def test_two_small_candidates_may_download_concurrently(tmp_path: Path) ->
     assert len(list(tmp_path.glob("media_*"))) >= 2
     await item.release(delete=True)
     assert not list(tmp_path.glob("*.part"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("fail_720", "expected"), [(False, "720"), (True, "1080")])
+async def test_short_default_does_not_race_720_against_faster_1080(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fail_720: bool,
+    expected: str,
+) -> None:
+    short = MediaRequest.from_url("https://www.youtube.com/shorts/example")
+    media, _ = transport(tmp_path, [])
+    first = replace(
+        source_candidate("https://cdn.example/720.mp4", size=1_000, candidate_id="720"),
+        url=short.canonical_url,
+        media_id=short.media_id,
+        width=720,
+        height=1280,
+    )
+    second = replace(
+        source_candidate(
+            "https://cdn.example/1080.mp4", size=1_000, candidate_id="1080"
+        ),
+        url=short.canonical_url,
+        media_id=short.media_id,
+        width=1080,
+        height=1920,
+    )
+
+    async def download(
+        request: MediaRequest, candidate: MediaCandidate, deadline: float
+    ):
+        del request, deadline
+        if candidate.candidate_id == "720":
+            await asyncio.sleep(0.03)
+            if fail_720:
+                raise DownloadFailed("720 source unavailable")
+        reservation = await media.disk_budget.reserve(
+            1_000, owner=candidate.candidate_id
+        )
+        return MaterializedItem((), 1_000, candidate, reservation)
+
+    monkeypatch.setattr(media, "_download_candidate", download)
+
+    item = await media.materialize(short, [first, second])
+
+    assert item.candidate.candidate_id == expected
+    await item.release()
 
 
 @pytest.mark.asyncio

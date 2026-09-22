@@ -39,6 +39,7 @@ from .models import (
     QualityPolicy,
     ResolvedMedia,
     UnsupportedMediaUrlError,
+    YOUTUBE_SHORT_DEFAULT_VARIANT,
 )
 from .race import RaceConfig, RaceResult, race_candidates
 from .registry import ProviderRegistry, ProviderRoute
@@ -238,9 +239,7 @@ class MediaPipeline:
         try:
             receipt = await operation
         except BaseException:
-            metrics.pipeline_results.inc(
-                status="error", platform=request.platform
-            )
+            metrics.pipeline_results.inc(status="error", platform=request.platform)
             raise
         else:
             metrics.pipeline_results.inc(
@@ -646,6 +645,38 @@ class MediaPipeline:
                             failures.append(
                                 (selected.provider or "materialization", error)
                             )
+                            if (
+                                isinstance(error, ArtifactValidationError)
+                                and completed is not None
+                                and work_request.output_variant
+                                == YOUTUBE_SHORT_DEFAULT_VARIANT
+                            ):
+                                remaining = tuple(
+                                    candidate
+                                    for candidate in selected.candidates
+                                    if (
+                                        candidate.provider,
+                                        candidate.candidate_id,
+                                    )
+                                    != (
+                                        completed.candidate.provider,
+                                        completed.candidate.candidate_id,
+                                    )
+                                )
+                                if remaining:
+                                    next_candidate = remaining[0]
+                                    selected = replace(
+                                        selected,
+                                        candidates=remaining,
+                                        provider=next_candidate.provider,
+                                        items=next_candidate.items
+                                        or (
+                                            _candidate_item(
+                                                work_request, next_candidate
+                                            ),
+                                        ),
+                                    )
+                                    continue
                             reserve = await self._resolve_reserve(
                                 work_request, attempted
                             )
@@ -837,9 +868,7 @@ class MediaPipeline:
         request: MediaRequest,
         **options: Any,
     ) -> DeliveryReceipt:
-        with metrics.pipeline_duration.time(
-            phase="deliver", platform=request.platform
-        ):
+        with metrics.pipeline_duration.time(phase="deliver", platform=request.platform):
             return await self.delivery.deliver(
                 media, target, request=request, **options
             )
@@ -1090,7 +1119,20 @@ async def validate_materialized_artifact(
         if item.kind is MediaKind.AUDIO and not audio:
             raise ArtifactValidationError("final artifact has no audio stream")
         if item.kind is MediaKind.VIDEO and candidate.has_audio and not audio:
-            raise ArtifactValidationError("final video has no required audio stream")
+            # FxTwitter cannot declare audio presence; an untouched source may be silent.
+            silent_direct_fxtwitter = (
+                candidate.provider == "fxtwitter"
+                and candidate.mux_mode is None
+                and len(candidate.sources) == len(media.paths)
+                and request.clip == ClipInterval()
+                and request.kind is not MediaKind.AUDIO
+                and request.audio_format is None
+                and request.audio_language is None
+            )
+            if not silent_direct_fxtwitter:
+                raise ArtifactValidationError(
+                    "final video has no required audio stream"
+                )
         if video:
             expected_width = item.width or candidate.width
             expected_height = item.height or candidate.height

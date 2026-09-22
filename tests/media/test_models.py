@@ -29,7 +29,11 @@ def test_youtube_url_forms_share_identity_but_preserve_clip():
     watch = MediaRequest.from_url("https://m.youtube.com/watch?v=abc123&utm_source=x")
 
     assert short.media_id == watch.media_id == "abc123"
-    assert short.canonical_url == watch.canonical_url == "https://www.youtube.com/watch?v=abc123"
+    assert (
+        short.canonical_url
+        == watch.canonical_url
+        == "https://www.youtube.com/watch?v=abc123"
+    )
     assert short.clip == ClipInterval(start_seconds=15, end_seconds=None)
     assert short.cache_key != watch.cache_key
 
@@ -42,6 +46,15 @@ def test_youtube_tracking_parameters_do_not_change_request_identity():
     )
 
     assert plain.cache_key == tracked.cache_key
+
+
+def test_default_short_quality_keeps_distinct_cache_identity_from_watch():
+    """Catches a watch URL reusing a 720p Shorts result, or vice versa."""
+    short = MediaRequest.from_url("https://youtube.com/shorts/abc123")
+    watch = MediaRequest.from_url("https://youtube.com/watch?v=abc123")
+
+    assert short.canonical_url == watch.canonical_url
+    assert short.cache_key != watch.cache_key
 
 
 def test_cache_key_isolates_scopes_and_all_delivery_equivalence_fields():
@@ -58,12 +71,16 @@ def test_cache_key_isolates_scopes_and_all_delivery_equivalence_fields():
         exact=True,
     )
 
-    assert base.cache_key != MediaRequest.from_url(
-        "https://youtu.be/abc123", auth_scope="user:2"
-    ).cache_key
-    assert base.cache_key != MediaRequest.from_url(
-        "https://youtu.be/abc123", exact=False
-    ).cache_key
+    assert (
+        base.cache_key
+        != MediaRequest.from_url(
+            "https://youtu.be/abc123", auth_scope="user:2"
+        ).cache_key
+    )
+    assert (
+        base.cache_key
+        != MediaRequest.from_url("https://youtu.be/abc123", exact=False).cache_key
+    )
     assert base.cache_key.startswith("media:v1:")
 
 

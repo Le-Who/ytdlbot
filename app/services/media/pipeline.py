@@ -27,6 +27,7 @@ from app.core.process import run_subprocess
 
 from .delivery import DeliveryAsset, TelegramDelivery
 from .models import (
+    YOUTUBE_SHORT_DEFAULT_VARIANT,
     ClipInterval,
     DeliveryReceipt,
     DeliveryStatus,
@@ -39,12 +40,11 @@ from .models import (
     QualityPolicy,
     ResolvedMedia,
     UnsupportedMediaUrlError,
-    YOUTUBE_SHORT_DEFAULT_VARIANT,
 )
 from .race import RaceConfig, RaceResult, race_candidates
 from .registry import ProviderRegistry, ProviderRoute
 from .singleflight import SingleFlightGroup
-from .transport import MaterializedItem, MediaTransport
+from .transport import MaterializationError, MaterializedItem, MediaTransport
 from .validation import validate_candidate
 
 ArtifactValidator = Callable[[MediaRequest, MaterializedItem], Awaitable[None]]
@@ -621,75 +621,112 @@ class MediaPipeline:
                     }
                     attempted.update(selected.attempted_providers)
                     failures: list[tuple[str, BaseException]] = []
-                    while True:
-                        candidates = _materialization_candidates(selected.candidates)
-                        completed: MaterializedItem | None = None
-                        try:
-                            completed = await self.transport.materialize(
-                                work_request,
-                                candidates,
-                                refreshers=self.refreshers,
-                            )
-                            await self.artifact_validator(work_request, completed)
-                        except asyncio.CancelledError:
-                            if completed is not None:
-                                await _await_preserving_cancellation(
-                                    completed.release(delete=True)
-                                )
-                            raise
-                        except BaseException as error:
-                            if completed is not None:
-                                await _await_preserving_cancellation(
-                                    completed.release(delete=True)
-                                )
-                            failures.append(
-                                (selected.provider or "materialization", error)
-                            )
+                    retried_tiktok_cheap = False
+                    cheap_prefetch: asyncio.Task[ResolvedMedia | None] | None = None
+                    try:
+                        while True:
                             if (
-                                isinstance(error, ArtifactValidationError)
-                                and completed is not None
-                                and work_request.output_variant
-                                == YOUTUBE_SHORT_DEFAULT_VARIANT
+                                not retried_tiktok_cheap
+                                and work_request.platform == "tiktok"
+                                and selected.provider == "ytdlp"
                             ):
-                                remaining = tuple(
-                                    candidate
-                                    for candidate in selected.candidates
-                                    if (
-                                        candidate.provider,
-                                        candidate.candidate_id,
-                                    )
-                                    != (
-                                        completed.candidate.provider,
-                                        completed.candidate.candidate_id,
+                                # Keep a lightweight resolver running while yt-dlp
+                                # attempts the native CDN. It may be ready before
+                                # those URLs fail, without another serial wait.
+                                retried_tiktok_cheap = True
+                                cheap_prefetch = asyncio.create_task(
+                                    self._resolve_reserve(
+                                        work_request,
+                                        attempted,
+                                        retry_cheap_only=True,
                                     )
                                 )
-                                if remaining:
-                                    next_candidate = remaining[0]
-                                    selected = replace(
-                                        selected,
-                                        candidates=remaining,
-                                        provider=next_candidate.provider,
-                                        items=next_candidate.items
-                                        or (
-                                            _candidate_item(
-                                                work_request, next_candidate
-                                            ),
-                                        ),
-                                    )
-                                    continue
-                            reserve = await self._resolve_reserve(
-                                work_request, attempted
+                            candidates = _materialization_candidates(
+                                selected.candidates
                             )
-                            if reserve is None:
-                                details = "; ".join(
-                                    f"{provider}: {error}"
-                                    for provider, error in failures
+                            completed: MaterializedItem | None = None
+                            try:
+                                completed = await self.transport.materialize(
+                                    work_request,
+                                    candidates,
+                                    refreshers=self.refreshers,
                                 )
-                                raise MediaPipelineError(details) from error
-                            selected = reserve
-                            attempted.update(reserve.attempted_providers)
-                            continue
-                        break
+                                await self.artifact_validator(work_request, completed)
+                            except asyncio.CancelledError:
+                                if completed is not None:
+                                    await _await_preserving_cancellation(
+                                        completed.release(delete=True)
+                                    )
+                                raise
+                            except BaseException as error:
+                                if completed is not None:
+                                    await _await_preserving_cancellation(
+                                        completed.release(delete=True)
+                                    )
+                                failures.append(
+                                    (selected.provider or "materialization", error)
+                                )
+                                if (
+                                    isinstance(error, ArtifactValidationError)
+                                    and completed is not None
+                                    and work_request.output_variant
+                                    == YOUTUBE_SHORT_DEFAULT_VARIANT
+                                ):
+                                    remaining = tuple(
+                                        candidate
+                                        for candidate in selected.candidates
+                                        if (
+                                            candidate.provider,
+                                            candidate.candidate_id,
+                                        )
+                                        != (
+                                            completed.candidate.provider,
+                                            completed.candidate.candidate_id,
+                                        )
+                                    )
+                                    if remaining:
+                                        next_candidate = remaining[0]
+                                        selected = replace(
+                                            selected,
+                                            candidates=remaining,
+                                            provider=next_candidate.provider,
+                                            items=next_candidate.items
+                                            or (
+                                                _candidate_item(
+                                                    work_request, next_candidate
+                                                ),
+                                            ),
+                                        )
+                                        continue
+                                reserve = None
+                                if cheap_prefetch is not None and isinstance(
+                                    error, MaterializationError
+                                ):
+                                    reserve = await cheap_prefetch
+                                    cheap_prefetch = None
+                                    attempted.update(
+                                        route.provider.name
+                                        for route in self._routes_for(work_request)
+                                        if not route.provider.is_heavy
+                                    )
+                                if reserve is None:
+                                    reserve = await self._resolve_reserve(
+                                        work_request, attempted
+                                    )
+                                if reserve is None:
+                                    details = "; ".join(
+                                        f"{provider}: {error}"
+                                        for provider, error in failures
+                                    )
+                                    raise MediaPipelineError(details) from error
+                                selected = reserve
+                                attempted.update(reserve.attempted_providers)
+                                continue
+                            break
+                    finally:
+                        if cheap_prefetch is not None:
+                            cheap_prefetch.cancel()
+                            await asyncio.gather(cheap_prefetch, return_exceptions=True)
                     await self._store_metadata(selected)
                     try:
                         # Publish inside the shared factory.  If its final
@@ -746,12 +783,20 @@ class MediaPipeline:
         return resolved
 
     async def _resolve_reserve(
-        self, request: MediaRequest, attempted: set[str]
+        self,
+        request: MediaRequest,
+        attempted: set[str],
+        *,
+        retry_cheap_only: bool = False,
     ) -> ResolvedMedia | None:
         routes = tuple(
             route
             for route in self._routes_for(request)
-            if route.provider.name not in attempted
+            if (
+                not route.provider.is_heavy
+                if retry_cheap_only
+                else route.provider.name not in attempted
+            )
         )
         if not routes:
             return None

@@ -22,6 +22,7 @@ from app.services.media.models import (
     MediaKind,
     MediaRequest,
     MediaSource,
+    ResolvedMedia,
 )
 from app.services.media.pipeline import (
     ArtifactValidationError,
@@ -503,6 +504,123 @@ async def test_materialization_reserve_does_not_repeat_earlier_cheap_routes(
     assert unavailable.calls == 1
     assert gallery.calls == 1
     assert ytdlp.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_tiktok_retries_cheap_resolver_after_ytdlp_cdn_denies_all_formats(
+    tmp_path: Path,
+):
+    request = build_media_request("https://vt.tiktok.com/ZSbrHsE9E/")
+    tikwm_candidate = replace(_candidate("tikwm"), media_id=request.media_id)
+    ytdlp_candidate = replace(_candidate("ytdlp"), media_id=request.media_id)
+
+    class SlowFirstTikWM:
+        name = "tikwm"
+        backend_family = "test"
+        is_heavy = False
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.second_started = asyncio.Event()
+
+        def supports(self, request):
+            return True
+
+        async def resolve(self, request):
+            self.calls += 1
+            if self.calls == 1:
+                await asyncio.sleep(60)
+            self.second_started.set()
+            return [tikwm_candidate]
+
+    tikwm = SlowFirstTikWM()
+    ytdlp = _Provider("ytdlp", ytdlp_candidate, is_heavy=True)
+    completed, reservation = _materialized(tmp_path, tikwm_candidate)
+
+    class DeniedYtDlpTransport:
+        def __init__(self) -> None:
+            self.providers: list[str | None] = []
+            self.ytdlp_started = asyncio.Event()
+            self.fail_ytdlp = asyncio.Event()
+
+        async def materialize(self, request, candidates, **kwargs):
+            provider = candidates[0].provider
+            self.providers.append(provider)
+            if provider == "ytdlp":
+                self.ytdlp_started.set()
+                await self.fail_ytdlp.wait()
+                raise MaterializationError(
+                    "materialization failed (DownloadFailed, DownloadFailed)"
+                )
+            return completed
+
+    transport = DeniedYtDlpTransport()
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(tikwm), ProviderRoute(ytdlp)]),
+        transport,
+        _Delivery(),
+        race_config=RaceConfig(heavy_delay=0),
+        artifact_validator=AsyncMock(),
+        enforce_route_matrix=True,
+    )
+
+    delivery_task = asyncio.create_task(pipeline.deliver(request, DeliveryTarget("1")))
+    try:
+        await asyncio.wait_for(transport.ytdlp_started.wait(), timeout=1)
+        await asyncio.wait_for(tikwm.second_started.wait(), timeout=1)
+    finally:
+        transport.fail_ytdlp.set()
+    receipt = await delivery_task
+
+    assert receipt.success
+    assert transport.providers == ["ytdlp", "tikwm"]
+    assert tikwm.calls == 2
+    assert ytdlp.calls == 1
+    assert reservation.released == 1
+
+
+@pytest.mark.asyncio
+async def test_tiktok_prefetched_resolver_is_reused_for_resolved_ytdlp_request(
+    tmp_path: Path,
+):
+    request = build_media_request("https://vt.tiktok.com/ZSbrHsE9E/")
+    tikwm_candidate = replace(_candidate("tikwm"), media_id=request.media_id)
+    ytdlp_candidate = replace(_candidate("ytdlp"), media_id=request.media_id)
+    tikwm = _Provider("tikwm", tikwm_candidate)
+    completed, reservation = _materialized(tmp_path, tikwm_candidate)
+
+    class DeniedYtDlpTransport:
+        async def materialize(self, request, candidates, **kwargs):
+            if candidates[0].provider == "ytdlp":
+                await asyncio.sleep(0)
+                raise MaterializationError("TikTok CDN returned 403")
+            return completed
+
+    pipeline = MediaPipeline(
+        ProviderRegistry(
+            [
+                ProviderRoute(tikwm),
+                ProviderRoute(_Provider("ytdlp", ytdlp_candidate, is_heavy=True)),
+            ]
+        ),
+        DeniedYtDlpTransport(),
+        _Delivery(),
+        artifact_validator=AsyncMock(),
+        enforce_route_matrix=True,
+    )
+    resolved = ResolvedMedia(
+        request=request,
+        items=(MediaItem(request.media_id, MediaKind.VIDEO, ytdlp_candidate.url),),
+        candidates=(ytdlp_candidate,),
+        provider="ytdlp",
+        attempted_providers=("ytdlp",),
+    )
+
+    async with pipeline.open_materialized(request, resolved=resolved) as item:
+        assert item.candidate.provider == "tikwm"
+
+    assert tikwm.calls == 1
+    assert reservation.released == 1
 
 
 @pytest.mark.asyncio

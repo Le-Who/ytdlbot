@@ -130,8 +130,16 @@ class YtDlpProvider:
         if info.get("is_live") or info.get("live_status") == "is_live":
             raise ProviderError(FailureKind.PERMANENT, "active live stream")
 
-        formats = [fmt for fmt in info.get("formats", []) if fmt.get("url")]
-        if not formats and info.get("url"):
+        formats = [
+            fmt
+            for fmt in info.get("formats", [])
+            if fmt.get("url") and fmt.get("protocol", "https") in {"http", "https"}
+        ]
+        if (
+            not formats
+            and info.get("url")
+            and info.get("protocol", "https") in {"http", "https"}
+        ):
             formats = [info]
         audio = [fmt for fmt in formats if _codec(fmt, "acodec")]
         if request.audio_language:
@@ -374,4 +382,11 @@ def _source(fmt: dict[str, Any], info: dict[str, Any]) -> MediaSource:
         filesize_bytes=_integer(fmt.get("filesize")),
         expires_at=_number(expiry),
         http_headers=tuple((str(key), str(value)) for key, value in headers.items()),
+        http_chunk_size=_http_chunk_size(fmt),
     )
+
+
+def _http_chunk_size(fmt: dict[str, Any]) -> int | None:
+    options = fmt.get("downloader_options")
+    value = options.get("http_chunk_size") if isinstance(options, dict) else None
+    return value if type(value) is int and 0 < value <= 10 * 1024 * 1024 else None

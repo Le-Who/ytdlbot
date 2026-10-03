@@ -8,6 +8,7 @@ import ipaddress
 import logging
 import math
 import os
+import re
 import socket
 import time
 import uuid
@@ -170,13 +171,23 @@ class _CurlResponse:
         }
 
     async def iter_bytes(self, chunk_size: int) -> AsyncIterator[bytes]:
-        async for chunk in self._response.aiter_content(chunk_size=chunk_size):
+        del chunk_size  # curl delivers its own bounded callback chunks.
+        async for chunk in self._response.aiter_content():
             if chunk:
                 yield chunk
 
     async def close(self) -> None:
         try:
-            await self._response.aclose()
+            # curl_cffi's aclose waits for the complete body. Cancel an unread
+            # transfer first so probes and cancellation do not drain full media.
+            stream = self._response.astream_task
+            if stream is not None:
+                task = asyncio.ensure_future(stream)
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            else:
+                await self._response.aclose()
         finally:
             await self._session.close()
 
@@ -201,7 +212,8 @@ class CurlStreamingClient:
         port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
         address = f"[{resolved_ip}]" if resolved_ip.version == 6 else str(resolved_ip)
         session: AsyncSession[Response] = AsyncSession(
-            curl_options={CurlOpt.RESOLVE: [f"{host}:{port}:{address}"]}
+            curl_options={CurlOpt.RESOLVE: [f"{host}:{port}:{address}"]},
+            trust_env=False,
         )
         try:
             response = await session.request(
@@ -247,6 +259,94 @@ class _Opened:
     response: StreamingResponse
     url: str
     started_at: float
+
+
+class _RangeResponse:
+    """Join validated HTTP ranges without buffering a complete media file."""
+
+    def __init__(
+        self,
+        response: StreamingResponse,
+        *,
+        range_size: int,
+        open_range: Callable[[int, int], Awaitable[StreamingResponse]],
+        close_response: Callable[[StreamingResponse], Awaitable[None]],
+    ) -> None:
+        self._active: StreamingResponse | None = response
+        self.status_code = response.status_code
+        self.headers: Mapping[str, str] = response.headers
+        self._range_size = range_size
+        self._open = open_range
+        self._close = close_response
+        self._total: int | None = None
+        self._etag = _header(response.headers, "etag")
+        self._modified = _header(response.headers, "last-modified")
+        if response.status_code == 206:
+            _, _, self._total = self._range(response, 0)
+            self.headers = {
+                key: value
+                for key, value in response.headers.items()
+                if key.lower() != "content-length"
+            }
+            self.headers = {**self.headers, "Content-Length": str(self._total)}
+
+    def _range(
+        self, response: StreamingResponse, expected: int
+    ) -> tuple[int, int, int]:
+        encoding = _header(response.headers, "content-encoding")
+        if encoding is not None and encoding.strip().lower() != "identity":
+            raise DownloadFailed("media range encoding must be identity")
+        value = _header(response.headers, "content-range") or ""
+        if self._total is not None and (
+            (self._etag is not None and _header(response.headers, "etag") != self._etag)
+            or (
+                self._modified is not None
+                and _header(response.headers, "last-modified") != self._modified
+            )
+        ):
+            raise DownloadFailed("media range validator changed")
+        match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", value)
+        if response.status_code != 206 or match is None:
+            raise DownloadFailed("media range response is invalid")
+        start, end, total = map(int, match.groups())
+        if (
+            start != expected
+            or not start <= end < total
+            or end - start + 1 > self._range_size
+            or (self._total is not None and total != self._total)
+        ):
+            raise DownloadFailed("media range identity changed")
+        return start, end, total
+
+    async def iter_bytes(self, chunk_size: int) -> AsyncIterator[bytes]:
+        if self.status_code != 206:
+            assert self._active is not None
+            async for chunk in self._active.iter_bytes(chunk_size):
+                yield chunk
+            return
+        offset = 0
+        while self._active is not None:
+            start, end, total = self._range(self._active, offset)
+            received = 0
+            async for chunk in self._active.iter_bytes(chunk_size):
+                received += len(chunk)
+                if received > end - start + 1:
+                    raise DownloadFailed("media range exceeded declared bytes")
+                yield chunk
+            if received != end - start + 1:
+                raise DownloadFailed("media range was truncated")
+            await self.close()
+            offset = end + 1
+            if offset >= total:
+                return
+            self._active = await self._open(
+                offset, min(total - 1, offset + self._range_size - 1)
+            )
+
+    async def close(self) -> None:
+        response, self._active = self._active, None
+        if response is not None:
+            await self._close(response)
 
 
 class MediaTransport:
@@ -961,6 +1061,16 @@ class MediaTransport:
     ) -> tuple[Path, int]:
         headers = {"Accept": "*/*", "User-Agent": "ytdlbot/2.0"}
         headers.update(dict(source.http_headers))
+        if source.http_chunk_size is not None:
+            if not 0 < source.http_chunk_size <= 10 * 1024 * 1024:
+                raise DownloadFailed("media HTTP range size is invalid")
+            headers = {
+                key: value
+                for key, value in headers.items()
+                if key.lower() not in {"range", "accept-encoding"}
+            }
+            headers["Accept-Encoding"] = "identity"
+            headers["Range"] = f"bytes=0-{source.http_chunk_size - 1}"
         opened = await self._request(
             "GET",
             source.url,
@@ -976,6 +1086,33 @@ class MediaTransport:
         try:
             try:
                 reservation.bind(partial_path)
+                if source.http_chunk_size is not None:
+                    validator = _header(response.headers, "etag")
+                    if not validator or validator.startswith("W/"):
+                        validator = _header(response.headers, "last-modified")
+
+                    async def open_range(start: int, end: int) -> StreamingResponse:
+                        next_opened = await self._request(
+                            "GET",
+                            source.url,
+                            headers={
+                                **headers,
+                                "Range": f"bytes={start}-{end}",
+                                **({"If-Range": validator} if validator else {}),
+                            },
+                            deadline=deadline,
+                            proxy_key=source.proxy_key,
+                        )
+                        return next_opened.response
+
+                    response = _RangeResponse(
+                        response,
+                        range_size=source.http_chunk_size,
+                        open_range=open_range,
+                        close_response=lambda active: self._close_response(
+                            active, deadline
+                        ),
+                    )
                 self._check_response(response, opened.url)
                 declared_response = _content_length(response.headers)
                 if declared_response is not None:

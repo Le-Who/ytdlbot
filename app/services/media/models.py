@@ -161,6 +161,7 @@ class MediaSource:
     filesize_bytes: int | None = None
     expires_at: float | None = None
     http_headers: tuple[tuple[str, str], ...] = ()
+    proxy_key: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

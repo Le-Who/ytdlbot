@@ -56,6 +56,10 @@ jobs:
           TELEGRAM_API_HASH: test
         run: |
           python -m pytest \
+            tests/media/test_proxy_routes.py \
+            tests/media/providers/test_ytdlp_provider.py \
+            tests/media/providers/test_gallerydl_provider.py \
+            tests/test_compose_contract.py \
             tests/acceptance/test_media_release.py \
             tests/deploy/test_release_scripts.py::test_routine_deploy_only_replaces_bot_and_preserves_host_state \
             tests/deploy/test_release_scripts.py::test_concurrent_deploy_is_rejected_by_project_lock \

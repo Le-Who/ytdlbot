@@ -1449,6 +1449,7 @@ def build_default_pipeline(bot: Any) -> MediaPipeline:
     from app.services.media.providers.ssstik import SSSTikProvider
     from app.services.media.providers.tikwm import TikWMProvider
     from app.services.media.providers.ytdlp import YtDlpProvider
+    from app.services.media.proxies import MediaProxyPool
     from app.services.pinterest import PinterestProvider
 
     routes: list[ProviderRoute] = [
@@ -1495,7 +1496,11 @@ def build_default_pipeline(bot: Any) -> MediaPipeline:
                 capability_available=cobalt_verified,
             )
         )
-    gallery = GalleryDlProvider()
+    proxy_pool = MediaProxyPool(
+        getattr(config, "MEDIA_PROXY_URLS", ()),
+        platforms=getattr(config, "MEDIA_PROXY_PLATFORMS", frozenset()),
+    )
+    gallery = GalleryDlProvider(proxy_pool=proxy_pool)
     routes.append(
         ProviderRoute(
             gallery,
@@ -1503,17 +1508,20 @@ def build_default_pipeline(bot: Any) -> MediaPipeline:
             capability_available=gallery.available,
         )
     )
-    ytdlp = YtDlpProvider()
+    ytdlp = YtDlpProvider(proxy_pool=proxy_pool)
     routes.append(ProviderRoute(ytdlp))
     cache = MediaCache(state.redis_client)
     bot_id = str(getattr(bot, "id", "")) or None
     delivery = TelegramDelivery(bot, media_cache=cache, bot_id=bot_id)
     return MediaPipeline(
         ProviderRegistry(routes, revision=_provider_revision(routes)),
-        MediaTransport(),
+        MediaTransport(proxy_pool=proxy_pool),
         cast(DeliveryBackend, delivery),
         media_cache=cache,
-        refreshers={ytdlp.name: ytdlp},
+        refreshers={ytdlp.name: ytdlp, gallery.name: gallery},
+        race_config=RaceConfig(resolve_timeout=24, total_timeout=28)
+        if proxy_pool.enabled
+        else None,
         enforce_route_matrix=True,
     )
 

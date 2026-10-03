@@ -3,16 +3,26 @@
 from __future__ import annotations
 
 import importlib.util
+import asyncio
 import json
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import replace
 from pathlib import PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
 from app.core.process import run_subprocess
 
-from ..models import MediaCandidate, MediaItem, MediaKind, MediaRequest, MediaSource
+from ..models import (
+    MediaCandidate,
+    MediaItem,
+    MediaKind,
+    MediaRequest,
+    MediaSource,
+    RefreshDescriptor,
+)
+from ..proxies import MediaProxyPool
 from ..registry import FailureKind, ProviderError
 
 GalleryExtractor = Callable[[str], Awaitable[Sequence[object]]]
@@ -40,10 +50,21 @@ class GalleryDlProvider:
     backend_family = "local-gallery-dl"
     is_heavy = True
 
-    def __init__(self, *, extract: GalleryExtractor | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        extract: GalleryExtractor | None = None,
+        proxy_pool: MediaProxyPool | None = None,
+        proxy_extract: Callable[[str, str | None], Awaitable[Sequence[object]]]
+        | None = None,
+    ) -> None:
         self._extract = extract or _dump_gallery
+        self._proxy_pool = proxy_pool or MediaProxyPool()
+        self._proxy_extract = proxy_extract
         self.available = (
-            extract is not None or importlib.util.find_spec("gallery_dl") is not None
+            extract is not None
+            or proxy_extract is not None
+            or importlib.util.find_spec("gallery_dl") is not None
         )
 
     def supports(self, request: MediaRequest) -> bool:
@@ -57,7 +78,17 @@ class GalleryDlProvider:
     async def resolve(self, request: MediaRequest) -> list[MediaCandidate]:
         if not self.supports(request):
             return []
-        messages = await self._extract(request.canonical_url)
+
+        async def extract(proxy: str | None) -> Sequence[object]:
+            if self._proxy_extract is not None:
+                return await self._proxy_extract(request.canonical_url, proxy)
+            if self._extract is _dump_gallery:
+                return await _dump_gallery(request.canonical_url, proxy=proxy)
+            return await self._extract(request.canonical_url)
+
+        messages, proxy_key = await self._proxy_pool.extract(
+            request.platform, extract, deadline=request.deadline
+        )
         items: list[MediaItem] = []
         sources: list[MediaSource] = []
         directory: Mapping[str, Any] = {}
@@ -107,6 +138,7 @@ class GalleryDlProvider:
                     container=container,
                     filesize_bytes=size,
                     http_headers=_safe_headers(metadata),
+                    proxy_key=proxy_key,
                 )
             )
         if not items:
@@ -137,17 +169,66 @@ class GalleryDlProvider:
                 kind=kind,
                 items=tuple(items),
                 auth_scope="public",
+                refresh=RefreshDescriptor(
+                    self.name,
+                    request.media_id,
+                    "gallery:" + ":".join(item.media_id for item in items),
+                ),
             )
         ]
 
+    async def refresh(
+        self,
+        request: MediaRequest,
+        descriptor: RefreshDescriptor,
+        *,
+        attempt: int,
+        deadline: float,
+    ) -> MediaCandidate:
+        if (
+            descriptor.provider != self.name
+            or descriptor.media_id != request.media_id
+            or attempt != 0
+        ):
+            raise ProviderError(FailureKind.PERMANENT, "refresh identity mismatch")
+        async with asyncio.timeout_at(deadline):
+            candidates = await self.resolve(replace(request, deadline=deadline))
+        for candidate in candidates:
+            if candidate.candidate_id == descriptor.variant_id:
+                if request.album_selection:
+                    selection = request.album_selection
+                    if any(
+                        index < 0 or index >= len(candidate.items)
+                        for index in selection
+                    ):
+                        raise ProviderError(
+                            FailureKind.PERMANENT, "gallery selection is out of range"
+                        )
+                    candidate = replace(
+                        candidate,
+                        items=tuple(candidate.items[index] for index in selection),
+                        sources=tuple(
+                            replace(candidate.sources[index], format_id=str(output))
+                            for output, index in enumerate(selection)
+                        ),
+                    )
+                return candidate
+        raise ProviderError(FailureKind.PERMANENT, "requested gallery disappeared")
 
-async def _dump_gallery(url: str) -> Sequence[object]:
+
+async def _dump_gallery(url: str, *, proxy: str | None = None) -> Sequence[object]:
     command = [
         sys.executable,
         "-m",
         "gallery_dl",
         "--dump-json",
         "--no-input",
+        "--config-ignore",
+        "--option",
+        "extractor.timeout=10",
+        "--option",
+        "extractor.retries=0",
+        *(["--proxy", proxy] if proxy else []),
         "--",
         url,
     ]

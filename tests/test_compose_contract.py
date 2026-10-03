@@ -54,8 +54,8 @@ def test_compose_uses_versioned_images_and_readiness_healthcheck() -> None:
     assert services["bot"]["image"] == immutable_bot
     assert services["volume-init"]["image"] == immutable_bot
     assert services["bgutil-pot"]["image"] == (
-        "brainicism/bgutil-ytdlp-pot-provider:2.0.0@sha256:"
-        "ed86b6fdd5e430ddd7c8ce1adb55e1ab54db7c7dbc1bcbf3a82454a85b971164"
+        "brainicism/bgutil-ytdlp-pot-provider:2.0.1@sha256:"
+        "96d95372bbf04db68e29329ba05a20bd406844fa3c5ac43315fe476870c6084d"
     )
     assert services["tg-api"]["image"] == (
         "aiogram/telegram-bot-api:10.3@sha256:"
@@ -111,8 +111,8 @@ def test_runtime_dependencies_are_exactly_pinned_and_image_does_not_self_update(
     dockerfile = (ROOT / "Dockerfile").read_text(encoding="utf-8")
     assert "FROM python:3.12-slim" not in dockerfile
     pinned_python = (
-        "python:3.12.14-slim-bookworm@sha256:"
-        "392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e"
+        "python:3.12.15-slim-bookworm@sha256:"
+        "54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3"
     )
     assert dockerfile.count(f"FROM {pinned_python}") == 2
     assert "yt-dlp -U" not in dockerfile

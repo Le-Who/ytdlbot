@@ -10,11 +10,18 @@ correlation_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "correlation_id", default="-"
 )
 _TELEGRAM_BOT_TOKEN = re.compile(r"/bot[0-9]+:[A-Za-z0-9_-]+")
+_URL_USERINFO = re.compile(r"(?i)(\b(?:https?|socks5h?)://)[^\s/\"'<>]*@")
+
+
+def redact_text(value: str) -> str:
+    return _URL_USERINFO.sub(
+        r"\1[REDACTED]@", _TELEGRAM_BOT_TOKEN.sub("/bot[REDACTED]", value)
+    )
 
 
 def _redact(value: object) -> object:
     if isinstance(value, str):
-        return _TELEGRAM_BOT_TOKEN.sub("/bot[REDACTED]", value)
+        return redact_text(value)
     if isinstance(value, dict):
         return {key: _redact(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):

@@ -10,6 +10,7 @@ import asyncio
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
+from dataclasses import replace
 from urllib.parse import parse_qs, urlsplit
 
 from app.services.ytdlp.exceptions import (
@@ -29,6 +30,7 @@ from ..models import (
     YOUTUBE_SHORT_DEFAULT_VARIANT,
 )
 from ..registry import FailureKind, ProviderError
+from ..proxies import MediaProxyPool
 
 Extractor = Callable[[str], Awaitable[dict[str, Any]]]
 _FAST_COMMAND_MAX_EDGE = 1080
@@ -44,12 +46,17 @@ class YtDlpProvider:
         *,
         extract: Extractor | None = None,
         cookie_auth_scopes: frozenset[str] = frozenset(),
+        proxy_pool: MediaProxyPool | None = None,
+        proxy_extract: Callable[[str, str | None], Awaitable[dict[str, Any]]]
+        | None = None,
     ) -> None:
         self._extract = extract
         self._service = YtDlpService() if extract is None else None
         # Scopes are explicitly authorized by the provider's composition root.
         # Merely supplying a non-public request scope does not authorize cookies.
         self._cookie_auth_scopes = cookie_auth_scopes - {"public"}
+        self._proxy_pool = proxy_pool or MediaProxyPool()
+        self._proxy_extract = proxy_extract
 
     def supports(self, request: MediaRequest) -> bool:
         # yt-dlp's generic extractor also handles embedded media on arbitrary sites.
@@ -63,11 +70,43 @@ class YtDlpProvider:
     async def resolve(self, request: MediaRequest) -> list[MediaCandidate]:
         if not self.supports(request):
             return []
+        info, proxy_key = await self._proxy_pool.extract(
+            request.platform,
+            lambda proxy: self._extract_on_route(request, proxy),
+            deadline=request.deadline,
+            auth_scope=request.auth_scope,
+        )
+        candidates = self._candidates(request, info)
+        return [
+            replace(
+                candidate,
+                sources=tuple(
+                    replace(source, proxy_key=proxy_key) for source in candidate.sources
+                ),
+            )
+            for candidate in candidates
+        ]
+
+    async def _extract_on_route(
+        self, request: MediaRequest, proxy: str | None
+    ) -> dict[str, Any]:
         try:
+            if self._proxy_extract is not None:
+                return await self._proxy_extract(request.canonical_url, proxy)
             if self._service is not None:
+                options: dict[str, Any] = {}
+                if self._proxy_pool.configured(request.platform):
+                    options = {
+                        "proxy_url": proxy,
+                        "override_proxy": True,
+                        "timeout": self._proxy_pool.attempt_timeout
+                        if proxy
+                        else self._proxy_pool.direct_timeout,
+                    }
                 info = await self._service.extract(
                     request.canonical_url,
                     use_cookies=request.auth_scope in self._cookie_auth_scopes,
+                    **options,
                 )
             else:
                 assert self._extract is not None
@@ -83,6 +122,11 @@ class YtDlpProvider:
             raise ProviderError(FailureKind.PERMANENT, str(error)) from error
         except (ExtractionError, TimeoutError, OSError) as error:
             raise ProviderError(FailureKind.TRANSIENT, str(error)) from error
+        return info
+
+    def _candidates(
+        self, request: MediaRequest, info: dict[str, Any]
+    ) -> list[MediaCandidate]:
         if info.get("is_live") or info.get("live_status") == "is_live":
             raise ProviderError(FailureKind.PERMANENT, "active live stream")
 
@@ -222,7 +266,7 @@ class YtDlpProvider:
             raise ProviderError(FailureKind.TRANSIENT, "refresh budget exhausted")
         try:
             async with asyncio.timeout(max(0, deadline - time.monotonic())):
-                candidates = await self.resolve(request)
+                candidates = await self.resolve(replace(request, deadline=deadline))
         except TimeoutError as error:
             raise ProviderError(
                 FailureKind.TRANSIENT, "refresh deadline exceeded"

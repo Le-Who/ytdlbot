@@ -1,5 +1,5 @@
 # ── Stage 1: Builder ──────────────────────────────────────────────
-FROM python:3.12.14-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e AS builder
+FROM python:3.12.15-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3 AS builder
 
 WORKDIR /build
 
@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Deno (needed at runtime for YouTube n-parameter challenge)
-ARG DENO_VERSION=v2.9.5
+ARG DENO_VERSION=v2.9.7
 RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local sh -s -- ${DENO_VERSION}
 
 # Install Python deps into a venv for clean copy
@@ -22,7 +22,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 
 # ── Stage 2: Runtime ─────────────────────────────────────────────
-FROM python:3.12.14-slim-bookworm@sha256:392307d22300de8b5986851a12d9176dfc0fc073e65bf6523ebd7dcbeb23564e
+FROM python:3.12.15-slim-bookworm@sha256:54c85f3c47607a77f32adec749d3c81d1348bf25833671f512b26a9b6d778cb3
 
 WORKDIR /app
 

@@ -951,7 +951,7 @@ def test_clean_ci_installs_all_pinned_test_dependencies() -> None:
         "pytest-cov==7.1.0",
         "pytest-asyncio==1.4.0",
         "pytest-timeout==2.4.0",
-        "hypothesis==6.168.0",
+        "hypothesis==6.168.3",
         "PyYAML==6.0.3",
         "httpx==0.28.1",
         "jsonschema[format]==4.26.0",

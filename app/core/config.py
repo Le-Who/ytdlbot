@@ -25,6 +25,29 @@ TELEGRAM_SECRET_TOKEN: str = os.getenv(
 TELEGRAM_LOCAL_ENDPOINT = os.getenv("TELEGRAM_LOCAL_ENDPOINT", "").strip().rstrip("/")
 
 
+def _media_proxy_urls() -> tuple[str, ...]:
+    try:
+        value = json.loads(os.getenv("MEDIA_PROXY_URLS", "[]"))
+    except json.JSONDecodeError:
+        raise RuntimeError(
+            "MEDIA_PROXY_URLS must be a JSON array of SOCKS5 URLs"
+        ) from None
+    if not isinstance(value, list) or not all(isinstance(url, str) for url in value):
+        raise RuntimeError("MEDIA_PROXY_URLS must be a JSON array of SOCKS5 URLs")
+    return tuple(value)
+
+
+MEDIA_PROXY_URLS = _media_proxy_urls()
+MEDIA_PROXY_PLATFORMS = frozenset(
+    value.strip().lower()
+    for value in os.getenv(
+        "MEDIA_PROXY_PLATFORMS",
+        "youtube,instagram,facebook,tiktok,pinterest,vk,rutube,twitter",
+    ).split(",")
+    if value.strip()
+)
+
+
 def _boolean(name: str, default: bool) -> bool:
     raw = os.getenv(name)
     if raw is None:

@@ -9,6 +9,7 @@ __all__ = ["YtDlpService"]
 
 from app.core.config import TEMP_DIR, TIKTOK_PROXY, VK_PROXY
 from app.core.texts import Texts
+from app.core.logging import redact_text
 
 from .builders import YtDlpCLIBuilder
 from .cookies import PlatformCookiesManager
@@ -52,9 +53,9 @@ class YtDlpService:
         if self.has_aria2:
             logger.info("✅ aria2c found — multi-connection downloads enabled")
         if self.tiktok_proxy:
-            logger.info("🔒 TikTok proxy configured: %s", self.tiktok_proxy)
+            logger.info("🔒 TikTok proxy configured")
         if self.vk_proxy:
-            logger.info("🔒 VK proxy configured: %s", self.vk_proxy)
+            logger.info("🔒 VK proxy configured")
 
     @property
     def cookies_path(self) -> str | None:
@@ -68,6 +69,9 @@ class YtDlpService:
         fallback_clients: bool = False,
         *,
         use_cookies: bool = True,
+        proxy_url: str | None = None,
+        override_proxy: bool = False,
+        timeout: float = 120.0,
     ) -> dict[str, Any]:
         """Извлекает метаданные видео через subprocess yt-dlp (async isolation)."""
         from app.core.process import run_subprocess
@@ -81,6 +85,8 @@ class YtDlpService:
         proxy = (
             self.tiktok_proxy if _is_tiktok(url) else (self.vk_proxy if is_vk else None)
         )
+        if override_proxy:
+            proxy = proxy_url
 
         cmd = self.builder.build_extraction_cmd(
             url=url,
@@ -93,14 +99,15 @@ class YtDlpService:
         cmd[0] = sys.executable
         cmd.insert(1, "-m")
         cmd.insert(2, "yt_dlp")
+        cmd[cmd.index("--socket-timeout") + 1] = str(timeout)
 
-        async with run_subprocess(cmd, timeout=120) as handle:
+        async with run_subprocess(cmd, timeout=timeout) as handle:
             assert handle.proc.stdout is not None
             stdout = await handle.proc.stdout.read()
             await handle.wait()
 
             if handle.proc.returncode != 0:
-                err_text = (
+                err_text = redact_text(
                     b"".join(handle.stderr_data).decode(errors="ignore")
                     if handle.stderr_data
                     else ""

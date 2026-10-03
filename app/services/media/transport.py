@@ -19,7 +19,7 @@ from collections.abc import (
     Mapping,
     Sequence,
 )
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol, cast
 from urllib.parse import urljoin, urlsplit, urlunsplit
@@ -39,6 +39,7 @@ from .models import (
     YOUTUBE_SHORT_DEFAULT_VARIANT,
 )
 from .validation import validate_candidate
+from .proxies import MediaProxyPool
 
 logger = logging.getLogger("app.services.media.transport")
 
@@ -183,6 +184,9 @@ class _CurlResponse:
 class CurlStreamingClient:
     """curl client that pins a prevalidated DNS answer for the request."""
 
+    def __init__(self, proxy_url: str | None = None) -> None:
+        self._proxy_url = proxy_url
+
     async def open(
         self,
         method: str,
@@ -208,6 +212,7 @@ class CurlStreamingClient:
                 allow_redirects=False,
                 stream=True,
                 impersonate="chrome",
+                proxy=self._proxy_url,
             )
         except BaseException:
             await session.close()
@@ -268,6 +273,9 @@ class MediaTransport:
         clock: Callable[[], float] = time.monotonic,
         process_runner: ProcessRunner | None = None,
         file_mover: FileMover = os.replace,
+        proxy_pool: MediaProxyPool | None = None,
+        proxy_client_factory: Callable[[str], StreamingClient] = CurlStreamingClient,
+        proxy_first_byte_timeout: float = 5.0,
     ) -> None:
         if max_bytes <= 0 or probe_bytes <= 0 or chunk_size <= 0:
             raise ValueError("transport byte limits must be positive")
@@ -281,6 +289,7 @@ class MediaTransport:
                 materialization_timeout,
                 transform_poll_interval,
                 cleanup_timeout,
+                proxy_first_byte_timeout,
             )
         ):
             raise ValueError("transport timeouts must be finite and positive")
@@ -293,6 +302,9 @@ class MediaTransport:
         self.output_dir = Path(output_dir).resolve()
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.client = client or CurlStreamingClient()
+        self.proxy_pool = proxy_pool or MediaProxyPool()
+        self._proxy_client_factory = proxy_client_factory
+        self.proxy_first_byte_timeout = proxy_first_byte_timeout
         self.url_policy = url_policy or URLPolicy()
         self.disk_budget = disk_budget or DiskBudget(self.output_dir)
         self.max_bytes = max_bytes
@@ -317,6 +329,7 @@ class MediaTransport:
         *,
         headers: Mapping[str, str] | None = None,
         deadline: float | None = None,
+        proxy_key: str | None = None,
     ) -> bytes:
         operation_deadline = (
             deadline if deadline is not None else self.clock() + self.request_timeout
@@ -329,7 +342,11 @@ class MediaTransport:
             **dict(headers or {}),
         }
         opened = await self._request(
-            "GET", url, headers=request_headers, deadline=operation_deadline
+            "GET",
+            url,
+            headers=request_headers,
+            deadline=operation_deadline,
+            proxy_key=proxy_key,
         )
         response = opened.response
         try:
@@ -339,7 +356,7 @@ class MediaTransport:
             first = True
             while len(data) < self.probe_bytes:
                 try:
-                    first_timeout = self.first_byte_timeout - (
+                    first_timeout = self._first_byte_budget(proxy_key) - (
                         self.clock() - opened.started_at
                     )
                     chunk = await asyncio.wait_for(
@@ -407,6 +424,8 @@ class MediaTransport:
                     request, candidate, materialization_deadline
                 )
             except (DownloadFailed, TransferTimeout):
+                for source in self._download_sources(candidate):
+                    self.proxy_pool.failed(request.platform, source.proxy_key)
                 descriptor = candidate.refresh
                 provider = (
                     refreshers.get(descriptor.provider)
@@ -717,6 +736,7 @@ class MediaTransport:
                     source.url,
                     headers=dict(source.http_headers),
                     deadline=deadline,
+                    proxy_key=source.proxy_key,
                 )
                 path, written = await self._stream_source(
                     source,
@@ -747,6 +767,8 @@ class MediaTransport:
             final_size = sum(path.stat().st_size for path in final_paths)
             self._check_actual_size(final_size)
             self._remaining(deadline)
+            for source in sources:
+                self.proxy_pool.succeeded(request.platform, source.proxy_key)
             return MaterializedItem(
                 final_paths,
                 final_size,
@@ -940,7 +962,11 @@ class MediaTransport:
         headers = {"Accept": "*/*", "User-Agent": "ytdlbot/2.0"}
         headers.update(dict(source.http_headers))
         opened = await self._request(
-            "GET", source.url, headers=headers, deadline=deadline
+            "GET",
+            source.url,
+            headers=headers,
+            deadline=deadline,
+            proxy_key=source.proxy_key,
         )
         response = opened.response
         extension = _extension(source)
@@ -976,7 +1002,7 @@ class MediaTransport:
                             (
                                 max(
                                     0,
-                                    self.first_byte_timeout
+                                    self._first_byte_budget(source.proxy_key)
                                     - (self.clock() - opened.started_at),
                                 )
                                 if first
@@ -1056,6 +1082,7 @@ class MediaTransport:
         headers: Mapping[str, str] | None = None,
         body_sensitive: bool = False,
         deadline: float | None = None,
+        proxy_key: str | None = None,
     ) -> _Opened:
         started_at = self.clock()
         operation_deadline = (
@@ -1065,21 +1092,27 @@ class MediaTransport:
         current_url = url
         current_method = method.upper()
         current_headers = dict(headers or {})
+        client = self.client
+        if proxy_key is not None:
+            try:
+                client = self._proxy_client_factory(self.proxy_pool.url(proxy_key))
+            except ValueError as error:
+                raise DownloadFailed("media proxy route is unavailable") from error
         for redirect_count in range(self.max_redirects + 1):
             try:
                 remaining = min(
                     self._remaining(operation_deadline),
-                    self.first_byte_timeout - (self.clock() - started_at),
+                    self._first_byte_budget(proxy_key) - (self.clock() - started_at),
                 )
                 resolved = await asyncio.wait_for(
                     self.url_policy.resolve(current_url), timeout=max(0, remaining)
                 )
                 request_remaining = min(
                     self._remaining(operation_deadline),
-                    self.first_byte_timeout - (self.clock() - started_at),
+                    self._first_byte_budget(proxy_key) - (self.clock() - started_at),
                 )
                 response = await asyncio.wait_for(
-                    self.client.open(
+                    client.open(
                         current_method,
                         current_url,
                         headers=current_headers,
@@ -1117,6 +1150,13 @@ class MediaTransport:
                 body_sensitive = False
             current_url = next_url
         raise DownloadFailed("too many media redirects")
+
+    def _first_byte_budget(self, proxy_key: str | None) -> float:
+        return (
+            self.proxy_first_byte_timeout
+            if proxy_key is not None
+            else self.first_byte_timeout
+        )
 
     async def _validate_candidate_urls(
         self, candidate: MediaCandidate, deadline: float
@@ -1159,7 +1199,18 @@ class MediaTransport:
             and fresh.auth_scope == original.auth_scope
             and fresh.refresh == descriptor
         )
-        if not identity_matches or not validate_candidate(request, fresh).usable:
+        validation_request = request
+        if request.album_selection:
+            # Both candidates already represent the selected delivery contract.
+            # Do not apply original album indices to the projected subset again.
+            identity_matches = identity_matches and tuple(
+                (item.media_id, item.kind) for item in original.items
+            ) == tuple((item.media_id, item.kind) for item in fresh.items)
+            validation_request = replace(request, album_selection=())
+        if (
+            not identity_matches
+            or not validate_candidate(validation_request, fresh).usable
+        ):
             raise DownloadFailed("refreshed candidate contract mismatch")
 
     def _remaining(self, deadline: float) -> float:

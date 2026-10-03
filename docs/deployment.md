@@ -216,6 +216,34 @@ sh "$RELEASE_DIR/scripts/deploy-release.sh"
 both commands is intentional: the first is an operator-visible check and the
 second owns the atomic release transaction.
 
+## Media proxies and PO-token sidecar maintenance
+
+`MEDIA_PROXY_URLS` is a JSON array of SOCKS5 URLs in primary/backup order, stored
+only in the existing protected VPS `.env`. Do not print `docker compose config`
+or container environment values when diagnosing credentials. YouTube uses the
+pool first. Local yt-dlp/gallery-dl extractors for the configured known platforms
+try direct first, then the pool after a transient/auth failure. Native API
+providers retain their direct fast path. A stream source carries an opaque route
+key; probes, redirects and downloads keep that route, with local DNS validation
+and pinning. A transfer failure cools that platform/route for 60 seconds and the
+single refresh obtains new URLs on the next available route. Proxy extraction
+attempts are bounded to 10 seconds; direct fallback attempts to 3 seconds.
+
+Only delete cookie sets whose expiry has been demonstrated. The old global
+`YTDLP_COOKIES_B64` contained invalid YouTube/Google cookies and was cleared for
+this release. Other platform cookies and Instagram sessions are preserved.
+
+Routine releases replace only `bot`, preserving the tested rollback contract.
+When changing `bgutil-ytdlp-pot-provider`, explicitly upgrade the project's
+`bgutil-pot` service to the exact matching pinned server version from the tested
+release Compose file. Under the same project deployment lock, verify the current
+container's Compose project/service/root labels, capture its previous image for
+rollback, pull the pinned image, and run `up -d --no-deps --no-build bgutil-pot`
+with `--project-directory /opt/ytdlbot` and the release Compose file. Check `/ping`
+from the bot's network and require the expected version before bot activation.
+If the check fails, restore that service's previous image. Never use an
+unqualified project-wide `up` or restart other applications on the shared host.
+
 ## Manual rollback with the same scripts
 
 The failed/candidate release directory contains the rollback script used by the

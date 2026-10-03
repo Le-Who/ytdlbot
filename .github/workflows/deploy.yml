@@ -57,6 +57,7 @@ jobs:
         run: |
           python -m pytest \
             tests/media/test_proxy_routes.py \
+            tests/media/test_range_downloads.py \
             tests/media/providers/test_ytdlp_provider.py \
             tests/media/providers/test_gallerydl_provider.py \
             tests/test_compose_contract.py \

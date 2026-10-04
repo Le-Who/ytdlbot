@@ -267,6 +267,120 @@ async def test_missing_audio_cannot_produce_usable_video():
     assert await provider.resolve(MediaRequest.from_url(URL)) == []
 
 
+@pytest.mark.parametrize("kind", [MediaKind.AUTO, MediaKind.VIDEO, MediaKind.AUDIO])
+@pytest.mark.parametrize("original_language", ["ru", "ja", "en-US"])
+async def test_youtube_original_audio_excludes_dubs_from_pipeline_fallbacks(
+    kind: MediaKind, original_language: str
+):
+    """Catches a higher-bitrate dub winning or returning during download failover."""
+    info = metadata(vertical=True)
+    dub, original = info["formats"][-2:]
+    dub.update(language="de", language_preference=5, abr=256)
+    original.update(language=original_language, language_preference=10, abr=128)
+    provider = YtDlpProvider(extract=AsyncMock(return_value=info))
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(provider)]), object(), object()
+    )
+
+    resolved = await pipeline.resolve(
+        build_media_request("https://youtube.com/shorts/example", kind=kind)
+    )
+
+    assert resolved.candidates
+    assert all(
+        candidate.audio_languages == (original_language,)
+        for candidate in resolved.candidates
+    )
+    assert resolved.candidates[0].sources[-1].format_id == "140-uk"
+    if kind is not MediaKind.AUDIO:
+        assert resolved.candidates[0].candidate_id == "136+140-uk"
+
+
+async def test_youtube_original_format_note_handles_missing_numeric_preference():
+    info = metadata()
+    dub, original = info["formats"][-2:]
+    dub.update(language="en-US", language_preference=5, abr=256)
+    original.update(language="ru", format_note="Russian original (default), medium")
+    provider = YtDlpProvider(extract=AsyncMock(return_value=info))
+
+    candidates = await provider.resolve(MediaRequest.from_url(URL))
+
+    assert candidates
+    assert all(candidate.audio_languages == ("ru",) for candidate in candidates)
+
+
+@pytest.mark.parametrize("muxed_language", ["en-US", None])
+async def test_youtube_muxed_audio_cannot_bypass_available_original(
+    muxed_language: str | None,
+):
+    info = metadata()
+    info["formats"][-1].update(language="ru", language_preference=10)
+    muxed = video_format("22", width=1920, height=1080, acodec="mp4a.40.2")
+    muxed.update(language=muxed_language, language_preference=5)
+    info["formats"].append(muxed)
+    provider = YtDlpProvider(extract=AsyncMock(return_value=info))
+
+    candidates = await provider.resolve(
+        MediaRequest.from_url(URL, kind=MediaKind.VIDEO, caller_scope="command")
+    )
+
+    assert candidates
+    assert all(candidate.audio_languages == ("ru",) for candidate in candidates)
+    assert candidates[0].candidate_id == "137+140-uk"
+
+
+async def test_youtube_original_muxed_video_remains_eligible():
+    info = metadata()
+    info["formats"][-1].update(language="ru", language_preference=10)
+    muxed = video_format("22", width=1920, height=1080, acodec="mp4a.40.2")
+    muxed.update(language="ru", language_preference=10)
+    info["formats"].append(muxed)
+    provider = YtDlpProvider(extract=AsyncMock(return_value=info))
+
+    candidates = await provider.resolve(
+        MediaRequest.from_url(URL, kind=MediaKind.VIDEO, caller_scope="command")
+    )
+
+    assert candidates[0].candidate_id == "22"
+    assert all(candidate.audio_languages == ("ru",) for candidate in candidates)
+
+
+async def test_explicit_youtube_audio_language_overrides_original_default():
+    info = metadata()
+    info["formats"][-1].update(language="ru", language_preference=10)
+    provider = YtDlpProvider(extract=AsyncMock(return_value=info))
+
+    candidates = await provider.resolve(MediaRequest.from_url(URL, audio_language="en"))
+
+    assert candidates
+    assert all(candidate.audio_languages == ("en",) for candidate in candidates)
+
+
+async def test_youtube_without_original_marker_retains_available_audio():
+    info = metadata()
+    info["formats"][-2].update(language_preference=5, abr=256)
+    provider = YtDlpProvider(extract=AsyncMock(return_value=info))
+
+    candidates = await provider.resolve(MediaRequest.from_url(URL))
+
+    assert candidates[0].audio_languages == ("en",)
+    assert any(candidate.audio_languages == ("uk",) for candidate in candidates)
+
+
+async def test_other_platform_audio_selection_is_unchanged():
+    info = metadata()
+    info["formats"][-2].update(abr=256)
+    info["formats"][-1].update(language="ru", language_preference=10)
+    provider = YtDlpProvider(extract=AsyncMock(return_value=info))
+
+    candidates = await provider.resolve(
+        build_media_request("https://www.instagram.com/reel/example/")
+    )
+
+    assert candidates[0].audio_languages == ("en",)
+    assert any(candidate.audio_languages == ("ru",) for candidate in candidates)
+
+
 async def test_strict_mp3_selects_requested_language_and_requires_conversion():
     provider = YtDlpProvider(extract=AsyncMock(return_value=metadata()))
     request = MediaRequest.from_url(

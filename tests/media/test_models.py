@@ -57,6 +57,60 @@ def test_default_short_quality_keeps_distinct_cache_identity_from_watch():
     assert short.cache_key != watch.cache_key
 
 
+@pytest.mark.parametrize(
+    ("url", "kind", "legacy_key"),
+    [
+        (
+            "https://youtube.com/shorts/LSie-2eT6gw",
+            MediaKind.AUTO,
+            "media:v1:06f84f5841757bb00d69addbb61ef0f1a5995bbc58ae9346ce491c5eac2ef6f7",
+        ),
+        (
+            "https://youtu.be/LSie-2eT6gw",
+            MediaKind.AUTO,
+            "media:v1:f7923175dd958d7cd4af10cfe1d3e4cade3bb0c547dfece81e62fb40fb34baf3",
+        ),
+        (
+            "https://youtu.be/LSie-2eT6gw",
+            MediaKind.AUDIO,
+            "media:v1:17f64c73da4cae14ab1b0494baf01cabe5ae7bd80d35f76340809f617096bf5c",
+        ),
+    ],
+)
+def test_original_audio_policy_does_not_reuse_cached_youtube_dub(
+    url: str, kind: MediaKind, legacy_key: str
+):
+    """Catches stale resolved media and Telegram file IDs hiding the audio fix."""
+    request = MediaRequest.from_url(url, kind=kind)
+
+    assert request.cache_key != legacy_key
+
+
+@pytest.mark.parametrize(
+    ("kind", "audio_language", "legacy_key"),
+    [
+        (
+            MediaKind.VIDEO,
+            "en",
+            "media:v1:33aeb37802e429754e4307a8fc8c9d49b40f7e30d6046e9368ea86b217682bb0",
+        ),
+        (
+            MediaKind.ANIMATION,
+            None,
+            "media:v1:a8351ad6ac67ca7a08898252c1a94c6f935df0f32598b2187a4836ed38ae6d88",
+        ),
+    ],
+)
+def test_original_audio_policy_keeps_unaffected_cache_entries(
+    kind: MediaKind, audio_language: str | None, legacy_key: str
+):
+    request = MediaRequest.from_url(
+        "https://youtu.be/LSie-2eT6gw", kind=kind, audio_language=audio_language
+    )
+
+    assert request.cache_key == legacy_key
+
+
 def test_cache_key_isolates_scopes_and_all_delivery_equivalence_fields():
     """Catches cache reuse across auth boundaries or changed output requests."""
     base = MediaRequest.from_url(

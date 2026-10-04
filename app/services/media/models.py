@@ -285,6 +285,13 @@ def request_cache_key(request: MediaRequest) -> str:
         "exact": request.exact,
         "output_variant": request.output_variant,
     }
+    if (
+        request.platform == "youtube"
+        and request.kind in {MediaKind.AUTO, MediaKind.VIDEO, MediaKind.AUDIO}
+        and not request.audio_language
+    ):
+        # Old resolved plans and Telegram file IDs may contain an automatic dub.
+        payload["audio_track_policy"] = "youtube-original-v1"
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=list)
     return f"media:v1:{hashlib.sha256(encoded.encode()).hexdigest()}"
 

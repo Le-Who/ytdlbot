@@ -36,6 +36,10 @@ boundary and evidence format.
   sources remain fallbacks. Different resolutions are tried in that order
   rather than raced against each other. Explicit quality and ordinary YouTube
   watch URLs retain their own selection behavior.
+- YouTube video and audio downloads use the original audio track when yt-dlp
+  identifies one. Automatic dubs are excluded from download fallbacks in that
+  case. An explicitly requested audio language takes precedence; when no
+  original is identified, the available tracks retain their usual ordering.
 - A direct FxTwitter MP4 may be delivered without an audio track when no audio
   was requested. Clips, transformed files, and explicit audio requests still
   require the expected audio stream.

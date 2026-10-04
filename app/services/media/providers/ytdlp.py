@@ -146,6 +146,18 @@ class YtDlpProvider:
             audio = [
                 fmt for fmt in audio if fmt.get("language") == request.audio_language
             ]
+        elif request.platform == "youtube":
+            # YouTube's default track may be a dub. yt-dlp marks the original
+            # with language_preference=10 and/or "original" in its format note.
+            original = [
+                fmt
+                for fmt in audio
+                if (_number(fmt.get("language_preference")) or 0) >= 10
+                or "original" in str(fmt.get("format_note") or "").lower()
+            ]
+            if original:
+                # Keep download retries on the original too, not just the winner.
+                audio = original
         audio.sort(
             key=lambda fmt: (fmt.get("vcodec") == "none", _number(fmt.get("abr")) or 0),
             reverse=True,
@@ -171,13 +183,7 @@ class YtDlpProvider:
                 and min(width or 0, height or 0) != request.quality.max_edge
             ):
                 continue
-            if request.kind is MediaKind.ANIMATION or (
-                _codec(video, "acodec")
-                and (
-                    not request.audio_language
-                    or video.get("language") == request.audio_language
-                )
-            ):
+            if request.kind is MediaKind.ANIMATION or video in audio:
                 candidates.append(self._candidate(request, info, video, None))
             elif not _codec(video, "acodec"):
                 for sound in audio:

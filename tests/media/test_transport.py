@@ -1409,6 +1409,76 @@ async def test_explicit_source_expiry_refreshes_before_stale_url_is_opened(
     await item.release(delete=True)
 
 
+@pytest.mark.parametrize("refreshed_language", ["en-US", None, "ru"])
+async def test_youtube_refresh_preserves_selected_audio_language(
+    tmp_path: Path, refreshed_language: str | None
+) -> None:
+    """Catches yt-dlp reusing an ordinal format ID for a different audio track."""
+    media, client = transport(tmp_path, [FakeResponse(), FakeResponse()])
+    stale = replace(
+        source_candidate(size=30_000_000),
+        audio_languages=("ru",),
+        sources=(replace(source_candidate().sources[0], expires_at=time.time() - 1),),
+        refresh=RefreshDescriptor("fixture", "1", "one"),
+    )
+    fresh = replace(
+        source_candidate("https://fresh.example/refreshed.mp4", size=30_000_000),
+        audio_languages=(refreshed_language,) if refreshed_language else (),
+    )
+    fallback = replace(
+        source_candidate(
+            "https://other.example/original.mp4",
+            size=30_000_000,
+            candidate_id="original-fallback",
+        ),
+        audio_languages=("ru",),
+    )
+
+    item = await media.materialize(
+        replace(request(), platform="youtube"),
+        [stale, fallback],
+        refreshers={"fixture": Refresher(fresh)},
+    )
+
+    assert item.candidate.audio_languages == ("ru",)
+    assert item.candidate.candidate_id == (
+        "one" if refreshed_language == "ru" else "original-fallback"
+    )
+    if refreshed_language != "ru":
+        assert all("fresh.example" not in str(call["url"]) for call in client.requests)
+    await item.release(delete=True)
+
+
+async def test_youtube_muted_animation_refresh_ignores_source_audio_language(
+    tmp_path: Path,
+) -> None:
+    media, _ = transport(tmp_path, [FakeResponse(), FakeResponse()])
+    stale = replace(
+        source_candidate(),
+        kind=MediaKind.ANIMATION,
+        has_audio=False,
+        audio_languages=("ru",),
+        sources=(replace(source_candidate().sources[0], expires_at=time.time() - 1),),
+        refresh=RefreshDescriptor("fixture", "1", "one"),
+    )
+    fresh = replace(
+        stale,
+        sources=source_candidate("https://fresh.example/muted.mp4").sources,
+        audio_languages=("en-US",),
+    )
+
+    item = await media.materialize(
+        replace(request(), platform="youtube", kind=MediaKind.ANIMATION),
+        [stale],
+        refreshers={"fixture": Refresher(fresh)},
+    )
+
+    assert item.candidate.kind is MediaKind.ANIMATION
+    assert not item.candidate.has_audio
+    assert item.candidate.sources == fresh.sources
+    await item.release(delete=True)
+
+
 @pytest.mark.asyncio
 async def test_refresh_exception_is_normalized_and_next_candidate_wins(
     tmp_path: Path,

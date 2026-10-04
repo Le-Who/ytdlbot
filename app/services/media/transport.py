@@ -1336,6 +1336,16 @@ class MediaTransport:
             and fresh.auth_scope == original.auth_scope
             and fresh.refresh == descriptor
         )
+        if (
+            request.platform == "youtube"
+            and original.has_audio
+            and original.audio_languages
+        ):
+            # yt-dlp can renumber duplicate format IDs between extractions.
+            # A refreshed URL must still refer to the selected audio language.
+            identity_matches = (
+                identity_matches and fresh.audio_languages == original.audio_languages
+            )
         validation_request = request
         if request.album_selection:
             # Both candidates already represent the selected delivery contract.

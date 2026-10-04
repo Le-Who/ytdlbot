@@ -12,11 +12,17 @@ contracts, durable job handling, and immutable bot-only deployment scripts.
 Those facts do **not** establish current production reachability of third-party
 providers.
 
-The 12-Short + 12-video production-IP run is intentionally pending Task 14. In
-particular, no checked-in evidence currently proves complete delivery through a
-free independent external YouTube route without cookies, a proxy, payment, or
-manual CAPTCHA. See [media release acceptance](docs/acceptance.md) for the exact
-boundary and evidence format.
+The October 4, 2026 checks downloaded the reported YouTube Short from the VPS
+through both configured SOCKS5 routes. A separate check of the original-audio
+fix matched the downloaded video's decoded audio against the Russian original
+track. See the [dated verification record](docs/verification-2026-10-04.md) for
+release identities, dependency versions, measurements, and their scope.
+
+The full 12-Short + 12-video production-IP run remains pending Task 14. A verified
+download of one Short does not establish statistical reliability or complete
+Telegram delivery through a free independent external YouTube route without
+cookies, a proxy, payment, or manual CAPTCHA. See
+[media release acceptance](docs/acceptance.md) for that evidence contract.
 
 ## Capabilities
 
@@ -40,9 +46,21 @@ boundary and evidence format.
   identifies one. Automatic dubs are excluded from download fallbacks in that
   case. An explicitly requested audio language takes precedence; when no
   original is identified, the available tracks retain their usual ordering.
+  Refreshed YouTube URLs must preserve a known selected audio language. Default
+  audible YouTube requests have a separate cache policy identity so older
+  translated downloads and Telegram file IDs are not reused.
+- YouTube uses the configured primary/backup SOCKS5 pool for extraction and
+  downloads. Other configured local extractors try direct access before the
+  proxy fallback. Media streams keep the extraction route; native API providers
+  retain their direct paths.
+- HTTP streams honor yt-dlp's bounded range size, validate every partial
+  response, and abort unread transfers during cancellation and failover.
 - A direct FxTwitter MP4 may be delivered without an audio track when no audio
   was requested. Clips, transformed files, and explicit audio requests still
   require the expected audio stream.
+- TikTok keeps a lightweight reserve resolver running while a selected yt-dlp
+  source downloads, so a failed transfer can use the ready fallback. A successful
+  native download is not held up by that reserve lookup.
 - Video, audio, photo, animation, document, mixed album, MP3, MP4, GIF-file, and
   explicit slideshow delivery paths.
 - Cancellation-safe queue leases and supervised yt-dlp, gallery-dl, ffmpeg, and
@@ -63,7 +81,7 @@ current configuration allows the route. Neither means production-IP verified.
 
 | Route | Implemented behavior | Eligibility | Production-IP evidence in this repository |
 |---|---|---|---|
-| YouTube / Shorts local | yt-dlp with pinned EJS/Deno/PO-token support, exact quality/audio/clip handling | Enabled when runtime dependencies are healthy | Pending controlled 24-link run |
+| YouTube / Shorts local | yt-dlp with pinned EJS/Deno/PO-token support, SOCKS5 fallback, original audio, and exact quality/clip handling | Enabled when runtime dependencies are healthy | One Short downloaded through both proxy routes; original audio checked separately; 24-link run pending |
 | TikTok | TikWM + SSSTik race; eligible Cobalt; one local fallback | Adapters declare support; endpoint/circuit state may disable a route | Pending controlled live run |
 | X/Twitter | FxTwitter + eligible Cobalt; yt-dlp fallback | Endpoint/circuit state applies | Pending controlled live run |
 | Instagram/Facebook public | Contract-gated SnapSave + eligible Cobalt; gallery-dl/yt-dlp fallback | SnapSave and Cobalt require explicit contract-verification flags | Pending controlled live run |
@@ -73,6 +91,10 @@ current configuration allows the route. Neither means production-IP verified.
 Personal cookies are not part of the ordinary public-provider race. Configured
 authorized Instagram/session or legacy cookie paths remain separate scopes and
 must not populate public cache entries.
+
+The default pipeline has no implemented independent YouTube provider. The
+`independent-youtube` entry is a routing slot, not a working external fallback.
+Configured proxy failover uses the same local yt-dlp backend.
 
 No provider quota is promised here. HTTP 403/429 and `Retry-After` are observed
 and classified at runtime; provider health and commercial terms can change.
@@ -149,6 +171,9 @@ Selected configuration:
 | `TELEGRAM_LOCAL_REQUIRED` | Require Local Bot API for readiness |
 | `MEDIA_DIR` | Persistent shared media directory |
 | `YTDLBOT_JOB_DB` | Persistent SQLite job-store path |
+| `MEDIA_PROXY_URLS` | JSON array of SOCKS5 URLs in primary/backup order; keep credentials outside Git |
+| `MEDIA_PROXY_PLATFORMS` | Platforms whose local extractors may use the pool; YouTube uses proxies first |
+| `POT_PROVIDER_URL` | bgutil PO-token server origin; Compose uses the project sidecar |
 | `COBALT_API_URL` | Comma-separated exact Cobalt origins; no origin is trusted automatically |
 | `COBALT_CONTRACT_VERIFIED` | Enables configured Cobalt routes only after contract verification |
 | `SNAPSAVE_CONTRACT_VERIFIED` | Enables SnapSave only after contract verification |
@@ -203,6 +228,9 @@ activation, rollback, and recovery commands. Rollback restores image and
 configuration but never rolls SQLite or Redis data backward. Production JSON
 logs opt into the existing shared Alloy/Loki stack without changing its other
 bot streams; the deployment guide documents the labels and redaction contract.
+The GitHub `production` environment requires reviewer approval after a release
+image has been verified and built. A merged commit or a successful build alone
+does not mean that the release is running on the VPS.
 
 ## Repository layout
 

@@ -1,8 +1,9 @@
 # Deployment and rollback
 
-This document describes the release machinery implemented in this repository. It
-does not claim that a candidate image, provider, or migration has been verified
-from the production VPS. That evidence belongs to the controlled Task 14 run.
+This document describes the implemented release, maintenance, and rollback
+procedures. Dated production checks are recorded separately in
+[verification-2026-10-04.md](verification-2026-10-04.md); their scope does not
+replace the complete [media acceptance procedure](acceptance.md).
 
 ## Release model
 
@@ -10,6 +11,9 @@ The routine release path is deliberately narrow:
 
 1. Test the exact Git SHA.
 2. Build the bot image once and address it by immutable registry digest.
+   The GitHub `production` environment then requires its configured reviewer
+   approval before the activation job starts. A waiting approval is not a
+   deployment failure, and the prior release continues serving requests.
 3. Upload only the allowlisted release payload to a fresh, project-scoped staging
    directory.
 4. Verify the payload, current production topology, disk budget, release SHA,
@@ -86,6 +90,9 @@ payload never contains or rewrites that file. Important runtime values are:
 | `MAX_MEDIA_FILE_MB` | Operator limit, at most `2000`; MB is exactly 1,000,000 bytes |
 | `MEDIA_DIR` | `/srv/ytdlbot/media` |
 | `YTDLBOT_JOB_DB` | `/srv/ytdlbot/state/jobs.sqlite3` |
+| `MEDIA_PROXY_URLS` | Protected JSON SOCKS5 route array; never expose its credentials in diagnostics |
+| `MEDIA_PROXY_PLATFORMS` | Platform allowlist for local extractor proxy fallback |
+| `POT_PROVIDER_URL` | Project bgutil sidecar; plugin and server must have matching pinned versions |
 
 Legacy `MAX_DL_MB` and `MAX_TG_UPLOAD_MB` are accepted only as an explicit,
 non-conflicting migration to `MAX_MEDIA_FILE_MB`. They are not separate runtime
@@ -230,8 +237,8 @@ single refresh obtains new URLs on the next available route. Proxy extraction
 attempts are bounded to 10 seconds; direct fallback attempts to 3 seconds.
 
 Only delete cookie sets whose expiry has been demonstrated. The old global
-`YTDLP_COOKIES_B64` contained invalid YouTube/Google cookies and was cleared for
-this release. Other platform cookies and Instagram sessions are preserved.
+`YTDLP_COOKIES_B64` contained invalid YouTube/Google cookies and was cleared on
+October 4, 2026. Other platform cookies and Instagram sessions were preserved.
 
 Routine releases replace only `bot`, preserving the tested rollback contract.
 When changing `bgutil-ytdlp-pot-provider`, explicitly upgrade the project's
@@ -243,6 +250,39 @@ with `--project-directory /opt/ytdlbot` and the release Compose file. Check `/pi
 from the bot's network and require the expected version before bot activation.
 If the check fails, restore that service's previous image. Never use an
 unqualified project-wide `up` or restart other applications on the shared host.
+
+The October 4 pins are Python 3.12.15, Deno 2.9.7, yt-dlp 2026.8.19,
+yt-dlp-ejs 0.8.0, and bgutil plugin/server 2.0.1. Treat `Dockerfile`,
+`requirements.txt`, and `docker-compose.yml` as the source of truth for a later
+release. Updating the bot image alone does not update the PO-token sidecar.
+
+## YouTube download troubleshooting
+
+YouTube's bot check may be surfaced as an access-denied extraction error even
+for a public video. Distinguish source privacy from network blocking using the
+bounded extraction result and the opaque route identifier. In the ordinary
+pipeline, a YouTube access denial is transient and allows the next configured
+proxy route; it does not permanently disable that provider as an auth failure.
+The default pipeline has no independent external YouTube downloader.
+
+Do not use a signed CDN URL extracted on one route for a direct or different
+proxy download. The reported October 4 Short returned HTTP 403 in that mixed
+route test. Probes, bounded HTTP ranges, downloads, and redirects must retain
+their selected route. An expired URL may be refreshed once within the remaining
+materialization deadline.
+
+For wrong-language audio, inspect the redacted format ID, language, and
+yt-dlp original-track markers rather than forcing Russian for every video.
+The resolver recognizes `language_preference >= 10` or `original` in
+`format_note`, excludes other audio candidates when an original is available,
+and respects an explicitly requested language. Refreshed audible YouTube
+candidates must retain a known selected language; ordinal format IDs alone are
+not stable track identity. Muted animations have no audio-language constraint.
+
+Default audible YouTube cache keys include `audio_track_policy` with value
+`youtube-original-v1`. This bypasses older translated plans and Telegram file
+IDs without clearing unrelated Redis data. Do not use a database-wide cache
+flush to repair a single download.
 
 ## Manual rollback with the same scripts
 

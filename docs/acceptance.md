@@ -4,8 +4,9 @@ Acceptance has two deliberately separate layers:
 
 1. **Offline release contracts** are deterministic and run in CI without calling
    public media providers.
-2. **Controlled live evidence** is opt-in, runs from the production VPS in Task
-   14, and is the only basis for production-provider or latency claims.
+2. **Controlled live evidence** is opt-in and runs from the production VPS.
+   Record bounded troubleshooting checks separately from Task 14 delivery and
+   statistical acceptance; each claim must stay within its measured scope.
 
 Passing the offline suite means that the implemented contracts work against local
 fixtures and fakes. It does not prove that YouTube or any external provider works
@@ -54,8 +55,42 @@ bash -n scripts/bootstrap-production.sh scripts/bootstrap-migrate-production.sh 
   scripts/rollback-release.sh
 ```
 
-Run `docker compose config` when Docker is installed. Lack of Docker is reported,
+Run `docker compose config --quiet` when Docker is installed so resolved proxy
+credentials and other secrets are not printed. Lack of Docker is reported,
 not emulated and not described as a successful Compose runtime check.
+
+Use an isolated test environment rather than the production `.env`. The webhook
+fixtures expect `TELEGRAM_SECRET_TOKEN=test-secret`; preserve that value instead
+of overriding it with another CI placeholder. `tests/conftest.py` supplies the
+test defaults when those variables are absent.
+
+When exporting a Windows checkout for Linux verification, preserve the LF
+line endings in committed shell scripts:
+
+```sh
+git -c core.autocrlf=false archive --format=tar --output=source.tar <tested-sha>
+```
+
+An archive converted to CRLF by local Git settings does not reproduce the Linux
+release checkout and can fail before a deployment script reaches its checks.
+
+### YouTube audio and HTTP transport checks
+
+The focused provider, request identity, and transport suites verify original
+audio selection, explicit language overrides, exclusion of dubs from candidate
+fallbacks, muxed-format eligibility, and known-language preservation on refresh.
+They also cover bounded range responses and cancellation of unread HTTP
+transfers. Run them explicitly with:
+
+```sh
+python -m pytest tests/media/providers/test_ytdlp_provider.py \
+  tests/media/test_models.py tests/media/test_transport.py \
+  tests/media/test_range_downloads.py tests/media/test_proxy_routes.py --no-cov -q
+```
+
+An original-audio live check should compare the decoded output audio with the
+independently downloaded original track. A format label or the presence of any
+audio stream alone does not establish that an automatic dub was avoided.
 
 ## The 24-link YouTube manifest
 
@@ -95,6 +130,12 @@ that a free independent external YouTube route performs complete delivery withou
 cookies, proxies, payment, or manual CAPTCHA. This remains an open Task 14
 criterion. Metadata, a provider health endpoint, a web page, or a GitHub-hosted
 diagnostic does not close it.
+
+The [October 4 verification record](verification-2026-10-04.md) documents the
+reported Short downloaded through the primary and backup SOCKS5 routes and the
+separate original-audio comparison. These checks exercise the local yt-dlp
+backend through approved proxies. They do not establish an independent YouTube
+provider, a 24-link result, p50/p95 latency, or Telegram full-delivery acceptance.
 
 ## Opt-in network diagnostics
 

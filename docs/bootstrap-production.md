@@ -40,6 +40,8 @@ release.
 
 Every routine release repeats those checks in `BOOTSTRAP_MODE=check` and
 refuses activation if either the live topology or recorded evidence differs.
-Changing dependency services remains a separate, explicitly authorized
-bootstrap operation; the routine release command stays bot-only with
-`--no-deps --no-build`.
+Changing shared topology remains a separate, explicitly authorized bootstrap
+operation. Updating the existing PO-token sidecar image uses the scoped
+[dependency maintenance procedure](deployment.md#media-proxies-and-po-token-sidecar-maintenance),
+including the project lock, version check, and captured rollback image. The
+routine release command stays bot-only with `--no-deps --no-build`.

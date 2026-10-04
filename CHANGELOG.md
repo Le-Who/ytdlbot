@@ -2,6 +2,67 @@
 
 All notable changes to this project will be documented in this file.
 
+## 2026-10-04 — YouTube original audio and proxy downloads
+
+### Fixed
+
+- Prefer the original YouTube audio track when yt-dlp identifies one, including
+  video, Shorts, and audio-only requests. Exclude dubs from download fallbacks
+  in that case; an explicitly requested language still takes precedence.
+- Preserve a known selected audio language when refreshing a YouTube URL, since
+  ordinal format IDs can be reassigned between extractions. Muted animations
+  remain outside that audio constraint.
+- Version default audible YouTube cache identities so earlier translated plans
+  and Telegram file IDs do not hide the original-audio fix.
+- Honor yt-dlp's bounded HTTP ranges; validate response offsets, lengths,
+  representation consistency, and transfer completion. Abort unread HTTP
+  transfers during cancellation and failover.
+
+### Changed
+
+- Add configured primary/backup SOCKS5 routes. YouTube uses proxies first; other
+  configured local extractors try direct access before the proxy fallback.
+  Extracted stream URLs retain their opaque route through probes and downloads.
+- Classify public YouTube access denials as transient so a blocked route can
+  fall back without permanently disabling the provider.
+- Clear the demonstrated invalid global YouTube/Google cookie set in production;
+  preserve other platform cookies and Instagram sessions.
+- Pin Python 3.12.15, Deno 2.9.7, and matching bgutil plugin/server 2.0.1. Update
+  the selected runtime and test packages recorded in `requirements.txt` and
+  `requirements-ci.txt`; yt-dlp remains pinned to 2026.8.19.
+
+### Verified
+
+- Full Linux suite for the original-audio patch: 1,278 passed, 4 skipped,
+  5 deselected; coverage 75.79%.
+- Real VPS downloads of the reported Short through both proxy routes, plus a
+  separate decoded-audio comparison against its Russian original. See the
+  [October 4 verification record](docs/verification-2026-10-04.md) for release
+  IDs, timings, and the limits of those checks.
+
+## 2026-09-22 to 2026-09-28 — Media download selection and fallback
+
+- Prefer 720p for default Shorts, then 1080p, retaining larger formats as
+  fallbacks. Preserve explicit quality requests and ordinary watch-URL behavior.
+- Prefer lighter compatible video plans for default command-scoped requests.
+- Accept untouched direct FxTwitter videos without audio when no audio or
+  transformation was requested; explicit audio and transformed outputs still
+  require their expected audio stream.
+- Keep a cheap TikTok reserve resolver active during a selected yt-dlp transfer;
+  consume its result after transfer failure and cancel it after successful
+  materialization.
+
+## 2026-09-20 to 2026-09-21 — Release verification and shared logging
+
+- Add a bounded candidate delivery smoke alongside the isolated legacy baseline
+  collector; preserve explicit unmeasured status for the full statistical run.
+- Normalize application and Uvicorn JSON records for the existing shared
+  Alloy/Loki stack, with correlated winning-candidate measurements and secret
+  redaction.
+- Bound release-critical CI verification, authenticate the remote registry
+  ephemerally, verify payload ownership, and resolve candidate configuration
+  from the existing project root.
+
 ## [Unreleased] — High-Throughput Routing & Parsing Optimization (2026-05-11)
 
 ### Performance & Optimization

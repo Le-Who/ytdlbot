@@ -1,8 +1,5 @@
 # Coding standards
 
-Read the branches selected by [AGENTS.md](AGENTS.md). Linked contracts and
-procedures remain authoritative; code links identify their implementation.
-
 ## Changes and verification
 
 Trace every changed interface to its consumers, including settings and dependency
@@ -23,8 +20,7 @@ Webhook fixtures expect `TELEGRAM_SECRET_TOKEN=test-secret`.
 
 Read [offline acceptance](docs/acceptance.md#offline-acceptance) before changing
 media behavior, including cancellation and callback compatibility. Extend
-[media models](app/services/media/models.py) through the shared pipeline;
-providers resolve candidates while the pipeline owns preferences and sends.
+[media models](app/services/media/models.py) through the shared pipeline.
 
 - **Request or cache identity:** Trace every changed field through
   [media cache](app/core/media_cache.py), transformation, and delivery consumers
@@ -73,5 +69,4 @@ secrets; report an unavailable Docker runtime as an unrun check.
 
 Measure a baseline before optimizing, then compare the same request semantics
 and environment afterward. Separate download, transform, and delivery costs;
-retain contract checks while measuring the affected path. Production claims
-follow the [acceptance evidence boundary](docs/acceptance.md#current-verification-boundary).
+retain contract checks while measuring the affected path.

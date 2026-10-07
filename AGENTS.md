@@ -1,14 +1,12 @@
 # Repository instructions
 
-YTDL Bot shares one media pipeline across Telegram and HTTP entrypoints, with a
-durable SQLite inbox and Local Bot API delivery. Use [README.md](README.md) for
-the module map and setup.
+Read every matching route for your task:
 
-## Read for the task
-
+- **Setup or navigation:** Use [README.md](README.md).
 - **Code, tests, dependencies, or configuration:** Before editing, read
   [changes and verification](CODING_STANDARDS.md#changes-and-verification).
-- **Media pipeline, requests, providers, cache, transport, callbacks, or sends:** Read
+- **Media pipeline, requests, providers, cache, transport, callbacks, sends, downloads,
+  conversion, queues, subprocesses, or cancellation:** Read
   [media contracts](CODING_STANDARDS.md#media-contracts).
 - **Webhooks, jobs, drain, recovery, or Telegram sends:** Read
   [durable delivery](CODING_STANDARDS.md#durable-delivery).

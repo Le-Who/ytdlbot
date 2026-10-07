@@ -1,34 +1,23 @@
 # Repository instructions
 
-YTDL Bot has one Telegram media pipeline, a durable SQLite job inbox, and a
-shared Local Telegram Bot API delivery profile. Start with the affected path;
-the module map and setup are in [README.md](README.md).
+YTDL Bot shares one media pipeline across Telegram and HTTP entrypoints, with a
+durable SQLite inbox and Local Bot API delivery. Use [README.md](README.md) for
+the module map and setup.
 
 ## Read for the task
 
-- **Code, tests, dependencies, or configuration:** Read
-  [CODING_STANDARDS.md](CODING_STANDARDS.md) before editing, then use its relevant
-  sections.
-- **Media requests, providers, cache, transport, callbacks, or delivery:** Read
-  [media acceptance](docs/acceptance.md) for compatibility obligations and the
-  evidence needed to establish provider behavior.
-- **Releases, Compose, readiness, or production operations:** Read
-  [deployment and rollback](docs/deployment.md) and the current
-  [release workflow](.github/workflows/deploy.yml). The release branch is `vps`.
-- **Initial shared media/state volume migration:** Also read
-  [production bootstrap](docs/bootstrap-production.md). This is a separately
-  authorized operation with a different scope from a routine bot release.
+- **Code, tests, dependencies, or configuration:** Before editing, read
+  [changes and verification](CODING_STANDARDS.md#changes-and-verification).
+- **Media pipeline, requests, providers, cache, transport, callbacks, or sends:** Read
+  [media contracts](CODING_STANDARDS.md#media-contracts).
+- **Webhooks, jobs, drain, recovery, or Telegram sends:** Read
+  [durable delivery](CODING_STANDARDS.md#durable-delivery).
+- **Settings, dependencies, logging, readiness, Compose, or releases:** Read
+  [runtime and release boundaries](CODING_STANDARDS.md#runtime-and-release-boundaries).
+- **Optimization:** Read [performance evidence](CODING_STANDARDS.md#performance-evidence).
+- **Live provider checks or production delivery/performance claims:** Read
+  [verification boundaries](docs/acceptance.md#current-verification-boundary),
+  [controlled runs](docs/acceptance.md#controlled-task-14-run), and
+  [redacted evidence](docs/acceptance.md#redacted-evidence-format).
 
-## Evidence and reporting
-
-Provider adapters, offline contracts, and GitHub network diagnostics establish
-different things. Keep production reachability, full Telegram delivery, and
-performance claims within the measured scope defined by media acceptance.
-
-Use the existing documentation as the home for changes to setup, contracts,
-acceptance, and deployment procedures. Keep tokens, cookies, sessions, provider
-credentials, signed media URLs, and unredacted user data out of Git and reports.
-
-Keep commits, code comments, and work reports free of emojis. Describe the
-changed behavior and the verification performed; include any unrun relevant
-check with its concrete limitation.
+Keep commits, code comments, and work reports emoji-free.

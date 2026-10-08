@@ -151,6 +151,30 @@ class JobStore:
     async def get_update(self, update_id: int) -> JobRecord | None:
         return await self._run(self._get_update_sync, update_id)
 
+    async def has_unsafe_deliveries(self, job_id: str) -> bool:
+        """Whether a whole-request retry could repeat a sent/uncertain item."""
+        return await self._run(self._has_unsafe_deliveries_sync, job_id)
+
+    async def supersede_failed_job(
+        self, job_id: str, *, successor_id: str, owner_id: str
+    ) -> bool:
+        """Retire the latest failed attempt under a live successor's ownership.
+
+        Follow earlier supersessions because the request cache may still hold
+        an older job ID after a transient cache write failure.
+        """
+        return await self._run(
+            self._supersede_failed_job_sync,
+            job_id,
+            successor_id,
+            owner_id,
+            self._clock(),
+        )
+
+    async def begin_retry_token(self, token: str) -> bool:
+        """Claim a polling retry, retaining uncertainty across process restarts."""
+        return await self._run(self._begin_retry_token_sync, token, self._clock())
+
     async def acquire_worker(self, owner_id: str, *, lease_seconds: float = 30) -> bool:
         _validate_owner(owner_id)
         _validate_lease(lease_seconds)
@@ -531,8 +555,7 @@ class JobStore:
             connection.execute(f"PRAGMA busy_timeout = {probe_timeout_ms}")
             connection.execute("BEGIN IMMEDIATE")
             lease = connection.execute(
-                "SELECT 1 FROM worker_lease "
-                "WHERE singleton = 1 AND expires_at > ?",
+                "SELECT 1 FROM worker_lease WHERE singleton = 1 AND expires_at > ?",
                 (now,),
             ).fetchone()
             if lease is None:
@@ -886,6 +909,76 @@ class JobStore:
             connection.close()
         return DeliveryOutcome(row["outcome"]) if row is not None else None
 
+    def _has_unsafe_deliveries_sync(self, job_id: str) -> bool:
+        connection = self._connect()
+        try:
+            return (
+                connection.execute(
+                    "SELECT 1 FROM deliveries WHERE job_id = ? AND outcome != 'failed' LIMIT 1",
+                    (job_id,),
+                ).fetchone()
+                is not None
+            )
+        finally:
+            connection.close()
+
+    def _begin_retry_token_sync(self, token: str, now: float) -> bool:
+        with self._transaction() as connection:
+            cursor = connection.execute(
+                """
+                INSERT INTO deliveries(job_id, item_key, outcome, updated_at, finalized)
+                VALUES (?, '__job__', 'uncertain', ?, 0)
+                ON CONFLICT(job_id, item_key) DO UPDATE SET
+                    outcome = 'uncertain', updated_at = excluded.updated_at, finalized = 0
+                WHERE deliveries.outcome = 'failed' AND deliveries.finalized = 1
+                """,
+                (f"retry:{token}", now),
+            )
+        return cursor.rowcount == 1
+
+    def _supersede_failed_job_sync(
+        self, job_id: str, successor_id: str, owner_id: str, now: float
+    ) -> bool:
+        with self._transaction() as connection:
+            if not _owns_live_job(connection, successor_id, owner_id, now):
+                return False
+            visited: set[str] = set()
+            while job_id != successor_id:
+                if job_id in visited:
+                    return False
+                visited.add(job_id)
+                row = connection.execute(
+                    "SELECT state, checkpoint FROM jobs WHERE job_id = ?", (job_id,)
+                ).fetchone()
+                if row is None:
+                    return False
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM deliveries WHERE job_id = ? AND outcome != 'failed' LIMIT 1",
+                        (job_id,),
+                    ).fetchone()
+                    is not None
+                ):
+                    return False
+                checkpoint = json.loads(row["checkpoint"]) if row["checkpoint"] else {}
+                if row["state"] == JobState.COMPLETED:
+                    next_id = checkpoint.get("superseded_by")
+                    if not isinstance(next_id, str):
+                        return False
+                    job_id = next_id
+                    continue
+                if row["state"] not in {JobState.FAILED, JobState.CHECKPOINTED}:
+                    return False
+                checkpoint["superseded_by"] = successor_id
+                connection.execute(
+                    "UPDATE jobs SET state = 'completed', owner_id = NULL, claim_expires_at = NULL, "
+                    "checkpoint = ?, error = NULL, updated_at = ? WHERE job_id = ?",
+                    (_encode_json(checkpoint), now, job_id),
+                )
+                return True
+            # The same callback job can resume after a worker restart.
+            return True
+
     def _has_failed_deliveries_sync(self, job_id: str) -> bool:
         connection = self._connect()
         try:
@@ -1097,6 +1190,29 @@ async def begin_current_delivery(item_keys: tuple[str, ...]) -> None:
     )
     if not started:
         raise RuntimeError("durable delivery attempt could not claim job ownership")
+
+
+def current_delivery_job_id() -> str | None:
+    context = _delivery_job.get()
+    return context.job_id if context is not None else None
+
+
+async def current_job_can_retry() -> bool:
+    context = _delivery_job.get()
+    return context is None or not await context.store.has_unsafe_deliveries(
+        context.job_id
+    )
+
+
+async def prepare_current_retry(predecessor_id: str | None) -> bool:
+    context = _delivery_job.get()
+    if context is None or predecessor_id is None or predecessor_id == context.job_id:
+        return True
+    if context.owner_id is None:
+        return False
+    return await context.store.supersede_failed_job(
+        predecessor_id, successor_id=context.job_id, owner_id=context.owner_id
+    )
 
 
 def mark_current_job_failed(error: BaseException) -> None:

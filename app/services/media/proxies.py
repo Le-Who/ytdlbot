@@ -36,7 +36,7 @@ class MediaProxyPool:
         urls: Sequence[str] = (),
         *,
         platforms: frozenset[str] = DEFAULT_PROXY_PLATFORMS,
-        attempt_timeout: float = 10.0,
+        attempt_timeout: float = 20.0,
         direct_timeout: float = 3.0,
         cooldown: float = 60.0,
         clock: Callable[[], float] = time.monotonic,
@@ -84,6 +84,11 @@ class MediaProxyPool:
     def configured(self, platform: str) -> bool:
         return self.enabled and platform in self.platforms
 
+    @property
+    def extraction_timeout(self) -> float:
+        """Cover direct fallback, every configured proxy and process cleanup."""
+        return self.direct_timeout + len(self._urls) * self.attempt_timeout + 1.0
+
     def url(self, key: str) -> str:
         try:
             return self._urls[key]
@@ -125,6 +130,7 @@ class MediaProxyPool:
             return await operation(None), None
         last_error: ProviderError | None = None
         for key in self.routes(platform):
+            started = self.clock()
             budget = self.attempt_timeout if key else self.direct_timeout
             if deadline is not None:
                 budget = min(budget, deadline - self.clock())
@@ -150,6 +156,7 @@ class MediaProxyPool:
                     "media route resolved: platform=%s route=%s",
                     platform,
                     key or "direct",
+                    extra={"duration_ms": round((self.clock() - started) * 1000, 3)},
                 )
                 return result, key
             self.failed(platform, key)
@@ -158,6 +165,12 @@ class MediaProxyPool:
                 platform,
                 key or "direct",
                 last_error.kind.value,
+                extra={
+                    "op": "media-route-failed",
+                    "duration_ms": round((self.clock() - started) * 1000, 3),
+                    "error": str(last_error),
+                    "metrics": {"timeout_seconds": budget},
+                },
             )
         assert last_error is not None
         if auth_scope == "public" and last_error.kind is FailureKind.AUTH:

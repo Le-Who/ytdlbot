@@ -72,6 +72,8 @@ class YtDlpService:
         proxy_url: str | None = None,
         override_proxy: bool = False,
         timeout: float = 120.0,
+        socket_timeout: float | None = None,
+        extractor_retries: int = 3,
     ) -> dict[str, Any]:
         """Извлекает метаданные видео через subprocess yt-dlp (async isolation)."""
         from app.core.process import run_subprocess
@@ -94,13 +96,15 @@ class YtDlpService:
             proxy=proxy,
             user_agent="" if is_vk else None,
             fallback_clients=fallback_clients,
+            timeout=min(timeout, socket_timeout)
+            if socket_timeout is not None
+            else timeout,
+            extractor_retries=extractor_retries,
         )
         # Ensure we use the current python executable for stability
         cmd[0] = sys.executable
         cmd.insert(1, "-m")
         cmd.insert(2, "yt_dlp")
-        cmd[cmd.index("--socket-timeout") + 1] = str(timeout)
-
         async with run_subprocess(cmd, timeout=timeout) as handle:
             assert handle.proc.stdout is not None
             stdout = await handle.proc.stdout.read()

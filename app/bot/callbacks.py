@@ -17,6 +17,7 @@ from telegram.error import BadRequest, NetworkError
 from telegram.ext import ContextTypes
 
 from app.bot.keyboards import build_format_keyboard
+from app.bot.retry import on_retry
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID, SLIDESHOW_PHOTO_FORMAT_ID
 from app.core import state
 from app.core.config import (
@@ -53,6 +54,7 @@ __all__ = [
     "on_pick",
     "on_cancel",
     "on_send",
+    "on_retry",
     "on_convert_to_gif",
     "on_slideshow",
     "on_save_as_gif_file",
@@ -385,6 +387,19 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         except Exception as e:
             logger.warning("UI update failed", extra={"error": str(e)})
 
+    async def retry_keyboard(request):
+        from app.bot.retry import save_retry_request
+
+        assert isinstance(q.message, Message)
+        return await save_retry_request(
+            request,
+            user_id=user_id,
+            chat_id=q.message.chat_id,
+            message_id=q.message.message_id,
+            caption="🎵" if request.kind.value == "audio" else "📹",
+            reply_markup=kb_error,
+        )
+
     success = await DownloadOrchestrator.process_download(
         token=token,
         chat_id=q.message.chat_id,
@@ -393,6 +408,7 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         fmt_size=fmt_size,
         update_ui=update_progress_ui,
         kb_error=kb_error,
+        retry_keyboard=retry_keyboard,
     )
 
     if success:

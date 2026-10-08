@@ -87,6 +87,18 @@ async def _deliver_private_pipeline(
         caller_scope="private",
         exact=exact,
     )
+
+    async def retry_markup():
+        from app.bot.retry import save_retry_request
+
+        return await save_retry_request(
+            request,
+            user_id=user.id,
+            chat_id=chat.id,
+            message_id=status.message_id,
+            caption="🎵" if kind == "audio" else "📹",
+        )
+
     try:
         if request.platform == "tiktok" and request.kind.value == "auto":
             cached_count = await pipeline.cached_item_count(request)
@@ -132,7 +144,12 @@ async def _deliver_private_pipeline(
                 "error": str(error),
             },
         )
-        await status.edit_text(str(error))
+        from app.bot.retry import can_retry_error
+
+        await status.edit_text(
+            str(error),
+            reply_markup=await retry_markup() if await can_retry_error(error) else None,
+        )
         return
     if receipt.success:
         try:
@@ -143,7 +160,12 @@ async def _deliver_private_pipeline(
     error_text = next(
         (item.error for item in receipt.items if item.error), Texts.SEND_ERROR
     )
-    await status.edit_text(error_text)
+    from app.bot.retry import can_retry_delivery
+
+    await status.edit_text(
+        error_text,
+        reply_markup=await retry_markup() if can_retry_delivery(receipt) else None,
+    )
 
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

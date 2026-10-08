@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 
@@ -76,7 +77,9 @@ async def test_write_probe_commits_only_dedicated_health_state(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_write_probe_propagates_commit_failure_and_rolls_back(tmp_path, monkeypatch):
+async def test_write_probe_propagates_commit_failure_and_rolls_back(
+    tmp_path, monkeypatch
+):
     path = tmp_path / "jobs.sqlite3"
     store = JobStore(path)
     await store.accept_update(update_payload(12))
@@ -249,6 +252,88 @@ async def test_checkpointed_job_is_recovered_after_worker_restart(tmp_path):
     assert recovered is not None
     assert recovered.id == "401"
     assert recovered.checkpoint == {"stage": "downloaded"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "outcome", [DeliveryOutcome.SUCCESS, DeliveryOutcome.UNCERTAIN]
+)
+async def test_manual_retry_refuses_unsafe_delivery_in_an_older_cached_chain(
+    tmp_path, outcome
+):
+    store = JobStore(tmp_path / "jobs.sqlite3")
+    await store.accept_update(update_payload(1))
+    first = await store.claim_next("worker")
+    assert await store.fail(first.id, "extraction timeout", owner_id="worker")
+    await store.accept_update(update_payload(2))
+    second = await store.claim_next("worker")
+    assert await store.supersede_failed_job(
+        first.id, successor_id=second.id, owner_id="worker"
+    )
+    await store.record_delivery(second.id, outcome)
+    assert await store.fail(second.id, "later failure", owner_id="worker")
+    await store.accept_update(update_payload(3))
+    third = await store.claim_next("worker")
+
+    assert not await store.supersede_failed_job(
+        first.id, successor_id=third.id, owner_id="worker"
+    )
+    assert (await store.get_update(2)).state is JobState.FAILED
+    assert (await store.get_update(1)).checkpoint == {"superseded_by": second.id}
+
+
+@pytest.mark.asyncio
+async def test_manual_retry_requires_live_successor_ownership(tmp_path):
+    now = [1_700_000_000.0]
+    store = JobStore(tmp_path / "jobs.sqlite3", clock=lambda: now[0])
+    await store.accept_update(update_payload(1))
+    first = await store.claim_next("worker", lease_seconds=1)
+    assert await store.fail(first.id, "extraction timeout", owner_id="worker")
+    await store.accept_update(update_payload(2))
+    second = await store.claim_next("worker", lease_seconds=1)
+    now[0] += 2
+
+    assert not await store.supersede_failed_job(
+        first.id, successor_id=second.id, owner_id="worker"
+    )
+    assert (await store.get_update(1)).state is JobState.FAILED
+
+
+@pytest.mark.asyncio
+async def test_manual_retry_cannot_supersede_a_completed_request(tmp_path):
+    store = JobStore(tmp_path / "jobs.sqlite3")
+    await store.accept_update(update_payload(1))
+    first = await store.claim_next("worker")
+    assert await store.complete(first.id, owner_id="worker")
+    await store.accept_update(update_payload(2))
+    second = await store.claim_next("worker")
+
+    assert not await store.supersede_failed_job(
+        first.id, successor_id=second.id, owner_id="worker"
+    )
+    assert (await store.get_update(1)).checkpoint is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", list(DeliveryOutcome))
+async def test_polling_retry_claim_is_atomic_and_only_known_failure_reopens_it(
+    tmp_path, outcome
+):
+    path = tmp_path / "jobs.sqlite3"
+    first, second = JobStore(path), JobStore(path)
+    await first.initialize()
+    await second.initialize()
+    claims = await asyncio.gather(
+        first.begin_retry_token("token"), second.begin_retry_token("token")
+    )
+    assert sum(claims) == 1
+    # A fresh store models a process restart before the send was confirmed.
+    reopened = JobStore(path)
+    assert not await reopened.begin_retry_token("token")
+    await first.record_delivery("retry:token", outcome)
+    assert await reopened.begin_retry_token("token") is (
+        outcome is DeliveryOutcome.FAILED
+    )
 
 
 @pytest.mark.asyncio

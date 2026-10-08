@@ -20,6 +20,7 @@ from .models import (
 from .pipeline import (
     ArtifactValidationError,
     CallbackDataError,
+    MediaDeliveryUncertainError,
     MediaPipeline,
     MediaPipelineError,
     MediaResolutionError,
@@ -58,6 +59,7 @@ __all__ = [
     "DeliveryTarget",
     "MaterializedItem",
     "MediaCandidate",
+    "MediaDeliveryUncertainError",
     "MediaItem",
     "MediaKind",
     "MediaPipeline",

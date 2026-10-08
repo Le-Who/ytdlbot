@@ -2,6 +2,8 @@ import json
 import subprocess
 import sys
 import unittest
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,6 +12,43 @@ from app.constants import GIF_FORMAT_ID
 from app.services.ytdlp.builders import YtDlpCLIBuilder
 from app.services.ytdlp.exceptions import AccessDeniedError
 from app.services.ytdlp.service import YtDlpService
+
+
+async def test_extraction_keeps_socket_retries_inside_the_process_budget(monkeypatch):
+    """A stalled socket must leave time for extraction and its bounded retry."""
+    from app.core import process
+    from yt_dlp import parse_options
+
+    observed = {}
+
+    @asynccontextmanager
+    async def run(command, *, timeout):
+        observed["timeout"] = timeout
+        observed["options"] = parse_options(command[3:]).ydl_opts
+        yield SimpleNamespace(
+            proc=SimpleNamespace(
+                stdout=SimpleNamespace(
+                    read=AsyncMock(return_value=b'{"id":"example"}')
+                ),
+                returncode=0,
+            ),
+            wait=AsyncMock(),
+            stderr_data=[],
+        )
+
+    monkeypatch.setattr(process, "run_subprocess", run)
+    result = await YtDlpService().extract(
+        "https://youtu.be/example",
+        use_cookies=False,
+        timeout=20,
+        socket_timeout=3,
+        extractor_retries=1,
+    )
+
+    assert result == {"id": "example"}
+    assert observed["timeout"] == 20
+    assert observed["options"]["socket_timeout"] == 3
+    assert observed["options"]["extractor_retries"] == 1
 
 
 @pytest.mark.parametrize("height", [720, 1080])

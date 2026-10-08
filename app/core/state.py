@@ -84,9 +84,11 @@ disk_critical: bool = False
 # Глобальный объект приложения Telegram (инициализируется в main.py)
 if TYPE_CHECKING:
     from telegram.ext import Application
+    from app.core.job_store import JobStore
     from app.services.media.pipeline import MediaPipeline
 bot_app: Application | None = None
 media_pipeline: MediaPipeline | None = None
+job_store: JobStore | None = None
 
 if REDIS_URL:
     import redis.asyncio as redis

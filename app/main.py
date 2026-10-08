@@ -250,6 +250,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         CallbackQueryHandler(callbacks.on_send, pattern=r"^(?:m2\|)?send\|")
     )
     bot_app.add_handler(
+        CallbackQueryHandler(callbacks.on_retry, pattern=r"^m2\|retry\|")
+    )
+    bot_app.add_handler(
         CallbackQueryHandler(callbacks.on_convert_to_gif, pattern=r"^(?:m2\|)?gif\|")
     )
     bot_app.add_handler(
@@ -343,6 +346,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         state.media_pipeline = build_default_pipeline(bot_app.bot)
         await bot_app.start()
         state.bot_app = bot_app
+        state.job_store = job_store
         configure_job_store(job_store)
         await durable_worker.start()
 
@@ -373,6 +377,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             redis_client=state.redis_client,
             drain_timeout_seconds=float(os.getenv("DRAIN_TIMEOUT_SECONDS", "30")),
         )
+        state.job_store = None
 
 
 api = FastAPI(lifespan=lifespan)

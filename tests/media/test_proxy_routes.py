@@ -5,6 +5,7 @@ import json
 import logging
 import ipaddress
 from dataclasses import asdict, replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -89,6 +90,90 @@ async def test_proxy_timeout_cancels_attempt_before_backup():
     )
     result = await provider.resolve(MediaRequest.from_url("https://youtu.be/example"))
     assert result and stopped.is_set()
+
+
+async def test_runtime_proxy_race_allows_backup_to_finish_after_slow_primary(
+    monkeypatch,
+):
+    """The provider timer must cover the proxy pool, including its backup."""
+    from app.core import config, state
+    from app.services.media import pipeline as pipeline_module
+    from app.services.media.race import race_candidates
+    from tests.media.test_race import ManualClock
+
+    clock = ManualClock()
+    monkeypatch.setattr(config, "MEDIA_PROXY_URLS", (PRIMARY, BACKUP))
+    monkeypatch.setattr(state, "redis_client", None)
+    pipeline = pipeline_module.build_default_pipeline(SimpleNamespace(id=1))
+    provider = pipeline.refreshers["ytdlp"]
+    calls = []
+
+    async def extract(url, proxy):
+        calls.append(proxy)
+        if proxy == PRIMARY:
+            await clock.sleep(20)
+            raise ProviderError(FailureKind.TRANSIENT, "primary timed out")
+        await clock.sleep(12)
+        return metadata()
+
+    async def race(request, routes, validate, *, config):
+        return await race_candidates(
+            request, routes, validate, config=config, clock=clock, sleep=clock.sleep
+        )
+
+    provider._proxy_extract = extract
+    monkeypatch.setattr(pipeline_module, "race_candidates", race)
+    task = asyncio.create_task(
+        pipeline.resolve(build_media_request("https://youtu.be/example"))
+    )
+    await clock.advance(0)
+    await clock.advance(20)
+    await clock.advance(12)
+
+    resolved = await asyncio.wait_for(task, timeout=1)
+    assert calls == [PRIMARY, BACKUP]
+    assert resolved.provider == "ytdlp"
+    assert all(
+        source.proxy_key == "proxy-2" for source in resolved.candidates[0].sources
+    )
+
+
+async def test_default_proxy_budget_allows_extraction_work_beyond_ten_seconds(
+    monkeypatch,
+):
+    """Network timeouts must not also be the full subprocess lifetime."""
+    from app.services.media import proxies
+    from tests.media.test_race import ManualClock
+
+    clock = ManualClock()
+
+    async def wait_for(operation, *, timeout):
+        attempt = asyncio.create_task(operation)
+        timer = asyncio.create_task(clock.sleep(timeout))
+        try:
+            done, _ = await asyncio.wait(
+                (attempt, timer), return_when=asyncio.FIRST_COMPLETED
+            )
+            if attempt in done:
+                return attempt.result()
+            raise TimeoutError
+        finally:
+            attempt.cancel()
+            timer.cancel()
+            await asyncio.gather(attempt, timer, return_exceptions=True)
+
+    monkeypatch.setattr(proxies, "asyncio", SimpleNamespace(wait_for=wait_for))
+    pool = MediaProxyPool((PRIMARY,), clock=clock)
+
+    async def extract(proxy):
+        await clock.sleep(12)
+        return "resolved"
+
+    task = asyncio.create_task(pool.extract("youtube", extract))
+    await clock.advance(10)
+    assert not task.done()
+    await clock.advance(2)
+    assert await asyncio.wait_for(task, timeout=1) == ("resolved", "proxy-1")
 
 
 async def test_caller_cancellation_does_not_launch_backup():

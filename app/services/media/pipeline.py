@@ -130,6 +130,14 @@ class Materializer(Protocol):
 class MediaPipelineError(RuntimeError):
     """Base class for user-visible pipeline failures."""
 
+    retryable = True
+
+
+class MediaDeliveryUncertainError(MediaPipelineError):
+    """Sending began, so repeating the whole request could duplicate media."""
+
+    retryable = False
+
 
 class MediaResolutionError(MediaPipelineError):
     """No provider produced an equivalent candidate."""
@@ -590,7 +598,7 @@ class MediaPipeline:
             renewal_error = renewal_task.exception()
             delivery_task.cancel()
             await asyncio.gather(delivery_task, return_exceptions=True)
-            raise MediaPipelineError(
+            raise MediaDeliveryUncertainError(
                 "media lease renewal failed; Telegram outcome is uncertain"
             ) from renewal_error
         finally:
@@ -1519,7 +1527,10 @@ def build_default_pipeline(bot: Any) -> MediaPipeline:
         cast(DeliveryBackend, delivery),
         media_cache=cache,
         refreshers={ytdlp.name: ytdlp, gallery.name: gallery},
-        race_config=RaceConfig(resolve_timeout=24, total_timeout=28)
+        race_config=RaceConfig(
+            resolve_timeout=proxy_pool.extraction_timeout,
+            total_timeout=proxy_pool.extraction_timeout + 4,
+        )
         if proxy_pool.enabled
         else None,
         enforce_route_matrix=True,
@@ -1868,6 +1879,7 @@ def _validate_callback_parts(values: Sequence[str], *, require_payload: bool) ->
 __all__ = [
     "ArtifactValidationError",
     "CallbackDataError",
+    "MediaDeliveryUncertainError",
     "MediaPipeline",
     "MediaPipelineError",
     "MediaResolutionError",

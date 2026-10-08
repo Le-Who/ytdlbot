@@ -102,6 +102,8 @@ class YtDlpProvider:
                         "timeout": self._proxy_pool.attempt_timeout
                         if proxy
                         else self._proxy_pool.direct_timeout,
+                        "socket_timeout": 3.0,
+                        "extractor_retries": 1,
                     }
                 info = await self._service.extract(
                     request.canonical_url,

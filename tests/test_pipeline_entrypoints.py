@@ -263,6 +263,7 @@ async def test_http_stream_surfaces_lease_renewal_failure_and_releases(
 
     path = tmp_path / "video.mp4"
     path.write_bytes(b"ab")
+    renewal_failed = asyncio.Event()
 
     class Cache:
         async def get(self, token: str):
@@ -290,6 +291,7 @@ async def test_http_stream_surfaces_lease_renewal_failure_and_releases(
                 self.released = True
 
         def _renew(self):
+            renewal_failed.set()
             raise RuntimeError("lease owner changed")
 
     pipeline = Pipeline()
@@ -304,7 +306,10 @@ async def test_http_stream_surfaces_lease_renewal_failure_and_releases(
     )
     iterator = response.body_iterator
     with pytest.raises(RuntimeError, match="lease owner changed"):
-        await anext(iterator)
+        async for _ in iterator:
+            # The filesystem may finish its first read before the renewal
+            # interval. Failure must still surface before the next chunk.
+            await asyncio.wait_for(renewal_failed.wait(), timeout=1)
 
     assert pipeline.released
 
@@ -487,6 +492,9 @@ async def test_private_pipeline_marks_handled_media_error_as_failed_job(
     monkeypatch.setattr(messages.state, "media_pipeline", FailingPipeline())
     monkeypatch.setattr(messages, "get_prefs", AsyncMock(return_value={}))
     monkeypatch.setattr(messages, "mark_current_job_failed", mark_failed, raising=False)
+    from app.core.storage.memory import MemoryStorage
+
+    monkeypatch.setattr(messages.state, "link_cache", MemoryStorage(maxsize=10, ttl=60))
 
     status = SimpleNamespace(message_id=100, edit_text=AsyncMock())
     message = MagicMock(reply_text=AsyncMock(return_value=status))
@@ -501,7 +509,9 @@ async def test_private_pipeline_marks_handled_media_error_as_failed_job(
     )
 
     mark_failed.assert_called_once_with(error)
-    status.edit_text.assert_awaited_once_with("provider failed")
+    assert status.edit_text.await_args.args == ("provider failed",)
+    markup = status.edit_text.await_args.kwargs["reply_markup"]
+    assert markup.inline_keyboard[0][0].callback_data.startswith("m2|retry|")
 
 
 @pytest.mark.asyncio
@@ -653,7 +663,10 @@ async def test_direct_instagram_story_private_and_group_use_authorized_pipeline(
     monkeypatch.setattr(
         group_logic, "extract_url_from_update", lambda message: (story_url, "10-20")
     )
-    parse_story = lambda url: ("stories", "tester", "story-1")
+
+    def parse_story(url):
+        return "stories", "tester", "story-1"
+
     monkeypatch.setattr(messages, "parse_instagram_url", parse_story)
     monkeypatch.setattr("app.services.instagram.parse_instagram_url", parse_story)
     monkeypatch.setattr(

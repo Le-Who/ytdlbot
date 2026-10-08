@@ -143,3 +143,15 @@ def build_cancel_keyboard(token: str) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def build_retry_keyboard(token: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            [
+                InlineKeyboardButton(
+                    Texts.BTN_RETRY, callback_data=encode_callback_data("retry", token)
+                )
+            ]
+        ]
+    )

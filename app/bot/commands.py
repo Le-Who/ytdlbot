@@ -125,6 +125,18 @@ async def _fast_download(
             except Exception:
                 pass
 
+    async def retry_keyboard(request):
+        from app.bot.retry import save_retry_request
+
+        assert status_msg is not None
+        return await save_retry_request(
+            request,
+            user_id=user.id,
+            chat_id=chat.id,
+            message_id=status_msg.message_id,
+            caption="🎵" if request.kind.value == "audio" else "📹",
+        )
+
     success = await DownloadOrchestrator.process_download(
         token=token,
         chat_id=chat.id,
@@ -134,6 +146,7 @@ async def _fast_download(
         update_ui=_update_ui,
         kb_error=None,
         caller_scope="command",
+        retry_keyboard=retry_keyboard,
     )
 
     if success:

@@ -34,8 +34,9 @@ class YtDlpCLIBuilder:
         cookies_path: str | None = None,
         proxy: str | None = None,
         user_agent: str | None = None,
-        timeout: int = 120,
+        timeout: float = 120,
         fallback_clients: bool = False,
+        extractor_retries: int = 3,
     ) -> list[str]:
         """Build args for dumping JSON info"""
         cmd = self._base_args.copy()
@@ -46,6 +47,8 @@ class YtDlpCLIBuilder:
                 "--no-playlist",
                 "--socket-timeout",
                 str(timeout),
+                "--extractor-retries",
+                str(extractor_retries),
             ]
         )
 

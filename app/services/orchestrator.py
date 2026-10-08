@@ -11,6 +11,7 @@ from telegram.constants import ChatAction
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from app.core import config, state
 from app.core.config import MAX_TG_UPLOAD_MB
+from app.core.job_store import mark_current_job_failed
 from app.core.models import DownloadContext
 from app.core.policy import size_allowed
 from app.core.process import process_owner_scope, process_supervisor
@@ -24,6 +25,7 @@ from app.services.converter import (
 )
 from app.services.downloader import MediaSender
 from app.services.gallery_dl.service import GalleryDlService
+from app.services.media.models import MediaRequest
 from app.services.pinterest import PinterestNativeService
 from app.services.tikwm import TikWMService
 
@@ -318,6 +320,7 @@ class DownloadOrchestrator:
         update_ui: Callable[[str, Optional[object]], Awaitable[None]],
         kb_error: object,
         caller_scope: str = "callback",
+        retry_keyboard: Callable[[MediaRequest], Awaitable[object]] | None = None,
     ) -> bool:
         with process_owner_scope(token):
             return await DownloadOrchestrator._process_download_owned(
@@ -329,6 +332,7 @@ class DownloadOrchestrator:
                 update_ui,
                 kb_error,
                 caller_scope,
+                retry_keyboard,
             )
 
     @staticmethod
@@ -341,6 +345,7 @@ class DownloadOrchestrator:
         update_ui: Callable[[str, Optional[object]], Awaitable[None]],
         kb_error: object,
         caller_scope: str = "callback",
+        retry_keyboard: Callable[[MediaRequest], Awaitable[object]] | None = None,
     ) -> bool:
         """Process download with concurrency checks, sizes, and Telegram upload.
 
@@ -393,14 +398,30 @@ class DownloadOrchestrator:
                         caption="🎵" if request.kind.value == "audio" else "📹",
                     )
                 except MediaPipelineError as pipeline_error:
-                    await update_ui(str(pipeline_error), kb_error)
+                    mark_current_job_failed(pipeline_error)
+                    from app.bot.retry import can_retry_error
+
+                    markup = (
+                        await retry_keyboard(request)
+                        if retry_keyboard is not None
+                        and await can_retry_error(pipeline_error)
+                        else kb_error
+                    )
+                    await update_ui(str(pipeline_error), markup)
                     return False
                 if not receipt.success:
                     error_text = next(
                         (item.error for item in receipt.items if item.error),
                         Texts.SEND_ERROR,
                     )
-                    await update_ui(error_text, kb_error)
+                    from app.bot.retry import can_retry_delivery
+
+                    markup = (
+                        await retry_keyboard(request)
+                        if retry_keyboard is not None and can_retry_delivery(receipt)
+                        else kb_error
+                    )
+                    await update_ui(error_text, markup)
                     return False
                 return True
 

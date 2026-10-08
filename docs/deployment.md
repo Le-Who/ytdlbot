@@ -234,7 +234,30 @@ providers retain their direct fast path. A stream source carries an opaque route
 key; probes, redirects and downloads keep that route, with local DNS validation
 and pinning. A transfer failure cools that platform/route for 60 seconds and the
 single refresh obtains new URLs on the next available route. Proxy extraction
-attempts are bounded to 10 seconds; direct fallback attempts to 3 seconds.
+attempts are bounded to 20 seconds; direct fallback attempts to 3 seconds.
+For yt-dlp, the network socket timeout is capped at 3 seconds and one extractor
+retry, independently of the process budget. The provider resolve timeout covers
+all configured proxy attempts, direct fallback and cleanup; the total race adds
+4 seconds. With two proxies these limits are 44 and 48 seconds. This leaves time
+for subprocess startup, YouTube's JS/PO-token work and a backup route after a
+slow primary, while stalled sockets fail promptly. Route failure logs include
+elapsed time, the applied budget and the error without proxy credentials.
+
+Failed private/group requests, `/mp3`, `/mp4` and picker downloads expose a
+`🔄 Повторить` button. The link cache stores the original media request and its
+author/chat/status-message binding under a separate retry namespace, with the
+normal link TTL. A retry preserves format, quality, audio language, clip and
+output variant, edits the same status message, and permits one active attempt
+per token. Success invalidates the token; another failure restores the button.
+The durable callback retires its previous failed job before attempting delivery,
+so a later worker restart does not replay a superseded attempt. SQLite retains
+the retry chain, allowing recovery even if advancing the cached job ID fails.
+Polling retries also claim their token in the SQLite delivery ledger before
+sending. Only a known failed attempt releases that claim; a completed,
+interrupted or uncertain attempt remains consumed even if Redis cleanup fails
+and the process restarts.
+Partial or uncertain Telegram deliveries do not expose a whole-request retry
+that could duplicate already sent media.
 
 Only delete cookie sets whose expiry has been demonstrated. The old global
 `YTDLP_COOKIES_B64` contained invalid YouTube/Google cookies and was cleared on

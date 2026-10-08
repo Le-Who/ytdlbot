@@ -41,6 +41,10 @@ class Texts:
     URL_NOT_SUPPORTED = "❌ Ссылка не поддерживается. Проверьте список доступных платформ с помощью команды /help."
     RATE_LIMITED = "⏳ Слишком часто. Пожалуйста, подождите минуту и попробуйте снова."
     SEARCHING = "🔎 Ищу видео..."
+    BTN_RETRY = "🔄 Повторить"
+    RETRY_NOT_OWNER = "Эта кнопка доступна только автору запроса."
+    RETRY_IN_PROGRESS = "⏳ Повторная загрузка уже выполняется."
+    RETRY_UNAVAILABLE = "⏳ Загрузка временно недоступна. Попробуйте повторить позже."
     TIMEOUT_RETRY = (
         "⏳ Время ожидания истекло. Сервер перегружен, пожалуйста, попробуйте еще раз."
     )
@@ -65,7 +69,9 @@ class Texts:
     SETTINGS_FMT_SET = "✅ Формат по умолчанию установлен: <b>{fmt}</b>"
     SETTINGS_QUALITY_SET = "✅ Качество по умолчанию установлено: <b>{quality}</b>"
     SETTINGS_RESET = "✅ Настройки сброшены."
-    SETTINGS_INVALID_FMT = "❌ Неверный формат. Используйте: <code>video</code> или <code>audio</code>."
+    SETTINGS_INVALID_FMT = (
+        "❌ Неверный формат. Используйте: <code>video</code> или <code>audio</code>."
+    )
     SETTINGS_INVALID_QUALITY = "❌ Неверное качество. Используйте: <code>best</code>, <code>1080</code>, <code>720</code>, <code>480</code>, <code>360</code>."
     FETCH_ERROR_RETRY = "⚠️ Ошибка при получении данных. Пожалуйста, проверьте ссылку и попробуйте еще раз."
     TIMEOUT_UNAVAILABLE = "❌ Время ожидания истекло. Сервис недоступен."
@@ -140,7 +146,9 @@ class Texts:
     SLIDESHOW_TRUNCATED = "ℹ️ Показаны первые 10 из {total} фото."
     SLIDESHOW_ERROR = "⚠️ Ошибка загрузки слайдшоу."
     # Shown as caption on the first album when content spans multiple batches of 10
-    SLIDESHOW_MULTI_ALBUM = "📸 1/{total_batches} • {total} фото — остальные придут следующими 🤫"
+    SLIDESHOW_MULTI_ALBUM = (
+        "📸 1/{total_batches} • {total} фото — остальные придут следующими 🤫"
+    )
 
     # ── Group logic ───────────────────────────────────────────────
     GROUP_ERROR = "❌ Ошибка."

@@ -8,6 +8,7 @@ from telegram.ext import ContextTypes
 
 from app.core import state
 from app.core.config import MAX_TG_UPLOAD_MB
+from app.core.job_store import mark_current_job_failed
 from app.core.models import DownloadContext
 from app.core.process import process_owner_scope
 from app.core.texts import Texts
@@ -88,6 +89,20 @@ async def handle_group_message(
             caller_scope="group",
             exact=False,
         )
+
+        async def retry_markup():
+            from app.bot.retry import save_retry_request
+
+            assert update.message is not None
+            return await save_retry_request(
+                request,
+                user_id=user.id,
+                chat_id=chat.id,
+                message_id=status_msg.message_id,
+                caption=f"📹 {user_tag}",
+                source_message_id=update.message.message_id,
+            )
+
         try:
             if request.platform == "tiktok":
                 cached_count = await state.media_pipeline.cached_item_count(request)
@@ -142,7 +157,15 @@ async def handle_group_message(
                 caption=f"📹 {user_tag}",
             )
         except MediaPipelineError as error:
-            await status_msg.edit_text(str(error))
+            mark_current_job_failed(error)
+            from app.bot.retry import can_retry_error
+
+            await status_msg.edit_text(
+                str(error),
+                reply_markup=await retry_markup()
+                if await can_retry_error(error)
+                else None,
+            )
             return
         if receipt.success:
             try:
@@ -157,7 +180,12 @@ async def handle_group_message(
         error_text = next(
             (item.error for item in receipt.items if item.error), Texts.SEND_ERROR
         )
-        await status_msg.edit_text(error_text)
+        from app.bot.retry import can_retry_delivery
+
+        await status_msg.edit_text(
+            error_text,
+            reply_markup=await retry_markup() if can_retry_delivery(receipt) else None,
+        )
         return
     if url_type != "unknown":
         from app.bot.messages import _handle_instagram

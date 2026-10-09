@@ -36,7 +36,7 @@ def test_json_formatter_emits_shared_loki_contract(monkeypatch) -> None:
     assert payload["correlation_id"] == "request-123"
     assert len(payload["event_id"]) == 32
     assert payload["timestamp"].endswith("Z")
-    datetime.fromisoformat(payload["timestamp"].replace("Z", "+00:00"))
+    datetime.fromisoformat(payload["timestamp"])
 
 
 def test_json_formatter_uses_safe_local_defaults(monkeypatch) -> None:

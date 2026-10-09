@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock
 
 """Tests for app.bot.group_logic — handle_group_message + on_group_slideshow."""
 
+import io
 import unittest
 
 
@@ -27,6 +28,7 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         import asyncio
+
         state.limiter = MagicMock()
         state.limiter.allow_user = AsyncMock(return_value=True)
         state.limiter.allow_chat = AsyncMock(return_value=True)
@@ -36,6 +38,7 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
         state.download_sem = asyncio.Semaphore(5)
         state.api_sem = asyncio.Semaphore(10)
         from app.core.download_queue import DownloadQueue
+
         state.download_queue = DownloadQueue(state.download_sem, max_queue_size=15)
         state.api_queue = DownloadQueue(state.api_sem, max_queue_size=15)
         state.disk_critical = False
@@ -187,17 +190,80 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(args[0], Texts.GROUP_SLIDESHOW_CHOICE)
         self.assertIn("reply_markup", kwargs)
 
+    async def test_tiktok_fallback_buffer_is_delivered_without_path_processing_or_cache(
+        self,
+    ):
+        from app.bot import group_logic
+        from app.services.tikwm import TikWMResult, TikWMService
+
+        url = "https://www.tiktok.com/@user/video/123"
+        self.update.message.text = url
+        self.update.message.caption = None
+        self.update.message.reply_to_message = None
+        status_msg = AsyncMock()
+        self.update.message.reply_text = AsyncMock(return_value=status_msg)
+        buffer = io.BytesIO(b"synthetic fallback video")
+        file_cache = AsyncMockCache()
+        with (
+            patch.object(state, "media_pipeline", None),
+            patch.object(state, "file_cache", file_cache),
+            patch.object(
+                TikWMService,
+                "process",
+                new=AsyncMock(
+                    return_value=TikWMResult(
+                        status="video", url="https://synthetic.invalid/video.mp4"
+                    )
+                ),
+            ),
+            patch.object(
+                TikWMService,
+                "download_video",
+                new=AsyncMock(return_value=(None, "synthetic TikWM download failure")),
+            ) as primary,
+            patch.object(
+                group_logic.MediaSender,
+                "download_video",
+                new=AsyncMock(return_value=(buffer, None)),
+            ) as fallback,
+            patch.object(
+                group_logic.MediaSender, "send_file", new=AsyncMock(return_value=True)
+            ) as sender,
+            patch(
+                "app.services.orchestrator.extract_video_meta",
+                new=AsyncMock(side_effect=AssertionError("buffer must not be probed")),
+            ) as probe,
+            patch(
+                "app.services.orchestrator.ensure_telegram_compatible",
+                new=AsyncMock(
+                    side_effect=AssertionError("buffer must not be converted")
+                ),
+            ) as convert,
+        ):
+            await group_logic.handle_group_message(self.update, self.context)
+
+        primary.assert_awaited_once()
+        fallback.assert_awaited_once()
+        sender.assert_awaited_once()
+        self.assertIs(sender.await_args.args[2], buffer)
+        self.assertFalse(buffer.closed)
+        probe.assert_not_awaited()
+        convert.assert_not_awaited()
+        self.assertEqual(file_cache, {})
+
 
 class TestOnGroupSlideshow(unittest.IsolatedAsyncioTestCase):
     """Test on_group_slideshow callback."""
 
     async def asyncSetUp(self):
         import asyncio
+
         state.link_cache = AsyncMockCache()
         state.file_cache = AsyncMockCache()
         state.download_sem = asyncio.Semaphore(5)
         state.api_sem = asyncio.Semaphore(10)
         from app.core.download_queue import DownloadQueue
+
         state.download_queue = DownloadQueue(state.download_sem, max_queue_size=15)
         state.api_queue = DownloadQueue(state.api_sem, max_queue_size=15)
         state.disk_critical = False

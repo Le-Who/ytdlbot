@@ -102,25 +102,21 @@ class TestGalleryDlSeparator(unittest.IsolatedAsyncioTestCase):
             new_callable=AsyncMock,
         ) as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=b"", stderr=b"")
-            try:
-                await service.download_slideshow(url, cookies_path="/tmp/cookies.txt")
-            except Exception:
-                pass  # We just need to capture the command
+            result, error = await service.download_slideshow(
+                url, cookies_path="/tmp/cookies.txt"
+            )
 
-            if mock_run.called:
-                cmd = mock_run.call_args[0][0]
-                self.assertIn("--", cmd)
-                sep_idx = cmd.index("--")
-                self.assertEqual(
-                    cmd[sep_idx + 1], url, "URL must immediately follow '--'"
-                )
-                if "--cookies" in cmd:
-                    cookies_idx = cmd.index("--cookies")
-                    self.assertLess(
-                        cookies_idx,
-                        sep_idx,
-                        "--cookies must appear before '--' separator",
-                    )
+            mock_run.assert_awaited_once()
+            self.assertIsNone(result)
+            self.assertIsNotNone(error)
+            cmd = mock_run.await_args.args[0]
+            self.assertIn("--", cmd)
+            sep_idx = cmd.index("--")
+            self.assertEqual(cmd[sep_idx + 1], url)
+            self.assertIn("--cookies", cmd)
+            cookies_idx = cmd.index("--cookies")
+            self.assertEqual(cmd[cookies_idx + 1], "/tmp/cookies.txt")
+            self.assertLess(cookies_idx, sep_idx)
 
 
 class TestURLPrefixValidation(unittest.TestCase):

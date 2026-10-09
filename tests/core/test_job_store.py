@@ -369,6 +369,64 @@ async def test_terminal_payload_is_removed_after_retention_deadline(tmp_path):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("expiry", ["claim", "worker", "replaced-worker"])
+async def test_renew_claim_rejects_expired_or_lost_ownership(tmp_path, expiry):
+    now = [100.0]
+    store = JobStore(tmp_path / "jobs.sqlite3", clock=lambda: now[0])
+    await store.accept_update(update_payload(502))
+    assert await store.claim_next("owner", lease_seconds=1) is not None
+    if expiry == "claim":
+        assert await store.renew_worker("owner", lease_seconds=100)
+    else:
+        assert await store.renew_claim("502", "owner", lease_seconds=100)
+    now[0] = 102
+    if expiry == "replaced-worker":
+        assert await store.acquire_worker("replacement")
+    assert await store.renew_claim("502", "owner") is False
+    assert (
+        await store.begin_delivery_attempts("502", ("item",), owner_id="owner") is False
+    )
+
+
+@pytest.mark.asyncio
+async def test_renew_claim_preserves_live_owner_and_rejects_other_owner(tmp_path):
+    now = [100.0]
+    store = JobStore(tmp_path / "jobs.sqlite3", clock=lambda: now[0])
+    await store.accept_update(update_payload(503))
+    assert await store.claim_next("owner", lease_seconds=10) is not None
+    now[0] = 105
+    assert await store.renew_claim("503", "other") is False
+    assert await store.renew_claim("503", "owner", lease_seconds=10) is True
+    now[0] = 111
+    assert await store.renew_worker("owner") is False
+    assert await store.complete("503", owner_id="owner") is False
+
+
+@pytest.mark.asyncio
+async def test_retention_preserves_payload_for_failed_delivery_restart_retry(tmp_path):
+    now = [100.0]
+    store = JobStore(
+        tmp_path / "jobs.sqlite3", clock=lambda: now[0], payload_retention_seconds=1
+    )
+    await store.accept_update(update_payload(504, text="source URL"))
+    await store.record_delivery("504", DeliveryOutcome.FAILED, item_key="item")
+    await store.fail("504", "delivery failed")
+    await store.accept_update(update_payload(505))
+    await store.fail("505", "irrecoverable handler error")
+    await store.accept_update(update_payload(506))
+    await store.complete("506")
+    now[0] = 102
+    assert await store.purge_expired_payloads() == 2
+    assert (await store.get_update(505)).payload == {"update_id": 505}
+    assert (await store.get_update(506)).payload == {"update_id": 506}
+    assert await store.requeue_failed_deliveries() == 1
+    retry = await store.claim_next("retry-owner")
+    assert retry is not None
+    assert retry.id == "504"
+    assert retry.payload["message"]["text"] == "source URL"
+
+
+@pytest.mark.asyncio
 async def test_version_one_database_migrates_without_losing_accepted_update(tmp_path):
     path = tmp_path / "jobs.sqlite3"
     connection = sqlite3.connect(path)

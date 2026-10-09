@@ -1,5 +1,6 @@
 import base64
 import pickle
+import sys
 
 print("===========================================")
 print("Инструмент создания сессии для Instagram")
@@ -21,7 +22,7 @@ ig_did = input(
 
 if not sessionid or not csrftoken or not ds_user_id:
     print("\n[ОШИБКА] sessionid, csrftoken и ds_user_id обязательны для обхода защиты!")
-    exit(1)
+    sys.exit(1)
 
 cookies = {
     "sessionid": sessionid,

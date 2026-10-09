@@ -1,13 +1,15 @@
 """Tests for app.services.sender — TelegramSender."""
 
+import asyncio
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app.services.media.models import DeliveryStatus
-from app.services.sender import MAX_TELEGRAM_ALBUM_SIZE, TelegramSender
+from app.services.sender import TelegramSender
 
 
 class TestSendFile(unittest.IsolatedAsyncioTestCase):
@@ -15,9 +17,8 @@ class TestSendFile(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         self.bot = AsyncMock()
-        self.tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        self.tmp.write(b"fake video data")
-        self.tmp.close()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as self.tmp:
+            self.tmp.write(b"fake video data")
 
     async def asyncTearDown(self):
         try:
@@ -96,7 +97,8 @@ class TestSendSlideshowPhotos(unittest.IsolatedAsyncioTestCase):
         self.images = []
         for i in range(3):
             p = os.path.join(self.tmpdir, f"img_{i}.jpg")
-            with open(p, "wb") as f:
+            # Small synthetic fixture I/O completes inline; no runtime worker ownership.
+            with open(p, "wb") as f:  # noqa: ASYNC230
                 f.write(b"\xff\xd8\xff" + b"\x00" * 100)
             self.images.append(p)
 
@@ -144,16 +146,45 @@ class TestSendSlideshowPhotos(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result)
         self.assertIs(result.status, DeliveryStatus.UNCERTAIN)
 
-    async def test_caps_at_max_album_size(self):
-        """More than MAX_TELEGRAM_ALBUM_SIZE images are truncated."""
-        many_images = self.images * 5  # 15 images
+    async def test_sends_every_image_across_multiple_album_chunks(self):
+        """All 15 unique photos are delivered, with caption on the first only."""
+        many_images = []
+        expected = []
+        for index in range(15):
+            content = b"\xff\xd8\xff" + bytes([index]) * 100
+            path = os.path.join(self.tmpdir, f"album_{index}.jpg")
+            await asyncio.to_thread(Path(path).write_bytes, content)
+            many_images.append(path)
+            expected.append(content)
+        delivered = []
+        original_send = self.bot.send_media_group.side_effect
+
+        async def record_media(**kwargs):
+            for media in kwargs["media"]:
+                content = media.media.input_file_content
+                delivered.append(
+                    content.read() if hasattr(content, "read") else content
+                )
+            return await original_send(**kwargs)
+
+        self.bot.send_media_group.side_effect = record_media
         result = await TelegramSender.send_slideshow_photos(
             self.bot, 123, many_images, caption="test"
         )
         self.assertTrue(result)
-        call_args = self.bot.send_media_group.call_args
-        media = call_args.kwargs.get("media") or call_args[1].get("media")
-        self.assertLessEqual(len(media), MAX_TELEGRAM_ALBUM_SIZE)
+        groups = [
+            call.kwargs["media"] for call in self.bot.send_media_group.await_args_list
+        ]
+        self.assertEqual([len(group) for group in groups], [10, 5])
+        self.assertEqual(delivered, expected)
+        self.assertEqual(len(result.items), 15)
+        self.assertTrue(
+            all(item.status is DeliveryStatus.SUCCESS for item in result.items)
+        )
+        self.assertEqual(
+            [media.caption or None for group in groups for media in group],
+            ["test"] + [None] * 14,
+        )
 
 
 if __name__ == "__main__":

@@ -132,3 +132,48 @@ async def test_timeout_grant_race_always_returns_the_slot():
             async with queue.acquire(_noop_ui):
                 pass
         assert queue.queue_depth == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_release_preserves_capacity_and_fifo_progress():
+    """Cancelling release while its lock is held must still forward one slot."""
+    semaphore = asyncio.BoundedSemaphore(1)
+    queue = DownloadQueue(semaphore, timeout_seconds=0.1)
+    active = await queue.acquire(_noop_ui)
+    order = []
+
+    async def take(label):
+        lease = await queue.acquire(_noop_ui)
+        order.append(label)
+        return lease
+
+    first = asyncio.create_task(take("first"))
+    await _wait_for_depth(queue, 1)
+    second = asyncio.create_task(take("second"))
+    await _wait_for_depth(queue, 2)
+    await queue._lock.acquire()
+    release = asyncio.create_task(active.release())
+    try:
+        await asyncio.sleep(0)
+        release.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await release
+    finally:
+        queue._lock.release()
+    try:
+        await active.release()
+        next_lease = await first
+        assert order == ["first"]
+        assert semaphore.locked()
+        await next_lease.release()
+        last = await second
+        assert order == ["first", "second"]
+        await last.release()
+        await active.release()
+        await semaphore.acquire()
+        assert semaphore.locked()
+        semaphore.release()
+    finally:
+        for task in (first, second):
+            task.cancel()
+        await asyncio.gather(first, second, return_exceptions=True)

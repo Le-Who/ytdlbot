@@ -271,11 +271,15 @@ def metric_rows(text, metric):
             result.append((labels(match.group(1) or ""), float(match.group(2))))
     return result
 
-def metric_sum(text, metric, **required):
+def metric_sum(text, metric, *, allow_missing_platform=False, **required):
     return sum(
         value
         for item_labels, value in metric_rows(text, metric)
-        if all(item_labels.get(key) == expected for key, expected in required.items())
+        if all(
+            item_labels.get(key) == expected
+            or (key == "platform" and allow_missing_platform and key not in item_labels)
+            for key, expected in required.items()
+        )
     )
 
 def metrics_snapshot():
@@ -288,12 +292,14 @@ def metrics_snapshot():
                 "ytdlbot_media_pipeline_duration_seconds_count",
                 phase=phase,
                 platform="youtube",
+                allow_missing_platform=phase == "first_byte",
             )),
             "sum": metric_sum(
                 text,
                 "ytdlbot_media_pipeline_duration_seconds_sum",
                 phase=phase,
                 platform="youtube",
+                allow_missing_platform=phase == "first_byte",
             ),
         }
         for phase in ("resolve", "first_byte", "materialize", "deliver")
@@ -331,7 +337,8 @@ def metrics_snapshot():
         "phases": phases,
         "results": results,
         "wasted_bytes": int(metric_sum(
-            text, "ytdlbot_media_race_wasted_bytes_total", platform="youtube"
+            text, "ytdlbot_media_race_wasted_bytes_total", platform="youtube",
+            allow_missing_platform=True,
         )),
         "file_id_hits": int(metric_sum(
             text,
@@ -1192,12 +1199,12 @@ class ProductionDockerAdapter:
         winners = {provider for provider, delta in deltas.items() if delta == 1}
         unclassified_winners = winners - {"ytdlp"} - evidenced_attempts
         if unclassified_winners:
-            raise AdapterError(
-                "winning provider lacks exact attempt evidence"
-            )
+            raise AdapterError("winning provider lacks exact attempt evidence")
         unapproved_attempts = evidenced_attempts - free - configured - {"ytdlp"}
         if unapproved_attempts:
-            raise AdapterError("attempted provider lacks an approved route classification")
+            raise AdapterError(
+                "attempted provider lacks an approved route classification"
+            )
         succeeded = bool(winners & (free | configured))
         route_class: str | None = None
         if attempted:
@@ -1322,7 +1329,6 @@ class ProductionDockerAdapter:
                 cause = "unknown"
             failures.append({"status": status, "cause": cause})
         return failures
-
 
     def observe(
         self,
@@ -1457,7 +1463,12 @@ class ProductionDockerAdapter:
             and item.get("response_confirmed") is True
         ]
         if deliveries:
-            delivery_outcomes = [str(item["outcome"]) for item in deliveries]
+            delivery_outcomes = [
+                str(item["outcome"])
+                if item.get("outcome") != "success" or item in confirmed_deliveries
+                else "uncertain"
+                for item in deliveries
+            ]
             before_results: Mapping[str, Any] = cast(
                 Mapping[str, Any], before_metrics["results"]
             )

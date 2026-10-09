@@ -1,9 +1,10 @@
 import unittest
+
 from app.services.ytdlp.parsers import (
+    _is_facebook,
+    _is_pinterest,
     _is_tiktok,
     _is_youtube,
-    _is_pinterest,
-    _is_facebook,
 )
 
 

@@ -14,23 +14,22 @@ from __future__ import annotations
 
 import logging
 import uuid
-from typing import Optional
 
-from telegram import Update, Message
-from telegram.ext import ContextTypes
+from telegram import Update
 from telegram.constants import ChatAction
+from telegram.ext import ContextTypes
 
 from app.constants import AUDIO_FORMAT_ID, SUPPORTED_PLATFORMS
-from app.core.config import MAX_TG_UPLOAD_MB, MAX_DL_MB
+from app.core.config import MAX_DL_MB, MAX_TG_UPLOAD_MB
 from app.core.texts import Texts
-from app.core.utils import extract_url_from_update
 from app.core.user_prefs import (
-    get_prefs,
-    set_prefs,
-    clear_prefs,
     VALID_FORMATS,
     VALID_QUALITIES,
+    clear_prefs,
+    get_prefs,
+    set_prefs,
 )
+from app.core.utils import extract_url_from_update
 
 logger = logging.getLogger("app.bot.commands")
 
@@ -101,10 +100,11 @@ async def _fast_download(
             chat_id=chat.id,
             action=ChatAction.UPLOAD_VOICE if is_audio else ChatAction.UPLOAD_VIDEO,
         )
-    except Exception:
+    # Chat-action feedback is optional; transport adapter failures must not block download.
+    except Exception:  # noqa: BLE001, S110
         pass
 
-    status_msg: Optional[Message] = await msg.reply_text(Texts.CMD_FAST_DL_START)
+    status_msg = await msg.reply_text(Texts.CMD_FAST_DL_START)
 
     token = uuid.uuid4().hex
 
@@ -118,11 +118,12 @@ async def _fast_download(
         section=section,
     )
 
-    async def _update_ui(text: str, markup: object = None) -> None:
+    async def _update_ui(text: str, markup: object | None = None) -> None:
         if status_msg:
             try:
                 await status_msg.edit_text(text, reply_markup=markup, parse_mode="HTML")  # type: ignore[arg-type]
-            except Exception:
+            # Progress/status edits are optional and must not abort download or delivery.
+            except Exception:  # noqa: BLE001, S110
                 pass
 
     async def retry_keyboard(request):
@@ -152,7 +153,8 @@ async def _fast_download(
     if success:
         try:
             await status_msg.delete()
-        except Exception:
+        # Status cleanup is optional; the orchestrator already reported successful delivery.
+        except Exception:  # noqa: BLE001, S110
             pass
 
 

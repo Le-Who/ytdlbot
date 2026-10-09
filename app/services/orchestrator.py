@@ -3,7 +3,7 @@ import io
 import json
 import logging
 import os
-from typing import Awaitable, Callable, Optional, Union
+from collections.abc import Awaitable, Callable
 
 from telegram import Bot
 from telegram.constants import ChatAction
@@ -44,11 +44,11 @@ _TG_UPLOAD_LIMIT_BYTES = int(48.5 * 1024 * 1024)  # 48.5 MB — absorbs moov-ato
 
 async def extract_video_meta(
     file_path: str | object,
-    info_json_path: Optional[str] = None,
+    info_json_path: str | None = None,
 ) -> dict:
     """Extract duration/width/height/vcodec for Telegram send_video.
 
-    Strategy: try info JSON first (zero-cost), fall back to ffprobe.
+    Extraction JSON supplies fallback metadata; ffprobe describes the selected file.
     Returns dict with keys: duration, width, height (all Optional[int]),
     vcodec (Optional[str]).
     """
@@ -56,7 +56,9 @@ async def extract_video_meta(
 
     if info_json_path and os.path.exists(info_json_path):
         try:
-            with open(info_json_path, "r", encoding="utf-8") as f:
+            # Read the extraction-owned metadata while this caller still owns
+            # its cleanup; a detached thread could otherwise read a deleted path.
+            with open(info_json_path, "r", encoding="utf-8") as f:  # noqa: ASYNC230
                 info = json.load(f)
             dur = info.get("duration")
             if dur:
@@ -66,14 +68,11 @@ async def extract_video_meta(
             if info.get("height"):
                 meta["height"] = int(info["height"])
             meta["vcodec"] = info.get("vcodec")
-
-            # Fast-path return: if we have duration, or if we have vcodec and dimensions
-            # (duration is optional for Telegram, and missing in slideshows/images), skip ffprobe.
-            if meta["duration"] or (
-                meta["vcodec"] and meta["width"] and meta["height"]
-            ):
-                return meta
-        except Exception:
+            if info.get("pix_fmt"):
+                meta["pix_fmt"] = info["pix_fmt"].lower()
+            if info.get("codec_tag_string"):
+                meta["codec_tag"] = info["codec_tag_string"].lower()
+        except (OSError, ValueError, TypeError, AttributeError, OverflowError):
             pass
 
     if not isinstance(file_path, str):
@@ -96,7 +95,7 @@ async def extract_video_meta(
             timeout=10.0,
         )
         stdout = process_result.stdout
-        if stdout:
+        if process_result.returncode == 0 and stdout:
             probe = json.loads(stdout)
             fmt = probe.get("format", {})
             dur = fmt.get("duration")
@@ -106,6 +105,10 @@ async def extract_video_meta(
                 (s for s in probe.get("streams", []) if s.get("codec_type") == "video"),
                 {},
             )
+            # A successful probe owns safety metadata, even if a field is absent.
+            meta["vcodec"] = None
+            meta.pop("pix_fmt", None)
+            meta.pop("codec_tag", None)
             if stream.get("width"):
                 meta["width"] = int(stream["width"])
             if stream.get("height"):
@@ -116,14 +119,16 @@ async def extract_video_meta(
                 meta["pix_fmt"] = stream["pix_fmt"].lower()
             if stream.get("codec_tag_string"):
                 meta["codec_tag"] = stream["codec_tag_string"].lower()
-    except Exception as e:
+    # The optional external probe and its untrusted metadata may fail in adapter
+    # specific ways; retain fallback metadata and leave cleanup to the supervisor.
+    except Exception as e:  # noqa: BLE001
         logger.warning("ffprobe meta extraction failed for %s: %s", file_path, e)
 
     return meta
 
 
 async def ensure_telegram_compatible(
-    file_path: str, info_json_path: Optional[str] = None
+    file_path: str, info_json_path: str | None = None
 ) -> str:
     """Re-encode video to H.264/AAC if its codec is not Telegram-compatible.
 
@@ -206,17 +211,19 @@ async def ensure_telegram_compatible(
         safe_remove(file_path)  # clean up the original
         return re_encoded
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.error("H.264 re-encode timed out")
         safe_remove(re_encoded)
         return file_path
-    except Exception as e:
+    # Re-encoding is a best-effort external converter boundary; its failed
+    # output is removed while the original owned download remains available.
+    except Exception as e:  # noqa: BLE001
         logger.error("H.264 re-encode exception: %s", e)
         safe_remove(re_encoded)
         return file_path
 
 
-def _build_gif_reply_markup(token: str, is_gif: bool) -> Optional[object]:
+def _build_gif_reply_markup(token: str, is_gif: bool) -> object | None:
     """Return the 'Save as .gif file' keyboard when delivering an animation.
 
     Returns None for non-GIF files so regular videos are unaffected.
@@ -284,7 +291,7 @@ async def _maybe_rename_webm_to_ogg(file_path: str) -> str:
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-async def _cobalt_url_head_size(url: str) -> Optional[int]:
+async def _cobalt_url_head_size(url: str) -> int | None:
     """HTTP HEAD request to Cobalt URL to fetch Content-Length in < 300 ms.
 
     Returns byte size if known, None if unknown or request failed.
@@ -297,7 +304,9 @@ async def _cobalt_url_head_size(url: str) -> Optional[int]:
             cl = resp.headers.get("content-length")
             if cl and cl.isdigit():
                 return int(cl)
-    except Exception as e:
+    # HEAD is an optional size hint from an HTTP adapter; any adapter failure
+    # must permit the normal materialized-download size validation to proceed.
+    except Exception as e:  # noqa: BLE001
         logger.debug("OPT-4 Cobalt HEAD failed: %s", e)
     return None
 
@@ -316,8 +325,8 @@ class DownloadOrchestrator:
         chat_id: int,
         bot: Bot,
         payload: DownloadContext,
-        fmt_size: Optional[int],
-        update_ui: Callable[[str, Optional[object]], Awaitable[None]],
+        fmt_size: int | None,
+        update_ui: Callable[[str, object | None], Awaitable[None]],
         kb_error: object,
         caller_scope: str = "callback",
         retry_keyboard: Callable[[MediaRequest], Awaitable[object]] | None = None,
@@ -341,8 +350,8 @@ class DownloadOrchestrator:
         chat_id: int,
         bot: Bot,
         payload: DownloadContext,
-        fmt_size: Optional[int],
-        update_ui: Callable[[str, Optional[object]], Awaitable[None]],
+        fmt_size: int | None,
+        update_ui: Callable[[str, object | None], Awaitable[None]],
         kb_error: object,
         caller_scope: str = "callback",
         retry_keyboard: Callable[[MediaRequest], Awaitable[object]] | None = None,
@@ -440,14 +449,19 @@ class DownloadOrchestrator:
                 await bot.send_chat_action(
                     chat_id=chat_id, action=ChatAction.UPLOAD_VIDEO
                 )
-            except Exception:
-                pass
+            # Chat actions are optional Telegram UI, independent of the actual
+            # receipt-bearing delivery and its durable error/ownership outcome.
+            except Exception as ui_error:  # noqa: BLE001
+                logger.debug(
+                    "Upload chat action failed",
+                    extra={"error_type": type(ui_error).__name__},
+                )
 
-            file_path: Union[str, io.BytesIO, None] = None
-            error: Optional[str] = None
+            file_path: str | io.BytesIO | None = None
+            error: str | None = None
 
             # ── Download phase ─────────────────────────────────────────────────
-            if payload.format_id == "tikwm_fallback":
+            if payload.format_id == "tikwm_fallback" and not payload.section:
                 file_path, error = await TikWMService.download_video(payload.page_url)
 
                 # Smart BVC2/HEVC Fallback:
@@ -477,6 +491,7 @@ class DownloadOrchestrator:
                             "bestvideo[vcodec^=avc]+bestaudio/best",
                             payload.height,
                             token + "_yt",
+                            section=payload.section,
                         )
 
                 # CDN geo-block / download failure fallback:
@@ -492,12 +507,13 @@ class DownloadOrchestrator:
                         "bestvideo[vcodec^=avc]+bestaudio/best",
                         payload.height,
                         token + "_yt",
+                        section=payload.section,
                     )
 
                 if file_path and not error:
                     state.file_cache[token] = file_path
 
-            elif payload.format_id == "gallerydl_fallback":
+            elif payload.format_id == "gallerydl_fallback" and not payload.section:
                 file_path, error = await GalleryDlService.download_video(
                     payload.page_url,
                     state.ytdlp.cookies_path,
@@ -506,9 +522,12 @@ class DownloadOrchestrator:
                 if file_path and not error:
                     state.file_cache[token] = file_path
 
-            elif payload.format_id == "pinterest_native" or (
-                payload.format_id == GIF_FORMAT_ID
-                and "pinterest" in payload.page_url.lower()
+            elif not payload.section and (
+                payload.format_id == "pinterest_native"
+                or (
+                    payload.format_id == GIF_FORMAT_ID
+                    and "pinterest" in payload.page_url.lower()
+                )
             ):
                 file_path, error = await PinterestNativeService.download_video(
                     payload.page_url
@@ -536,12 +555,15 @@ class DownloadOrchestrator:
 
                 file_path, error = await MediaSender.download_video(
                     payload.page_url,
-                    payload.format_id or "",
+                    "bestvideo[vcodec^=avc]+bestaudio/best"
+                    if payload.format_id in _api_origin_ids
+                    else payload.format_id or "",
                     payload.height,
                     token,
                     info_json_path=payload.info_json_path,
                     fallback_clients=payload.youtube_fallback,
                     progress_callback=_on_progress,
+                    section=payload.section,
                 )
 
             if error or not file_path:
@@ -562,7 +584,7 @@ class DownloadOrchestrator:
             # ── OPT-1: Zero-Cost Thumbnail Pre-Fetch ──────────────────────────
             # yt-dlp writes <stem>.jpg alongside the video when --write-thumbnail is active.
             # We inject it into send_video for instant chat preview rendering on all clients.
-            thumbnail_path: Optional[str] = None
+            thumbnail_path: str | None = None
             if isinstance(file_path, str) and not is_gif and not is_audio:
                 thumbnail_path = find_thumbnail(file_path)
                 if thumbnail_path:
@@ -571,13 +593,16 @@ class DownloadOrchestrator:
 
             # ── OPT-3: Native Opus Audio Bypass ───────────────────────────────
             # Strict audio callbacks request MP3, so materialize actual MP3 bytes.
-            if isinstance(file_path, str) and is_audio:
-                if not file_path.lower().endswith(".mp3"):
-                    mp3_path = await MediaConverter.convert_to_mp3(file_path)
-                    if mp3_path is None:
-                        await update_ui(Texts.GENERIC_ERROR_SHORT, kb_error)
-                        return False
-                    file_path = mp3_path
+            if (
+                isinstance(file_path, str)
+                and is_audio
+                and not file_path.lower().endswith(".mp3")
+            ):
+                mp3_path = await MediaConverter.convert_to_mp3(file_path)
+                if mp3_path is None:
+                    await update_ui(Texts.GENERIC_ERROR_SHORT, kb_error)
+                    return False
+                file_path = mp3_path
 
             # ── Re-encode pass: non-H.264 videos for Telegram compatibility ───
             # (TikTok CDN often serves HEVC which Telegram can't play)
@@ -621,7 +646,9 @@ class DownloadOrchestrator:
                                 _part_thumb_bytes: io.BytesIO | None = None
                                 if part_thumb and os.path.exists(part_thumb):
                                     try:
-                                        with open(part_thumb, "rb") as _tf:
+                                        # Snapshot this owned thumbnail before sending;
+                                        # cancellation cannot leave a late reader after cleanup.
+                                        with open(part_thumb, "rb") as _tf:  # noqa: ASYNC230
                                             _part_thumb_bytes = io.BytesIO(_tf.read())
                                     except OSError:
                                         pass
@@ -685,7 +712,9 @@ class DownloadOrchestrator:
             thumb_bytes: io.BytesIO | None = None
             if thumbnail_path and os.path.exists(thumbnail_path):
                 try:
-                    with open(thumbnail_path, "rb") as _tf:
+                    # Snapshot the optional thumbnail under the download owner's
+                    # cleanup lifetime, without an outstanding disk-reader thread.
+                    with open(thumbnail_path, "rb") as _tf:  # noqa: ASYNC230
                         thumb_bytes = io.BytesIO(_tf.read())
                 except OSError:
                     pass

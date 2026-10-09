@@ -4,32 +4,33 @@ import asyncio
 import logging
 import os
 from typing import TYPE_CHECKING, Any
+
 from cachetools import TTLCache
+
 from app.core.cache import FileTTLCache
 from app.core.config import (
-    LINK_TTL_MINUTES,
-    MAX_CONCURRENT_TASKS,
-    LIMITER_USER_CAPACITY,
-    LIMITER_USER_REFILL_PER_SEC,
     LIMITER_CHAT_CAPACITY,
     LIMITER_CHAT_REFILL_PER_SEC,
+    LIMITER_IG_CAPACITY,
+    LIMITER_IG_REFILL_PER_SEC,
     LIMITER_IP_CAPACITY,
     LIMITER_IP_REFILL_PER_SEC,
     LIMITER_TOKEN_CAPACITY,
     LIMITER_TOKEN_REFILL_PER_SEC,
-    LIMITER_IG_CAPACITY,
-    LIMITER_IG_REFILL_PER_SEC,
-    REDIS_URL,
+    LIMITER_USER_CAPACITY,
+    LIMITER_USER_REFILL_PER_SEC,
+    LINK_TTL_MINUTES,
+    MAX_CONCURRENT_TASKS,
     MAX_QUEUE_SIZE,
     QUEUE_TIMEOUT_SECONDS,
+    REDIS_URL,
 )
-from app.core.limiter import LimiterRegistry
-from app.core.utils import safe_remove
 from app.core.download_queue import DownloadQueue
-
-from app.services.ytdlp.service import YtDlpService
-from app.core.storage.base import StateStorage
+from app.core.limiter import LimiterRegistry
 from app.core.storage import MemoryStorage, RedisStorage
+from app.core.storage.base import StateStorage
+from app.core.utils import safe_remove
+from app.services.ytdlp.service import YtDlpService
 
 # Инициализация логгера
 logger = logging.getLogger("app")
@@ -84,6 +85,7 @@ disk_critical: bool = False
 # Глобальный объект приложения Telegram (инициализируется в main.py)
 if TYPE_CHECKING:
     from telegram.ext import Application
+
     from app.core.job_store import JobStore
     from app.services.media.pipeline import MediaPipeline
 bot_app: Application | None = None

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
+import io
 import json
 import os
+import re
 import shutil
+import sqlite3
 import subprocess
 import sys
+import urllib.request
 from pathlib import Path
 from typing import Any
 
@@ -330,6 +335,199 @@ def test_candidate_preflight_proves_container_readiness_without_sending(
     assert "BOT_TOKEN" not in json.dumps(result)
 
 
+def _helper_functions(module: Any, *names: str) -> dict[str, Any]:
+    source = ast.parse(module._CONTAINER_HELPER)
+    selected = ast.Module(
+        body=[
+            node
+            for node in source.body
+            if isinstance(node, ast.FunctionDef) and node.name in names
+        ],
+        type_ignores=[],
+    )
+    namespace = {"re": re, "urllib": urllib, "Path": Path, "os": os, "sqlite3": sqlite3}
+    exec(compile(selected, "<container-helper>", "exec"), namespace)  # noqa: S102 - checked-in helper only
+    return namespace
+
+
+@pytest.mark.parametrize(
+    "activity", ["isolated", "changing-before", "other-job", "multiple-first-byte"]
+)
+def test_real_exporter_labels_reach_request_measurements(
+    adapter_module: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    activity: str,
+) -> None:
+    from app.core.metrics import MetricsCollector
+
+    metrics = MetricsCollector()
+    helper = _helper_functions(
+        adapter_module, "labels", "metric_rows", "metric_sum", "metrics_snapshot"
+    )
+    monkeypatch.setattr(
+        urllib.request, "urlopen", lambda *a, **k: io.BytesIO(metrics.render().encode())
+    )
+
+    class ExporterRuntime(FakeRuntime):
+        def container_call(
+            self, action: str, payload: dict[str, Any], *, timeout: float
+        ) -> dict[str, Any]:
+            was_submitted = self.submitted
+            result = super().container_call(action, payload, timeout=timeout)
+            if action == "submit" and not was_submitted:
+                for phase, value in (
+                    ("resolve", 0.1),
+                    ("materialize", 0.3),
+                    ("deliver", 0.4),
+                ):
+                    metrics.pipeline_duration.observe(
+                        value, phase=phase, platform="youtube"
+                    )
+                    metrics.pipeline_duration.observe(
+                        99, phase=phase, platform="tiktok"
+                    )
+                metrics.pipeline_duration.observe(0.2, phase="first_byte")
+                if activity == "multiple-first-byte":
+                    metrics.pipeline_duration.observe(0.1, phase="first_byte")
+                metrics.pipeline_duration.observe(
+                    99, phase="first_byte", platform="tiktok"
+                )
+                metrics.race_wasted_bytes.inc(11, provider="ytdlp")
+                metrics.race_wasted_bytes.inc(
+                    13, stage="completed_sources", outcome="cancelled"
+                )
+                metrics.race_wasted_bytes.inc(17, stage="stream", outcome="failed")
+                metrics.race_wasted_bytes.inc(99, platform="tiktok")
+                metrics.pipeline_results.inc(platform="youtube", status="success")
+                metrics.provider_wins.inc(platform="youtube", provider="ytdlp")
+            if action == "snapshot":
+                result["metrics"] = helper["metrics_snapshot"]()
+                if (
+                    not self.submitted
+                    and self.snapshot_count == 1
+                    and activity == "changing-before"
+                ):
+                    metrics.pipeline_duration.observe(0.5, phase="first_byte")
+                if self.submitted and activity == "other-job":
+                    result["job"]["other_jobs"] = 1
+            return result
+
+    runtime = ExporterRuntime(adapter_module, profile="candidate")
+    instance = adapter_module.ProductionDockerAdapter(
+        runtime,
+        expected_release="d" * 40,
+        expected_image_id="sha256:" + "b" * 64,
+        runtime_profile="candidate",
+        sleep=lambda _: None,
+    )
+    if activity == "changing-before":
+        with pytest.raises(adapter_module.AdapterError, match="quiescent"):
+            instance.observe(
+                update=_update(), correlation_id="proof:exporter", timeout_seconds=10
+            )
+        assert runtime.submitted is False
+        return
+    result = instance.observe(
+        update=_update(), correlation_id="proof:exporter", timeout_seconds=10
+    )
+    if activity == "other-job":
+        assert result["attribution_confirmed"] is False
+        return
+    assert result["attribution_confirmed"] is True
+    if activity == "multiple-first-byte":
+        assert result["measurement"]["first_byte"] == {
+            "availability": "unavailable",
+            "method": "unavailable",
+        }
+        return
+    assert result["measurement"]["first_byte"] == {
+        "availability": "measured",
+        "method": "task11-metric",
+    }
+    assert result["phase_metrics"]["first_byte"]["after_sum"] == pytest.approx(0.2)
+    assert result["phase_metrics"]["resolve"]["after_sum"] == pytest.approx(0.1)
+    assert result["wasted_bytes_after"] - result["wasted_bytes_before"] == 41
+
+
+@pytest.mark.parametrize(
+    "outcome,finalized,delivery_id,expected",
+    [
+        ("success", 1, "telegram-receipt", True),
+        ("success", 0, "telegram-receipt", False),
+        ("success", 1, None, False),
+        ("success", 0, None, False),
+        ("failed", 1, "telegram-receipt", False),
+        ("uncertain", 1, "telegram-receipt", False),
+        (None, 0, None, False),
+    ],
+)
+def test_sqlite_delivery_proof_is_preserved_through_adapter_and_collector(
+    adapter_module: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str | None,
+    finalized: int,
+    delivery_id: str | None,
+    expected: bool,
+) -> None:
+    database = tmp_path / "jobs.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE jobs (job_id TEXT, update_id INTEGER, state TEXT, error TEXT, accepted_at REAL)"
+        )
+        connection.execute(
+            "CREATE TABLE deliveries (job_id TEXT, item_key TEXT, outcome TEXT, finalized INTEGER, delivery_id TEXT)"
+        )
+    monkeypatch.setenv("YTDLBOT_JOB_DB", str(database))
+    helper = _helper_functions(adapter_module, "classify_failure", "job_snapshot")
+
+    class ReceiptRuntime(FakeRuntime):
+        def container_call(
+            self, action: str, payload: dict[str, Any], *, timeout: float
+        ) -> dict[str, Any]:
+            result = super().container_call(action, payload, timeout=timeout)
+            if action == "submit":
+                with sqlite3.connect(database) as connection:
+                    connection.execute(
+                        "INSERT INTO jobs VALUES ('job', ?, 'completed', NULL, 0)",
+                        (_update()["update_id"],),
+                    )
+                    if outcome is not None:
+                        connection.execute(
+                            "INSERT INTO deliveries VALUES ('job', 'video', ?, ?, ?)",
+                            (outcome, finalized, delivery_id),
+                        )
+            if action == "snapshot":
+                result["job"] = helper["job_snapshot"](
+                    payload["update_id"], payload["since"]
+                )
+            return result
+
+    instance = adapter_module.ProductionDockerAdapter(
+        ReceiptRuntime(adapter_module, profile="candidate"),
+        expected_release="d" * 40,
+        expected_image_id="sha256:" + "b" * 64,
+        runtime_profile="candidate",
+        sleep=lambda _: None,
+    )
+    observation = instance.observe(
+        update=_update(), correlation_id="proof:receipt", timeout_seconds=10
+    )
+    spec = importlib.util.spec_from_file_location(
+        "receipt_collector", ROOT / "scripts/collect-media-release-evidence.py"
+    )
+    collector = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = collector
+    spec.loader.exec_module(collector)
+    run = collector._run_from_observation(
+        case=collector.CaseSpec("short-01", "short", "https://invalid.example"),
+        cache_state="cold",
+        observation=observation,
+    )
+    assert run["full_delivery"] is expected
+    assert run["failure_stage"] == (None if expected else "deliver")
+
+
 def test_candidate_observation_confirms_terminal_delivery_and_resource_deltas(
     adapter_module: Any,
 ) -> None:
@@ -499,7 +697,12 @@ def test_configured_provider_is_not_attempted_without_exact_attempt_delta(
         "route_class": None,
     }
     assert adapter._route_outcome(
-        {}, {"external": 1}, {}, {"external": 1}, "", cache_hit=False,
+        {},
+        {"external": 1},
+        {},
+        {"external": 1},
+        "",
+        cache_hit=False,
         attempt_metric_available=True,
     ) == {
         "capability": "available",
@@ -757,7 +960,9 @@ def test_legacy_interruption_removes_exact_owned_container_before_return(
     )
 
     expected_error = (
-        adapter_module.AdapterTimeout if interruption == "timeout" else KeyboardInterrupt
+        adapter_module.AdapterTimeout
+        if interruption == "timeout"
+        else KeyboardInterrupt
     )
     with pytest.raises(expected_error):
         runtime.legacy_container_call(
@@ -898,9 +1103,7 @@ def test_cleanup_docker_daemon_failure_is_not_treated_as_absence(
     adapter_module: Any,
     tmp_path: Path,
 ) -> None:
-    result = _run_cleanup_shell(
-        adapter_module, tmp_path, docker_mode="daemon-failure"
-    )
+    result = _run_cleanup_shell(adapter_module, tmp_path, docker_mode="daemon-failure")
 
     assert result.returncode != 0
 

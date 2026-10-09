@@ -1,9 +1,10 @@
 import unittest
 from unittest.mock import AsyncMock
 
+from app.core.config import CONCURRENT_FRAGMENTS
+
 # Add repo root to path
 from app.services.ytdlp.service import YtDlpService
-from app.core.config import CONCURRENT_FRAGMENTS
 
 
 class TestProfessionalRefinements(unittest.IsolatedAsyncioTestCase):

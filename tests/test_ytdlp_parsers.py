@@ -1,16 +1,17 @@
 import unittest
+
+from app.bot.format_formatter import format_label
+from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
+from app.services.ytdlp.models import FormatMetadata
 from app.services.ytdlp.parsers import (
-    parse_format_metadata,
-    create_format_item,
-    get_special_format,
-    deduplicate_formats,
+    BITRATE_COEFFICIENT,
     _extract_height,
     _format_duration,
-    BITRATE_COEFFICIENT,
+    create_format_item,
+    deduplicate_formats,
+    get_special_format,
+    parse_format_metadata,
 )
-from app.services.ytdlp.models import FormatMetadata
-from app.bot.format_formatter import format_label
-from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
 
 class TestYtDlpParsers(unittest.TestCase):
@@ -445,3 +446,18 @@ class TestFacebookFormats(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+import pytest
+
+
+@pytest.mark.parametrize(
+    "message, expected",
+    [
+        ("HTTP status code 404", "not_found"),
+        ("HTTP status code 403", "forbidden"),
+        ("TikTok status code 10231", "auth"),
+    ],
+)
+def test_tiktok_http_status_classification(message, expected):
+    from app.services.ytdlp.parsers import classify_tiktok_error
+
+    assert classify_tiktok_error(message).value == expected

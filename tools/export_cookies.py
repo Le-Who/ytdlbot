@@ -29,8 +29,12 @@ import tempfile
 
 # Force UTF-8 stdout on Windows, line-buffered to prevent garbled output
 if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True)
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
+    sys.stdout = io.TextIOWrapper(
+        sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
+    )
+    sys.stderr = io.TextIOWrapper(
+        sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
+    )
 else:
     # Even if encoding is fine, ensure line buffering
     sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
@@ -44,18 +48,29 @@ DUMMY_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 # Chrome/Edge/Brave User Data directories per OS
 _CHROMIUM_USER_DATA = {
     "chrome": {
-        "Windows": os.path.join(os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "User Data"),
+        "Windows": os.path.join(
+            os.environ.get("LOCALAPPDATA", ""), "Google", "Chrome", "User Data"
+        ),
         "Darwin": os.path.expanduser("~/Library/Application Support/Google/Chrome"),
         "Linux": os.path.expanduser("~/.config/google-chrome"),
     },
     "edge": {
-        "Windows": os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "User Data"),
+        "Windows": os.path.join(
+            os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Edge", "User Data"
+        ),
         "Darwin": os.path.expanduser("~/Library/Application Support/Microsoft Edge"),
         "Linux": os.path.expanduser("~/.config/microsoft-edge"),
     },
     "brave": {
-        "Windows": os.path.join(os.environ.get("LOCALAPPDATA", ""), "BraveSoftware", "Brave-Browser", "User Data"),
-        "Darwin": os.path.expanduser("~/Library/Application Support/BraveSoftware/Brave-Browser"),
+        "Windows": os.path.join(
+            os.environ.get("LOCALAPPDATA", ""),
+            "BraveSoftware",
+            "Brave-Browser",
+            "User Data",
+        ),
+        "Darwin": os.path.expanduser(
+            "~/Library/Application Support/BraveSoftware/Brave-Browser"
+        ),
         "Linux": os.path.expanduser("~/.config/BraveSoftware/Brave-Browser"),
     },
 }
@@ -70,23 +85,24 @@ def _print_banner() -> None:
     print()
 
 
-def _check_ytdlp() -> str:
-    """Return the path to yt-dlp binary, or exit with instructions."""
+def _check_ytdlp() -> list[str]:
+    """Return yt-dlp argv without splitting executable paths."""
     path = shutil.which("yt-dlp")
     if path:
-        return path
+        return [path]
 
     # Maybe installed as a Python module
     try:
         subprocess.run(
             [sys.executable, "-m", "yt_dlp", "--version"],
-            capture_output=True, check=True, timeout=10,
+            capture_output=True,
+            check=True,
+            timeout=10,
         )
-        return f"{sys.executable} -m yt_dlp"
-    except Exception:
-        pass
-
-    print("  [X]  yt-dlp not found!")
+        return [sys.executable, "-m", "yt_dlp"]
+    except (OSError, subprocess.SubprocessError):
+        # Expected launch/exit/timeout failures make the module unavailable.
+        print("  [X]  yt-dlp not found!")
     print()
     print("  Install it:")
     print("      pip install yt-dlp")
@@ -131,12 +147,14 @@ def _discover_chromium_profiles(browser: str) -> list[dict]:
         # Also check gaia_info_picture_url presence as a sign of logged-in profile
         gaia_name = profile_info.get("gaia_name", "")
 
-        profiles.append({
-            "dir": entry,
-            "name": name,
-            "email": email,
-            "gaia_name": gaia_name,
-        })
+        profiles.append(
+            {
+                "dir": entry,
+                "name": name,
+                "email": email,
+                "gaia_name": gaia_name,
+            }
+        )
 
     return profiles
 
@@ -246,7 +264,10 @@ def _resolve_profile(browser: str, explicit_profile: str | None) -> str | None:
         return profiles[0]["dir"]
 
     # Multiple profiles — interactive selection
-    return _pick_profile_interactive(profiles)
+    selected = _pick_profile_interactive(profiles)
+    if selected is None:
+        sys.exit(0)
+    return selected
 
 
 def _check_browser_running(browser: str) -> bool:
@@ -265,53 +286,71 @@ def _check_browser_running(browser: str) -> bool:
         try:
             result = subprocess.run(
                 ["tasklist", "/FI", f"IMAGENAME eq {target}.exe", "/NH"],
-                capture_output=True, text=True, timeout=5,
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
             )
             return target.lower() in result.stdout.lower()
-        except Exception:
+        except (OSError, subprocess.SubprocessError, UnicodeError):
             return False
     else:
         try:
             result = subprocess.run(
                 ["pgrep", "-i", target],
-                capture_output=True, timeout=5,
+                capture_output=True,
+                timeout=5,
+                check=False,
             )
             return result.returncode == 0
-        except Exception:
+        except (OSError, subprocess.SubprocessError):
             return False
 
 
-def _extract_cookies(ytdlp_path: str, browser: str, profile: str | None) -> str | None:
+def _extract_cookies(
+    ytdlp_path: str | list[str], browser: str, profile: str | None
+) -> str | None:
+    with tempfile.TemporaryDirectory(prefix="ytdlbot_cookies_") as tmp_dir:
+        return _extract_cookies_to_directory(ytdlp_path, browser, profile, tmp_dir)
+
+
+def _extract_cookies_to_directory(
+    ytdlp_path: str | list[str],
+    browser: str,
+    profile: str | None,
+    tmp_dir: str,
+) -> str | None:
     """
     Run yt-dlp to extract cookies from the browser and dump them
     into a temporary Netscape cookie file. Returns file content or None.
     """
-    tmp_dir = tempfile.mkdtemp(prefix="ytdlbot_cookies_")
     cookie_file = os.path.join(tmp_dir, "cookies.txt")
 
     # Build the command
-    if " " in ytdlp_path:
-        cmd = ytdlp_path.split()
-    else:
-        cmd = [ytdlp_path]
+    cmd = [ytdlp_path] if isinstance(ytdlp_path, str) else list(ytdlp_path)
 
     # yt-dlp syntax: --cookies-from-browser BROWSER[:PROFILE]
     browser_arg = browser
     if profile:
         browser_arg = f"{browser}:{profile}"
 
-    cmd.extend([
-        "--cookies-from-browser", browser_arg,
-        "--cookies", cookie_file,
-        "--skip-download",
-        "--no-warnings",
-        "--quiet",
-        "--", DUMMY_URL,
-    ])
+    cmd.extend(
+        [
+            "--cookies-from-browser",
+            browser_arg,
+            "--cookies",
+            cookie_file,
+            "--skip-download",
+            "--no-warnings",
+            "--quiet",
+            "--",
+            DUMMY_URL,
+        ]
+    )
 
     profile_label = f" (profile: {profile})" if profile else ""
     print(f"  [..]  Extracting cookies from {browser.title()}{profile_label}...")
-    print(f"        (if the browser asks for permission, click 'Allow')")
+    print("        (if the browser asks for permission, click 'Allow')")
     print()
 
     try:
@@ -320,6 +359,7 @@ def _extract_cookies(ytdlp_path: str, browser: str, profile: str | None) -> str 
             capture_output=True,
             text=True,
             timeout=60,
+            check=False,
         )
     except subprocess.TimeoutExpired:
         print("  [X]  Timeout. Try closing the browser and running again.")
@@ -332,15 +372,25 @@ def _extract_cookies(ytdlp_path: str, browser: str, profile: str | None) -> str 
         stderr = result.stderr.strip() if result.stderr else ""
         print("  [X]  yt-dlp did not create a cookie file.")
         if stderr:
-            last_line = [l for l in stderr.splitlines() if l.strip()][-1] if stderr.splitlines() else stderr
+            last_line = (
+                [l for l in stderr.splitlines() if l.strip()][-1]
+                if stderr.splitlines()
+                else stderr
+            )
             print(f"       Reason: {last_line}")
         print()
 
         # Specific guidance for Chrome App-Bound Encryption (DPAPI) failure
-        if "dpapi" in stderr.lower() or "app_bound" in stderr.lower() or "10927" in stderr:
+        if (
+            "dpapi" in stderr.lower()
+            or "app_bound" in stderr.lower()
+            or "10927" in stderr
+        ):
             print("  [!]  CHROME APP-BOUND ENCRYPTION ERROR")
             print("       Chrome 127+ encrypts cookies with a system service that")
-            print("       requires Administrator privileges to read from outside Chrome.")
+            print(
+                "       requires Administrator privileges to read from outside Chrome."
+            )
             print()
             print("  FIX: Re-run this script as Administrator:")
             print("       1. Close this terminal")
@@ -354,19 +404,14 @@ def _extract_cookies(ytdlp_path: str, browser: str, profile: str | None) -> str 
         else:
             print("  Tips:")
             print("    - Make sure you are logged in to YouTube in this browser")
-            print("    - CLOSE the browser completely before running (check system tray!)")
+            print(
+                "    - CLOSE the browser completely before running (check system tray!)"
+            )
             print("    - For Chrome you may need to run as Administrator")
         return None
 
     with open(cookie_file, "r", encoding="utf-8") as f:
         content = f.read()
-
-    # Cleanup
-    try:
-        os.unlink(cookie_file)
-        os.rmdir(tmp_dir)
-    except OSError:
-        pass
 
     return content
 
@@ -376,29 +421,34 @@ def _filter_youtube_cookies(raw_content: str) -> str:
     Keep only YouTube/Google-related cookie lines.
     This reduces the base64 payload and avoids leaking unrelated sessions.
     """
-    youtube_domains = (
-        ".youtube.com",
-        ".google.com",
-        ".googlevideo.com",
-        "youtube.com",
-        "google.com",
-        "accounts.google.com",
-    )
+    youtube_domains = ("youtube.com", "google.com", "googlevideo.com")
     header = "# Netscape HTTP Cookie File\n"
     lines = []
     for line in raw_content.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("#") or stripped.startswith("//"):
+        cookie_line = stripped.removeprefix("#HttpOnly_")
+        if not stripped or cookie_line.startswith("#") or stripped.startswith("//"):
             continue
         # Netscape format: domain \t flag \t path \t secure \t expiry \t name \t value
-        parts = stripped.split("\t")
-        if len(parts) >= 7:
-            domain = parts[0].lstrip(".")
-            if any(domain == d.lstrip(".") or domain.endswith("." + d.lstrip(".")) for d in youtube_domains):
-                lines.append(stripped)
+        parts = cookie_line.split("\t")
+        if (
+            len(parts) != 7
+            or not parts[5]
+            or not parts[2].startswith("/")
+            or parts[1] not in {"TRUE", "FALSE"}
+            or parts[3] not in {"TRUE", "FALSE"}
+            or not parts[4].isdigit()
+        ):
+            continue
+        domain = parts[0].removeprefix(".").lower()
+        if any(
+            domain == allowed or domain.endswith("." + allowed)
+            for allowed in youtube_domains
+        ):
+            lines.append(stripped)
 
     if not lines:
-        return raw_content
+        return ""
 
     return header + "\n".join(lines) + "\n"
 
@@ -411,6 +461,7 @@ def _copy_to_clipboard(text: str) -> bool:
     """Try to copy text to clipboard. Returns True on success."""
     if platform.system() != "Windows":
         return False
+    process = None
     try:
         process = subprocess.Popen(
             ["clip.exe"],
@@ -419,7 +470,12 @@ def _copy_to_clipboard(text: str) -> bool:
         )
         process.communicate(input=text.encode("utf-8"), timeout=5)
         return process.returncode == 0
-    except Exception:
+    except subprocess.TimeoutExpired:
+        if process is not None:
+            process.kill()
+            process.wait()
+        return False
+    except (OSError, subprocess.SubprocessError, UnicodeError):
         return False
 
 
@@ -430,13 +486,13 @@ def main() -> None:
     browser, explicit_profile = _pick_browser_and_profile(sys.argv)
 
     print(f"  Browser: {browser.title()}")
-    print(f"  yt-dlp:  {ytdlp_path}")
+    print(f"  yt-dlp:  {' '.join(ytdlp_path)}")
     print()
 
     # Check if browser is running
     if _check_browser_running(browser):
         print(f"  [!!]  {browser.title()} is currently running!")
-        print(f"        Close it completely (check system tray) and press Enter.")
+        print("        Close it completely (check system tray) and press Enter.")
         print()
         try:
             input("        Press Enter when ready...")
@@ -453,7 +509,12 @@ def main() -> None:
         sys.exit(1)
 
     filtered = _filter_youtube_cookies(raw_cookies)
-    cookie_lines = [l for l in filtered.splitlines() if l.strip() and not l.startswith("#")]
+    if not filtered:
+        print("  [X]  No YouTube/Google cookies found.")
+        sys.exit(1)
+    cookie_lines = [
+        l for l in filtered.splitlines() if l.strip() and not l.startswith("#")
+    ]
     b64 = _encode_base64(filtered)
 
     print(f"  [OK]  Extracted {len(cookie_lines)} YouTube/Google cookies")
@@ -468,7 +529,7 @@ def main() -> None:
     print("  +--- Ready .env line -------------------------")
     print("  |")
     preview_len = 80
-    if len(env_line) > preview_len:
+    if copied and len(env_line) > preview_len:
         print(f"  |  {env_line[:preview_len]}...")
     else:
         print(f"  |  {env_line}")

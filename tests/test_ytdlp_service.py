@@ -16,8 +16,9 @@ from app.services.ytdlp.service import YtDlpService
 
 async def test_extraction_keeps_socket_retries_inside_the_process_budget(monkeypatch):
     """A stalled socket must leave time for extraction and its bounded retry."""
-    from app.core import process
     from yt_dlp import parse_options
+
+    from app.core import process
 
     observed = {}
 
@@ -287,3 +288,46 @@ print(json.dumps(selected[0]['format_id'] if selected else None))
         check=True,
     )
     assert json.loads(result.stdout) == "video+uk"
+
+
+@pytest.mark.parametrize(
+    "source, expected",
+    [
+        (
+            "https://vk.com/video-1_2?next=vk.com#vk.com",
+            "https://m.vk.com/video-1_2?next=vk.com#vk.com",
+        ),
+        ("https://m.vk.com/video-1_2", "https://m.vk.com/video-1_2"),
+        ("https://VK.COM/video-1_2", "https://m.vk.com/video-1_2"),
+        ("https://www.vk.com:443/video-1_2", "https://m.vk.com:443/video-1_2"),
+        (
+            "https://example.com/vk.com?next=vk.com",
+            "https://example.com/vk.com?next=vk.com",
+        ),
+    ],
+)
+async def test_vk_rewrite_is_host_only_in_download_and_extract(
+    monkeypatch, source, expected
+):
+    from app.core import process
+
+    observed = []
+
+    @asynccontextmanager
+    async def run(command, **kwargs):
+        observed.append(command[-1])
+        yield SimpleNamespace(
+            proc=SimpleNamespace(
+                stdout=SimpleNamespace(read=AsyncMock(return_value=b'{"id":"video"}')),
+                returncode=0,
+            ),
+            wait=AsyncMock(),
+            stderr_data=[],
+        )
+
+    monkeypatch.setattr(process, "run_subprocess", run)
+    service = YtDlpService()
+    assert service.build_command(source, "best", 720, "out.mp4")[-1] == expected
+    assert service.build_command(expected, "best", 720, "out.mp4")[-1] == expected
+    assert await service.extract(source, use_cookies=False) == {"id": "video"}
+    assert observed == [expected]

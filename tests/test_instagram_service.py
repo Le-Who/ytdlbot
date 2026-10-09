@@ -1,7 +1,7 @@
 """Tests for Instagram service — URL parsing, profile metadata, downloads."""
 
 import unittest
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 try:
@@ -137,7 +137,7 @@ class TestIGStoryItem(unittest.TestCase):
             is_video=True,
             url="https://example.com/video.mp4",
             thumbnail_url="https://example.com/thumb.jpg",
-            timestamp=datetime(2026, 3, 25, 12, 30, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 3, 25, 12, 30, tzinfo=UTC),
             duration=15.0,
         )
         label = item.label
@@ -154,7 +154,7 @@ class TestIGStoryItem(unittest.TestCase):
             is_video=False,
             url="https://example.com/photo.jpg",
             thumbnail_url="https://example.com/thumb.jpg",
-            timestamp=datetime(2026, 3, 25, 14, 0, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 3, 25, 14, 0, tzinfo=UTC),
         )
         label = item.label
         self.assertIn("📸", label)
@@ -169,14 +169,14 @@ class TestIGStoryItem(unittest.TestCase):
             is_video=True,
             url="",
             thumbnail_url="",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
         p = IGStoryItem(
             mediaid="2",
             is_video=False,
             url="",
             thumbnail_url="",
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
         self.assertEqual(v.type_emoji, "🎬")
         self.assertEqual(p.type_emoji, "📸")
@@ -221,9 +221,10 @@ class TestInstagramServiceDownloadStoryItem(unittest.IsolatedAsyncioTestCase):
     """Test InstagramService.download_story_item with mocked curl_cffi."""
 
     async def test_download_streams_correctly(self):
-        import tempfile
         import os
-        from app.services.instagram import InstagramService, IGStoryItem
+        import tempfile
+
+        from app.services.instagram import IGStoryItem, InstagramService
 
         tmpdir = tempfile.mkdtemp()
         chunks = [b"video_part1", b"video_part2"]
@@ -233,7 +234,7 @@ class TestInstagramServiceDownloadStoryItem(unittest.IsolatedAsyncioTestCase):
             is_video=True,
             url="https://scontent.cdninstagram.com/v/t123.mp4",
             thumbnail_url="https://scontent.cdninstagram.com/v/thumb.jpg",
-            timestamp=datetime(2026, 3, 25, 10, 0, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 3, 25, 10, 0, tzinfo=UTC),
             duration=10.0,
         )
 
@@ -266,21 +267,23 @@ class TestInstagramServiceDownloadStoryItem(unittest.IsolatedAsyncioTestCase):
         assert path is not None
         self.assertTrue(os.path.exists(path))
 
-        with open(path, "rb") as f:
+        # Small synthetic fixture I/O completes inline; no runtime worker ownership.
+
+        with open(path, "rb") as f:  # noqa: ASYNC230
             self.assertEqual(f.read(), b"video_part1video_part2")
 
         os.unlink(path)
         os.rmdir(tmpdir)
 
     async def test_download_returns_error_on_http_failure(self):
-        from app.services.instagram import InstagramService, IGStoryItem
+        from app.services.instagram import IGStoryItem, InstagramService
 
         item = IGStoryItem(
             mediaid="bad",
             is_video=False,
             url="https://scontent.cdninstagram.com/v/gone.jpg",
             thumbnail_url="",
-            timestamp=datetime(2026, 3, 25, 10, 0, tzinfo=timezone.utc),
+            timestamp=datetime(2026, 3, 25, 10, 0, tzinfo=UTC),
         )
 
         mock_resp = MagicMock()

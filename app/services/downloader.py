@@ -9,44 +9,43 @@ This module retains download_video and provides MediaSender as a facade
 so existing callers (callbacks.py, group_logic.py, tests) don't break.
 """
 
-import os
-import uuid
-import time
 import asyncio
-import logging
-from typing import Optional, Tuple, Union, Callable, Awaitable
 import io
+import logging
+import os
 import re
+import time
+import uuid
+from collections.abc import Awaitable, Callable
 
-
+from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from app.core import state
 from app.core.config import (
-    TEMP_DIR,
-    MAX_TG_UPLOAD_MB,
     DL_TIMEOUT_TELEGRAM,
+    MAX_TG_UPLOAD_MB,
+    TEMP_DIR,
     YOUTUBE_PIPE_MODE,
 )
-from app.core.utils import safe_remove
+from app.core.policy import size_allowed
 from app.core.process import (
     ProcessOwnerCancelled,
     current_process_owner,
     run_subprocess,
 )
-from app.core.policy import size_allowed
-from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
+from app.core.utils import safe_remove
+from app.services.converter import MediaConverter
 
 # Re-export decomposed services for backward compatibility
-from app.services.sender import TelegramSender, MAX_TELEGRAM_ALBUM_SIZE
-from app.services.converter import MediaConverter
+from app.services.sender import MAX_TELEGRAM_ALBUM_SIZE, TelegramSender
 from app.services.slideshow import SlideshowPipeline
 
 __all__ = [
-    "MediaSender",
-    "VideoDownloader",
-    "TelegramSender",
-    "MediaConverter",
-    "SlideshowPipeline",
     "MAX_TELEGRAM_ALBUM_SIZE",
+    "MediaConverter",
+    "MediaSender",
+    "SlideshowPipeline",
+    "TelegramSender",
+    "VideoDownloader",
 ]
 
 logger = logging.getLogger("app.services.downloader")
@@ -66,13 +65,13 @@ class VideoDownloader:
     async def download_video(
         page_url: str,
         format_id: str,
-        height: Optional[int],
+        height: int | None,
         token: str,
-        info_json_path: Optional[str] = None,
+        info_json_path: str | None = None,
         fallback_clients: bool = False,
-        progress_callback: Optional[Callable[[float, str], Awaitable[None]]] = None,
-        section: Optional[str] = None,
-    ) -> Tuple[Optional[Union[str, io.BytesIO]], Optional[str]]:
+        progress_callback: Callable[[float, str], Awaitable[None]] | None = None,
+        section: str | None = None,
+    ) -> tuple[str | io.BytesIO | None, str | None]:
         """
         Downloads a video.
 
@@ -147,8 +146,13 @@ class VideoDownloader:
                         pct = float(m.group(1))
                         eta = f"ETA {m.group(2).decode()}"
                         await progress_callback(pct, eta)
-                    except Exception:
-                        pass
+                    # Progress callbacks are optional caller adapters; their
+                    # failures must not interrupt the supervised media download.
+                    except Exception as error:  # noqa: BLE001
+                        logger.debug(
+                            "Download progress callback failed",
+                            extra={"error_type": type(error).__name__},
+                        )
 
             def on_stderr(line: bytes) -> None:
                 if progress_callback:
@@ -198,7 +202,7 @@ class VideoDownloader:
                             )
                             if not line:
                                 break
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         if proc.returncode is not None:
                             break
                         continue
@@ -214,10 +218,10 @@ class VideoDownloader:
                     logger.error("yt-dlp download failed", extra={"stderr": err_text})
 
                     from app.services.ytdlp.exceptions import (
-                        map_ytdlp_error,
                         AccessDeniedError,
-                        VideoNotFoundError,
                         ExtractionError,
+                        VideoNotFoundError,
+                        map_ytdlp_error,
                     )
 
                     mapped_err = map_ytdlp_error(err_text, page_url)
@@ -289,7 +293,7 @@ class VideoDownloader:
         except ProcessOwnerCancelled:
             return None, "❌ Загрузка отменена пользователем."
         except Exception as e:
-            logger.error("Download exception", extra={"error": str(e)}, exc_info=True)
+            logger.exception("Download exception", extra={"error": str(e)})
             _metrics().downloads_failed.inc(platform="telegram")
             await asyncio.to_thread(safe_remove, tmp_path)
             return None, "⚠️ Внутренняя ошибка при загрузке."

@@ -10,7 +10,7 @@ from collections.abc import Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, BinaryIO, TypeAlias
+from typing import TYPE_CHECKING, Any, BinaryIO
 
 from telegram import (
     Bot,
@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 MAX_TELEGRAM_ALBUM_SIZE = 10
 logger = logging.getLogger("app.services.media.delivery")
 
-MediaSource: TypeAlias = str | os.PathLike[str] | BinaryIO | io.BytesIO
+type MediaSource = str | os.PathLike[str] | BinaryIO | io.BytesIO
 
 
 @dataclass(frozen=True, slots=True)

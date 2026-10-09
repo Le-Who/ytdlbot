@@ -1,11 +1,12 @@
 """Tests for TikTok content-type router and error classification."""
 
 import unittest
+
 from app.services.ytdlp.parsers import (
+    TikTokError,
     _is_facebook,
     classify_tiktok_content,
     classify_tiktok_error,
-    TikTokError,
 )
 
 

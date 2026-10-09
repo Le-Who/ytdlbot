@@ -1,5 +1,6 @@
 import unittest
-from app.services.ytdlp.parsers import _calculate_filesize, BITRATE_COEFFICIENT
+
+from app.services.ytdlp.parsers import BITRATE_COEFFICIENT, _calculate_filesize
 
 
 class TestCalculateFilesize(unittest.TestCase):

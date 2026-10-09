@@ -1,9 +1,9 @@
-import os
-import tempfile
+import atexit
 import base64
 import logging
-import atexit
-from typing import Optional
+import os
+import tempfile
+from typing import ClassVar
 
 logger = logging.getLogger("ytdlp_service.cookies")
 
@@ -20,7 +20,7 @@ class PlatformCookiesManager:
     """
 
     # platform keyword (matched against URL) → env var name
-    _PLATFORM_ENV_MAP: dict[str, str] = {
+    _PLATFORM_ENV_MAP: ClassVar[dict[str, str]] = {
         "tiktok.com": "TIKTOK_COOKIES_B64",
         "facebook.com": "FACEBOOK_COOKIES_B64",
         "fb.watch": "FACEBOOK_COOKIES_B64",
@@ -32,7 +32,7 @@ class PlatformCookiesManager:
     def __init__(self) -> None:
         # platform keyword → temp file path (or None)
         self._platform_cookies: dict[str, str] = {}
-        self._global_cookies_path: Optional[str] = None
+        self._global_cookies_path: str | None = None
         self._initialize()
 
     def _initialize(self) -> None:
@@ -61,7 +61,7 @@ class PlatformCookiesManager:
         if self._global_cookies_path:
             logger.info("Global cookies configured (YTDLP_COOKIES_B64)")
 
-    def get_cookies_path(self, url: str) -> Optional[str]:
+    def get_cookies_path(self, url: str) -> str | None:
         """Return the best cookies file path for the given URL.
 
         Priority: platform-specific → global fallback → None.
@@ -74,12 +74,12 @@ class PlatformCookiesManager:
         return self._global_cookies_path
 
     @property
-    def tiktok_cookies_path(self) -> Optional[str]:
+    def tiktok_cookies_path(self) -> str | None:
         """Shortcut for TikTok cookies (used by gallery-dl, TikWM)."""
         return self._platform_cookies.get("tiktok.com") or self._global_cookies_path
 
     @staticmethod
-    def _decode_cookies(env_var: str, label: str) -> Optional[str]:
+    def _decode_cookies(env_var: str, label: str) -> str | None:
         """Decode a base64 env var into a temp cookies file."""
         b64 = os.getenv(env_var, "").strip()
         if not b64:
@@ -107,7 +107,7 @@ class PlatformCookiesManager:
             atexit.register(_cleanup_file, path)
             return path
 
-        except Exception as e:
+        except (OSError, ValueError) as e:
             logger.error("[%s] Failed to init cookies: %s", label, e)
             return None
 
@@ -185,5 +185,5 @@ def _cleanup_file(path: str) -> None:
     if path and os.path.exists(path):
         try:
             os.unlink(path)
-        except Exception:
+        except OSError:
             pass

@@ -72,9 +72,7 @@ class FxTwitterProvider:
                 if code in {429, 500, 502, 503, 504}
                 else FailureKind.PERMANENT
             )
-            raise ProviderError(
-                failure_kind, f"FxTwitter status error: {code!r}"
-            )
+            raise ProviderError(failure_kind, f"FxTwitter status error: {code!r}")
         status = data.get("status")
         if not isinstance(status, dict):
             raise ProviderError(FailureKind.PERMANENT, "FxTwitter status is missing")
@@ -85,9 +83,7 @@ class FxTwitterProvider:
         if not raw_items:
             quote_status = status.get("quote")
             quoted_media = (
-                quote_status.get("media")
-                if isinstance(quote_status, dict)
-                else None
+                quote_status.get("media") if isinstance(quote_status, dict) else None
             )
             if isinstance(quoted_media, dict):
                 raw_items, order_complete = _ordered_media(quoted_media)
@@ -149,8 +145,16 @@ def _ordered_media(media: dict[str, object]) -> tuple[list[dict[str, object]], b
         return [item for item in all_items if isinstance(item, dict)], True
     photos = media.get("photos")
     videos = media.get("videos")
-    photo_items = [item for item in photos if isinstance(item, dict)] if isinstance(photos, list) else []
-    video_items = [item for item in videos if isinstance(item, dict)] if isinstance(videos, list) else []
+    photo_items = (
+        [item for item in photos if isinstance(item, dict)]
+        if isinstance(photos, list)
+        else []
+    )
+    video_items = (
+        [item for item in videos if isinstance(item, dict)]
+        if isinstance(videos, list)
+        else []
+    )
     return photo_items + video_items, not (photo_items and video_items)
 
 
@@ -161,7 +165,9 @@ def _media_item(
     selected = raw
     formats = raw.get("formats")
     if isinstance(formats, list):
-        usable = [item for item in formats if isinstance(item, dict) and item.get("url")]
+        usable = [
+            item for item in formats if isinstance(item, dict) and item.get("url")
+        ]
         if usable:
             selected = max(usable, key=_format_rank)
     url = selected.get("url")

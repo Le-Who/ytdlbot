@@ -631,6 +631,8 @@ class MediaPipeline:
                     failures: list[tuple[str, BaseException]] = []
                     retried_tiktok_cheap = False
                     cheap_prefetch: asyncio.Task[ResolvedMedia | None] | None = None
+                    completed: MaterializedItem | None = None
+                    completed_valid = False
                     try:
                         while True:
                             if (
@@ -652,7 +654,8 @@ class MediaPipeline:
                             candidates = _materialization_candidates(
                                 selected.candidates
                             )
-                            completed: MaterializedItem | None = None
+                            completed = None
+                            completed_valid = False
                             try:
                                 completed = await self.transport.materialize(
                                     work_request,
@@ -660,6 +663,7 @@ class MediaPipeline:
                                     refreshers=self.refreshers,
                                 )
                                 await self.artifact_validator(work_request, completed)
+                                completed_valid = True
                             except asyncio.CancelledError:
                                 if completed is not None:
                                     await _await_preserving_cancellation(
@@ -734,8 +738,27 @@ class MediaPipeline:
                     finally:
                         if cheap_prefetch is not None:
                             cheap_prefetch.cancel()
-                            await asyncio.gather(cheap_prefetch, return_exceptions=True)
-                    await self._store_metadata(selected)
+                            try:
+                                await _await_preserving_cancellation(
+                                    asyncio.gather(
+                                        cheap_prefetch, return_exceptions=True
+                                    )
+                                )
+                            except BaseException:
+                                if completed_valid and completed is not None:
+                                    await _await_preserving_cancellation(
+                                        completed.release(delete=True)
+                                    )
+                                raise
+                    try:
+                        await self._store_metadata(selected)
+                    except BaseException:
+                        # Bytes are owned by the factory until ready publication.
+                        # Cache cancellation must not leave them between owners.
+                        await _await_preserving_cancellation(
+                            completed.release(delete=True)
+                        )
+                        raise
                     try:
                         # Publish inside the shared factory.  If its final
                         # subscriber is cancelled after the bytes are ready,
@@ -783,7 +806,13 @@ class MediaPipeline:
         resolved = ResolvedMedia(
             request=request,
             items=items,
-            candidates=(winner, *result.winner.alternatives),
+            candidates=(
+                winner,
+                *(
+                    _project_album_selection(request, candidate)
+                    for candidate in result.winner.alternatives
+                ),
+            ),
             provider=result.winner.provider,
             attempted_providers=result.attempted_providers,
         )
@@ -1054,6 +1083,13 @@ def build_media_request(
         )
     except UnsupportedMediaUrlError:
         canonical, platform, media_id = _canonicalize_generic_url(url)
+        if urlsplit(canonical).hostname in {
+            "youtube.com",
+            "www.youtube.com",
+            "m.youtube.com",
+            "youtu.be",
+        }:
+            raise
         return MediaRequest(
             canonical_url=canonical,
             platform=platform,
@@ -1093,7 +1129,7 @@ def request_from_download_context(
     return build_media_request(
         payload.page_url,
         kind=kind,
-        quality=payload.height,
+        quality=None if kind is MediaKind.AUDIO else payload.height,
         audio_format=audio_format,
         clip=payload.section,
         caller_scope=caller_scope,
@@ -1104,7 +1140,7 @@ def request_from_download_context(
 
 def encode_callback_data(action: str, *parts: str) -> str:
     values = (_CALLBACK_VERSION, action, *parts)
-    _validate_callback_parts(values, require_payload=True)
+    _validate_callback_parts((action, *parts))
     encoded = "|".join(values)
     if len(encoded.encode("utf-8")) > 64:
         raise CallbackDataError("callback data exceeds Telegram's 64-byte limit")
@@ -1136,16 +1172,14 @@ def decode_callback_payload(
         raise CallbackDataError("invalid callback data")
     values = tuple(payload.split("|"))
     if values[:1] == (_CALLBACK_VERSION,):
-        if len(values) < 3:
+        if len(values) < 2:
             raise CallbackDataError("versioned callback data is incomplete")
         action, parts = values[1], values[2:]
     else:
-        if len(values) < 2:
-            raise CallbackDataError("legacy callback data is incomplete")
         action, parts = values[0], values[1:]
     if action not in allowed_actions or len(parts) > max_parts:
         raise CallbackDataError("callback action or shape is invalid")
-    _validate_callback_parts((action, *parts), require_payload=True)
+    _validate_callback_parts((action, *parts))
     return action, parts
 
 
@@ -1364,14 +1398,16 @@ def _expected_duration(
         if item.duration_seconds is not None
         else candidate.duration_seconds
     )
-    if start is None and end is None:
-        return source_duration
     clip_start = start or 0
     if end is not None:
-        return max(0, end - clip_start)
-    if source_duration is not None:
-        return max(0, source_duration - clip_start)
-    return None
+        expected = max(0, end - clip_start)
+    elif source_duration is not None:
+        expected = max(0, source_duration - clip_start)
+    else:
+        expected = None
+    if candidate.mux_mode == "mute-mp4" and expected is not None:
+        return min(expected, 60)
+    return expected
 
 
 def _display_dimensions(stream: Mapping[str, Any]) -> tuple[int, int]:
@@ -1869,9 +1905,12 @@ def _generic_media_id(
     return hashlib.sha256(canonical.encode()).hexdigest()[:24]
 
 
-def _validate_callback_parts(values: Sequence[str], *, require_payload: bool) -> None:
-    if require_payload and len(values) < 2:
+def _validate_callback_parts(values: Sequence[str]) -> None:
+    if not values or (values[0] != "back" and len(values) < 2):
         raise CallbackDataError("callback data is incomplete")
+    # Back restores picker state from the conversation; it carries no token.
+    if values[0] == "back" and len(values) != 1:
+        raise CallbackDataError("callback action or shape is invalid")
     if any(not value or not _CALLBACK_PART.fullmatch(value) for value in values):
         raise CallbackDataError("callback data contains invalid characters")
 

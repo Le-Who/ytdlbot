@@ -1,13 +1,13 @@
 """Media conversion service — GIF and slideshow-to-video via ffmpeg."""
 
 import asyncio
+import glob
 import json
 import logging
 import os
 import struct
 import time
 import uuid
-from typing import Optional
 
 from app.core import state
 from app.core.config import TEMP_DIR
@@ -38,10 +38,10 @@ _FALLBACK_AUDIO_KBPS = 128
 _MIN_VIDEO_KBPS = 100
 
 # Max segment size for lossless stream-copy splitting (slightly under the Telegram limit).
-_SPLIT_SEGMENT_BYTES = int(47 * 1024 * 1024)  # 47 MB
+_SPLIT_SEGMENT_BYTES = 47 * 1024 * 1024  # 47 MB
 
 # Maximum total size we're willing to split (avoids spawning dozens of parts).
-_SPLIT_MAX_INPUT_BYTES = int(500 * 1024 * 1024)  # 500 MB
+_SPLIT_MAX_INPUT_BYTES = 500 * 1024 * 1024  # 500 MB
 
 
 async def _run_transform_process(
@@ -71,7 +71,7 @@ async def _run_transform_process(
         )
 
 
-def find_thumbnail(video_path: str) -> Optional[str]:
+def find_thumbnail(video_path: str) -> str | None:
     """Return the .jpg thumbnail yt-dlp may have written beside the video.
 
     yt-dlp writes thumbnails as ``<video_stem>.jpg`` (after ``--convert-thumbnails jpg``).
@@ -97,7 +97,7 @@ async def split_video_stream_copy(
     input_path: str,
     *,
     segment_bytes: int = _SPLIT_SEGMENT_BYTES,
-) -> Optional[list[str]]:
+) -> list[str] | None:
     """Split a video into ≤segment_bytes chunks using FFmpeg stream-copy (zero re-encoding).
 
     This is an O(file-size / disk-speed) operation — typically 1–3 seconds for a 200 MB file.
@@ -141,6 +141,8 @@ async def split_video_stream_copy(
 
     uid = uuid.uuid4().hex
     segment_pattern = os.path.join(TEMP_DIR, f"split_{uid}_%03d.mp4")
+    parts_pattern = os.path.join(TEMP_DIR, f"split_{uid}_*.mp4")
+    succeeded = False
 
     cmd = [
         "ffmpeg",
@@ -177,30 +179,35 @@ async def split_video_stream_copy(
             return None
 
         # Collect produced segments (ffmpeg names them 000, 001, …)
-        import glob
-
-        pattern = os.path.join(TEMP_DIR, f"split_{uid}_*.mp4")
-        parts = sorted(glob.glob(pattern))
-        valid = [p for p in parts if os.path.exists(p) and os.path.getsize(p) > 0]
-
-        if not valid:
-            logger.error("split_video_stream_copy: no output segments produced")
+        parts = sorted(glob.glob(parts_pattern))
+        if not parts or any(
+            not os.path.exists(part) or not 0 < os.path.getsize(part) <= segment_bytes
+            for part in parts
+        ):
+            logger.error(
+                "split_video_stream_copy: missing, empty, or oversized output segment"
+            )
             return None
 
         logger.info(
             "split_video_stream_copy: %.0f MB → %d parts (≈%.0f MB each)",
             file_size / 1e6,
-            len(valid),
+            len(parts),
             segment_bytes / 1e6,
         )
-        return valid
+        succeeded = True
+        return parts
 
     except TimeoutError:
         logger.error("split_video_stream_copy: ffmpeg timed out")
         return None
-    except Exception as exc:
-        logger.error("split_video_stream_copy: exception: %s", exc, exc_info=True)
+    except Exception:
+        logger.exception("split_video_stream_copy failed")
         return None
+    finally:
+        if not succeeded:
+            for part in glob.glob(parts_pattern):
+                safe_remove(part)
 
 
 async def _probe_full_meta(video_path: str) -> dict:
@@ -241,7 +248,9 @@ async def _probe_full_meta(video_path: str) -> dict:
                 if br:
                     result["audio_kbps"] = int(br) // 1000
                 break
-    except Exception as exc:
+    # Probe execution and provider metadata are optional inputs; the supervisor
+    # owns process cleanup and callers retain their documented fallback values.
+    except Exception as exc:  # noqa: BLE001
         logger.debug("_probe_full_meta failed for %s: %s", video_path, exc)
     return result
 
@@ -251,7 +260,7 @@ async def compress_video_to_size(
     *,
     target_bytes: int = _TG_MAX_BYTES,
     audio_kbps: int = _FALLBACK_AUDIO_KBPS,
-) -> Optional[str]:
+) -> str | None:
     """Re-encode a video with a mathematically calculated bitrate to fit target_bytes.
 
     Algorithm (two-pass libx264):
@@ -416,7 +425,16 @@ async def compress_video_to_size(
             safe_remove(output_path)
             return None
 
-        final_size_mb = os.path.getsize(output_path) / (1024 * 1024)
+        final_size = os.path.getsize(output_path)
+        if final_size > target_bytes:
+            logger.warning(
+                "compress_video_to_size: output exceeds target (%d > %d bytes)",
+                final_size,
+                target_bytes,
+            )
+            safe_remove(output_path)
+            return None
+        final_size_mb = final_size / (1024 * 1024)
         logger.info(
             "compress_video_to_size: %.1f MB → %.1f MB (target %.1f MB) ✓",
             size_mb,
@@ -425,8 +443,8 @@ async def compress_video_to_size(
         )
         return output_path
 
-    except Exception as exc:
-        logger.error("compress_video_to_size exception: %s", exc, exc_info=True)
+    except Exception:
+        logger.exception("compress_video_to_size failed")
         safe_remove(output_path)
         return None
     finally:
@@ -435,7 +453,7 @@ async def compress_video_to_size(
             safe_remove(passlog_prefix + suffix)
 
 
-async def _probe_video_codec(video_path: str) -> Optional[str]:
+async def _probe_video_codec(video_path: str) -> str | None:
     """Detect the video codec of a file via ffprobe.
 
     Returns the lowercase codec name (e.g. ``"h264"``, ``"vp9"``) or
@@ -462,12 +480,14 @@ async def _probe_video_codec(video_path: str) -> Optional[str]:
         stdout = process_result.stdout
         if process_result.returncode == 0 and stdout:
             return stdout.decode().strip().lower()
-    except Exception as exc:
+    # An unavailable or failed external probe leaves codec detection unknown;
+    # this must not convert an optional compatibility probe into a download error.
+    except Exception as exc:  # noqa: BLE001
         logger.debug("ffprobe failed: %s", exc)
     return None
 
 
-def _get_audio_duration(audio_path: str) -> Optional[float]:
+def _get_audio_duration(audio_path: str) -> float | None:
     """Fast extraction of MP3/M4A duration without ffprobe.
 
     Reads the file header to estimate duration.  Falls back to None
@@ -499,7 +519,7 @@ def _get_audio_duration(audio_path: str) -> Optional[float]:
                     dur = struct.unpack(">Q", data[offset + 24 : offset + 32])[0]
                 if ts > 0:
                     return float(dur / ts)
-    except Exception as e:
+    except (OSError, IndexError, struct.error) as e:
         logger.debug("Audio duration probe failed: %s", e)
     return None
 
@@ -514,7 +534,7 @@ class MediaConverter:
     """Handles ffmpeg-based media conversions."""
 
     @staticmethod
-    async def remux_webm_opus(file_path: str) -> Optional[str]:
+    async def remux_webm_opus(file_path: str) -> str | None:
         """Put an Opus stream in a real Ogg container without re-encoding."""
         if not file_path.lower().endswith(".webm") or not os.path.exists(file_path):
             return None
@@ -555,7 +575,7 @@ class MediaConverter:
         return output_path
 
     @staticmethod
-    async def convert_to_mp3(file_path: str) -> Optional[str]:
+    async def convert_to_mp3(file_path: str) -> str | None:
         """Satisfy a strict MP3 request with MP3 bytes, never an alias."""
         if not file_path or not os.path.exists(file_path):
             return None
@@ -652,7 +672,7 @@ class MediaConverter:
         )
 
     @staticmethod
-    async def convert_to_gif_ffmpeg(video_path: str) -> Optional[str]:
+    async def convert_to_gif_ffmpeg(video_path: str) -> str | None:
         """Convert a video to a mute MP4 (Telegram treats as GIF).
 
         Strategy:
@@ -717,12 +737,14 @@ class MediaConverter:
                 return None
 
             return gif_path
-        except Exception as e:
+        # This compatibility facade translates external converter failures into
+        # its established None result; process cancellation remains a BaseException.
+        except Exception as e:  # noqa: BLE001
             logger.error("FFmpeg exception", extra={"error": str(e)})
             return None
 
     @staticmethod
-    async def convert_to_native_gif(video_path: str) -> Optional[str]:
+    async def convert_to_native_gif(video_path: str) -> str | None:
         """Convert a video file to a native .gif with high-quality palette generation.
 
         Uses FFmpeg's two-pass palettegen→paletteuse pipeline for optimal color
@@ -827,8 +849,8 @@ class MediaConverter:
             logger.info("convert_to_native_gif: OK → %s (%.1f MB)", gif_path, size_mb)
             return gif_path
 
-        except Exception as exc:
-            logger.error("convert_to_native_gif exception: %s", exc, exc_info=True)
+        except Exception:
+            logger.exception("convert_to_native_gif failed")
             safe_remove(gif_path)
             return None
         finally:
@@ -837,8 +859,8 @@ class MediaConverter:
     @staticmethod
     async def images_to_video(
         images: list[str],
-        audio_path: Optional[str] = None,
-    ) -> Optional[str]:
+        audio_path: str | None = None,
+    ) -> str | None:
         """
         Converts a list of images (+ optional audio) into a slideshow MP4.
 
@@ -960,9 +982,7 @@ class MediaConverter:
             return output_path
 
         except Exception as e:
-            logger.error(
-                "Slideshow conversion exception", extra={"error": str(e)}, exc_info=True
-            )
+            logger.exception("Slideshow conversion exception", extra={"error": str(e)})
             return None
         finally:
             safe_remove(concat_file)

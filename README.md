@@ -228,9 +228,10 @@ activation, rollback, and recovery commands. Rollback restores image and
 configuration but never rolls SQLite or Redis data backward. Production JSON
 logs opt into the existing shared Alloy/Loki stack without changing its other
 bot streams; the deployment guide documents the labels and redaction contract.
-The GitHub `production` environment requires reviewer approval after a release
-image has been verified and built. A merged commit or a successful build alone
-does not mean that the release is running on the VPS.
+A push to `vps` verifies and builds the release, then activates it automatically
+without a required-reviewer approval gate. The GitHub `production` environment
+retains the deployment credentials. Confirm the running release through the
+deployment workflow and readiness response reporting the exact release SHA.
 
 ## Repository layout
 

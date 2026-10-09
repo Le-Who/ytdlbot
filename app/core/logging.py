@@ -4,7 +4,7 @@ import logging
 import os
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 correlation_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "correlation_id", default="-"
@@ -32,7 +32,7 @@ def _redact(value: object) -> object:
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         timestamp = (
-            datetime.fromtimestamp(record.created, timezone.utc)
+            datetime.fromtimestamp(record.created, UTC)
             .isoformat(timespec="milliseconds")
             .replace("+00:00", "Z")
         )

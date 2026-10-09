@@ -75,12 +75,12 @@ class SnapSaveProvider:
         if parser.job_id:
             raise UpstreamRenderRequired(parser.job_id)
         if not parser.links:
-            raise ProviderError(FailureKind.TRANSIENT, "SnapSave returned no ready link")
+            raise ProviderError(
+                FailureKind.TRANSIENT, "SnapSave returned no ready link"
+            )
         candidates: list[MediaCandidate] = []
         for index, (url, quality) in enumerate(parser.links):
-            await probe_candidate(
-                self._transport, url, wall_clock=self._wall_clock
-            )
+            await probe_candidate(self._transport, url, wall_clock=self._wall_clock)
             kind = _kind_from_url(url)
             label = _normalized_quality(quality)
             quality_limited = _is_lower_quality(request, label)
@@ -117,9 +117,7 @@ class _SnapSaveParser(HTMLParser):
         self._quality = ""
         self._label: list[str] = []
 
-    def handle_starttag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = dict(attrs)
         job_id = values.get("data-job-id")
         if job_id and (values.get("data-status") or "").lower() not in {

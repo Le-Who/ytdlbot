@@ -33,14 +33,14 @@ from app.core.process import run_subprocess
 from app.core.resource_budget import DiskBudget, DiskReservation
 
 from .models import (
+    YOUTUBE_SHORT_DEFAULT_VARIANT,
     MediaCandidate,
     MediaRequest,
     MediaSource,
     RefreshDescriptor,
-    YOUTUBE_SHORT_DEFAULT_VARIANT,
 )
-from .validation import validate_candidate
 from .proxies import MediaProxyPool
+from .validation import validate_candidate
 
 logger = logging.getLogger("app.services.media.transport")
 
@@ -696,7 +696,9 @@ class MediaTransport:
         try:
             reservation.bind(adopted)
             try:
-                await asyncio.to_thread(self.file_mover, source, adopted)
+                await _await_thread_io(
+                    asyncio.to_thread(self.file_mover, source, adopted)
+                )
             except OSError as error:
                 if (
                     error.errno != errno.EXDEV
@@ -763,47 +765,60 @@ class MediaTransport:
         attempt: Callable[[MediaCandidate], Coroutine[Any, Any, MaterializedItem]],
         deadline: float,
     ) -> tuple[MaterializedItem | None, list[MaterializationError]]:
-        tasks: set[asyncio.Task[MaterializedItem]] = {
+        all_tasks: set[asyncio.Task[MaterializedItem]] = {
             asyncio.create_task(attempt(candidate)) for candidate in candidates
         }
+        tasks = set(all_tasks)
         errors: list[MaterializationError] = []
         winner: MaterializedItem | None = None
-        try:
-            while tasks and self.clock() < deadline:
-                done, tasks = await asyncio.wait(
-                    tasks,
-                    timeout=max(0, deadline - self.clock()),
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-                if not done:
-                    break
-                for task in done:
-                    try:
-                        result = task.result()
-                    except MaterializationError as error:
-                        errors.append(error)
-                    else:
-                        if winner is None:
-                            winner = result
-                        else:
-                            metrics.race_wasted_bytes.inc(
-                                result.size_bytes,
-                                provider=result.candidate.provider or "unknown",
-                            )
-                            await result.release(delete=True)
-                if winner is not None:
-                    break
-        finally:
-            for task in tasks:
-                task.cancel()
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for gathered_result in results:
-                if isinstance(gathered_result, MaterializedItem):
+
+        async def discard_losers() -> None:
+            results = await asyncio.gather(*all_tasks, return_exceptions=True)
+            cleanup_error: BaseException | None = None
+            for result in results:
+                if isinstance(result, MaterializedItem) and result is not winner:
                     metrics.race_wasted_bytes.inc(
-                        gathered_result.size_bytes,
-                        provider=gathered_result.candidate.provider or "unknown",
+                        result.size_bytes,
+                        provider=result.candidate.provider or "unknown",
                     )
-                    await gathered_result.release(delete=True)
+                    try:
+                        await result.release(delete=True)
+                    except BaseException as error:  # noqa: BLE001 - join every owner's cleanup
+                        # A failed loser release must not prevent other cleanup.
+                        cleanup_error = cleanup_error or error
+            if cleanup_error is not None:
+                raise cleanup_error
+
+        try:
+            try:
+                while tasks and self.clock() < deadline:
+                    done, tasks = await asyncio.wait(
+                        tasks,
+                        timeout=max(0, deadline - self.clock()),
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if not done:
+                        break
+                    for task in done:
+                        try:
+                            result = task.result()
+                        except MaterializationError as error:
+                            errors.append(error)
+                        else:
+                            if winner is None:
+                                winner = result
+                    if winner is not None:
+                        break
+            finally:
+                for task in tasks:
+                    task.cancel()
+                # A cancelled gather would cancel attempts again while their
+                # cleanup runs. Join all attempts before transferring ownership.
+                await _await_thread_io(discard_losers())
+        except BaseException:
+            if winner is not None:
+                await _await_thread_io(winner.release(delete=True))
+            raise
         return winner, errors
 
     async def _download_candidate(
@@ -824,6 +839,7 @@ class MediaTransport:
         except TimeoutError as error:
             raise TransferTimeout("disk reservation timed out") from error
         completed: list[Path] = []
+        final_paths: tuple[Path, ...] = ()
         total = 0
         try:
             download_started = self.clock()
@@ -889,7 +905,7 @@ class MediaTransport:
                         else "failed"
                     ),
                 )
-            for path in completed:
+            for path in set(completed).union(final_paths):
                 path.unlink(missing_ok=True)
             await reservation.release()
             raise
@@ -1618,7 +1634,7 @@ def _format_seconds(value: float) -> str:
 
 
 async def _await_thread_io(operation: Awaitable[Any]) -> Any:
-    """Finish one local I/O chunk, then restore caller cancellation."""
+    """Join local I/O or ownership cleanup, then restore caller cancellation."""
     task: asyncio.Future[Any] = asyncio.ensure_future(operation)
     cancellation: asyncio.CancelledError | None = None
     while not task.done():
@@ -1626,10 +1642,15 @@ async def _await_thread_io(operation: Awaitable[Any]) -> Any:
             await asyncio.shield(task)
         except asyncio.CancelledError as error:
             cancellation = error
-    result = task.result()
+        except BaseException:
+            if cancellation is None:
+                raise
+            break
     if cancellation is not None:
+        if not task.cancelled():
+            task.exception()
         raise cancellation
-    return result
+    return task.result()
 
 
 async def _run_process(command: list[str], timeout: float) -> int:

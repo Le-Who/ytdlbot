@@ -1,6 +1,6 @@
-import zlib
 import logging
-from typing import Any, Optional, TypeVar
+import zlib
+from typing import Any, TypeVar
 
 import msgspec
 
@@ -70,19 +70,45 @@ class RedisStorage(StateStorage):
             return None
         try:
             return self._decode(data, type_hint)
-        except Exception as e:
+        # The supplied type_hint may run dataclass validators that raise custom
+        # errors; a failed ephemeral-cache decode remains a logged cache miss.
+        except Exception as e:  # noqa: BLE001
             logger.error("Redis decode error for key %s: %s", key, str(e))
             return None
 
-    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+    async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
         try:
             data = self._encode(value)
             await self.redis.set(self._key(key), data, ex=ttl or self.default_ttl)
-        except Exception as e:
+        # StateStorage is a best-effort ephemeral cache with an injected Redis
+        # adapter and arbitrary serializable values, not the durable job store.
+        except Exception as e:  # noqa: BLE001
             logger.error("Redis encode error for key %s: %s", key, str(e))
 
     async def delete(self, key: str) -> None:
         await self.redis.delete(self._key(key))
 
     async def clear(self) -> None:
-        await self.redis.flushdb()
+        if not self.prefix:
+            # An unprefixed storage explicitly owns the whole database.
+            await self.redis.flushdb()
+            return
+        # Redis glob syntax must treat namespace characters literally. The
+        # second check protects namespace ownership even with a loose scanner.
+        pattern = (
+            "".join(
+                f"\\{character}" if character in "\\*?[]" else character
+                for character in self.prefix
+            )
+            + "*"
+        )
+        keys = []
+        async for key in self.redis.scan_iter(match=pattern, count=100):
+            prefix = self.prefix.encode() if isinstance(key, bytes) else self.prefix
+            if key.startswith(prefix):
+                keys.append(key)
+                if len(keys) == 100:
+                    await self.redis.delete(*keys)
+                    keys.clear()
+        if keys:
+            await self.redis.delete(*keys)

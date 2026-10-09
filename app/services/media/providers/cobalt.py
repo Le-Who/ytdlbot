@@ -128,15 +128,11 @@ class CobaltProvider:
                     )
                 await probe_candidate(transport, url, wall_clock=self._wall_clock)
                 kind = _cobalt_kind(raw_item.get("type"))
-                items.append(
-                    MediaItem(f"{request.media_id}:{index}", kind, url)
-                )
+                items.append(MediaItem(f"{request.media_id}:{index}", kind, url))
                 sources.append(MediaSource(str(index), url))
             audio = data.get("audio")
             if isinstance(audio, str) and audio:
-                await probe_candidate(
-                    transport, audio, wall_clock=self._wall_clock
-                )
+                await probe_candidate(transport, audio, wall_clock=self._wall_clock)
                 sources.append(MediaSource("audio", audio, audio_codec="unknown"))
             return [
                 MediaCandidate(

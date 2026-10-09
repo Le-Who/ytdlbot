@@ -8,7 +8,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -18,23 +18,29 @@ class TestVideoDownloader(unittest.IsolatedAsyncioTestCase):
 
     async def asyncSetUp(self):
         from app.core import state as s
+        from app.core.storage.memory import MemoryStorage
 
-        s.file_cache = {}
-        s.cancel_cache = {}
-        s.ytdlp = MagicMock()
+        for name, value in {
+            "file_cache": {},
+            "cancel_cache": MemoryStorage(maxsize=100, ttl=60),
+            "ytdlp": MagicMock(),
+            "limiter": MagicMock(),
+        }.items():
+            patcher = patch.object(s, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         s.ytdlp.build_command.return_value = ["echo", "test"]
-        s.limiter = MagicMock()
 
     async def test_cached_file_returns_immediately(self):
         """If file is already in file_cache, return it without downloading."""
-        from app.services.downloader import VideoDownloader
-        from app.core import state as s
         import tempfile
 
+        from app.core import state as s
+        from app.services.downloader import VideoDownloader
+
         # Create a temp file to serve as "cached"
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        tmp.write(b"cached data")
-        tmp.close()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+            tmp.write(b"cached data")
 
         try:
             s.file_cache["tok123"] = tmp.name
@@ -50,22 +56,40 @@ class TestVideoDownloader(unittest.IsolatedAsyncioTestCase):
             os.unlink(tmp.name)
 
     async def test_cached_file_not_on_disk_falls_through(self):
-        """If file_cache points to nonexistent file, fall through to download."""
-        from app.services.downloader import VideoDownloader
+        """A ghost cache entry must be replaced by a successful disk download."""
+        import tempfile
+
         from app.core import state as s
+        from app.services import downloader
 
         s.file_cache["tok_ghost"] = "/nonexistent/file.mp4"
 
-        # download will fail since build_command returns ["echo", "test"] which
-        # doesn't produce a file — we just verify it doesn't return the ghost path
-        path, error = await VideoDownloader.download_video(
-            "https://youtube.com/watch?v=abc",
-            "137",
-            1080,
-            "tok_ghost",
-        )
-        # The ghost path should NOT be returned
-        self.assertNotEqual(path, "/nonexistent/file.mp4")
+        def command(*args, output, **kwargs):
+            return [
+                sys.executable,
+                "-c",
+                "import pathlib,sys; pathlib.Path(sys.argv[1]).write_bytes(b'fresh download')",
+                output,
+            ]
+
+        s.ytdlp.build_command.side_effect = command
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(downloader, "TEMP_DIR", directory),
+            patch.object(downloader, "YOUTUBE_PIPE_MODE", False),
+        ):
+            path, error = await downloader.VideoDownloader.download_video(
+                "https://youtube.com/watch?v=abc",
+                "137",
+                1080,
+                "tok_ghost",
+            )
+            self.assertIsNone(error)
+            self.assertIsInstance(path, str)
+            self.assertEqual(Path(path).read_bytes(), b"fresh download")
+            self.assertEqual(s.file_cache["tok_ghost"], path)
+            s.ytdlp.build_command.assert_called_once()
+            self.assertEqual(s.ytdlp.build_command.call_args.kwargs["output"], path)
 
 
 if __name__ == "__main__":

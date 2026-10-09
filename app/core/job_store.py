@@ -740,8 +740,13 @@ class JobStore:
                 """
                 UPDATE jobs SET claim_expires_at = ?, updated_at = ?
                 WHERE job_id = ? AND state = 'running' AND owner_id = ?
+                  AND claim_expires_at > ?
+                  AND EXISTS (
+                      SELECT 1 FROM worker_lease
+                      WHERE singleton = 1 AND owner_id = ? AND expires_at > ?
+                  )
                 """,
-                (now + lease_seconds, now, job_id, owner_id),
+                (now + lease_seconds, now, job_id, owner_id, now, owner_id, now),
             )
         return cursor.rowcount == 1
 
@@ -1027,6 +1032,13 @@ class JobStore:
                 SELECT job_id, update_id FROM jobs
                 WHERE state IN ('completed', 'failed')
                   AND payload_expires_at <= ?
+                  AND NOT (
+                      state = 'failed' AND EXISTS (
+                          SELECT 1 FROM deliveries
+                          WHERE deliveries.job_id = jobs.job_id
+                            AND deliveries.outcome = 'failed'
+                      )
+                  )
                 ORDER BY payload_expires_at, update_id
                 LIMIT ?
                 """,

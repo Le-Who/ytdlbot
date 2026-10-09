@@ -4,10 +4,10 @@ Skipped by default in local runs (pytest addopts: -m 'not integration').
 Run explicitly with:  pytest -m integration --no-cov
 """
 
+import asyncio
 import os
 import shutil
 import tempfile
-import asyncio
 import unittest
 
 import pytest
@@ -70,7 +70,7 @@ class TestYtdlpIntegration(unittest.IsolatedAsyncioTestCase):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+            _stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
             self.assertEqual(
                 proc.returncode, 0, f"yt-dlp failed: {stderr.decode()[:200]}"
             )

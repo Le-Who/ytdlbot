@@ -1,5 +1,5 @@
-import unittest
 import os
+import unittest
 
 # Add repo root to path
 # Set dummy env vars for app.main import

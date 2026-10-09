@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -7,15 +6,14 @@ class DownloadContext:
     """Strongly typed context for video download sessions."""
 
     page_url: str
-    format_id: Optional[str] = None
-    height: Optional[int] = None
-    title: Optional[str] = None
-    info_json_path: Optional[str] = None
-    user_tag: Optional[str] = None
-    chat_id: Optional[int] = None
-    original_msg_id: Optional[int] = None
-    api_source: Optional[str] = None
-    api_json: Optional[dict] = None
+    format_id: str | None = None
+    height: int | None = None
+    title: str | None = None
+    info_json_path: str | None = None
+    user_tag: str | None = None
+    chat_id: int | None = None
+    original_msg_id: int | None = None
+    api_source: str | None = None
+    api_json: dict | None = None
     youtube_fallback: bool = False
-    section: Optional[str] = None
-
+    section: str | None = None

@@ -73,6 +73,10 @@ DOWNLOADED_BYTES_METHODS = {
     "file-id-cache",
     "unavailable",
 }
+EVIDENCE_SCHEMA_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "tests/fixtures/media-release-evidence.schema.json"
+)
 
 
 class EvidenceError(RuntimeError):
@@ -240,6 +244,19 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _validate_schema(instance: dict[str, Any], schema_path: Path) -> None:
     schema = _load_json(schema_path)
+    _validate_instance(instance, schema)
+
+
+def _validate_instance(instance: dict[str, Any], schema: dict[str, Any]) -> None:
+    def finite(value: Any) -> bool:
+        if isinstance(value, dict):
+            return all(finite(item) for item in value.values())
+        if isinstance(value, list):
+            return all(finite(item) for item in value)
+        return not isinstance(value, float) or math.isfinite(value)
+
+    if not finite(instance):
+        raise EvidenceValidationError("evidence contains a nonfinite number")
     validator = Draft202012Validator(schema, format_checker=FormatChecker())
     errors = sorted(validator.iter_errors(instance), key=lambda item: list(item.path))
     if errors:
@@ -248,6 +265,70 @@ def _validate_schema(instance: dict[str, Any], schema_path: Path) -> None:
         raise EvidenceValidationError(
             f"schema validation failed at {location} ({first.validator})"
         )
+
+
+def _validate_window_state(
+    state: dict[str, Any], schema_path: Path = EVIDENCE_SCHEMA_PATH
+) -> None:
+    """Reuse the closed evidence contracts before consuming persisted state."""
+    evidence_schema = _load_json(schema_path)
+    metadata_fields = (
+        "schema_version",
+        "release_sha",
+        "manifest_sha256",
+        "current_memory_limit_bytes",
+        "production_ip_attested",
+        "runtime_profile",
+        "image_id",
+        "image_reference",
+        "identity_binding",
+    )
+    properties = {key: evidence_schema["properties"][key] for key in metadata_fields}
+    window_properties = evidence_schema["$defs"]["window"]["properties"]
+    for key in ("window_id", "started_at", "reconciliations"):
+        properties[key] = window_properties[key]
+    reservation_properties = dict(
+        evidence_schema["$defs"]["reconciliation"]["properties"]
+    )
+    for key in ("decision", "audited_by", "reconciled_at"):
+        del reservation_properties[key]
+    reservation_properties.update(
+        {
+            "kind": {"enum": ["short", "video"]},
+            "reserved_at": {"type": "string", "format": "date-time"},
+            "state": {"const": "IN_FLIGHT"},
+        }
+    )
+    properties["in_flight"] = {
+        "anyOf": [
+            {"type": "null"},
+            {
+                "type": "object",
+                "additionalProperties": False,
+                "required": list(reservation_properties),
+                "properties": reservation_properties,
+            },
+        ]
+    }
+    properties["runs"] = {
+        "type": "array",
+        "maxItems": 48,
+        "items": {"$ref": "#/$defs/run"},
+    }
+    schema = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(properties),
+        "properties": {**properties, "plan": {"enum": ["full", "smoke"]}},
+        "$defs": evidence_schema["$defs"],
+        "allOf": evidence_schema.get("allOf", []),
+    }
+    _validate_instance(state, schema)
+    if (
+        state["runtime_profile"] == "legacy-baseline"
+        and state["image_reference"] != state["image_id"]
+    ):
+        raise EvidenceValidationError("legacy image binding is invalid")
 
 
 def _manifest_cases(manifest_path: Path) -> tuple[list[CaseSpec], str]:
@@ -520,6 +601,10 @@ def _run_from_observation(
         success_delta == 1
         and observation.get("job_state") == "completed"
         and all(item in SUCCESS_RESULTS for item in delivery_outcomes)
+        and {"job-completed", "delivery-success"}.issubset(events)
+        and not {"job-failed", "delivery-failed", "delivery-uncertain"}.intersection(
+            events
+        )
     )
     raw_bypassed = observation.get("bypassed_phases", [])
     if (
@@ -657,6 +742,7 @@ def _resume_state(
             "runs": [],
         }
     payload = _load_json(output_path)
+    _validate_window_state(payload)
     metadata = {
         "schema_version": 1,
         "release_sha": release_sha,
@@ -712,6 +798,7 @@ def reconcile_in_flight(
         raise EvidenceValidationError("audited_by contains unsafe characters")
     _unix_time(reconciled_at)
     state = _load_json(output_path)
+    _validate_window_state(state)
     reservation = state.get("in_flight")
     if not isinstance(reservation, dict) or reservation.get("state") != "IN_FLIGHT":
         raise EvidenceValidationError("no IN_FLIGHT reservation to reconcile")
@@ -734,7 +821,7 @@ def _unix_time(timestamp: str) -> int:
     from datetime import datetime
 
     try:
-        return int(datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp())
+        return int(datetime.fromisoformat(timestamp).timestamp())
     except ValueError as exc:
         raise EvidenceValidationError(
             "collected_at must be an ISO 8601 timestamp"
@@ -773,6 +860,8 @@ def collect_window(
     ):
         raise EvidenceValidationError("correlation_prefix contains unsafe characters")
     cases, manifest_sha256 = _manifest_cases(manifest_path)
+    if output_path.exists():
+        _validate_window_state(_load_json(output_path))
     identity = adapter.identity()
     memory_limit = _positive_int(
         identity.get("current_memory_limit_bytes"), "current_memory_limit_bytes"
@@ -941,12 +1030,11 @@ def collect_window(
         _atomic_json(output_path, state)
 
 
-def finalize_smoke(
-    *, window_path: Path, output_path: Path, collected_at: str
-) -> None:
+def finalize_smoke(*, window_path: Path, output_path: Path, collected_at: str) -> None:
     """Finalize one representative delivery without statistical claims."""
     _unix_time(collected_at)
     state = _load_json(window_path)
+    _validate_window_state(state)
     if state.get("plan") != "smoke" or state.get("runtime_profile") not in {
         "legacy-baseline",
         "candidate",
@@ -1086,8 +1174,7 @@ def _summary(
             else None
         ),
         "independent_route_measurement_complete": all(
-            run["independent_route"]["capability"] == "available"
-            for run in cohort
+            run["independent_route"]["capability"] == "available" for run in cohort
         ),
     }
 
@@ -1128,6 +1215,8 @@ def finalize_evidence(
     if len(window_paths) != 3:
         raise EvidenceValidationError("finalization requires exactly window-1..3")
     states = [_load_json(path) for path in window_paths]
+    for state in states:
+        _validate_window_state(state, schema_path)
     by_id = {state.get("window_id"): state for state in states}
     if len(by_id) != 3 or set(by_id) != set(WINDOW_IDS):
         raise EvidenceValidationError("finalization requires exactly window-1..3")
@@ -1165,6 +1254,9 @@ def finalize_evidence(
         for state in ordered
     ]
     all_runs = [run for window in windows for run in window["runs"]]
+    _validate_final_semantics(
+        {"windows": windows}, {case.case_id: case.kind for case in cases}
+    )
     summaries = [
         _summary(
             all_runs, kind=kind, cache_state=cache_state, memory_limit=memory_limit

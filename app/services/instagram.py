@@ -5,22 +5,23 @@ Implemented via Tier 1 Anonymous Mobile API Forgery (GraphQL Bypass).
 Uses `curl_cffi` to bypass datacenter TLS fingerprints.
 """
 
+import base64
 import logging
 import os
+import pickle
 import re
 import uuid
-import base64
-import pickle
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from typing import Dict, List, Optional, Tuple, Literal
+from datetime import UTC, datetime
+from typing import ClassVar, Literal
 
 from curl_cffi.requests import AsyncSession
-from app.core.config import TEMP_DIR, IG_SESSIONS_B64
-from app.core.utils import safe_remove
-from app.core import state
 
-__all__ = ["InstagramService", "IGStoryItem", "IGHighlight", "parse_instagram_url"]
+from app.core import state
+from app.core.config import IG_SESSIONS_B64, TEMP_DIR
+from app.core.utils import safe_remove
+
+__all__ = ["IGHighlight", "IGStoryItem", "InstagramService", "parse_instagram_url"]
 
 logger = logging.getLogger("app.services.instagram")
 
@@ -36,7 +37,7 @@ class IGStoryItem:
     url: str  # direct media URL
     thumbnail_url: str  # thumbnail for preview
     timestamp: datetime
-    duration: Optional[float] = None
+    duration: float | None = None
     typename: str = ""
 
     @property
@@ -85,9 +86,9 @@ class IGProfileMedia:
     """Aggregated stories + highlights for a user profile."""
 
     username: str
-    stories: List[IGStoryItem] = field(default_factory=list)
-    highlights: List[IGHighlight] = field(default_factory=list)
-    error: Optional[str] = None
+    stories: list[IGStoryItem] = field(default_factory=list)
+    highlights: list[IGHighlight] = field(default_factory=list)
+    error: str | None = None
 
 
 # ── URL Parsing ──────────────────────────────────────────────────────────────
@@ -106,7 +107,7 @@ _IG_POST_RE = re.compile(
 )
 
 
-def parse_instagram_url(url: str) -> Tuple[str, Optional[str], Optional[str]]:
+def parse_instagram_url(url: str) -> tuple[str, str | None, str | None]:
     url_lower = url.lower()
     if "instagram.com" not in url_lower and "instagr.am" not in url_lower:
         return "unknown", None, None
@@ -156,7 +157,7 @@ _IG_SHORTCODE_ALPHABET = (
 )
 
 
-def _extract_shortcode(url: str) -> Optional[str]:
+def _extract_shortcode(url: str) -> str | None:
     """Extract the shortcode from an Instagram /p/, /reel/, or /reels/ URL."""
     m = _IG_POST_RE.search(url)
     return m.group(1) if m else None
@@ -180,10 +181,10 @@ class InstagramService:
     IMPERSONATE: Literal["chrome110"] = "chrome110"
     IG_USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/110.0.0.0 Safari/537.36"
 
-    _ig_cookie_pool: List[Dict[str, str]] = []
-    _pool_initialized: bool = False
-    _current_pool_index: int = 0
-    _dead_sessions: set = set()  # Indices of suspended/checkpointed accounts
+    _ig_cookie_pool: ClassVar[list[dict[str, str]]] = []
+    _pool_initialized: ClassVar[bool] = False
+    _current_pool_index: ClassVar[int] = 0
+    _dead_sessions: ClassVar[set[int]] = set()  # Suspended/checkpointed session indices
 
     @classmethod
     def _init_pool(cls) -> None:
@@ -224,7 +225,9 @@ class InstagramService:
                         idx,
                     )
 
-            except Exception as e:
+            # Legacy session pickles may instantiate cookie objects with their
+            # own iteration/properties; one bad session must not discard the pool.
+            except Exception as e:  # noqa: BLE001
                 logger.error(
                     "[INSTAGRAM] Failed to parse IG_SESSIONS_B64 index %d: %s",
                     idx,
@@ -240,7 +243,7 @@ class InstagramService:
     @classmethod
     async def _get_available_session(
         cls,
-    ) -> Tuple[Optional[int], Optional[Dict[str, str]]]:
+    ) -> tuple[int | None, dict[str, str] | None]:
         """Round-robin iterates over the session pool and claims the first allowed token from Redis limiter."""
         cls._init_pool()
         pool_size = len(cls._ig_cookie_pool)
@@ -288,7 +291,7 @@ class InstagramService:
         return False
 
     @classmethod
-    def _auth_headers(cls, cookies: Dict[str, str]) -> Dict[str, str]:
+    def _auth_headers(cls, cookies: dict[str, str]) -> dict[str, str]:
         """Build unified authenticated request headers with CSRF token from cookie pool."""
         return {
             "User-Agent": cls.IG_USER_AGENT,
@@ -341,7 +344,7 @@ class InstagramService:
                                             item_count=1,  # Approximate
                                         )
                                     )
-                    except Exception as e:
+                    except (ValueError, TypeError, KeyError, AttributeError) as e:
                         logger.warning(
                             "[INSTAGRAM] Failed to parse web_profile_info for %s: %s",
                             username,
@@ -373,7 +376,9 @@ class InstagramService:
                     if mobile_doc.status_code != 200 and sess_idx is not None:
                         try:
                             body = mobile_doc.text[:500] if mobile_doc.text else ""
-                        except Exception:
+                        # Reading a failed HTTP adapter's body is diagnostic
+                        # only; session health can still use its status code.
+                        except Exception:  # noqa: BLE001
                             body = ""
                         cls._check_response_health(
                             mobile_doc.status_code, body, sess_idx
@@ -383,7 +388,7 @@ class InstagramService:
                             m_data = mobile_doc.json()
                             if "user" in m_data and "pk" in m_data["user"]:
                                 uid = str(m_data["user"]["pk"])
-                        except Exception as e:
+                        except (ValueError, TypeError, KeyError, AttributeError) as e:
                             logger.warning(
                                 "[INSTAGRAM] Failed to parse usernameinfo for %s: %s",
                                 username,
@@ -430,7 +435,12 @@ class InstagramService:
                                                 item_count=edge.get("media_count", 1),
                                             )
                                         )
-                            except Exception as e:
+                            except (
+                                ValueError,
+                                TypeError,
+                                KeyError,
+                                AttributeError,
+                            ) as e:
                                 logger.warning(
                                     "[INSTAGRAM] Failed to parse highlights_tray for %s: %s",
                                     username,
@@ -456,7 +466,9 @@ class InstagramService:
 
             return result
 
-        except Exception as e:
+        # Public profile resolution crosses multiple HTTP/auth adapters and
+        # translates their failures into the profile result's explicit error.
+        except Exception as e:  # noqa: BLE001
             logger.error("[INSTAGRAM] Profile fetch error: %s", e)
             result.error = f"⚠️ Ошибка загрузки профиля: {str(e)[:100]}"
             return result
@@ -464,7 +476,7 @@ class InstagramService:
     @classmethod
     async def get_highlight_items(
         cls, highlight_id: str
-    ) -> Tuple[List[IGStoryItem], Optional[str]]:
+    ) -> tuple[list[IGStoryItem], str | None]:
         """Fetch items in a specific highlight securely, authenticating if possible."""
         cls._init_pool()
         try:
@@ -486,14 +498,16 @@ class InstagramService:
                 hid = f"highlight:{highlight_id}"
                 items = await cls._fetch_reels_media(session, [hid])
                 return items.get(hid, []), None
-        except Exception as e:
+        # Public highlight resolution translates external session/reel adapter
+        # failures into the established empty-items plus error result.
+        except Exception as e:  # noqa: BLE001
             logger.error("[INSTAGRAM] Highlight items error: %s", e)
             return [], f"⚠️ Ошибка загрузки хайлайта: {str(e)[:100]}"
 
     @classmethod
     async def _fetch_reels_media(
-        cls, session: AsyncSession, ids: List[str]
-    ) -> Dict[str, List[IGStoryItem]]:
+        cls, session: AsyncSession, ids: list[str]
+    ) -> dict[str, list[IGStoryItem]]:
         """Hits the iPhone reels_media endpoint using curl_cffi."""
         try:
             ids_param = "&".join(f"reel_ids={x}" for x in ids)
@@ -519,12 +533,12 @@ class InstagramService:
             out = {}
             for reel_id, reel_data in reels.items():
                 items_data = reel_data.get("items", [])
-                parsed: List[IGStoryItem] = []
+                parsed: list[IGStoryItem] = []
                 for item in items_data:
                     is_video = item.get("media_type") == 2
                     duration = float(item.get("video_duration", 0.0))
                     timestamp_val = item.get("taken_at", 0)
-                    dt = datetime.fromtimestamp(timestamp_val, tz=timezone.utc)
+                    dt = datetime.fromtimestamp(timestamp_val, tz=UTC)
 
                     url = ""
                     thumb = ""
@@ -563,14 +577,16 @@ class InstagramService:
                     )
                 out[reel_id] = parsed
             return out
-        except Exception as e:
+        # HTTP, session cookies and untrusted reel metadata share this provider
+        # boundary; the caller receives an empty collection after a logged failure.
+        except Exception as e:  # noqa: BLE001
             logger.error("[INSTAGRAM] _fetch_reels_media error: %s", e)
             return {}
 
     @classmethod
     async def download_story_item(
         cls, item: IGStoryItem
-    ) -> Tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """Download high-res video/image from IG URL -> local temp file via chunked stream."""
         from urllib.parse import urlparse
 
@@ -599,22 +615,28 @@ class InstagramService:
                 if resp.status_code != 200:
                     return None, f"⚠️ Ошибка CDN Instagram: {resp.status_code}"
 
-                with open(out_path, "wb") as f:
+                # This legacy stream owns open/write/close synchronously between
+                # network awaits; cancellation cannot strand a detached disk writer.
+                with open(out_path, "wb") as f:  # noqa: ASYNC230
                     async for chunk in resp.aiter_content():
                         f.write(chunk)
                 return out_path, None
 
-        except Exception as e:
+        # No partial file is returned after an arbitrary external stream failure;
+        # the synchronous context manager has closed its handle before cleanup.
+        except Exception as e:  # noqa: BLE001
             logger.error("[INSTAGRAM] Download error: %s", e)
             safe_remove(out_path)
             return None, "⚠️ Внутренняя ошибка загрузки."
 
     @classmethod
-    async def download_post(cls, url: str) -> Tuple[Optional[str], Optional[str]]:
+    async def download_post(cls, url: str) -> tuple[str | None, str | None]:
         """Download post/reel via Cobalt with native authenticated fallback."""
         import os
         import uuid
+
         from curl_cffi.requests import AsyncSession
+
         from app.core.config import TEMP_DIR
         from app.core.utils import safe_remove
 
@@ -630,7 +652,9 @@ class InstagramService:
                 video_url = c_res.url
             elif c_res and getattr(c_res, "status", None) == "picker":
                 return None, "⚠️ Multi-photo карусели скачивайте через основное меню."
-        except Exception as e:
+        # Cobalt is an optional provider adapter; any adapter failure must permit
+        # the independent native Instagram fallback below.
+        except Exception as e:  # noqa: BLE001
             logger.warning("[INSTAGRAM] Cobalt attempt failed for post %s: %s", url, e)
 
         # 2. Native Fallback if Cobalt failed or returned empty URL
@@ -689,7 +713,9 @@ class InstagramService:
                             # Check if this session is dead (suspended/checkpointed)
                             try:
                                 body_text = doc.text[:500] if doc.text else ""
-                            except Exception:
+                            # Body decoding is optional session-health evidence;
+                            # a broken response adapter must not mask its status.
+                            except Exception:  # noqa: BLE001
                                 body_text = ""
 
                             if sess_idx is not None and cls._check_response_health(
@@ -716,7 +742,7 @@ class InstagramService:
 
                             if items:
                                 item = items[0]
-                                if "video_versions" in item and item["video_versions"]:
+                                if item.get("video_versions"):
                                     video_url = item["video_versions"][0]["url"]
                                 elif "carousel_media" in item:
                                     return (
@@ -745,7 +771,9 @@ class InstagramService:
                             )
                         # Success — break out of retry loop
                         break
-                except Exception as e:
+                # Translate failures of native authentication/HTTP/parsing into
+                # the public post-download error contract after retries finish.
+                except Exception as e:  # noqa: BLE001
                     logger.error(
                         "[INSTAGRAM] Mobile API fallback exception for %s: %s", url, e
                     )
@@ -762,13 +790,17 @@ class InstagramService:
                         f"⚠️ Ошибка сети при скачивании медиа (CDN: {resp.status_code})",
                     )
 
-                with open(out_path, "wb") as f:
+                # Keep the legacy CDN handle and writes inside this coroutine's
+                # synchronous ownership; no disk operation may outlive cleanup.
+                with open(out_path, "wb") as f:  # noqa: ASYNC230
                     async for chunk in resp.aiter_content():
                         f.write(chunk)
 
             return out_path, None
 
-        except Exception as e:
+        # Arbitrary CDN stream failures must remove the closed partial file and
+        # return an error rather than publish an incomplete video path.
+        except Exception as e:  # noqa: BLE001
             logger.error("[INSTAGRAM] Post video pipe error: %s", e)
             safe_remove(out_path)
             return None, "⚠️ Ошибка скачивания видео потока."

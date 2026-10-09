@@ -39,6 +39,12 @@ jobs:
           pip install -r requirements.txt
           pip install -r requirements-ci.txt
 
+      - name: Check Python lint, formatting and types
+        run: |
+          python -m ruff check .
+          python -m ruff format --check .
+          python -m mypy app/ --no-incremental
+
       - name: Run tests with coverage
         env:
           BOT_TOKEN: test_token

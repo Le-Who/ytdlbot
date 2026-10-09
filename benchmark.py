@@ -1,7 +1,7 @@
 import asyncio
-import time
 import os
 import tempfile
+import time
 from unittest.mock import AsyncMock
 
 from app.services.sender import TelegramSender

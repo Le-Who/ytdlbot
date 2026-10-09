@@ -1,12 +1,13 @@
 import unittest
-from app.services.ytdlp.exceptions import (
-    map_ytdlp_error,
-    AccessDeniedError,
-    VideoNotFoundError,
-    LiveStreamError,
-    ExtractionError,
-)
+
 from app.core.texts import Texts
+from app.services.ytdlp.exceptions import (
+    AccessDeniedError,
+    ExtractionError,
+    LiveStreamError,
+    VideoNotFoundError,
+    map_ytdlp_error,
+)
 
 
 class TestYtDlpExceptions(unittest.TestCase):

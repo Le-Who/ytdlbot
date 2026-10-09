@@ -4,9 +4,15 @@ from urllib.parse import urlsplit
 
 from app.constants import SUPPORTED_PLATFORMS, SUPPORTED_PLATFORMS_SUFFIXES
 
-__all__ = ["is_supported_url", "extract_supported_url", "extract_url_and_section", "extract_url_from_update", "safe_remove"]
+__all__ = [
+    "extract_supported_url",
+    "extract_url_and_section",
+    "extract_url_from_update",
+    "is_supported_url",
+    "safe_remove",
+]
 
-URL_RE = re.compile(r"https?://\S+", re.I)
+URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
 
 
 def is_supported_url(text: str) -> bool:
@@ -20,7 +26,7 @@ def is_supported_url(text: str) -> bool:
         return domain in SUPPORTED_PLATFORMS or domain.endswith(
             SUPPORTED_PLATFORMS_SUFFIXES
         )
-    except Exception:
+    except ValueError:
         return False
 
 
@@ -32,7 +38,10 @@ def extract_supported_url(text: str) -> str | None:
     return url if is_supported_url(url) else None
 
 
-SECTION_RE = re.compile(r"(\d{1,2}:\d{2}(?::\d{2})?)\s*[- ]\s*(\d{1,2}:\d{2}(?::\d{2})?)")
+SECTION_RE = re.compile(
+    r"(\d{1,2}:\d{2}(?::\d{2})?)\s*[- ]\s*(\d{1,2}:\d{2}(?::\d{2})?)"
+)
+
 
 def extract_url_and_section(text: str) -> tuple[str | None, str | None]:
     """Extracts URL and optional timestamp section (*start-end) for slicing."""

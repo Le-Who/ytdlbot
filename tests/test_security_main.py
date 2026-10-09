@@ -16,11 +16,11 @@ class AsyncMockCache(dict):
         self.pop(key, None)
 
 
-import re
-
 from unittest.mock import patch
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
 from app.api.routes import router
 
 _app = FastAPI()
@@ -63,45 +63,70 @@ class TestDownloadEndpoint(unittest.TestCase):
         self.assertEqual(resp.status_code, 429)
 
 
-class TestFilenameSanitization(unittest.TestCase):
-    """Test the REAL filename sanitization logic from routes.download.
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
-    The actual sanitization from routes.py is:
-        clean_title = re.sub(r'[\\x00-\\x1f\\x7f\\r\\n]', '', raw_title)[:200]
-    """
+import pytest
 
-    @staticmethod
-    def _sanitize(raw_title: str) -> str:
-        """Reproduce the exact sanitization from routes.py download()."""
-        return re.sub(r"[\x00-\x1f\x7f\r\n]", "", raw_title)[:200]
+from app.core import state
+from app.core.models import DownloadContext
 
-    def test_control_chars_stripped(self):
-        """Control characters and CRLF are removed."""
-        clean = self._sanitize("normal_title\r\ninjected_header: bad")
-        self.assertNotIn("\r", clean)
-        self.assertNotIn("\n", clean)
-        self.assertIn("normal_title", clean)
-        self.assertIn("injected_header: bad", clean)
 
-    def test_filename_length_truncated_to_200(self):
-        """Titles longer than 200 chars are truncated."""
-        clean = self._sanitize("A" * 500)
-        self.assertEqual(len(clean), 200)
+@pytest.mark.parametrize(
+    ("title", "filename"),
+    [
+        (
+            "normal_title\r\ninjected_header: bad",
+            "normal_titleinjected_header%3A%20bad",
+        ),
+        ("A" * 500, "A" * 200),
+        ("hello\x00world", "helloworld"),
+        ("hello\tworld", "helloworld"),
+        (
+            "Привет 🎬 мир",
+            "%D0%9F%D1%80%D0%B8%D0%B2%D0%B5%D1%82%20%F0%9F%8E%AC%20%D0%BC%D0%B8%D1%80",
+        ),
+    ],
+)
+def test_download_response_sanitizes_filename(monkeypatch, tmp_path, title, filename):
+    """Removing route sanitization must change the actual response header."""
+    path = tmp_path / "video.mp4"
+    path.write_bytes(b"video")
 
-    def test_null_byte_stripped(self):
-        """Null bytes in title are removed."""
-        clean = self._sanitize("hello\x00world")
-        self.assertEqual(clean, "helloworld")
+    @asynccontextmanager
+    async def open_materialized(request):
+        yield SimpleNamespace(paths=(path,), size_bytes=5, renew_lease=lambda: None)
 
-    def test_tab_stripped(self):
-        """Tab characters are removed."""
-        clean = self._sanitize("hello\tworld")
-        self.assertEqual(clean, "helloworld")
+    monkeypatch.setattr(
+        state,
+        "link_cache",
+        AsyncMockCache(
+            {
+                "filename": DownloadContext(
+                    page_url="https://youtu.be/example", title=title
+                )
+            }
+        ),
+    )
+    monkeypatch.setattr(
+        state, "media_pipeline", SimpleNamespace(open_materialized=open_materialized)
+    )
+    monkeypatch.setattr(
+        state,
+        "limiter",
+        SimpleNamespace(
+            allow_ip=AsyncMock(return_value=True),
+            allow_token=AsyncMock(return_value=True),
+        ),
+    )
+    with TestClient(_app) as client:
+        response = client.get("/dl/filename")
 
-    def test_normal_unicode_preserved(self):
-        """Normal Unicode (Cyrillic, emoji) is preserved."""
-        clean = self._sanitize("Привет 🎬 мир")
-        self.assertEqual(clean, "Привет 🎬 мир")
+    assert response.status_code == 200
+    assert response.content == b"video"
+    assert response.headers["Content-Disposition"] == (
+        f"attachment; filename*=UTF-8''{filename}.mp4"
+    )
 
 
 if __name__ == "__main__":

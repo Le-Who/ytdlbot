@@ -68,7 +68,8 @@ class TikWMProvider:
             message = str(data.get("msg") or "unknown error")
             kind = (
                 FailureKind.TRANSIENT
-                if code == -1 and any(word in message.lower() for word in ("limit", "many"))
+                if code == -1
+                and any(word in message.lower() for word in ("limit", "many"))
                 else FailureKind.PERMANENT
             )
             raise ProviderError(kind, f"TikWM: {message}")
@@ -87,19 +88,17 @@ class TikWMProvider:
         sources: list[MediaSource] = []
         for index, raw_url in enumerate(images):
             if not isinstance(raw_url, str) or not raw_url:
-                raise ProviderError(FailureKind.INTERNAL, "TikWM album item omitted URL")
-            await probe_candidate(
-                self._transport, raw_url, wall_clock=self._wall_clock
-            )
+                raise ProviderError(
+                    FailureKind.INTERNAL, "TikWM album item omitted URL"
+                )
+            await probe_candidate(self._transport, raw_url, wall_clock=self._wall_clock)
             items.append(
                 MediaItem(f"{request.media_id}:{index}", MediaKind.PHOTO, raw_url)
             )
             sources.append(MediaSource(str(index), raw_url, container="image"))
         music = info.get("music")
         if isinstance(music, str) and music:
-            await probe_candidate(
-                self._transport, music, wall_clock=self._wall_clock
-            )
+            await probe_candidate(self._transport, music, wall_clock=self._wall_clock)
             sources.append(MediaSource("audio", music, audio_codec="unknown"))
         return MediaCandidate(
             candidate_id="tikwm:album",

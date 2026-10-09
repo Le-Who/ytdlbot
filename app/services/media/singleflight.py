@@ -6,10 +6,6 @@ import asyncio
 from collections.abc import Awaitable, Callable, Hashable
 from contextvars import ContextVar
 from dataclasses import dataclass
-from typing import Generic, TypeVar
-
-K = TypeVar("K", bound=Hashable)
-T = TypeVar("T")
 
 
 @dataclass(slots=True)
@@ -33,7 +29,7 @@ _ACTIVE_FACTORIES: ContextVar[tuple[_FactoryMarker, ...]] = ContextVar(
 
 
 @dataclass(slots=True)
-class _Flight(Generic[T]):
+class _Flight[T]:
     task: asyncio.Task[T]
     subscribers: int = 0
 
@@ -42,7 +38,7 @@ class SingleFlightReentryError(RuntimeError):
     """A shared factory tried to subscribe to its own group/key flight."""
 
 
-class SingleFlightGroup(Generic[K, T]):
+class SingleFlightGroup[K: Hashable, T]:
     """Share one task per key without sharing subscriber cancellation."""
 
     def __init__(self) -> None:
@@ -119,7 +115,7 @@ class SingleFlightGroup(Generic[K, T]):
             await asyncio.gather(cleanup, return_exceptions=True)
 
 
-async def _invoke(
+async def _invoke[T](
     work: Callable[[], Awaitable[T]],
     marker: _FactoryMarker,
     owner: _FactoryOwner,

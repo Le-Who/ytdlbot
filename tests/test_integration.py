@@ -22,21 +22,21 @@ class AsyncMockCache(dict):
 
 
 import asyncio
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from telegram import Message
 
 from app.bot import callbacks
-from app.core import state
-from app.core.utils import extract_supported_url, is_supported_url
-from app.core.policy import size_allowed
-from app.services.ytdlp.parsers import (
-    get_special_format,
-    deduplicate_formats,
-)
-from app.services.ytdlp.models import FormatItem, FormatMetadata, ExtractionResult
 from app.bot.format_formatter import format_label
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
+from app.core import state
+from app.core.policy import size_allowed
+from app.core.utils import extract_supported_url, is_supported_url
+from app.services.ytdlp.models import ExtractionResult, FormatItem, FormatMetadata
+from app.services.ytdlp.parsers import (
+    deduplicate_formats,
+    get_special_format,
+)
 
 
 class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
@@ -114,12 +114,12 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
 
         # --- Assert ---
         self.assertTrue(len(state.link_cache) > 0)
-        token = list(state.link_cache.keys())[0]
+        token = next(iter(state.link_cache))
         cached = state.link_cache[token]
         self.assertEqual(cached.format_id, "137")
         self.assertEqual(cached.page_url, url)
 
-        args, kwargs = update.callback_query.edit_message_text.call_args
+        args, _kwargs = update.callback_query.edit_message_text.call_args
         msg = args[0]
         self.assertIn("1080p", msg)
         self.assertIn("100.0 MB", msg)
@@ -167,7 +167,7 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
             mock_kb.return_value = MagicMock()
             await callbacks.on_back(update, context)
 
-        args, kwargs = update.callback_query.edit_message_text.call_args
+        args, _kwargs = update.callback_query.edit_message_text.call_args
         self.assertIn("Video Title", args[0])
         self.assertIn("03:00", args[0])
 
@@ -183,6 +183,7 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
         state.download_sem = asyncio.Semaphore(5)
         state.api_sem = asyncio.Semaphore(10)
         from app.core.download_queue import DownloadQueue
+
         state.download_queue = DownloadQueue(state.download_sem, max_queue_size=15)
         state.api_queue = DownloadQueue(state.api_sem, max_queue_size=15)
         state.limiter = MagicMock()

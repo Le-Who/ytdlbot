@@ -167,7 +167,7 @@ async def _run_once(payload: Mapping[str, Any]) -> dict[str, Any]:
     case = payload.get("case")
     correlation = payload.get("correlation_id")
     if not isinstance(case, Mapping) or not isinstance(correlation, str):
-        raise RuntimeError("invalid isolated run input")
+        raise TypeError("invalid isolated run input")
     url = case.get("url")
     if not isinstance(url, str) or not url.startswith("https://"):
         raise RuntimeError("invalid case URL")
@@ -243,9 +243,7 @@ async def _run_once(payload: Mapping[str, Any]) -> dict[str, Any]:
                 cpu_after = _cgroup_cpu_seconds()
                 after = _metrics_snapshot(metrics)
                 download_count, download_sum = _phase(before, after, "download")
-                conversion_count, conversion_sum = _phase(
-                    before, after, "conversion"
-                )
+                conversion_count, conversion_sum = _phase(before, after, "conversion")
                 upload_count, upload_sum = _phase(before, after, "upload")
                 outcomes = list(current_delivery.get("outcomes", []))
                 delivery_success = bool(outcomes) and all(outcomes)
@@ -317,9 +315,7 @@ async def _run_once(payload: Mapping[str, Any]) -> dict[str, Any]:
                     "cpu_seconds_after": max(cpu_before, cpu_after),
                     "rss_bytes_samples": rss_samples,
                     "job_state": "completed" if completed else "failed",
-                    "delivery_outcomes": [
-                        "success" if completed else "failed"
-                    ],
+                    "delivery_outcomes": ["success" if completed else "failed"],
                     "http_failures": list(capture.failures),
                     "failure_stage": (
                         None
@@ -366,7 +362,7 @@ def main() -> int:
     try:
         payload = json.loads(sys.stdin.read() or "{}")
         if not isinstance(payload, dict):
-            raise RuntimeError("input must be an object")
+            raise TypeError("input must be an object")
         action = payload.get("action")
         if action == "preflight":
             result = _preflight()
@@ -385,7 +381,8 @@ def main() -> int:
             raise RuntimeError("non-finite resource measurement")
         print(json.dumps(result, separators=(",", ":"), ensure_ascii=True))
         return 0
-    except Exception:
+    # Isolated CLI failures must stay redacted and produce a nonzero, unsafe result.
+    except Exception:  # noqa: BLE001
         print('{"safe":false,"error":"isolated-run-failed"}')
         return 2
 

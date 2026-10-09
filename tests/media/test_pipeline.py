@@ -10,6 +10,7 @@ import pytest
 
 from app.core.media_cache import CachedDelivery, MediaCache
 from app.core.metrics import MetricsCollector
+from app.core.resource_budget import DiskBudget, media_lease_path
 from app.services.media import pipeline as pipeline_module
 from app.services.media.models import (
     ClipInterval,
@@ -23,14 +24,18 @@ from app.services.media.models import (
     MediaRequest,
     MediaSource,
     ResolvedMedia,
+    UnsupportedMediaUrlError,
 )
 from app.services.media.pipeline import (
     ArtifactValidationError,
+    CallbackDataError,
     MediaPipeline,
     MediaPipelineError,
     MediaResolutionError,
     build_default_pipeline,
     build_media_request,
+    decode_callback_data,
+    encode_callback_data,
     validate_materialized_artifact,
 )
 from app.services.media.race import RaceConfig
@@ -267,26 +272,46 @@ async def test_slideshow_video_uses_soundtrack_validation_delivery_and_lease_hea
         items=items,
     )
     reservations: list[_Reservation] = []
+    delivery_started = asyncio.Event()
+    finish_delivery = asyncio.Event()
+    derived_release_started = asyncio.Event()
+    finish_derived_release = asyncio.Event()
 
-    class DerivedReservation(_Reservation):
+    class HeartbeatReservation(_Reservation):
         def __init__(self) -> None:
             super().__init__()
             self.release_started = False
+            self.first_tick = asyncio.Event()
+            self.second_tick = asyncio.Event()
+            self.heartbeat_task = None
 
         def renew(self) -> None:
             if self.release_started:
-                raise RuntimeError("heartbeat raced released derived artifact")
+                raise RuntimeError("heartbeat raced released artifact")
             super().renew()
+            if delivery_started.is_set():
+                self.heartbeat_task = asyncio.current_task()
+                if not self.first_tick.is_set():
+                    self.first_tick.set()
+                else:
+                    self.second_tick.set()
 
         async def release(self) -> None:
             self.release_started = True
-            await asyncio.sleep(0.025)
+            assert self.heartbeat_task is not None and self.heartbeat_task.done()
+            await super().release()
+
+    class DerivedReservation(HeartbeatReservation):
+        async def release(self) -> None:
+            derived_release_started.set()
+            assert self.heartbeat_task is not None and self.heartbeat_task.done()
+            await finish_derived_release.wait()
             await super().release()
 
     class Transport:
         async def materialize(self, materialize_request, candidates, **kwargs):
             selected = candidates[0]
-            reservation = _Reservation()
+            reservation = HeartbeatReservation()
             reservations.append(reservation)
             paths = (
                 (soundtrack,)
@@ -311,7 +336,8 @@ async def test_slideshow_video_uses_soundtrack_validation_delivery_and_lease_hea
 
     class Delivery(_Delivery):
         async def deliver(self, media, target, **kwargs):
-            await asyncio.sleep(0.035)
+            delivery_started.set()
+            await finish_delivery.wait()
             return await super().deliver(media, target, **kwargs)
 
     validator_calls = []
@@ -328,11 +354,28 @@ async def test_slideshow_video_uses_soundtrack_validation_delivery_and_lease_hea
         lease_renew_interval=0.01,
     )
 
-    receipt = await pipeline.deliver_slideshow_video(
-        request,
-        DeliveryTarget("9", caller_scope="group"),
-        caption="👤 @tester",
+    task = asyncio.create_task(
+        pipeline.deliver_slideshow_video(
+            request,
+            DeliveryTarget("9", caller_scope="group"),
+            caption="👤 @tester",
+        )
     )
+    try:
+        await asyncio.wait_for(delivery_started.wait(), timeout=5)
+        assert len(reservations) == 3
+        for reservation in reservations:
+            await asyncio.wait_for(reservation.first_tick.wait(), timeout=5)
+            await asyncio.wait_for(reservation.second_tick.wait(), timeout=5)
+        assert not task.done()
+        finish_delivery.set()
+        await asyncio.wait_for(derived_release_started.wait(), timeout=5)
+        assert all(reservation.heartbeat_task.done() for reservation in reservations)
+        renewals_at_release = [reservation.renewed for reservation in reservations]
+    finally:
+        finish_delivery.set()
+        finish_derived_release.set()
+    receipt = await task
 
     assert receipt.success
     assert converter_calls == [([str(image_one), str(image_two)], str(soundtrack))]
@@ -354,8 +397,7 @@ async def test_slideshow_video_uses_soundtrack_validation_delivery_and_lease_hea
     assert derived_request.cache_key != normal_video_request.cache_key
     assert derived.candidate.kind is MediaKind.VIDEO
     assert derived.candidate.has_audio
-    assert all(reservation.renewed >= 3 for reservation in reservations[:2])
-    assert reservations[-1].renewed >= 2
+    assert [reservation.renewed for reservation in reservations] == renewals_at_release
     assert all(reservation.released == 1 for reservation in reservations)
     assert not video.exists()
     assert collector.pipeline_results.collect() == [
@@ -694,7 +736,35 @@ async def test_slow_telegram_delivery_periodically_renews_materialized_lease(
 ):
     request = _request()
     candidate = _candidate()
-    materialized, reservation = _materialized(tmp_path, candidate)
+    delivery_started = asyncio.Event()
+    first_tick = asyncio.Event()
+    second_tick = asyncio.Event()
+    release_started = asyncio.Event()
+    finish_release = asyncio.Event()
+
+    class ObservedReservation(_Reservation):
+        tick_task: asyncio.Task | None = None
+
+        def renew(self):
+            assert not release_started.is_set(), "heartbeat continued during release"
+            super().renew()
+            if delivery_started.is_set():
+                self.tick_task = asyncio.current_task()
+                if not first_tick.is_set():
+                    first_tick.set()
+                else:
+                    second_tick.set()
+
+        async def release(self):
+            release_started.set()
+            assert self.tick_task is not None and self.tick_task.done()
+            await finish_release.wait()
+            await super().release()
+
+    reservation = ObservedReservation()
+    path = tmp_path / "item.mp4"
+    path.write_bytes(b"\x00\x00\x00\x18ftypisom")
+    materialized = MaterializedItem((path,), 12, candidate, reservation)
     transport = _Transport(materialized)
     transport.release.set()
 
@@ -706,6 +776,7 @@ async def test_slow_telegram_delivery_periodically_renews_materialized_lease(
 
         async def deliver(self, media, target, **kwargs):
             self.started.set()
+            delivery_started.set()
             await self.finish.wait()
             return await super().deliver(media, target, **kwargs)
 
@@ -720,12 +791,19 @@ async def test_slow_telegram_delivery_periodically_renews_materialized_lease(
 
     task = asyncio.create_task(pipeline.deliver(request, DeliveryTarget("1")))
     await delivery.started.wait()
-    await asyncio.sleep(0.035)
+    await asyncio.wait_for(first_tick.wait(), timeout=5)
+    assert not task.done()
+    await asyncio.wait_for(second_tick.wait(), timeout=5)
+    assert not task.done()
     delivery.finish.set()
+    await asyncio.wait_for(release_started.wait(), timeout=5)
+    renewals_at_release = reservation.renewed
+    assert reservation.tick_task.done()
+    finish_release.set()
     receipt = await task
 
     assert receipt.success
-    assert reservation.renewed >= 3
+    assert reservation.renewed == renewals_at_release
     assert reservation.released == 1
 
 
@@ -1187,6 +1265,375 @@ async def test_artifact_validation_failure_releases_materialized_lease(tmp_path:
         await pipeline.deliver(_request(), DeliveryTarget("1"))
 
     assert reservation.released == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repeat_cancel", [False, True])
+async def test_metadata_publication_cancellation_releases_completed_artifact(
+    tmp_path: Path,
+    repeat_cancel: bool,
+):
+    """Catches ownership falling between validation and ready publication."""
+    candidate = _candidate()
+    path = tmp_path / "completed.mp4"
+    path.write_bytes(b"ready")
+    release_started = asyncio.Event()
+    finish_release = asyncio.Event()
+
+    class BlockingBudget(DiskBudget):
+        async def _release(self, size):
+            release_started.set()
+            await finish_release.wait()
+            await super()._release(size)
+
+    budget = BlockingBudget(tmp_path, capacity_bytes=100)
+    reservation = await budget.reserve(5, owner="metadata-test")
+    reservation.bind(path)
+    materialized = MaterializedItem((path,), 5, candidate, reservation)
+    metadata_started = asyncio.Event()
+
+    class BlockingCache(MediaCache):
+        async def put_metadata(self, request, metadata):
+            metadata_started.set()
+            await asyncio.Event().wait()
+
+    transport = _Transport(materialized)
+    transport.release.set()
+    pipeline = MediaPipeline(
+        ProviderRegistry([]),
+        transport,
+        _Delivery(BlockingCache()),
+        artifact_validator=AsyncMock(),
+    )
+    resolved = ResolvedMedia(
+        _request(),
+        (MediaItem("abc123", MediaKind.VIDEO, candidate.url),),
+        (candidate,),
+        "winner",
+    )
+
+    async def consume():
+        async with pipeline.open_materialized(_request(), resolved=resolved):
+            raise AssertionError("cancelled publication must not yield an item")
+
+    task = asyncio.create_task(consume())
+    await metadata_started.wait()
+    task.cancel()
+    if repeat_cancel:
+        await asyncio.wait_for(release_started.wait(), timeout=5)
+        task.cancel()
+    finish_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert not path.exists()
+    assert not media_lease_path(path).exists()
+    assert budget.reserved_bytes == 0
+    assert pipeline._materialized_ready == {}
+    assert pipeline._materialized_pending_users == {}
+    assert pipeline._materialize_flights.inflight_count == 0
+    assert pipeline._resolve_flights.inflight_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cache_error", [False, True])
+async def test_metadata_wait_keeps_artifact_for_remaining_subscriber(
+    tmp_path, cache_error
+):
+    """Catches one cancelled subscriber deleting another subscriber's ready bytes."""
+    candidate = _candidate()
+    path = tmp_path / "completed.mp4"
+    path.write_bytes(b"ready")
+    budget = DiskBudget(tmp_path, capacity_bytes=100)
+    reservation = await budget.reserve(5, owner="shared-metadata")
+    reservation.bind(path)
+    materialized = MaterializedItem((path,), 5, candidate, reservation)
+    metadata_started = asyncio.Event()
+    finish_metadata = asyncio.Event()
+    yielded = asyncio.Event()
+    finish_user = asyncio.Event()
+
+    class BlockingCache(MediaCache):
+        async def put_metadata(self, request, metadata):
+            metadata_started.set()
+            await finish_metadata.wait()
+            if cache_error:
+                raise RuntimeError("optional cache failed")
+            await super().put_metadata(request, metadata)
+
+    transport = _Transport(materialized)
+    transport.release.set()
+    pipeline = MediaPipeline(
+        ProviderRegistry([]),
+        transport,
+        _Delivery(BlockingCache()),
+        artifact_validator=AsyncMock(),
+    )
+    resolved = ResolvedMedia(
+        _request(),
+        (MediaItem("abc123", MediaKind.VIDEO, candidate.url),),
+        (candidate,),
+        "winner",
+    )
+
+    async def consume():
+        async with pipeline.open_materialized(_request(), resolved=resolved) as item:
+            yielded.set()
+            await finish_user.wait()
+            return item.paths[0].read_bytes()
+
+    first = asyncio.create_task(consume())
+    await metadata_started.wait()
+    second = asyncio.create_task(consume())
+    async with asyncio.timeout(5):
+        while pipeline._materialize_flights.subscriber_count < 2:
+            await asyncio.sleep(0)
+    first.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await first
+    assert path.exists() and media_lease_path(path).exists()
+    assert budget.reserved_bytes == 5
+    finish_metadata.set()
+    await yielded.wait()
+    assert path.exists() and budget.reserved_bytes == 5
+    finish_user.set()
+    assert await second == b"ready"
+    assert transport.calls == 1
+    assert not path.exists() and not media_lease_path(path).exists()
+    assert budget.reserved_bytes == 0
+    assert pipeline._materialized_ready == pipeline._materialized_pending_users == {}
+    assert pipeline._materialize_flights.inflight_count == 0
+
+
+@pytest.mark.asyncio
+async def test_completed_artifact_survives_only_until_prefetch_cleanup_is_joined(
+    tmp_path,
+):
+    """Catches cancellation at the last factory boundary before metadata publication."""
+    request = build_media_request("https://www.tiktok.com/@tester/video/123")
+    candidate = replace(_candidate("ytdlp"), media_id="123")
+    path = tmp_path / "completed.mp4"
+    path.write_bytes(b"ready")
+    budget = DiskBudget(tmp_path, capacity_bytes=100)
+    reservation = await budget.reserve(5, owner="prefetch-cleanup")
+    reservation.bind(path)
+    materialized = MaterializedItem((path,), 5, candidate, reservation)
+    transport = _Transport(materialized)
+    prefetch_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    finish_cleanup = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+    pipeline = MediaPipeline(
+        ProviderRegistry([]), transport, _Delivery(), artifact_validator=AsyncMock()
+    )
+
+    async def reserve(*args, **kwargs):
+        prefetch_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            await finish_cleanup.wait()
+            cleanup_finished.set()
+
+    pipeline._resolve_reserve = reserve
+    resolved = ResolvedMedia(
+        request,
+        (MediaItem("123", MediaKind.VIDEO, candidate.url),),
+        (candidate,),
+        "ytdlp",
+    )
+
+    async def consume():
+        async with pipeline.open_materialized(request, resolved=resolved):
+            raise AssertionError("cancelled factory must not yield bytes")
+
+    task = asyncio.create_task(consume())
+    await prefetch_started.wait()
+    transport.release.set()
+    await cleanup_started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    finish_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert cleanup_finished.is_set()
+    assert not path.exists() and not media_lease_path(path).exists()
+    assert budget.reserved_bytes == 0
+    assert pipeline._materialized_ready == pipeline._materialized_pending_users == {}
+
+
+@pytest.mark.asyncio
+async def test_selected_album_fallback_delivers_only_selected_items_in_order(
+    tmp_path: Path,
+):
+    """Catches unprojected alternatives delivering the entire album."""
+    from tests.media.test_transport import FakeResponse
+    from tests.media.test_transport import transport as real_transport
+
+    items = tuple(
+        MediaItem(
+            f"abc123:{index}",
+            MediaKind.PHOTO,
+            f"https://cdn.example/{index}.jpg",
+            container="jpg",
+        )
+        for index in range(3)
+    )
+    first = replace(_candidate(items=items), candidate_id="first", sources=())
+    second = replace(first, candidate_id="second")
+
+    class Albums(_Provider):
+        async def resolve(self, request):
+            return [first, second]
+
+    media, _ = real_transport(tmp_path, [])
+    seen: list[tuple[str, ...]] = []
+    real_download = media._download_candidate
+
+    async def download(request, candidate, deadline):
+        seen.append(tuple(item.media_id for item in candidate.items))
+        if candidate.candidate_id == "first":
+            raise MaterializationError("first variant expired")
+        # Keep transfer and lease ownership real; only external HTTP is fake.
+        media.client.responses.extend(
+            FakeResponse(
+                chunks=(b"\xff\xd8\xffphoto",), headers={"content-type": "image/jpeg"}
+            )
+            for _ in range(2 * len(candidate.items))
+        )
+        return await real_download(request, candidate, deadline)
+
+    media._download_candidate = download
+    cache = MediaCache()
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(Albums("winner"))]),
+        media,
+        _Delivery(cache),
+        artifact_validator=AsyncMock(),
+    )
+    request = replace(_request(kind=MediaKind.AUTO), album_selection=(2, 0))
+    receipt = await pipeline.deliver(request, DeliveryTarget("1"))
+
+    assert seen == [("abc123:2", "abc123:0"), ("abc123:2", "abc123:0")]
+    assert tuple(item.item.media_id for item in receipt.items) == (
+        "abc123:2",
+        "abc123:0",
+    )
+    assert await pipeline.cached_item_count(request) == 2
+    assert media.disk_budget.reserved_bytes == 0
+    assert not list(tmp_path.glob("media_*"))
+
+
+@pytest.mark.parametrize("clip", ["nan", "1m2s3", "-1", "20&end=10"])
+def test_builder_rejects_invalid_youtube_clip_instead_of_generic_fallback(clip):
+    with pytest.raises(UnsupportedMediaUrlError):
+        build_media_request(f"https://youtu.be/abc123?t={clip}")
+
+
+def test_builder_preserves_generic_non_youtube_urls():
+    request = build_media_request("https://cdn.example/custom.mp4?token=abc")
+    assert request.platform == "other"
+    assert request.canonical_url == "https://cdn.example/custom.mp4?token=abc"
+
+
+def test_builder_preserves_typed_error_for_malformed_generic_host():
+    with pytest.raises(UnsupportedMediaUrlError):
+        build_media_request("https://[invalid/video.mp4")
+
+
+def test_callback_encoder_rejects_missing_payload():
+    with pytest.raises(CallbackDataError, match="incomplete"):
+        encode_callback_data("send")
+
+
+def test_callback_encoder_preserves_payload_free_back_control():
+    assert encode_callback_data("back") == "m2|back"
+    assert (
+        decode_callback_data(
+            encode_callback_data("back"), expected_action="back", max_parts=0
+        )
+        == ()
+    )
+
+
+@pytest.mark.parametrize("payload", ["back", "m2|back"])
+def test_callback_decoder_accepts_payload_free_back_control(payload):
+    assert decode_callback_data(payload, expected_action="back", max_parts=0) == ()
+
+
+def test_callback_encoder_rejects_unexpected_back_payload():
+    with pytest.raises(CallbackDataError):
+        encode_callback_data("back", "token")
+
+
+@pytest.mark.parametrize("payload", ["back|token", "m2|back|token"])
+def test_callback_decoder_rejects_unexpected_back_payload(payload):
+    with pytest.raises(CallbackDataError):
+        decode_callback_data(payload, expected_action="back")
+
+
+@pytest.mark.parametrize(
+    "payload", ["send", "m2|send", "send|token|extra", "m2|send|token|extra"]
+)
+def test_send_handler_callback_shape_requires_one_token(payload):
+    with pytest.raises(CallbackDataError):
+        decode_callback_data(payload, expected_action="send", max_parts=1)
+
+
+@pytest.mark.parametrize(
+    ("action", "parts", "max_parts"),
+    [
+        ("back", (), 0),
+        ("pick", ("137",), 1),
+        ("send", ("token",), 1),
+        ("cancel", ("token",), 1),
+        ("cancel_parse", ("token",), 1),
+        ("retry", ("token",), 1),
+        ("gif", ("token",), 1),
+        ("giffile", ("token",), 1),
+        ("slideshow", ("photo",), 2),
+        ("cbslide", ("token", "photo"), 2),
+        ("apislide", ("token", "video"), 2),
+        ("grpslide", ("token", "photo"), 2),
+        ("cbgrpslide", ("token", "photo"), 2),
+        ("apigrpslide", ("token", "video"), 2),
+        ("ig_stories", ("token",), 1),
+        ("ig_highlights", ("token",), 1),
+        ("ig_hl_items", ("token", "highlight"), 2),
+        ("ig_dl", ("token", "media"), 2),
+        ("ig_dl_all", ("token",), 1),
+        ("ig_hl_dl", ("token", "media"), 2),
+        ("ig_hl_dl_all", ("token",), 1),
+        ("ig_menu", ("token",), 1),
+    ],
+)
+def test_registered_callback_actions_roundtrip_their_handler_shapes(
+    action, parts, max_parts
+):
+    encoded = encode_callback_data(action, *parts)
+    assert (
+        decode_callback_data(encoded, expected_action=action, max_parts=max_parts)
+        == parts
+    )
+    legacy = "|".join((action, *parts))
+    assert (
+        decode_callback_data(legacy, expected_action=action, max_parts=max_parts)
+        == parts
+    )
+
+
+@pytest.mark.parametrize(
+    "parts", [("token",), ("token", "video"), ("token", "video", "0")]
+)
+def test_callback_encoder_roundtrips_supported_payload_arity(parts):
+    assert (
+        decode_callback_data(
+            encode_callback_data("send", *parts), expected_action="send"
+        )
+        == parts
+    )
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
+import tempfile
 import unittest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 try:
     import curl_cffi  # noqa: F401
@@ -90,8 +91,8 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
             res = await CobaltService.process("https://tiktok.com/@user/video/123")
 
         self.assertEqual(res.status, "error")
-        if res.error_message:
-            self.assertIn("not_found", res.error_message)
+        self.assertTrue(res.error_message)
+        self.assertIn("not_found", res.error_message)
 
     async def test_error_response_continues_to_next_configured_origin(self):
         """Catches one Cobalt business error suppressing a healthy origin."""
@@ -151,9 +152,11 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
+
         async def video_chunks(chunk_size):
             del chunk_size
             yield b"video_data"
+
         mock_resp.aiter_content = video_chunks
 
         mock_session = AsyncMock()
@@ -175,20 +178,26 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
             m_open().write.assert_called_once_with(b"video_data")
 
     async def test_download_slideshow_success(self):
-        from app.services.cobalt import CobaltService, CobaltResult, CobaltPickerItem
+        from app.services.cobalt import CobaltPickerItem, CobaltResult, CobaltService
 
         mock_resp_img = MagicMock()
         mock_resp_img.status_code = 200
+        mock_resp_img.headers = {}
+
         async def image_chunks(chunk_size):
             del chunk_size
             yield b"img_data"
+
         mock_resp_img.aiter_content = image_chunks
 
         mock_resp_audio = MagicMock()
         mock_resp_audio.status_code = 200
+        mock_resp_audio.headers = {}
+
         async def audio_chunks(chunk_size):
             del chunk_size
             yield b"audio_data"
+
         mock_resp_audio.aiter_content = audio_chunks
 
         mock_session = AsyncMock()
@@ -212,17 +221,67 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("app.services.cobalt.TEMP_DIR", directory),
             patch("app.services.cobalt.AsyncSession", return_value=mock_session),
-            patch("app.services.cobalt.open", unittest.mock.mock_open()),
         ):
             images, audio = await CobaltService.download_slideshow(res)
 
             self.assertIsNotNone(images)
-            if images:
-                self.assertEqual(len(images), 2)
-                self.assertTrue(images[0].endswith("000.jpg"))
-                self.assertTrue(images[1].endswith("001.jpg"))
+            self.assertEqual(len(images), 2)
+            self.assertTrue(images[0].endswith("000.jpg"))
+            self.assertTrue(images[1].endswith("001.jpg"))
+            self.assertEqual(
+                [Path(image).read_bytes() for image in images],
+                [b"img_data", b"img_data"],
+            )
 
             self.assertIsNotNone(audio)
-            if audio:
-                self.assertTrue(audio.endswith("audio.mp3"))
+            self.assertTrue(audio.endswith("audio.mp3"))
+            self.assertEqual(Path(audio).read_bytes(), b"audio_data")
+
+
+from pathlib import Path
+
+import pytest
+
+
+@pytest.mark.parametrize("failure", ["http", "stream"])
+async def test_failed_optional_audio_returns_none_and_removes_partial(
+    tmp_path, monkeypatch, failure
+):
+    from app.services import cobalt
+
+    class Response:
+        def __init__(self, url):
+            self.audio = url.endswith("audio")
+            self.status_code = 500 if self.audio and failure == "http" else 200
+            self.headers = {}
+
+        async def aiter_content(self, chunk_size):
+            yield b"audio-partial" if self.audio else b"complete-image"
+            if self.audio and failure == "stream":
+                raise OSError("connection interrupted")
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, **kwargs):
+            return Response(url)
+
+    monkeypatch.setattr(cobalt, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(cobalt, "AsyncSession", Session)
+    result = cobalt.CobaltResult(
+        status="picker",
+        audio="https://cdn.example/audio",
+        picker=[cobalt.CobaltPickerItem("photo", "https://cdn.example/image")],
+    )
+    images, audio = await cobalt.CobaltService.download_slideshow(result)
+    assert images is not None and len(images) == 1
+    assert Path(images[0]).read_bytes() == b"complete-image"
+    assert audio is None
+    assert list(tmp_path.rglob("audio.mp3")) == []

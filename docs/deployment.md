@@ -11,9 +11,9 @@ The routine release path is deliberately narrow:
 
 1. Test the exact Git SHA.
 2. Build the bot image once and address it by immutable registry digest.
-   The GitHub `production` environment then requires its configured reviewer
-   approval before the activation job starts. A waiting approval is not a
-   deployment failure, and the prior release continues serving requests.
+   Activation runs automatically after the verification and build jobs succeed.
+   The GitHub `production` environment retains its deployment secrets and
+   variables without a required-reviewer approval gate.
 3. Upload only the allowlisted release payload to a fresh, project-scoped staging
    directory.
 4. Verify the payload, current production topology, disk budget, release SHA,
@@ -103,8 +103,9 @@ The protected GitHub deployment job requires `VPS_HOST`, `VPS_USERNAME`,
 public origin from `PUBLIC_BASE_URL`, falling back to the legacy `BASE_URL`
 secret during migration. The project root is the repository variable
 `VPS_PROJECT_PATH` when set and otherwise the fixed `/opt/ytdlbot`; it is never
-derived from the uploaded release directory. Configure required reviewers on
-the `production` GitHub environment before authorizing the first release.
+derived from the uploaded release directory. Keep required reviewers disabled
+on the `production` GitHub environment for automatic activation after a `vps`
+push; retain the environment and its deployment credentials.
 
 ## Readiness and Local Bot API degradation
 

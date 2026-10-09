@@ -1,4 +1,5 @@
-from typing import Any, Optional, TypeVar
+from typing import Any, TypeVar
+
 from cachetools import TTLCache
 
 from .base import StateStorage
@@ -8,12 +9,12 @@ T = TypeVar("T")
 
 class MemoryStorage(StateStorage):
     def __init__(self, maxsize: int, ttl: int):
-        self._cache = TTLCache(maxsize=maxsize, ttl=ttl)
+        self._cache: TTLCache[str, Any] = TTLCache(maxsize=maxsize, ttl=ttl)
 
     async def get(self, key: str, type_hint: Any = None) -> Any:
         return self._cache.get(key)
 
-    async def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
+    async def set(self, key: str, value: Any, ttl: int | None = None) -> None:
         """
         Store a value in cache.
         Note: The `ttl` parameter is ignored. MemoryStorage uses a fixed TTL

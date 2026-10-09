@@ -3,7 +3,7 @@
 import unittest
 from unittest.mock import patch
 
-from app.core.utils import is_supported_url, extract_supported_url, safe_remove
+from app.core.utils import extract_supported_url, is_supported_url, safe_remove
 
 
 class TestSafeRemove(unittest.TestCase):

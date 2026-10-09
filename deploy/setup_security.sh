@@ -17,7 +17,7 @@ log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_err()  { echo -e "${RED}[ERROR]${NC} $1"; }
 
 if [[ $EUID -ne 0 ]]; then
-   log_err "Этот скрипт должен быть запущен с правами root (используйте sudo)." 
+   log_err "Этот скрипт должен быть запущен с правами root (используйте sudo)."
    exit 1
 fi
 
@@ -79,7 +79,7 @@ else
     log_info "Найден обычный пользователь: $NON_ROOT_USER"
     # Отключаем вход по паролю (разрешаем только по ключам)
     sed -i 's/^#*PasswordAuthentication .*/PasswordAuthentication no/' $SSHD_CONFIG
-    
+
     # Отключаем вход для root (если есть хотя бы один обычный пользователь)
     sed -i 's/^#*PermitRootLogin .*/PermitRootLogin no/' $SSHD_CONFIG
 fi

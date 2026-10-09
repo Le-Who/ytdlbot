@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import os
 import shutil
 import time
@@ -45,13 +46,7 @@ def is_active_media_lease(
     path: str | os.PathLike[str], *, wall_clock: Callable[[], float] = time.time
 ) -> bool:
     """Return whether a valid, owned sidecar lease currently protects *path*."""
-    marker = media_lease_path(path)
-    try:
-        payload = json.loads(marker.read_text(encoding="utf-8"))
-        owner = payload.get("owner")
-        expires_at = float(payload.get("expires_at", 0))
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return False
+    owner, expires_at = _marker_identity(media_lease_path(path))
     return bool(owner) and expires_at > wall_clock()
 
 
@@ -103,6 +98,8 @@ class DiskBudget:
 
     async def _grow(self, reservation: DiskReservation, new_size: int) -> None:
         async with self._lock:
+            if reservation._released:
+                raise RuntimeError("reservation already released")
             delta = new_size - reservation.size_bytes
             if delta <= 0:
                 return
@@ -139,6 +136,7 @@ class DiskReservation:
         self.lease_ttl = lease_ttl
         self._paths: set[Path] = set()
         self._released = False
+        self._release_task: asyncio.Task[None] | None = None
 
     async def ensure(self, size_bytes: int) -> None:
         if self._released:
@@ -224,8 +222,14 @@ class DiskReservation:
         self._paths.remove(resolved)
 
     async def release(self) -> None:
-        if self._released:
-            return
+        if self._release_task is None:
+            # Claim release before its first await so neither another release
+            # nor a queued ensure can debit/grow this allocation again.
+            self._released = True
+            self._release_task = asyncio.create_task(self._finish_release())
+        await asyncio.shield(self._release_task)
+
+    async def _finish_release(self) -> None:
         try:
             for path in self._paths:
                 try:
@@ -237,7 +241,6 @@ class DiskReservation:
         finally:
             self._paths.clear()
             await self.budget._release(self.size_bytes)
-            self._released = True
 
     def _write_marker(self, path: Path, *, require_owner: bool = False) -> None:
         marker = media_lease_path(path)
@@ -320,11 +323,21 @@ def _marker_locks(*paths: Path) -> Iterator[None]:
 def _marker_identity(marker: Path) -> tuple[str | None, float]:
     try:
         payload = json.loads(marker.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            return None, 0
         owner = payload.get("owner")
-        expiry = float(payload.get("expires_at", 0))
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        expiry = payload.get("expires_at")
+        if (
+            not isinstance(owner, str)
+            or not owner
+            or isinstance(expiry, bool)
+            or not isinstance(expiry, (int, float))
+            or not math.isfinite(expiry)
+        ):
+            return None, 0
+    except (OSError, ValueError, TypeError, OverflowError, json.JSONDecodeError):
         return None, 0
-    return (str(owner) if owner else None), expiry
+    return owner, float(expiry)
 
 
 @contextmanager

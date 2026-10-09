@@ -1,9 +1,9 @@
 """Slideshow download and cleanup service."""
 
-import os
 import logging
+import os
 import shutil
-from typing import Any, Optional, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Optional
 
 from app.core import state
 
@@ -19,7 +19,7 @@ class SlideshowPipeline:
     @staticmethod
     async def download_slideshow(
         page_url: str,
-    ) -> Tuple[Optional["SlideshowResult"], Optional[str]]:
+    ) -> tuple[Optional["SlideshowResult"], str | None]:
         """
         Downloads TikTok slideshow images (and optional audio) via gallery-dl.
 
@@ -48,7 +48,7 @@ class SlideshowPipeline:
             try:
                 shutil.rmtree(parent_dir, ignore_errors=True)
                 logger.info("Removed slideshow dir", extra={"dir": parent_dir})
-            except Exception as e:
+            except OSError as e:
                 logger.warning(
                     "Failed to remove slideshow dir", extra={"error": str(e)}
                 )

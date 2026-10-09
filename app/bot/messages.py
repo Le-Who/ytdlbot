@@ -2,9 +2,16 @@ import asyncio
 import html
 import logging
 import uuid
-from typing import Any
+from io import BytesIO
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import (
+    Chat,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    Update,
+    User,
+)
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
@@ -20,13 +27,14 @@ from app.core.process import process_owner_scope
 from app.core.texts import Texts
 from app.core.user_prefs import get_prefs
 from app.core.utils import extract_url_from_update
-from app.services.cobalt import CobaltService
+from app.services.cobalt import CobaltResult, CobaltService
 from app.services.instagram import (
     InstagramService,
     parse_instagram_url,
 )
+from app.services.media.models import MediaItem
 from app.services.media.pipeline import encode_callback_data
-from app.services.tikwm import TikWMService
+from app.services.tikwm import TikWMResult, TikWMService
 from app.services.ytdlp.exceptions import (
     AccessDeniedError,
     ExtractionError,
@@ -102,7 +110,7 @@ async def _deliver_private_pipeline(
     try:
         if request.platform == "tiktok" and request.kind.value == "auto":
             cached_count = await pipeline.cached_item_count(request)
-            items = ()
+            items: tuple[MediaItem, ...] = ()
             if cached_count is None:
                 items = (await pipeline.resolve(request)).items
             if (cached_count is not None and cached_count > 1) or (
@@ -154,7 +162,8 @@ async def _deliver_private_pipeline(
     if receipt.success:
         try:
             await status.delete()
-        except Exception:
+        # Status cleanup is optional; the pipeline receipt already confirms delivery.
+        except Exception:  # noqa: BLE001, S110
             pass
         return
     error_text = next(
@@ -266,9 +275,9 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
 async def _complete_message_parse(
     context: ContextTypes.DEFAULT_TYPE,
-    msg: Any,
-    user: Any,
-    chat: Any,
+    msg: Message,
+    user: User,
+    chat: Chat,
     text: str,
     section: str | None,
     parse_token: str,
@@ -290,7 +299,7 @@ async def _complete_message_parse(
     is_tiktok_url = "tiktok" in text.lower()
     is_tiktok_api_success = False
     is_slideshow = False
-    tiktok_api_res: Any = None
+    tiktok_api_res: TikWMResult | CobaltResult | None = None
     title = ""
     duration = "—"
     special_format = None
@@ -315,7 +324,8 @@ async def _complete_message_parse(
                     tikwm_res.status,
                     tikwm_res.error_message,
                 )
-        except Exception as e:
+        # The external TikWM adapter may raise arbitrary client/decoder errors; try fallback.
+        except Exception as e:  # noqa: BLE001
             logger.warning("TikWM failed, falling back: %s", e)
 
         # Try Cobalt if enabled and TikWM failed
@@ -334,7 +344,8 @@ async def _complete_message_parse(
                         cobalt_res.status,
                         cobalt_res.error_message,
                     )
-            except Exception as e:
+            # The external Cobalt adapter may raise arbitrary client/decoder errors; try fallback.
+            except Exception as e:  # noqa: BLE001
                 logger.warning("Cobalt failed, falling back: %s", e)
 
     # If TikTok APIs fail, or it's not TikTok, process extraction fallbacks
@@ -394,7 +405,7 @@ async def _complete_message_parse(
                     await asyncio.wait_for(
                         state.inflight_parsing[text].wait(), timeout=300.0
                     )
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     await status_msg.edit_text(Texts.TIMEOUT_RETRY)
                     return
                 cached = await state.info_cache.get(text)
@@ -450,7 +461,7 @@ async def _complete_message_parse(
                         return
 
                     await state.info_cache.set(text, result)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     await status_msg.edit_text(Texts.TIMEOUT_UNAVAILABLE)
                     return
 
@@ -474,7 +485,7 @@ async def _complete_message_parse(
                         await status_msg.edit_text(f"❌ {e}")
                     return
                 except Exception as e:
-                    logger.error("Parse error", extra={"error": str(e)}, exc_info=True)
+                    logger.exception("Parse error", extra={"error": str(e)})
                     await status_msg.edit_text(
                         Texts.GENERIC_ERROR.format(detail=str(e)[:150])
                     )
@@ -537,7 +548,8 @@ async def _complete_message_parse(
                 reply_markup=reply_markup,
                 parse_mode="HTML",
             )
-        except Exception:
+        # Telegram UI adapter failures require rebuilding the slideshow menu as a message.
+        except Exception:  # noqa: BLE001
             await status_msg.delete()
             await status_msg.get_bot().send_message(
                 chat_id=status_msg.chat_id,
@@ -548,7 +560,7 @@ async def _complete_message_parse(
     elif is_tiktok_api_success and tiktok_api_res and tiktok_api_res.url:
         # Direct API video! Download and send immediately
         await status_msg.edit_text("⏳ Загрузка видео...")
-        file_path = None
+        file_path: str | BytesIO | None = None
         if api_source == "tikwm":
             file_path, err = await TikWMService.download_video(
                 text, direct_video_url=tiktok_api_res.url
@@ -569,7 +581,7 @@ async def _complete_message_parse(
                 file_path = await CobaltService.download_file(tiktok_api_res.url, "mp4")
 
         # Smart BVC2/HEVC Fallback Check
-        if file_path and (not file_path.startswith("http")):
+        if isinstance(file_path, str) and not file_path.startswith("http"):
             from app.services.orchestrator import TG_SAFE_CODECS, extract_video_meta
 
             with process_owner_scope(parse_token):
@@ -613,7 +625,7 @@ async def _complete_message_parse(
                 await status_msg.edit_text(err or "⚠️ Ошибка загрузки видео.")
                 return
 
-        if file_path and not file_path.startswith("http"):
+        if isinstance(file_path, str) and not file_path.startswith("http"):
             from app.services.orchestrator import ensure_telegram_compatible
 
             with process_owner_scope(parse_token):
@@ -622,11 +634,12 @@ async def _complete_message_parse(
         from app.bot.keyboards import build_video_keyboard
 
         kb = build_video_keyboard(parse_token)
-        state.file_cache[parse_token] = file_path  # for GIF conversions
+        if isinstance(file_path, str):
+            state.file_cache[parse_token] = file_path  # for GIF conversions
 
         from app.services.sender import TelegramSender
 
-        success = await TelegramSender.send_file(
+        receipt = await TelegramSender.send_file(
             context.bot,
             chat.id,
             file_path,
@@ -637,11 +650,12 @@ async def _complete_message_parse(
             reply_markup=kb,
             operation_key=f"message-media:{text}:video",
         )
-        if success:
+        if receipt:
             try:
                 await status_msg.delete()
                 await msg.delete()
-            except Exception:
+            # Message cleanup is optional; the sender receipt already confirms delivery.
+            except Exception:  # noqa: BLE001, S110
                 pass
         else:
             await status_msg.edit_text("⚠️ Ошибка отправки видео.")
@@ -677,7 +691,8 @@ async def _complete_message_parse(
         if thumbnail_url:
             try:
                 await status_msg.delete()
-            except Exception:
+            # Old-menu deletion is optional; thumbnail/text fallback must remain available.
+            except Exception:  # noqa: BLE001, S110
                 pass
             try:
                 await msg.reply_photo(
@@ -686,7 +701,8 @@ async def _complete_message_parse(
                     reply_markup=reply_markup,
                     parse_mode="HTML",
                 )
-            except Exception as e:
+            # Thumbnail transport/decoder failures must fall back to the text menu.
+            except Exception as e:  # noqa: BLE001
                 logger.warning("Failed to send thumbnail, falling back to text: %s", e)
                 await msg.reply_text(
                     text=caption,
@@ -714,7 +730,7 @@ async def _handle_instagram(
     target: str | None,
     item_id: str | None,
     *,
-    status_msg: Any | None = None,
+    status_msg: Message | None = None,
     caller_scope: str = "private",
 ) -> None:
     """Handle Instagram URLs with rich selection UX."""
@@ -733,7 +749,7 @@ async def _handle_instagram(
 
         from app.services.sender import TelegramSender
 
-        success = await TelegramSender.send_file(
+        receipt = await TelegramSender.send_file(
             context.bot,
             chat.id,
             file_path,
@@ -743,10 +759,11 @@ async def _handle_instagram(
             parse_mode="HTML",
             operation_key=f"instagram:{url}:post",
         )
-        if success:
+        if receipt:
             try:
                 await status_msg.delete()
-            except Exception:
+            # Status cleanup is optional; the Instagram sender receipt confirms delivery.
+            except Exception:  # noqa: BLE001, S110
                 pass
         else:
             await status_msg.edit_text(Texts.IG_DOWNLOAD_ERROR)
@@ -774,7 +791,7 @@ async def _handle_instagram(
         if state.media_pipeline is not None:
             from app.bot.ig_callbacks import _deliver_authorized_stories
 
-            success = await _deliver_authorized_stories(
+            pipeline_success = await _deliver_authorized_stories(
                 context,
                 chat.id,
                 [story],
@@ -783,10 +800,11 @@ async def _handle_instagram(
                 clip=section,
                 canonical_url=url,
             )
-            if success:
+            if pipeline_success:
                 try:
                     await status_msg.delete()
-                except Exception:
+                # Status cleanup is optional; the authorized pipeline already confirms delivery.
+                except Exception:  # noqa: BLE001, S110
                     pass
             else:
                 await status_msg.edit_text(Texts.IG_DOWNLOAD_ERROR)
@@ -799,7 +817,7 @@ async def _handle_instagram(
 
         from app.services.sender import TelegramSender
 
-        success = await TelegramSender.send_file(
+        receipt = await TelegramSender.send_file(
             context.bot,
             chat.id,
             file_path,
@@ -808,10 +826,11 @@ async def _handle_instagram(
             caption=f"📷 @{target} • {story.label}",
             operation_key=f"instagram:{url}:story:{story.mediaid}",
         )
-        if success:
+        if receipt:
             try:
                 await status_msg.delete()
-            except Exception:
+            # Status cleanup is optional; the Instagram sender receipt confirms delivery.
+            except Exception:  # noqa: BLE001, S110
                 pass
         else:
             await status_msg.edit_text(Texts.IG_DOWNLOAD_ERROR)
@@ -1001,6 +1020,7 @@ async def _handle_twitter(
 
     status_msg = await msg.reply_text("⏳ Поиск в X (Twitter)...")
 
+    durable_send_active = False
     try:
         res = await CobaltService.process(url)
 
@@ -1023,6 +1043,7 @@ async def _handle_twitter(
 
             _x_size = await _cobalt_url_head_size(res.url)
             _tg_url_limit = int(19.5 * 1024 * 1024)
+            owned_path: str | None = None
             if _x_size is not None and _x_size <= _tg_url_limit:
                 logger.info("OPT-4 X/Twitter URL delivery: %.1f MB", _x_size / 1e6)
                 file_path = res.url  # URL delivered to TG server directly
@@ -1032,36 +1053,43 @@ async def _handle_twitter(
                     await status_msg.edit_text("⚠️ Ошибка загрузки видео с X.")
                     return True
                 file_path = _downloaded
+                owned_path = _downloaded
             if not file_path:
                 await status_msg.edit_text("⚠️ Ошибка загрузки видео с X.")
                 return True
 
-            await status_msg.edit_text("⏳ Отправка видео с X...")
-            success = await TelegramSender.send_file(
-                context.bot,
-                chat.id,
-                file_path,
-                is_audio=False,
-                is_gif=False,
-                caption=f"🐦 X (Twitter) • {user.mention_html()}",
-                parse_mode="HTML",
-                operation_key=f"x:{url}:video",
-            )
-
-            if success:
-                try:
-                    await status_msg.delete()
-                    await msg.delete()
-                except Exception:
-                    pass
-            else:
-                await status_msg.edit_text("⚠️ Ошибка отправки видео с X.")
-
-            # Clean up
             try:
-                os.unlink(file_path)
-            except Exception:
-                pass
+                await status_msg.edit_text("⏳ Отправка видео с X...")
+                durable_send_active = True
+                receipt = await TelegramSender.send_file(
+                    context.bot,
+                    chat.id,
+                    file_path,
+                    is_audio=False,
+                    is_gif=False,
+                    caption=f"🐦 X (Twitter) • {user.mention_html()}",
+                    parse_mode="HTML",
+                    operation_key=f"x:{url}:video",
+                )
+                durable_send_active = False
+
+                if receipt:
+                    try:
+                        await status_msg.delete()
+                        await msg.delete()
+                    # Message cleanup is optional; the X sender receipt already confirms delivery.
+                    except Exception:  # noqa: BLE001, S110
+                        pass
+                else:
+                    await status_msg.edit_text("⚠️ Ошибка отправки видео с X.")
+            finally:
+                # Only Cobalt's downloaded output belongs to this callback; URLs do not.
+                if owned_path is not None:
+                    try:
+                        os.unlink(owned_path)
+                    # Cleanup must not mask a durable error or overturn a confirmed send.
+                    except Exception:  # noqa: BLE001, S110
+                        pass
             return True
 
         if res.status == "picker":
@@ -1090,53 +1118,65 @@ async def _handle_twitter(
                 # Wait, send_file only handles video, audio, gif. But wait!
                 # If it's a photo, we should use send_photo
                 # TelegramSender.send_file doesn't have is_photo flag, so it'll use bot.send_video.
-                if is_photo:
-                    try:
-                        with open(path, "rb") as fh:
-                            await context.bot.send_photo(
-                                chat_id=chat.id,
-                                photo=fh,
-                                caption=caption,
-                                parse_mode="HTML",
-                            )
-                            success_count += 1
-                    except Exception as e:
-                        logger.error("Failed to send X photo: %s", e)
-                else:
-                    success = await TelegramSender.send_file(
-                        context.bot,
-                        chat.id,
-                        path,
-                        is_audio=False,
-                        is_gif=(item_type == "gif"),
-                        caption=caption,
-                        parse_mode="HTML",
-                        operation_key=f"x:{url}:item:{i}",
-                    )
-                    if success:
-                        success_count += 1
-
                 try:
-                    os.unlink(path)
-                except Exception:
-                    pass
+                    if is_photo:
+                        try:
+                            # The synchronous upload handle stays owned through send;
+                            # offloading only open() risks a late handle on cancellation.
+                            with open(path, "rb") as fh:  # noqa: ASYNC230
+                                await context.bot.send_photo(
+                                    chat_id=chat.id,
+                                    photo=fh,
+                                    caption=caption,
+                                    parse_mode="HTML",
+                                )
+                                success_count += 1
+                        # A failed file/transport adapter must not abort the remaining X collection items.
+                        except Exception as e:  # noqa: BLE001
+                            logger.error("Failed to send X photo: %s", e)
+                    else:
+                        durable_send_active = True
+                        receipt = await TelegramSender.send_file(
+                            context.bot,
+                            chat.id,
+                            path,
+                            is_audio=False,
+                            is_gif=(item_type == "gif"),
+                            caption=caption,
+                            parse_mode="HTML",
+                            operation_key=f"x:{url}:item:{i}",
+                        )
+                        durable_send_active = False
+                        if receipt:
+                            success_count += 1
+                finally:
+                    try:
+                        os.unlink(path)
+                    # Owned-item cleanup must not hide a durable error or change earlier receipts.
+                    except Exception:  # noqa: BLE001, S110
+                        pass
 
             if success_count > 0:
                 try:
                     await status_msg.delete()
                     await msg.delete()
-                except Exception:
+                # Message cleanup is optional; sent collection items determine the result.
+                except Exception:  # noqa: BLE001, S110
                     pass
             else:
                 await status_msg.edit_text("⚠️ Ошибка отправки медиа с X.")
 
             return True
 
-    except Exception as e:
-        logger.error("Twitter Cobalt error: %s", e, exc_info=True)
+    except Exception:
+        # Durable sender escapes must reach the worker; provider fallback cannot resolve them.
+        if durable_send_active:
+            raise
+        logger.exception("Twitter Cobalt error")
         try:
             await status_msg.delete()
-        except Exception:
+        # Failed-provider status cleanup is optional; yt-dlp fallback must remain available.
+        except Exception:  # noqa: BLE001, S110
             pass
         return False
 

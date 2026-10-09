@@ -218,9 +218,8 @@ class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
         from app.services.converter import MediaConverter
 
         # Create a fake video file
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        tmp.write(b"fake video")
-        tmp.close()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+            tmp.write(b"fake video")
 
         _gif_path = tmp.name.rsplit(".", 1)[0] + "_gif.mp4"
 
@@ -262,9 +261,8 @@ class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
 
         from app.services.converter import MediaConverter
 
-        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
-        tmp.write(b"fake video")
-        tmp.close()
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
+            tmp.write(b"fake video")
 
         from app.core.process import ProcessResult
 

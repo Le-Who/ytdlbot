@@ -16,13 +16,14 @@ class TestFindThumbnail(unittest.TestCase):
 
     def setUp(self):
         from app.services.converter import find_thumbnail
+
         self.find_thumbnail = find_thumbnail
 
     def test_returns_jpg_if_exists(self):
         with tempfile.TemporaryDirectory() as d:
             video = os.path.join(d, "test.mp4")
             thumb = os.path.join(d, "test.jpg")
-            open(thumb, "wb").write(b"\xff\xd8\xff fake jpeg")
+            Path(thumb).write_bytes(b"\xff\xd8\xff fake jpeg")
             result = self.find_thumbnail(video)
             self.assertEqual(result, thumb)
 
@@ -36,7 +37,7 @@ class TestFindThumbnail(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             video = os.path.join(d, "test.mp4")
             thumb = os.path.join(d, "test.jpg")
-            open(thumb, "wb").write(b"")  # empty
+            Path(thumb).write_bytes(b"")  # empty
             result = self.find_thumbnail(video)
             self.assertIsNone(result)
 
@@ -52,7 +53,7 @@ class TestFindThumbnail(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             video = os.path.join(d, "test.mp4")
             thumb = os.path.join(d, "test.jpeg")
-            open(thumb, "wb").write(b"\xff\xd8\xff")
+            Path(thumb).write_bytes(b"\xff\xd8\xff")
             result = self.find_thumbnail(video)
             self.assertEqual(result, thumb)
 
@@ -60,7 +61,7 @@ class TestFindThumbnail(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             video = os.path.join(d, "test.mp4")
             thumb = os.path.join(d, "test.webp")
-            open(thumb, "wb").write(b"RIFF fake webp")
+            Path(thumb).write_bytes(b"RIFF fake webp")
             result = self.find_thumbnail(video)
             self.assertEqual(result, thumb)
 
@@ -69,8 +70,8 @@ class TestFindThumbnail(unittest.TestCase):
             video = os.path.join(d, "test.mp4")
             jpg = os.path.join(d, "test.jpg")
             webp = os.path.join(d, "test.webp")
-            open(jpg, "wb").write(b"\xff\xd8\xff")
-            open(webp, "wb").write(b"RIFF fake")
+            Path(jpg).write_bytes(b"\xff\xd8\xff")
+            Path(webp).write_bytes(b"RIFF fake")
             result = self.find_thumbnail(video)
             self.assertEqual(result, jpg)
 
@@ -80,30 +81,37 @@ class TestNativeAudioBypass(unittest.TestCase):
 
     def test_is_native_audio_mp3(self):
         from app.services.orchestrator import _is_native_audio_container
+
         self.assertTrue(_is_native_audio_container("/tmp/audio.mp3"))
 
     def test_is_native_audio_m4a(self):
         from app.services.orchestrator import _is_native_audio_container
+
         self.assertTrue(_is_native_audio_container("/tmp/audio.m4a"))
 
     def test_is_native_audio_ogg(self):
         from app.services.orchestrator import _is_native_audio_container
+
         self.assertTrue(_is_native_audio_container("/tmp/audio.ogg"))
 
     def test_is_native_audio_opus(self):
         from app.services.orchestrator import _is_native_audio_container
+
         self.assertTrue(_is_native_audio_container("/tmp/audio.opus"))
 
     def test_is_not_native_audio_webm(self):
         from app.services.orchestrator import _is_native_audio_container
+
         self.assertFalse(_is_native_audio_container("/tmp/audio.webm"))
 
     def test_is_not_native_audio_mp4(self):
         from app.services.orchestrator import _is_native_audio_container
+
         self.assertFalse(_is_native_audio_container("/tmp/video.mp4"))
 
     def test_detect_opus_from_webm_positive(self):
         from app.services.orchestrator import _detect_opus_from_webm
+
         with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
             # OpusHead signature within first 512 bytes
             f.write(b"\x1a\x45\xdf\xa3" + b"\x00" * 100 + b"OpusHead" + b"\x00" * 50)
@@ -115,6 +123,7 @@ class TestNativeAudioBypass(unittest.TestCase):
 
     def test_detect_opus_from_webm_negative(self):
         from app.services.orchestrator import _detect_opus_from_webm
+
         with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
             f.write(b"\x1a\x45\xdf\xa3" + b"\x00" * 200)
             fname = f.name
@@ -125,16 +134,19 @@ class TestNativeAudioBypass(unittest.TestCase):
 
     def test_detect_opus_from_webm_missing_file(self):
         from app.services.orchestrator import _detect_opus_from_webm
+
         self.assertFalse(_detect_opus_from_webm("/nonexistent/path.webm"))
 
     def test_maybe_rename_non_webm_unchanged(self):
         from app.services.orchestrator import _maybe_rename_webm_to_ogg
+
         result = asyncio.run(_maybe_rename_webm_to_ogg("/tmp/audio.ogg"))
         self.assertEqual(result, "/tmp/audio.ogg")
 
     def test_maybe_rename_webm_with_opus_header(self):
         from app.services.converter import MediaConverter
         from app.services.orchestrator import _maybe_rename_webm_to_ogg
+
         with tempfile.TemporaryDirectory() as d:
             webm_path = os.path.join(d, "audio.webm")
             with open(webm_path, "wb") as f:
@@ -152,6 +164,7 @@ class TestNativeAudioBypass(unittest.TestCase):
 
     def test_maybe_rename_webm_no_opus_unchanged(self):
         from app.services.orchestrator import _maybe_rename_webm_to_ogg
+
         with tempfile.TemporaryDirectory() as d:
             webm_path = os.path.join(d, "video.webm")
             with open(webm_path, "wb") as f:
@@ -213,24 +226,28 @@ class TestOpenMediaPassthrough(unittest.TestCase):
 
     def test_https_url_passes_through(self):
         from app.services.sender import _open_media
+
         url = "https://cdn.cobalt.tools/video.mp4"
         with _open_media(url) as result:
             self.assertEqual(result, url)
 
     def test_http_url_passes_through(self):
         from app.services.sender import _open_media
+
         url = "http://example.com/video.mp4"
         with _open_media(url) as result:
             self.assertEqual(result, url)
 
     def test_bytesio_passes_through(self):
         from app.services.sender import _open_media
+
         buf = io.BytesIO(b"video data")
         with _open_media(buf) as result:
             self.assertIs(result, buf)
 
     def test_file_path_opens_binary(self):
         from app.services.sender import _open_media
+
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as f:
             f.write(b"fake video")
             fname = f.name
@@ -246,11 +263,13 @@ class TestSplitVideoStreamCopy(unittest.IsolatedAsyncioTestCase):
 
     async def test_returns_none_for_nonexistent_file(self):
         from app.services.converter import split_video_stream_copy
+
         result = await split_video_stream_copy("/nonexistent/video.mp4")
         self.assertIsNone(result)
 
     async def test_returns_none_for_small_file(self):
         from app.services.converter import split_video_stream_copy
+
         with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
             f.write(b"x" * 100)
             fname = f.name
@@ -261,46 +280,53 @@ class TestSplitVideoStreamCopy(unittest.IsolatedAsyncioTestCase):
             os.unlink(fname)
 
     async def test_returns_none_for_too_large_file(self):
-        from app.services.converter import split_video_stream_copy, _SPLIT_MAX_INPUT_BYTES
+        from app.services.converter import (
+            _SPLIT_MAX_INPUT_BYTES,
+            split_video_stream_copy,
+        )
 
-        with patch("os.path.getsize", return_value=_SPLIT_MAX_INPUT_BYTES + 1):
-            with patch("os.path.exists", return_value=True):
-                result = await split_video_stream_copy("/fake/huge.mp4")
+        with (
+            patch("os.path.getsize", return_value=_SPLIT_MAX_INPUT_BYTES + 1),
+            patch("os.path.exists", return_value=True),
+        ):
+            result = await split_video_stream_copy("/fake/huge.mp4")
         self.assertIsNone(result)
 
     async def test_returns_none_when_probe_fails(self):
         from app.services.converter import split_video_stream_copy
 
-        with patch("os.path.exists", return_value=True):
-            with patch("os.path.getsize", return_value=100 * 1024 * 1024):
-                with patch(
-                    "app.services.converter._probe_full_meta",
-                    new_callable=AsyncMock,
-                    return_value={"duration_s": None},
-                ):
-                    result = await split_video_stream_copy("/fake/video.mp4")
+        with (
+            patch("os.path.exists", return_value=True),
+            patch("os.path.getsize", return_value=100 * 1024 * 1024),
+            patch(
+                "app.services.converter._probe_full_meta",
+                new_callable=AsyncMock,
+                return_value={"duration_s": None},
+            ),
+        ):
+            result = await split_video_stream_copy("/fake/video.mp4")
         self.assertIsNone(result)
 
     async def test_returns_none_on_ffmpeg_failure(self):
         from app.services.converter import split_video_stream_copy
 
-        process_result = ProcessResult(
-            returncode=1, stdout=b"", stderr=b"ffmpeg error"
-        )
+        process_result = ProcessResult(returncode=1, stdout=b"", stderr=b"ffmpeg error")
 
-        with patch("os.path.exists", return_value=True):
-            with patch("os.path.getsize", return_value=100 * 1024 * 1024):
-                with patch(
-                    "app.services.converter._probe_full_meta",
-                    new_callable=AsyncMock,
-                    return_value={"duration_s": 300.0},
-                ):
-                    with patch(
-                        "app.services.converter.process_supervisor.run",
-                        new_callable=AsyncMock,
-                        return_value=process_result,
-                    ):
-                        result = await split_video_stream_copy("/fake/video.mp4")
+        with (
+            patch("os.path.exists", return_value=True),
+            patch("os.path.getsize", return_value=100 * 1024 * 1024),
+            patch(
+                "app.services.converter._probe_full_meta",
+                new_callable=AsyncMock,
+                return_value={"duration_s": 300.0},
+            ),
+            patch(
+                "app.services.converter.process_supervisor.run",
+                new_callable=AsyncMock,
+                return_value=process_result,
+            ),
+        ):
+            result = await split_video_stream_copy("/fake/video.mp4")
         self.assertIsNone(result)
 
 
@@ -309,6 +335,7 @@ class TestYtDlpBuilderThumbnail(unittest.TestCase):
 
     def test_thumbnail_flags_added_for_video(self):
         from app.services.ytdlp.builders import YtDlpCLIBuilder
+
         builder = YtDlpCLIBuilder()
         cmd = builder.build_download_cmd(
             url="https://youtube.com/watch?v=test",
@@ -323,6 +350,7 @@ class TestYtDlpBuilderThumbnail(unittest.TestCase):
 
     def test_thumbnail_flags_absent_in_pipe_mode(self):
         from app.services.ytdlp.builders import YtDlpCLIBuilder
+
         builder = YtDlpCLIBuilder()
         cmd = builder.build_download_cmd(
             url="https://youtube.com/watch?v=test",
@@ -334,6 +362,7 @@ class TestYtDlpBuilderThumbnail(unittest.TestCase):
 
     def test_thumbnail_flags_absent_for_audio(self):
         from app.services.ytdlp.builders import YtDlpCLIBuilder
+
         builder = YtDlpCLIBuilder()
         cmd = builder.build_download_cmd(
             url="https://youtube.com/watch?v=test",
@@ -346,6 +375,7 @@ class TestYtDlpBuilderThumbnail(unittest.TestCase):
     def test_thumbnail_flags_absent_for_gif(self):
         from app.constants import GIF_FORMAT_ID
         from app.services.ytdlp.builders import YtDlpCLIBuilder
+
         builder = YtDlpCLIBuilder()
         cmd = builder.build_download_cmd(
             url="https://youtube.com/watch?v=test",
@@ -361,12 +391,14 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
 
     async def test_returns_empty_dict_for_missing_file(self):
         from app.services.orchestrator import extract_video_meta
+
         result = await extract_video_meta("/nonexistent/file.mp4")
         self.assertIsInstance(result, dict)
 
     async def test_parses_ffprobe_output(self):
-        from app.services.orchestrator import extract_video_meta
         import json
+
+        from app.services.orchestrator import extract_video_meta
 
         fake_probe = {
             "format": {"duration": "42.5"},
@@ -403,9 +435,10 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.get("codec_tag"), "avc1")
 
     async def test_returns_meta_from_info_json_if_present(self):
-        from app.services.orchestrator import extract_video_meta
         import json
         import tempfile
+
+        from app.services.orchestrator import extract_video_meta
 
         info = {"duration": 120, "width": 1280, "height": 720, "vcodec": "h264"}
         with tempfile.NamedTemporaryFile(
@@ -415,7 +448,7 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
             json_path = f.name
 
         try:
-            result = await extract_video_meta("/fake/video.mp4", info_json_path=json_path)
+            result = await extract_video_meta(object(), info_json_path=json_path)
             self.assertEqual(result.get("duration"), 120)
             self.assertEqual(result.get("vcodec"), "h264")
         finally:
@@ -426,8 +459,9 @@ class TestEnsureTelegramCompatible(unittest.IsolatedAsyncioTestCase):
     """Tests for orchestrator.ensure_telegram_compatible."""
 
     async def test_h264_passes_through(self):
-        from app.services.orchestrator import ensure_telegram_compatible
         import json
+
+        from app.services.orchestrator import ensure_telegram_compatible
 
         fake_probe = {
             "format": {"duration": "30.0"},
@@ -456,8 +490,9 @@ class TestEnsureTelegramCompatible(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, "/fake/h264.mp4")
 
     async def test_hevc_triggers_reencode_and_falls_back_on_failure(self):
-        from app.services.orchestrator import ensure_telegram_compatible
         import json
+
+        from app.services.orchestrator import ensure_telegram_compatible
 
         fake_probe = {
             "format": {"duration": "15.0"},
@@ -502,11 +537,13 @@ class TestBuildGifReplyMarkup(unittest.TestCase):
 
     def test_returns_none_for_non_gif(self):
         from app.services.orchestrator import _build_gif_reply_markup
+
         result = _build_gif_reply_markup("tok123", is_gif=False)
         self.assertIsNone(result)
 
     def test_returns_markup_for_gif(self):
         from app.services.orchestrator import _build_gif_reply_markup
+
         with patch("app.bot.keyboards.build_sent_gif_keyboard") as mock_kb:
             mock_kb.return_value = MagicMock()
             result = _build_gif_reply_markup("tok123", is_gif=True)
@@ -519,6 +556,7 @@ class TestProbeFullMeta(unittest.IsolatedAsyncioTestCase):
 
     async def test_returns_none_duration_on_bad_output(self):
         from app.services.converter import _probe_full_meta
+
         process_result = ProcessResult(returncode=0, stdout=b"", stderr=b"")
         with patch(
             "app.services.converter.process_supervisor.run",
@@ -529,8 +567,9 @@ class TestProbeFullMeta(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result["duration_s"])
 
     async def test_parses_duration_and_audio_bitrate(self):
-        from app.services.converter import _probe_full_meta
         import json
+
+        from app.services.converter import _probe_full_meta
 
         fake = {
             "format": {"duration": "120.5"},
@@ -552,6 +591,7 @@ class TestProbeFullMeta(unittest.IsolatedAsyncioTestCase):
 
     async def test_returns_defaults_on_exception(self):
         from app.services.converter import _probe_full_meta
+
         with patch(
             "app.services.converter.process_supervisor.run",
             new_callable=AsyncMock,
@@ -568,28 +608,142 @@ class TestSplitVideoCompletePath(unittest.IsolatedAsyncioTestCase):
     async def test_returns_sorted_parts_on_success(self):
         from app.services.converter import split_video_stream_copy
 
-        process_result = ProcessResult(returncode=0, stdout=b"", stderr=b"")
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.mp4"
+            source.write_bytes(b"source" * 100)
+            produced = []
 
-        fake_parts = ["/tmp/ytdlbot/split_abc123_000.mp4", "/tmp/ytdlbot/split_abc123_001.mp4"]
+            async def transform(command, **kwargs):
+                for index in [1, 0]:
+                    part = Path(command[-1].replace("%03d", f"{index:03d}"))
+                    part.write_bytes(bytes([index + 1]) * 200)
+                    produced.append(str(part))
+                return ProcessResult(0, b"", b"")
 
-        with patch("os.path.exists", return_value=True):
-            with patch("os.path.getsize", return_value=100 * 1024 * 1024):
-                with patch(
+            with (
+                patch("app.services.converter.TEMP_DIR", directory),
+                patch(
                     "app.services.converter._probe_full_meta",
-                    new_callable=AsyncMock,
-                    return_value={"duration_s": 300.0, "audio_kbps": 128},
-                ):
-                    with patch(
-                        "app.services.converter.process_supervisor.run",
-                        new_callable=AsyncMock,
-                        return_value=process_result,
-                    ):
-                        with patch("glob.glob", return_value=fake_parts):
-                            result = await split_video_stream_copy("/fake/video.mp4")
-
-        self.assertIsNotNone(result)
-        self.assertEqual(len(result), 2)
+                    AsyncMock(return_value={"duration_s": 30}),
+                ),
+                patch("app.services.converter._run_transform_process", transform),
+            ):
+                result = await split_video_stream_copy(str(source), segment_bytes=200)
+            self.assertEqual(result, [produced[1], produced[0]])
+            self.assertEqual(
+                [Path(part).read_bytes() for part in result],
+                [b"\x01" * 200, b"\x02" * 200],
+            )
 
 
 if __name__ == "__main__":
     unittest.main()
+from pathlib import Path
+
+import pytest
+
+
+@pytest.mark.parametrize(
+    "part_sizes, outcome",
+    [([200, 200], "success"), ([200, 201], "failure"), ([200, 0], "failure")],
+)
+async def test_split_enforces_each_actual_part_size(
+    tmp_path, monkeypatch, part_sizes, outcome
+):
+    from app.services import converter
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"original" * 100)
+    produced = []
+
+    async def transform(command, **kwargs):
+        for index in [1, 0]:
+            path = Path(command[-1].replace("%03d", f"{index:03d}"))
+            path.write_bytes(bytes([index + 1]) * part_sizes[index])
+            produced.append(path)
+        return ProcessResult(0, b"", b"")
+
+    monkeypatch.setattr(converter, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        converter, "_probe_full_meta", AsyncMock(return_value={"duration_s": 20})
+    )
+    monkeypatch.setattr(converter, "_run_transform_process", transform)
+    result = await converter.split_video_stream_copy(str(source), segment_bytes=200)
+    if outcome == "success":
+        assert result == [str(produced[1]), str(produced[0])]
+        assert [Path(part).read_bytes() for part in result] == [
+            b"\x01" * 200,
+            b"\x02" * 200,
+        ]
+    else:
+        assert result is None
+        assert not any(part.exists() for part in produced)
+    assert source.read_bytes() == b"original" * 100
+
+
+@pytest.mark.parametrize("failure", ["returncode", "timeout"])
+async def test_split_failure_cleans_all_owned_parts(tmp_path, monkeypatch, failure):
+    from app.services import converter
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"original" * 100)
+    unrelated = tmp_path / "split_other_000.mp4"
+    unrelated.write_bytes(b"unrelated")
+
+    async def transform(command, **kwargs):
+        Path(command[-1].replace("%03d", "000")).write_bytes(b"partial")
+        if failure == "timeout":
+            raise TimeoutError
+        return ProcessResult(1, b"", b"failed")
+
+    monkeypatch.setattr(converter, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        converter, "_probe_full_meta", AsyncMock(return_value={"duration_s": 20})
+    )
+    monkeypatch.setattr(converter, "_run_transform_process", transform)
+    assert (
+        await converter.split_video_stream_copy(str(source), segment_bytes=200) is None
+    )
+    assert list(tmp_path.glob("split_*.mp4")) == [unrelated]
+    assert source.read_bytes() == b"original" * 100
+
+
+@pytest.mark.parametrize("output_bytes", [799999, 800000, 800001])
+async def test_compression_enforces_actual_output_size(
+    tmp_path, monkeypatch, output_bytes
+):
+    import asyncio
+
+    from app.core import state
+    from app.services import converter
+
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"original" * 150000)
+    produced = []
+
+    async def transform(command, **kwargs):
+        if command[-1] != os.devnull:
+            path = Path(command[-1])
+            path.write_bytes(
+                b"encoded" * (output_bytes // 7) + b"x" * (output_bytes % 7)
+            )
+            produced.append(path)
+        return ProcessResult(0, b"", b"")
+
+    monkeypatch.setattr(state, "conversion_sem", asyncio.Semaphore(1))
+    monkeypatch.setattr(converter, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        converter,
+        "_probe_full_meta",
+        AsyncMock(return_value={"duration_s": 10, "audio_kbps": 128}),
+    )
+    monkeypatch.setattr(converter, "_run_transform_process", transform)
+    result = await converter.compress_video_to_size(str(source), target_bytes=800000)
+    assert len(produced) == 1
+    if output_bytes <= 800000:
+        assert result == str(produced[0])
+        assert Path(result).stat().st_size == output_bytes
+    else:
+        assert result is None
+        assert not produced[0].exists()
+    assert source.read_bytes() == b"original" * 150000

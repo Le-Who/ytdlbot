@@ -1,21 +1,23 @@
 """Property-based tests using hypothesis for parsers and URL validation."""
 
 import unittest
-from hypothesis import given, strategies as st, settings
 
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+from app.core.utils import extract_supported_url, is_supported_url
+from app.services.ytdlp.models import FormatMetadata
 from app.services.ytdlp.parsers import (
+    TikTokError,
+    _calculate_filesize,
+    _format_duration,
+    _is_facebook,
+    _is_pinterest,
     _is_tiktok,
     _is_youtube,
-    _is_pinterest,
-    _is_facebook,
-    _format_duration,
-    _calculate_filesize,
     classify_tiktok_error,
-    TikTokError,
     deduplicate_formats,
 )
-from app.services.ytdlp.models import FormatMetadata
-from app.core.utils import is_supported_url, extract_supported_url
 
 # ── Duration formatting properties ───────────────────────────────
 

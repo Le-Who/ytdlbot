@@ -1,6 +1,6 @@
-import unittest
 import os
-from unittest.mock import AsyncMock, patch, MagicMock
+import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Mock config before importing app.main
 os.environ["BOT_TOKEN"] = "test:token"

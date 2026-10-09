@@ -1,25 +1,26 @@
 """Comprehensive tests for app.services.ytdlp.parsers — all public functions."""
 
 import unittest
+
+from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
+from app.services.ytdlp.models import FormatMetadata
 from app.services.ytdlp.parsers import (
+    TikTokError,
+    _calculate_filesize,
+    _extract_height,
+    _format_duration,
+    _is_facebook,
+    _is_pinterest,
     _is_tiktok,
     _is_youtube,
-    _is_pinterest,
-    _is_facebook,
     classify_tiktok_content,
     classify_tiktok_error,
-    TikTokError,
-    _format_duration,
-    _extract_height,
-    _calculate_filesize,
-    parse_format_metadata,
     create_format_item,
     deduplicate_formats,
-    get_special_format,
     detect_tiktok_slideshow,
+    get_special_format,
+    parse_format_metadata,
 )
-from app.services.ytdlp.models import FormatMetadata
-from app.constants import GIF_FORMAT_ID, AUDIO_FORMAT_ID
 
 # ── Platform detection ────────────────────────────────────────────
 

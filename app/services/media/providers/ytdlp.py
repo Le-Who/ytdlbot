@@ -9,8 +9,8 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from typing import Any
 from dataclasses import replace
+from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 from app.services.ytdlp.exceptions import (
@@ -22,15 +22,16 @@ from app.services.ytdlp.exceptions import (
 from app.services.ytdlp.service import YtDlpService
 
 from ..models import (
+    YOUTUBE_COMMAND_DEFAULT_VARIANT,
+    YOUTUBE_SHORT_DEFAULT_VARIANT,
     MediaCandidate,
     MediaKind,
     MediaRequest,
     MediaSource,
     RefreshDescriptor,
-    YOUTUBE_SHORT_DEFAULT_VARIANT,
 )
-from ..registry import FailureKind, ProviderError
 from ..proxies import MediaProxyPool
+from ..registry import FailureKind, ProviderError
 
 Extractor = Callable[[str], Awaitable[dict[str, Any]]]
 _FAST_COMMAND_MAX_EDGE = 1080
@@ -341,7 +342,7 @@ def _candidate_sort_key(
         return preference, resolution_order, compatible, ready
     fast_command = (
         request.kind is MediaKind.VIDEO
-        and request.caller_scope == "command"
+        and request.output_variant == YOUTUBE_COMMAND_DEFAULT_VARIANT
         and request.quality.max_edge is None
     )
     if not fast_command:

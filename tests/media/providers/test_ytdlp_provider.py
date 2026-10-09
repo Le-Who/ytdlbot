@@ -3,7 +3,7 @@ import base64
 import json
 import time
 from contextlib import asynccontextmanager
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -212,6 +212,177 @@ async def test_fast_command_prefers_1080_source_over_4k():
     assert candidates[0].candidate_id == "137+140"
     assert min(candidates[0].width or 0, candidates[0].height or 0) == 1080
     assert any(candidate.candidate_id == "401+140" for candidate in candidates)
+
+
+async def test_command_profile_and_ordinary_best_do_not_share_public_work():
+    """Catches public normalization losing /mp4 policy or coalescing 1080 and 4K."""
+    from app.core.media_cache import MediaCache
+
+    info = metadata()
+    info["formats"].insert(0, video_format("401", width=3840, height=2160))
+    both_extractions = asyncio.Event()
+    finish_extraction = asyncio.Event()
+    calls = 0
+
+    async def extract(url):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            both_extractions.set()
+        await finish_extraction.wait()
+        return info
+
+    cache = MediaCache()
+    pipeline = MediaPipeline(
+        ProviderRegistry([ProviderRoute(YtDlpProvider(extract=extract))]),
+        object(),
+        object(),
+        media_cache=cache,
+    )
+    command = build_media_request(URL, kind=MediaKind.VIDEO, caller_scope="command")
+    ordinary = build_media_request(URL, kind=MediaKind.VIDEO, caller_scope="private")
+    tasks = [
+        asyncio.create_task(pipeline.resolve(request))
+        for request in (command, ordinary)
+    ]
+    try:
+        await asyncio.wait_for(both_extractions.wait(), timeout=1)
+    finally:
+        finish_extraction.set()
+        resolved = await asyncio.gather(*tasks)
+
+    assert [value.candidates[0].candidate_id for value in resolved] == [
+        "137+140",
+        "401+140",
+    ]
+    public_command = replace(command, caller_scope="public")
+    public_ordinary = replace(ordinary, caller_scope="public")
+    assert public_command.cache_key != public_ordinary.cache_key
+    assert (await cache.get_metadata(public_command)).height == 1080
+    assert (await cache.get_metadata(public_ordinary)).height == 2160
+
+
+async def test_legacy_audio_height_resolves_through_real_pipeline():
+    """Catches cached visual dimensions rejecting an MP3 picker request."""
+    from app.constants import AUDIO_FORMAT_ID
+    from app.core.models import DownloadContext
+    from app.services.media.pipeline import request_from_download_context
+
+    pipeline = MediaPipeline(
+        ProviderRegistry(
+            [ProviderRoute(YtDlpProvider(extract=AsyncMock(return_value=metadata())))]
+        ),
+        object(),
+        object(),
+    )
+    request = request_from_download_context(
+        DownloadContext(page_url=URL, format_id=AUDIO_FORMAT_ID, height=1080),
+        caller_scope="callback",
+    )
+    resolved = await pipeline.resolve(request)
+    assert resolved.candidates[0].kind is MediaKind.AUDIO
+    assert resolved.candidates[0].mux_mode == "extract-mp3"
+    assert resolved.candidates[0].height is None
+    assert request.quality.max_edge is None
+
+
+async def test_command_and_ordinary_profiles_materialize_distinct_owned_outputs(
+    tmp_path,
+):
+    """Catches materialization coalescing outputs after distinct resolution."""
+    from tests.media.test_pipeline import _Delivery
+    from tests.media.test_transport import (
+        FakeResponse,
+        RecordingProcessRunner,
+        transport,
+    )
+
+    info = metadata()
+    info["formats"][0]["url"] = "https://cdn.example/137"
+    info["formats"].insert(0, video_format("401", width=3840, height=2160))
+    media, _ = transport(
+        tmp_path,
+        [FakeResponse() for _ in range(32)],
+        process_runner=RecordingProcessRunner(),
+        max_bytes=10_000,
+        capacity_bytes=100_000,
+    )
+    started = asyncio.Event()
+    finish = asyncio.Event()
+    requests = []
+    original = media.materialize
+
+    async def materialize(request, candidates, **kwargs):
+        requests.append(request)
+        if len(requests) == 2:
+            started.set()
+        await finish.wait()
+        return await original(request, candidates, **kwargs)
+
+    media.materialize = materialize
+    pipeline = MediaPipeline(
+        ProviderRegistry(
+            [ProviderRoute(YtDlpProvider(extract=AsyncMock(return_value=info)))]
+        ),
+        media,
+        _Delivery(),
+        artifact_validator=AsyncMock(),
+    )
+    command = build_media_request(URL, kind=MediaKind.VIDEO, caller_scope="command")
+    ordinary = build_media_request(URL, kind=MediaKind.VIDEO, caller_scope="group")
+
+    async def consume(request):
+        async with pipeline.open_materialized(request) as item:
+            return (
+                item.candidate.candidate_id,
+                item.paths[0],
+                item.paths[0].read_bytes(),
+            )
+
+    tasks = [asyncio.create_task(consume(request)) for request in (command, ordinary)]
+    try:
+        await asyncio.wait_for(started.wait(), timeout=5)
+    finally:
+        finish.set()
+        results = await asyncio.gather(*tasks)
+
+    assert [result[0].split("+")[0] for result in results] == ["137", "401"]
+    assert results[0][1] != results[1][1]
+    assert all(result[2] for result in results)
+    assert all(request.caller_scope == "public" for request in requests)
+    assert requests[0].cache_key != requests[1].cache_key
+    assert media.disk_budget.reserved_bytes == 0
+    assert not list(tmp_path.glob("media_*"))
+
+
+@pytest.mark.parametrize(
+    ("url", "options", "expected"),
+    [
+        ("https://www.youtube.com/shorts/example", {}, "136+140"),
+        (URL, {"quality": 2160}, "401+140"),
+        (URL, {"output_variant": "custom"}, "401+140"),
+    ],
+)
+async def test_command_default_profile_preserves_short_quality_and_custom_variants(
+    url,
+    options,
+    expected,
+):
+    info = metadata()
+    info["formats"].insert(0, video_format("401", width=3840, height=2160))
+    pipeline = MediaPipeline(
+        ProviderRegistry(
+            [ProviderRoute(YtDlpProvider(extract=AsyncMock(return_value=info)))]
+        ),
+        object(),
+        object(),
+    )
+    resolved = await pipeline.resolve(
+        build_media_request(
+            url, kind=MediaKind.VIDEO, caller_scope="command", **options
+        )
+    )
+    assert resolved.candidates[0].candidate_id == expected
 
 
 async def test_fast_command_prefers_ready_compatible_mp4_at_same_quality():

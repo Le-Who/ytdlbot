@@ -52,18 +52,13 @@ def cleanup_temp_dir(root: str | None = None) -> tuple[int, int]:
                 try:
                     shutil.rmtree(path, ignore_errors=True)
                     deleted += 1
-                except Exception:
+                except OSError:
                     pass
             continue
 
         # Clean bot-created files
-        if not (
-            name.startswith("ytdl_")
-            or name.startswith("concat_")
-            or name.startswith("tikwm_")
-            or name.startswith("gdl_video_")
-            or name.startswith("info_")
-            or name.startswith("media_")
+        if not name.startswith(
+            ("ytdl_", "concat_", "tikwm_", "gdl_video_", "info_", "media_")
         ):
             continue
         if not os.path.isfile(path):
@@ -104,16 +99,11 @@ def _aggressive_purge_temp(root: str | None = None) -> int:
             try:
                 shutil.rmtree(path, ignore_errors=True)
                 deleted += 1
-            except Exception:
+            except OSError:
                 pass
             continue
-        if not (
-            name.startswith("ytdl_")
-            or name.startswith("concat_")
-            or name.startswith("tikwm_")
-            or name.startswith("gdl_video_")
-            or name.startswith("info_")
-            or name.startswith("media_")
+        if not name.startswith(
+            ("ytdl_", "concat_", "tikwm_", "gdl_video_", "info_", "media_")
         ):
             continue
         if os.path.isfile(path) and _delete_media_target(
@@ -206,7 +196,9 @@ async def _notify_admin(message: str) -> None:
             text=message,
             parse_mode="HTML",
         )
-    except Exception as exc:
+    # Alert delivery crosses the optional Telegram adapter; disk maintenance
+    # must continue even when that adapter raises an unexpected failure.
+    except Exception as exc:  # noqa: BLE001
         logger.warning("Disk alert admin notification failed: %s", exc)
 
 
@@ -293,12 +285,17 @@ async def janitor_loop(stop_event: asyncio.Event) -> None:
             from app.core.metrics import metrics as app_metrics
 
             app_metrics.log_summary()
-        except Exception:
-            pass
+        # Metrics observers are optional; their failures must not prevent disk
+        # checks or lease-aware cleanup from running on subsequent iterations.
+        except Exception as error:  # noqa: BLE001
+            logger.debug(
+                "Janitor metrics summary failed",
+                extra={"error_type": type(error).__name__},
+            )
 
         await check_disk_space()
 
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=JANITOR_INTERVAL_SECONDS)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             continue

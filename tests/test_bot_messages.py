@@ -3,8 +3,13 @@ from unittest.mock import AsyncMock
 """Tests for on_message handler — the core user flow."""
 
 import asyncio
+import hashlib
+import io
+import sqlite3
 import unittest
 from types import SimpleNamespace
+
+import pytest
 
 
 class AsyncMockCache(dict):
@@ -126,7 +131,7 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
 
         # Should have called edit_text with the title (status message)
         self.assertTrue(status_msg.edit_text.called)
-        args, kwargs = status_msg.edit_text.call_args
+        args, _kwargs = status_msg.edit_text.call_args
         self.assertIn("Cached Video Title", args[0])
 
         # user_data should have page_url set
@@ -245,6 +250,208 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.context.user_data["page_url"], self.update.message.text)
         self.assertEqual(self.context.user_data["title"], "TikTok Content")
         self.assertTrue(status_msg.edit_text.called)
+
+    async def test_tiktok_fallback_buffer_is_delivered_without_path_processing_or_cache(
+        self,
+    ):
+        from app.services.downloader import MediaSender
+        from app.services.sender import TelegramSender
+        from app.services.tikwm import TikWMResult
+
+        url = "https://www.tiktok.com/@user/video/123"
+        self.update.message.text = url
+        status_msg = AsyncMock()
+        self.update.message.reply_text = AsyncMock(return_value=status_msg)
+        self.update.message.delete = AsyncMock()
+        buffer = io.BytesIO(b"synthetic fallback video")
+        file_cache = AsyncMockCache()
+        with (
+            patch.object(state, "media_pipeline", None),
+            patch.object(state, "file_cache", file_cache),
+            patch.object(
+                messages.TikWMService,
+                "process",
+                new=AsyncMock(
+                    return_value=TikWMResult(
+                        status="video", url="https://synthetic.invalid/video.mp4"
+                    )
+                ),
+            ),
+            patch.object(
+                messages.TikWMService,
+                "download_video",
+                new=AsyncMock(return_value=(None, "synthetic TikWM download failure")),
+            ) as primary,
+            patch.object(
+                MediaSender,
+                "download_video",
+                new=AsyncMock(return_value=(buffer, None)),
+            ) as fallback,
+            patch.object(
+                TelegramSender, "send_file", new=AsyncMock(return_value=True)
+            ) as sender,
+            patch(
+                "app.services.orchestrator.extract_video_meta",
+                new=AsyncMock(side_effect=AssertionError("buffer must not be probed")),
+            ) as probe,
+            patch(
+                "app.services.orchestrator.ensure_telegram_compatible",
+                new=AsyncMock(
+                    side_effect=AssertionError("buffer must not be converted")
+                ),
+            ) as convert,
+        ):
+            await messages.on_message(self.update, self.context)
+
+        primary.assert_awaited_once()
+        fallback.assert_awaited_once()
+        sender.assert_awaited_once()
+        self.assertIs(sender.await_args.args[2], buffer)
+        self.assertFalse(buffer.closed)
+        probe.assert_not_awaited()
+        convert.assert_not_awaited()
+        self.assertEqual(file_cache, {})
+
+
+@pytest.mark.parametrize("mode", ["direct-url", "local-download", "picker-video"])
+async def test_twitter_receipt_write_failure_propagates_without_fallback(
+    tmp_path, monkeypatch, mode
+):
+    from app.core import config
+    from app.core.job_store import DeliveryOutcome, JobStore, delivery_job_context
+    from app.services.cobalt import CobaltPickerItem, CobaltResult
+
+    class FailingFinalizationStore(JobStore):
+        def _finalize_delivery_attempt_sync(self, *args, **kwargs):
+            raise sqlite3.OperationalError("synthetic Twitter receipt write failure")
+
+    url = "https://x.com/test/status/123"
+    local_download = mode != "direct-url"
+    source = tmp_path / "source.mp4"
+    original = b"\x00\x00\x00\x18ftypisom"
+    source.write_bytes(original)
+    downloaded = tmp_path / "downloaded.mp4"
+    if local_download:
+        downloaded.write_bytes(original)
+    status = SimpleNamespace(edit_text=AsyncMock(), delete=AsyncMock())
+    msg = SimpleNamespace(reply_text=AsyncMock(return_value=status), delete=AsyncMock())
+    update = SimpleNamespace(
+        message=msg,
+        effective_user=SimpleNamespace(mention_html=lambda: "synthetic-user"),
+        effective_chat=SimpleNamespace(id=42),
+    )
+    bot = SimpleNamespace(
+        send_video=AsyncMock(
+            return_value=SimpleNamespace(
+                message_id=125, video=SimpleNamespace(file_id="twitter-fid")
+            )
+        )
+    )
+    monkeypatch.setattr(config, "TELEGRAM_LOCAL_ENDPOINT", "")
+    monkeypatch.setattr(
+        messages.CobaltService,
+        "process",
+        AsyncMock(
+            return_value=CobaltResult(
+                status="picker" if mode == "picker-video" else "redirect",
+                url="https://video.twimg.com/synthetic.mp4",
+                picker=[
+                    CobaltPickerItem(
+                        type="video", url="https://video.twimg.com/synthetic.mp4"
+                    )
+                ]
+                if mode == "picker-video"
+                else [],
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.orchestrator._cobalt_url_head_size",
+        AsyncMock(return_value=None if local_download else 100),
+    )
+    download = AsyncMock(return_value=str(downloaded))
+    monkeypatch.setattr(messages.CobaltService, "download_file", download)
+    store = FailingFinalizationStore(tmp_path / "jobs.sqlite3")
+    await store.accept_update({"update_id": 993})
+    claimed = await store.claim_next("worker-a")
+    assert claimed is not None
+
+    with (
+        delivery_job_context(store, claimed.id, owner_id="worker-a"),
+        pytest.raises(
+            sqlite3.OperationalError, match="synthetic Twitter receipt write failure"
+        ),
+    ):
+        await messages._handle_twitter(
+            update, SimpleNamespace(bot=bot), url, "synthetic", None
+        )
+
+    bot.send_video.assert_awaited_once()
+    operation = f"x:{url}:item:0" if mode == "picker-video" else f"x:{url}:video"
+    digest = hashlib.sha256(f"compat-file:video:{operation}".encode()).hexdigest()
+    assert (
+        await store.delivery_outcome(claimed.id, item_key=f"42:operation:{digest}:0")
+        is DeliveryOutcome.UNCERTAIN
+    )
+    assert await store.has_unsafe_deliveries(claimed.id)
+    assert not await store.has_failed_deliveries(claimed.id)
+    # Failure after durable sending starts must not advertise a yt-dlp fallback.
+    status.delete.assert_not_awaited()
+    msg.delete.assert_not_awaited()
+    if local_download:
+        download.assert_awaited_once()
+        assert not downloaded.exists()
+    else:
+        download.assert_not_awaited()
+    assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize("provider_raises", [False, True])
+async def test_twitter_provider_failure_before_sending_preserves_false_fallback(
+    monkeypatch, provider_raises
+):
+    from app.services.cobalt import CobaltResult
+
+    status = SimpleNamespace(edit_text=AsyncMock(), delete=AsyncMock())
+    msg = SimpleNamespace(reply_text=AsyncMock(return_value=status), delete=AsyncMock())
+    update = SimpleNamespace(
+        message=msg,
+        effective_user=SimpleNamespace(mention_html=lambda: "synthetic-user"),
+        effective_chat=SimpleNamespace(id=42),
+    )
+    bot = SimpleNamespace(send_video=AsyncMock())
+    process = (
+        AsyncMock(side_effect=RuntimeError("synthetic provider failure"))
+        if provider_raises
+        else AsyncMock(
+            return_value=CobaltResult(
+                status="error", error_message="synthetic provider failure"
+            )
+        )
+    )
+    monkeypatch.setattr(messages.CobaltService, "process", process)
+    download = AsyncMock(
+        side_effect=AssertionError("provider failure must not download")
+    )
+    head = AsyncMock(
+        side_effect=AssertionError("provider failure must not inspect remote media")
+    )
+    monkeypatch.setattr(messages.CobaltService, "download_file", download)
+    monkeypatch.setattr("app.services.orchestrator._cobalt_url_head_size", head)
+
+    success = await messages._handle_twitter(
+        update,
+        SimpleNamespace(bot=bot),
+        "https://x.com/test/status/123",
+        "synthetic",
+        None,
+    )
+
+    assert success is False
+    bot.send_video.assert_not_awaited()
+    download.assert_not_awaited()
+    head.assert_not_awaited()
+    status.delete.assert_awaited_once()
 
 
 if __name__ == "__main__":

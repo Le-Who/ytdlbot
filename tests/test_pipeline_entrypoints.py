@@ -66,7 +66,7 @@ def test_every_entrypoint_builds_the_same_canonical_media_request(entrypoint: st
     assert request.auth_scope == "public"
 
 
-def test_legacy_download_context_maps_mp3_clip_and_quality_without_fallback():
+def test_legacy_download_context_maps_mp3_clip_without_cached_visual_quality():
     request = request_from_download_context(
         DownloadContext(
             page_url=YOUTUBE_URL,
@@ -79,7 +79,7 @@ def test_legacy_download_context_maps_mp3_clip_and_quality_without_fallback():
 
     assert request.kind is MediaKind.AUDIO
     assert request.audio_format == "mp3"
-    assert request.quality.max_edge == 1080
+    assert request.quality.max_edge is None
     assert request.clip == ClipInterval(10, 20)
     assert request.exact is True
 
@@ -564,7 +564,9 @@ async def test_command_and_callback_orchestrator_adapters_invoke_pipeline(
     assert success
     request = pipeline.requests[0]
     assert request.kind is expected_kind
-    assert request.quality.max_edge == 1080
+    assert request.quality.max_edge == (
+        None if expected_kind is MediaKind.AUDIO else 1080
+    )
     assert request.clip == ClipInterval(10, 20)
     assert request.caller_scope == caller_scope
 

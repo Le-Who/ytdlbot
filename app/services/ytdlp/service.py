@@ -4,12 +4,13 @@ import os
 import shutil
 import sys
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 __all__ = ["YtDlpService"]
 
 from app.core.config import TEMP_DIR, TIKTOK_PROXY, VK_PROXY
-from app.core.texts import Texts
 from app.core.logging import redact_text
+from app.core.texts import Texts
 
 from .builders import YtDlpCLIBuilder
 from .cookies import PlatformCookiesManager
@@ -36,6 +37,18 @@ from .parsers import (
 )
 
 logger = logging.getLogger("ytdlp_service")
+
+
+def _rewrite_vk_url(url: str) -> str:
+    """Use VK's mobile host without changing paths, queries, or other hosts."""
+    parsed = urlsplit(url)
+    if parsed.hostname not in {"vk.com", "www.vk.com", "m.vk.com"}:
+        return url
+    authority = parsed.netloc.rsplit("@", 1)
+    host_port = authority[-1]
+    port_suffix = host_port[len(parsed.hostname) :]
+    userinfo = authority[0] + "@" if len(authority) == 2 else ""
+    return urlunsplit(parsed._replace(netloc=userinfo + "m.vk.com" + port_suffix))
 
 
 class YtDlpService:
@@ -80,7 +93,7 @@ class YtDlpService:
 
         is_vk = _is_vk(url)
         if is_vk:
-            url = url.replace("vk.com", "m.vk.com")
+            url = _rewrite_vk_url(url)
 
         # Legacy callers retain configured cookies; policy-aware providers opt out.
         cookies = self.cookies_manager.get_cookies_path(url) if use_cookies else None
@@ -196,7 +209,7 @@ class YtDlpService:
             raise
         except Exception as e:
             # Re-raise known API exceptions that should trigger orchestration fallback
-            logger.error("YtDlp Extraction Error: %s", e, exc_info=True)
+            logger.exception("YtDlp extraction failed")
             raise ExtractionError(
                 Texts.SVC_EXTRACTION_ERROR.format(detail=str(e)[:300])
             )
@@ -241,10 +254,14 @@ class YtDlpService:
                 info_json_path = os.path.join(
                     TEMP_DIR, f"info_{_uuid.uuid4().hex}.json"
                 )
-                with open(info_json_path, "w", encoding="utf-8") as f:
+                # Publish this extraction-owned optional cache synchronously:
+                # cancellation cannot leave a detached writer or a late path.
+                with open(info_json_path, "w", encoding="utf-8") as f:  # noqa: ASYNC230
                     json.dump(info, f, ensure_ascii=False)
                 logger.info("Cached extraction info: %s", info_json_path)
-            except Exception as exc:
+            # yt-dlp metadata can include arbitrary extractor values; caching
+            # is optional and must not discard a successful extraction result.
+            except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to cache info JSON: %s", exc)
                 info_json_path = None
 
@@ -281,7 +298,7 @@ class YtDlpService:
 
         # Rewrite to m.vk.com for better anti-bot bypass
         if is_vk:
-            page_url = page_url.replace("vk.com", "m.vk.com")
+            page_url = _rewrite_vk_url(page_url)
             use_aria2 = False
 
         cmd = self.builder.build_download_cmd(

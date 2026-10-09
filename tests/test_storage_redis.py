@@ -1,14 +1,15 @@
 import unittest
-from unittest.mock import AsyncMock, patch
-import msgspec
 import zlib
 from typing import Any
+from unittest.mock import AsyncMock, patch
+
+import msgspec
 
 from app.core.storage.redis_storage import (
-    RedisStorage,
-    _RAW_PREFIX,
-    _COMPRESSED_PREFIX,
     _COMPRESS_THRESHOLD,
+    _COMPRESSED_PREFIX,
+    _RAW_PREFIX,
+    RedisStorage,
 )
 
 
@@ -201,6 +202,28 @@ class TestRedisStorageNamespacing(unittest.IsolatedAsyncioTestCase):
         self.mock_redis.get.return_value = None
         await storage.get("raw_key")
         self.mock_redis.get.assert_awaited_once_with("raw_key")
+
+    async def test_clear_preserves_other_namespaces_and_raw_keys(self):
+        """A prefixed cache clear must never flush the shared Redis database."""
+
+        class KeyStore:
+            def __init__(self):
+                self.keys = {b"lnk:a", b"lnk:b", b"inf:a", b"lnk-extra:a", b"raw"}
+
+            async def scan_iter(self, **kwargs):
+                for key in sorted(self.keys):
+                    yield key
+
+            async def delete(self, *keys):
+                self.keys.difference_update(keys)
+
+            async def flushdb(self):
+                self.keys.clear()
+
+        redis = KeyStore()
+        storage = RedisStorage(redis, default_ttl=600, prefix="lnk")
+        await storage.clear()
+        self.assertEqual(redis.keys, {b"inf:a", b"lnk-extra:a", b"raw"})
 
 
 if __name__ == "__main__":

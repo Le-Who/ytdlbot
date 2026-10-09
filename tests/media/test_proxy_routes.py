@@ -1,9 +1,9 @@
 """Proxy routing regressions: selection, URL affinity, cancellation and secrets."""
 
 import asyncio
+import ipaddress
 import json
 import logging
-import ipaddress
 from dataclasses import asdict, replace
 from types import SimpleNamespace
 
@@ -11,22 +11,32 @@ import pytest
 
 from app.core.logging import JsonFormatter
 from app.services.media.models import MediaRequest, RefreshDescriptor
-from app.services.media.pipeline import build_media_request, _project_album_selection
-from app.services.media.proxies import MediaProxyPool
+from app.services.media.pipeline import _project_album_selection, build_media_request
 from app.services.media.providers.gallerydl import GalleryDlProvider
 from app.services.media.providers.ytdlp import YtDlpProvider
-from app.services.media.registry import FailureKind, ProviderError
-from app.services.media.registry import ProviderRegistry, ProviderRoute
-from app.services.media.transport import MediaTransport, URLPolicy, UnsafeMediaURL
-from app.services.media.transport import CurlStreamingClient
+from app.services.media.proxies import MediaProxyPool
+from app.services.media.registry import (
+    FailureKind,
+    ProviderError,
+    ProviderRegistry,
+    ProviderRoute,
+)
+from app.services.media.transport import (
+    CurlStreamingClient,
+    MediaTransport,
+    UnsafeMediaURL,
+    URLPolicy,
+)
 from app.services.ytdlp.exceptions import AccessDeniedError, VideoNotFoundError
 from tests.media.providers.test_ytdlp_provider import metadata
 from tests.media.test_transport import (
     FakeClient,
     FakeResponse,
     Resolver,
-    source_candidate as candidate,
     request,
+)
+from tests.media.test_transport import (
+    source_candidate as candidate,
 )
 
 PRIMARY = "socks5://alice:secret-one@proxy-one.example:8000"

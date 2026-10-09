@@ -22,7 +22,6 @@ class TestProcess(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(list(handle.stderr_data), [b"err\n"])
 
     async def test_run_subprocess_cancel(self):
-        import asyncio
 
         proc = AsyncMock()
         proc.returncode = None
@@ -31,8 +30,8 @@ class TestProcess(unittest.IsolatedAsyncioTestCase):
         proc.terminate = Mock()
         proc.wait = AsyncMock()
         proc.wait.side_effect = [
-            asyncio.TimeoutError(),
-            asyncio.TimeoutError(),
+            TimeoutError(),
+            TimeoutError(),
             0,
             0,
             0,

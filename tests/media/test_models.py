@@ -1,4 +1,4 @@
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
@@ -111,13 +111,34 @@ def test_original_audio_policy_keeps_unaffected_cache_entries(
     assert request.cache_key == legacy_key
 
 
-def test_cache_key_isolates_scopes_and_all_delivery_equivalence_fields():
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"canonical_url": "https://www.youtube.com/watch?v=other"},
+        {"platform": "other"},
+        {"media_id": "other"},
+        {"kind": MediaKind.AUDIO},
+        {"quality": QualityPolicy(720)},
+        {"audio_format": "mp3"},
+        {"audio_language": "en"},
+        {"clip": ClipInterval(1, 20)},
+        {"clip": ClipInterval(0, 21)},
+        {"album_selection": (1, 3)},
+        {"watermark_allowed": True},
+        {"caller_scope": "chat:2"},
+        {"auth_scope": "user:2"},
+        {"exact": False},
+        {"output_variant": "custom"},
+    ],
+)
+def test_cache_key_isolates_each_delivery_equivalence_field(change):
     """Catches cache reuse across auth boundaries or changed output requests."""
     base = MediaRequest.from_url(
         "https://youtu.be/abc123",
         quality=QualityPolicy(max_edge=1080),
         audio_format="m4a",
         audio_language="uk",
+        clip=ClipInterval(0, 20),
         album_selection=(3, 1),
         watermark_allowed=False,
         caller_scope="chat:1",
@@ -125,17 +146,13 @@ def test_cache_key_isolates_scopes_and_all_delivery_equivalence_fields():
         exact=True,
     )
 
-    assert (
-        base.cache_key
-        != MediaRequest.from_url(
-            "https://youtu.be/abc123", auth_scope="user:2"
-        ).cache_key
-    )
-    assert (
-        base.cache_key
-        != MediaRequest.from_url("https://youtu.be/abc123", exact=False).cache_key
-    )
+    assert base.cache_key != replace(base, **change).cache_key
     assert base.cache_key.startswith("media:v1:")
+
+
+def test_deadline_does_not_change_delivery_equivalence():
+    request = MediaRequest.from_url("https://youtu.be/abc123")
+    assert request.cache_key == replace(request, deadline=123).cache_key
 
 
 @pytest.mark.parametrize(
@@ -159,6 +176,11 @@ def test_non_finite_clip_time_raises_typed_error(clip_value: str):
     """Catches non-standard JSON cache identities from invalid clip times."""
     with pytest.raises(UnsupportedMediaUrlError):
         MediaRequest.from_url(f"https://youtube.com/watch?v=abc123&t={clip_value}")
+
+
+def test_reversed_youtube_query_clip_raises_typed_error():
+    with pytest.raises(UnsupportedMediaUrlError):
+        MediaRequest.from_url("https://youtube.com/watch?v=abc123&t=20&end=10")
 
 
 def test_contracts_are_immutable():

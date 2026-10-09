@@ -1,8 +1,9 @@
 import asyncio
 import os
 import time
-from app.core.config import TEMP_DIR
 import uuid
+
+from app.core.config import TEMP_DIR
 
 
 async def benchmark():

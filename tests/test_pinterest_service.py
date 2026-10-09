@@ -35,7 +35,7 @@ class TestPinterestExtractMediaUrl(unittest.IsolatedAsyncioTestCase):
         mock_session.get = AsyncMock(return_value=mock_resp)
 
         with patch("app.services.pinterest.AsyncSession", return_value=mock_session):
-            video_url, image_url = await PinterestNativeService.extract_media_url(
+            video_url, _image_url = await PinterestNativeService.extract_media_url(
                 "https://pinterest.com/pin/123"
             )
 
@@ -110,11 +110,13 @@ class TestPinterestExtractMediaUrl(unittest.IsolatedAsyncioTestCase):
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = AsyncMock(side_effect=TimeoutError("slow"))
 
-        with patch("app.services.pinterest.AsyncSession", return_value=mock_session):
-            with self.assertRaises(ProviderError) as raised:
-                await PinterestNativeService.resolve_media_url(
-                    "https://pinterest.com/pin/slow"
-                )
+        with (
+            patch("app.services.pinterest.AsyncSession", return_value=mock_session),
+            self.assertRaises(ProviderError) as raised,
+        ):
+            await PinterestNativeService.resolve_media_url(
+                "https://pinterest.com/pin/slow"
+            )
 
         self.assertIs(raised.exception.kind, FailureKind.TRANSIENT)
 
@@ -130,11 +132,13 @@ class TestPinterestExtractMediaUrl(unittest.IsolatedAsyncioTestCase):
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = AsyncMock(return_value=response)
 
-        with patch("app.services.pinterest.AsyncSession", return_value=mock_session):
-            with self.assertRaises(ProviderError) as raised:
-                await PinterestNativeService.resolve_media_url(
-                    "https://pinterest.com/pin/challenge"
-                )
+        with (
+            patch("app.services.pinterest.AsyncSession", return_value=mock_session),
+            self.assertRaises(ProviderError) as raised,
+        ):
+            await PinterestNativeService.resolve_media_url(
+                "https://pinterest.com/pin/challenge"
+            )
 
         self.assertIs(raised.exception.kind, FailureKind.TRANSIENT)
 
@@ -206,15 +210,18 @@ class TestPinterestStreamDownload(unittest.IsolatedAsyncioTestCase):
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = AsyncMock(return_value=mock_resp)
 
-        with patch("app.services.pinterest.AsyncSession", return_value=mock_session):
-            with patch("app.services.pinterest.TEMP_DIR", tmpdir):
-                result = await _stream_download(
-                    "https://example.com/video.mp4", "test_", "mp4"
-                )
+        with (
+            patch("app.services.pinterest.AsyncSession", return_value=mock_session),
+            patch("app.services.pinterest.TEMP_DIR", tmpdir),
+        ):
+            result = await _stream_download(
+                "https://example.com/video.mp4", "test_", "mp4"
+            )
 
         self.assertIsNotNone(result)
         self.assertTrue(os.path.exists(result))
-        with open(result, "rb") as f:
+        # Small synthetic fixture I/O completes inline; no runtime worker ownership.
+        with open(result, "rb") as f:  # noqa: ASYNC230
             data = f.read()
         self.assertEqual(data, b"chunk1chunk2chunk3")
         os.unlink(result)
@@ -248,7 +255,7 @@ class TestPinterestStreamDownload(unittest.IsolatedAsyncioTestCase):
 
         async def _aiter():
             return
-            yield  # makes it async generator  # noqa
+            yield  # makes it async generator
 
         mock_resp.aiter_content = _aiter
 
@@ -257,11 +264,13 @@ class TestPinterestStreamDownload(unittest.IsolatedAsyncioTestCase):
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = AsyncMock(return_value=mock_resp)
 
-        with patch("app.services.pinterest.AsyncSession", return_value=mock_session):
-            with patch("app.services.pinterest.TEMP_DIR", tmpdir):
-                result = await _stream_download(
-                    "https://example.com/empty.mp4", "test_empty_", "mp4"
-                )
+        with (
+            patch("app.services.pinterest.AsyncSession", return_value=mock_session),
+            patch("app.services.pinterest.TEMP_DIR", tmpdir),
+        ):
+            result = await _stream_download(
+                "https://example.com/empty.mp4", "test_empty_", "mp4"
+            )
 
         self.assertIsNone(result)
         os.rmdir(tmpdir)
@@ -274,20 +283,22 @@ class TestPinterestDownloadVideo(unittest.IsolatedAsyncioTestCase):
     async def test_tier1_video_download(self):
         from app.services.pinterest import PinterestNativeService
 
-        with patch.object(
-            PinterestNativeService,
-            "extract_media_url",
-            new_callable=AsyncMock,
-            return_value=("https://v.pinimg.com/video.mp4", None),
-        ):
-            with patch(
+        with (
+            patch.object(
+                PinterestNativeService,
+                "extract_media_url",
+                new_callable=AsyncMock,
+                return_value=("https://v.pinimg.com/video.mp4", None),
+            ),
+            patch(
                 "app.services.pinterest._stream_download",
                 new_callable=AsyncMock,
                 return_value="/tmp/pin_test.mp4",
-            ) as mock_dl:
-                path, error = await PinterestNativeService.download_video(
-                    "https://pinterest.com/pin/123"
-                )
+            ) as mock_dl,
+        ):
+            path, error = await PinterestNativeService.download_video(
+                "https://pinterest.com/pin/123"
+            )
 
         self.assertEqual(path, "/tmp/pin_test.mp4")
         self.assertIsNone(error)
@@ -298,50 +309,54 @@ class TestPinterestDownloadVideo(unittest.IsolatedAsyncioTestCase):
     async def test_tier2_image_fallback(self):
         from app.services.pinterest import PinterestNativeService
 
-        with patch.object(
-            PinterestNativeService,
-            "extract_media_url",
-            new_callable=AsyncMock,
-            return_value=(None, "https://i.pinimg.com/img.jpg"),
-        ):
-            with patch(
+        with (
+            patch.object(
+                PinterestNativeService,
+                "extract_media_url",
+                new_callable=AsyncMock,
+                return_value=(None, "https://i.pinimg.com/img.jpg"),
+            ),
+            patch(
                 "app.services.pinterest._stream_download",
                 new_callable=AsyncMock,
                 return_value="/tmp/pin_img.jpg",
-            ):
-                path, error = await PinterestNativeService.download_video(
-                    "https://pinterest.com/pin/456"
-                )
+            ),
+        ):
+            path, error = await PinterestNativeService.download_video(
+                "https://pinterest.com/pin/456"
+            )
 
         self.assertEqual(path, "/tmp/pin_img.jpg")
         self.assertIsNone(error)
 
     async def test_tier3_cobalt_fallback(self):
-        from app.services.pinterest import PinterestNativeService
         from app.services.cobalt import CobaltResult
+        from app.services.pinterest import PinterestNativeService
 
-        with patch.object(
-            PinterestNativeService,
-            "extract_media_url",
-            new_callable=AsyncMock,
-            return_value=(None, None),
-        ):
-            with patch(
+        with (
+            patch.object(
+                PinterestNativeService,
+                "extract_media_url",
+                new_callable=AsyncMock,
+                return_value=(None, None),
+            ),
+            patch(
                 "app.services.cobalt.CobaltService.process",
                 new_callable=AsyncMock,
                 return_value=CobaltResult(
                     status="tunnel",
                     url="https://cobalt.example.com/video.mp4",
                 ),
-            ):
-                with patch(
-                    "app.services.pinterest._stream_download",
-                    new_callable=AsyncMock,
-                    return_value="/tmp/pin_cobalt.mp4",
-                ):
-                    path, error = await PinterestNativeService.download_video(
-                        "https://pinterest.com/pin/789"
-                    )
+            ),
+            patch(
+                "app.services.pinterest._stream_download",
+                new_callable=AsyncMock,
+                return_value="/tmp/pin_cobalt.mp4",
+            ),
+        ):
+            path, error = await PinterestNativeService.download_video(
+                "https://pinterest.com/pin/789"
+            )
 
         self.assertEqual(path, "/tmp/pin_cobalt.mp4")
         self.assertIsNone(error)

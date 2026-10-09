@@ -46,14 +46,16 @@ class TestExtractUrlFromUpdate(unittest.TestCase):
         from app.core.utils import extract_url_from_update
 
         msg = self._msg(caption="https://youtube.com/watch?v=abc")
-        url, section = extract_url_from_update(msg)
+        url, _section = extract_url_from_update(msg)
         self.assertIsNotNone(url)
 
     def test_url_in_reply_text(self):
         from app.core.utils import extract_url_from_update
 
-        msg = self._msg(text="please download", reply_text="https://youtube.com/watch?v=123")
-        url, section = extract_url_from_update(msg)
+        msg = self._msg(
+            text="please download", reply_text="https://youtube.com/watch?v=123"
+        )
+        url, _section = extract_url_from_update(msg)
         self.assertIsNotNone(url)
         self.assertIn("youtube", url)
 
@@ -61,7 +63,7 @@ class TestExtractUrlFromUpdate(unittest.TestCase):
         from app.core.utils import extract_url_from_update
 
         msg = self._msg(reply_caption="https://youtu.be/xyz")
-        url, section = extract_url_from_update(msg)
+        url, _section = extract_url_from_update(msg)
         self.assertIsNotNone(url)
 
     def test_no_url_anywhere(self):
@@ -97,7 +99,7 @@ class TestExtractUrlFromUpdate(unittest.TestCase):
         msg = MagicMock()  # .text returns a MagicMock, not a string
         msg.reply_to_message = None
         # Must not raise
-        url, section = extract_url_from_update(msg)
+        url, _section = extract_url_from_update(msg)
         self.assertIsNone(url)
 
     def test_section_extracted_from_reply(self):
@@ -128,21 +130,25 @@ class AsyncMockCache(dict):
 class TestUserPrefs(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         from app.core import state
+
         state.prefs_cache = AsyncMockCache()
 
     async def test_get_prefs_empty(self):
         from app.core.user_prefs import get_prefs
+
         prefs = await get_prefs(999)
         self.assertEqual(prefs, {})
 
     async def test_set_and_get_format(self):
         from app.core.user_prefs import get_prefs, set_prefs
+
         await set_prefs(1, default_format="audio")
         prefs = await get_prefs(1)
         self.assertEqual(prefs["default_format"], "audio")
 
     async def test_set_and_get_quality(self):
         from app.core.user_prefs import get_prefs, set_prefs
+
         await set_prefs(2, default_quality=720)
         prefs = await get_prefs(2)
         self.assertEqual(prefs["default_quality"], 720)
@@ -150,6 +156,7 @@ class TestUserPrefs(unittest.IsolatedAsyncioTestCase):
     async def test_set_merges(self):
         """set_prefs should merge kwargs rather than overwrite."""
         from app.core.user_prefs import get_prefs, set_prefs
+
         await set_prefs(3, default_format="video")
         await set_prefs(3, default_quality=1080)
         prefs = await get_prefs(3)
@@ -158,6 +165,7 @@ class TestUserPrefs(unittest.IsolatedAsyncioTestCase):
 
     async def test_clear_prefs(self):
         from app.core.user_prefs import clear_prefs, get_prefs, set_prefs
+
         await set_prefs(4, default_format="audio")
         await clear_prefs(4)
         prefs = await get_prefs(4)
@@ -165,11 +173,13 @@ class TestUserPrefs(unittest.IsolatedAsyncioTestCase):
 
     async def test_valid_formats_set(self):
         from app.core.user_prefs import VALID_FORMATS
+
         self.assertIn("audio", VALID_FORMATS)
         self.assertIn("video", VALID_FORMATS)
 
     async def test_valid_qualities_dict(self):
         from app.core.user_prefs import VALID_QUALITIES
+
         self.assertIn("best", VALID_QUALITIES)
         self.assertIsNone(VALID_QUALITIES["best"])
         self.assertEqual(VALID_QUALITIES["720"], 720)
@@ -178,23 +188,49 @@ class TestUserPrefs(unittest.IsolatedAsyncioTestCase):
 # ── Feature 5: Tiered Semaphore Selection ────────────────────────────────────
 
 
-class TestTieredSemaphoreLogic(unittest.TestCase):
-    """Tests for the semaphore-selection logic introduced in orchestrator.py."""
+class TestTieredSemaphoreLogic(unittest.IsolatedAsyncioTestCase):
+    """The real orchestrator admits native and extractor work to their queues."""
 
-    def test_api_origin_format_ids_routed_to_api_sem(self):
-        """Verify the API-origin format IDs set matches expected values.
+    async def _assert_queue(self, format_id, *, native):
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
 
-        Tests the set membership assumption used in process_download.
-        """
-        api_ids = {"tikwm_fallback", "pinterest_native", "gallerydl_fallback"}
-        self.assertIn("tikwm_fallback", api_ids)
-        self.assertIn("pinterest_native", api_ids)
-        self.assertIn("gallerydl_fallback", api_ids)
+        from app.core import state
+        from app.core.models import DownloadContext
+        from app.services.orchestrator import DownloadOrchestrator
 
-    def test_yt_dlp_format_not_in_api_ids(self):
-        api_ids = {"tikwm_fallback", "pinterest_native", "gallerydl_fallback"}
-        self.assertNotIn("137", api_ids)
-        self.assertNotIn("bestaudio/best", api_ids)
+        api = SimpleNamespace(enqueue=AsyncMock(return_value=False))
+        download = SimpleNamespace(enqueue=AsyncMock(return_value=False))
+        update_ui = AsyncMock()
+        with (
+            patch.object(state, "api_queue", api),
+            patch.object(state, "download_queue", download),
+        ):
+            success = await DownloadOrchestrator.process_download(
+                token="queue-routing",
+                chat_id=42,
+                bot=MagicMock(),
+                payload=DownloadContext(
+                    page_url="https://youtu.be/example", format_id=format_id
+                ),
+                fmt_size=None,
+                update_ui=update_ui,
+                kb_error=None,
+            )
+        self.assertFalse(success)
+        selected, other = (api, download) if native else (download, api)
+        selected.enqueue.assert_awaited_once_with(update_ui, kb_error=None)
+        other.enqueue.assert_not_awaited()
+
+    async def test_api_origin_format_ids_routed_to_api_sem(self):
+        for format_id in ("tikwm_fallback", "pinterest_native", "gallerydl_fallback"):
+            with self.subTest(format_id=format_id):
+                await self._assert_queue(format_id, native=True)
+
+    async def test_yt_dlp_format_not_in_api_ids(self):
+        for format_id in ("137", "bestaudio/best"):
+            with self.subTest(format_id=format_id):
+                await self._assert_queue(format_id, native=False)
 
 
 if __name__ == "__main__":

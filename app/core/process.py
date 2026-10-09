@@ -163,7 +163,9 @@ def _create_windows_job() -> int:
 
 
 def _windows_process_handle(proc: asyncio.subprocess.Process) -> int:
-    transport = getattr(proc, "_transport")
+    # Windows Job Object adoption needs CPython's private transport, absent from
+    # the public Process stub; preserve the audited dynamic platform bridge.
+    transport = getattr(proc, "_transport")  # noqa: B009
     popen = transport.get_extra_info("subprocess")
     return int(popen._handle)
 
@@ -650,8 +652,13 @@ class ProcessSupervisor:
                     if stderr_callback is not None:
                         try:
                             stderr_callback(line)
-                        except Exception:
-                            pass
+                        # Progress observers are caller-supplied and optional;
+                        # their failures must not stop draining the process pipe.
+                        except Exception as error:  # noqa: BLE001
+                            logger.debug(
+                                "Subprocess stderr callback failed",
+                                extra={"error_type": type(error).__name__},
+                            )
 
             handle.stderr_task = asyncio.create_task(consume_stderr())
         try:

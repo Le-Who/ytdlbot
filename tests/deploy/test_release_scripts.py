@@ -8,12 +8,12 @@ import stat
 import subprocess
 import sys
 import time
+import tomllib
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 import pytest
-import tomllib
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -199,18 +199,13 @@ def fake_host(tmp_path: Path) -> FakeHost:
         encoding="utf-8",
     )
     (deploy_state / "bootstrap.manifest").write_text(
-        "\n".join(
-            (
-                "BOOTSTRAP_SCHEMA=1",
-                "COMPOSE_PROJECT=verified-project",
-                "MEDIA_VOLUME=verified-project_media",
-                "STATE_VOLUME=verified-project_state",
-                "TG_API_VOLUME=verified-project_tg-api-data",
-                "REDIS_VOLUME=verified-project_redis-data",
-                "BOT_UID_GID=10001:10001",
-            )
-        )
-        + "\n",
+        "BOOTSTRAP_SCHEMA=1\n"
+        "COMPOSE_PROJECT=verified-project\n"
+        "MEDIA_VOLUME=verified-project_media\n"
+        "STATE_VOLUME=verified-project_state\n"
+        "TG_API_VOLUME=verified-project_tg-api-data\n"
+        "REDIS_VOLUME=verified-project_redis-data\n"
+        "BOT_UID_GID=10001:10001\n",
         encoding="utf-8",
     )
     for name in (
@@ -816,9 +811,7 @@ def test_manifest_must_match_exact_sha_image_project_and_compose(
 
 
 def test_candidate_compose_preflight_uses_production_project_directory() -> None:
-    script = (ROOT / "scripts" / "preflight-production.sh").read_text(
-        encoding="utf-8"
-    )
+    script = (ROOT / "scripts" / "preflight-production.sh").read_text(encoding="utf-8")
     normalized = " ".join(script.replace("\\\n", " ").split())
 
     assert (
@@ -1020,7 +1013,7 @@ def test_every_active_ci_workflow_uses_one_pinned_test_contract() -> None:
     assert threshold_match is not None
     configured_threshold = int(threshold_match.group(1))
 
-    for path, document in documents.items():
+    for path in documents:
         source = path.read_text(encoding="utf-8")
         uses_lines = [line.strip() for line in source.splitlines() if "uses:" in line]
         assert all(
@@ -1059,9 +1052,7 @@ def test_workflow_smokes_immutable_image_and_promotes_trusted_staging() -> None:
 
 def test_remote_registry_auth_is_ephemeral_and_read_only() -> None:
     workflow = yaml.load(
-        (ROOT / ".github" / "workflows" / "deploy.yml").read_text(
-            encoding="utf-8"
-        ),
+        (ROOT / ".github" / "workflows" / "deploy.yml").read_text(encoding="utf-8"),
         Loader=yaml.BaseLoader,
     )
     deploy = workflow["jobs"]["deploy"]
@@ -1080,25 +1071,18 @@ def test_remote_registry_auth_is_ephemeral_and_read_only() -> None:
     assert 'mktemp -d "$PROJECT_ROOT/.deploy/registry-auth.XXXXXX"' in script
     assert 'export DOCKER_CONFIG="$registry_config"' in script
     assert (
-        'printf \'%s\' "$GHCR_TOKEN" | docker login ghcr.io '
+        "printf '%s' \"$GHCR_TOKEN\" | docker login ghcr.io "
         '--username "$GHCR_USERNAME" --password-stdin >/dev/null' in script
     )
     assert "unset GHCR_TOKEN" in script
-    assert (
-        "docker logout ghcr.io >/dev/null 2>&1 || cleanup_status=$?"
-        in script
-    )
-    assert (
-        'rm -f -- "$registry_config/config.json" || cleanup_status=$?' in script
-    )
+    assert "docker logout ghcr.io >/dev/null 2>&1 || cleanup_status=$?" in script
+    assert 'rm -f -- "$registry_config/config.json" || cleanup_status=$?' in script
     assert 'rmdir -- "$registry_config" || cleanup_status=$?' in script
     assert 'test ! -e "$registry_config" || cleanup_status=1' in script
     assert "|| true" not in script
 
 
-def test_uploaded_payload_ownership_is_normalized_only_after_shape_validation() -> (
-    None
-):
+def test_uploaded_payload_ownership_is_normalized_only_after_shape_validation() -> None:
     script = _activation_workflow_script()
     exact_entries_check = 'test "$actual_entries" = "$expected_entries"'
     no_links_check = 'test -z "$(find "$staging_dir" -type l -print -quit)"'
@@ -1106,8 +1090,7 @@ def test_uploaded_payload_ownership_is_normalized_only_after_shape_validation() 
         'chown --no-dereference "$(id -u):$(id -g)" "$staging_dir/scripts"'
     )
     normalize_file = (
-        'chown --no-dereference "$(id -u):$(id -g)" '
-        '"$staging_dir/$relative_path"'
+        'chown --no-dereference "$(id -u):$(id -g)" "$staging_dir/$relative_path"'
     )
     verify = 'verify_release_payload "$staging_dir"'
     normalize_index = script.index(normalize_scripts)

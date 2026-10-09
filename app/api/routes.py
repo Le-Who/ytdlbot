@@ -364,43 +364,45 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
                 "mp4",
                 "-",
             ]
-            async with run_subprocess(cmd, timeout=DL_TIMEOUT_HTTP) as dl_handle:
-                async with run_subprocess(
+            async with (
+                run_subprocess(cmd, timeout=DL_TIMEOUT_HTTP) as dl_handle,
+                run_subprocess(
                     ffmpeg_cmd, stdin=asyncio.subprocess.PIPE, timeout=300
-                ) as ff_handle:
+                ) as ff_handle,
+            ):
 
-                    async def read_ytdlp_write_ffmpeg():
-                        try:
-                            while True:
-                                chunk = await dl_handle.proc.stdout.read(CHUNK_SIZE)  # type: ignore[union-attr]
-                                if not chunk:
-                                    break
-                                ff_handle.proc.stdin.write(chunk)  # type: ignore[union-attr]
-                                await ff_handle.proc.stdin.drain()  # type: ignore[union-attr]
-                        except Exception as e:
-                            logger.debug("Pipe stream error", extra={"error": str(e)})
-                        finally:
-                            try:
-                                ff_handle.proc.stdin.close()  # type: ignore[union-attr]
-                            except Exception:
-                                pass
-
-                    pipe_task = asyncio.create_task(read_ytdlp_write_ffmpeg())
+                async def read_ytdlp_write_ffmpeg():
                     try:
                         while True:
-                            chunk = await ff_handle.proc.stdout.read(CHUNK_SIZE)  # type: ignore[union-attr]
+                            chunk = await dl_handle.proc.stdout.read(CHUNK_SIZE)  # type: ignore[union-attr]
                             if not chunk:
                                 break
-                            bytes_sent += len(chunk)
-                            if bytes_sent > max_bytes:
-                                logger.warning(
-                                    "Stream exceeded size limit",
-                                    extra={"limit_mb": MAX_DL_MB},
-                                )
-                                return
-                            yield chunk
+                            ff_handle.proc.stdin.write(chunk)  # type: ignore[union-attr]
+                            await ff_handle.proc.stdin.drain()  # type: ignore[union-attr]
+                    except (OSError, RuntimeError) as e:
+                        logger.debug("Pipe stream error", extra={"error": str(e)})
                     finally:
-                        pipe_task.cancel()
+                        try:
+                            ff_handle.proc.stdin.close()  # type: ignore[union-attr]
+                        except (OSError, RuntimeError):
+                            pass
+
+                pipe_task = asyncio.create_task(read_ytdlp_write_ffmpeg())
+                try:
+                    while True:
+                        chunk = await ff_handle.proc.stdout.read(CHUNK_SIZE)  # type: ignore[union-attr]
+                        if not chunk:
+                            break
+                        bytes_sent += len(chunk)
+                        if bytes_sent > max_bytes:
+                            logger.warning(
+                                "Stream exceeded size limit",
+                                extra={"limit_mb": MAX_DL_MB},
+                            )
+                            return
+                        yield chunk
+                finally:
+                    pipe_task.cancel()
         else:
             cmd = state.ytdlp.build_command(
                 payload.page_url,
@@ -470,7 +472,9 @@ async def _stop_lease_renewal(
     except asyncio.CancelledError:
         if not cancelled_here:
             raise
-    except BaseException as error:
+    # Return the task's terminal failure so the stream owner can report it;
+    # cancellation initiated by somebody else is propagated above.
+    except BaseException as error:  # noqa: BLE001
         return error
     return None
 

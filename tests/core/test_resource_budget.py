@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import threading
@@ -328,3 +329,119 @@ async def test_promotion_rename_failure_removes_destination_lease(
     assert budget.reserved_bytes == 10
     await reservation.release()
     assert budget.reserved_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_release_preserves_other_owners_reservation(tmp_path):
+    """A repeated release cannot subtract another owner's disk allocation."""
+    budget = DiskBudget(tmp_path, capacity_bytes=100)
+    first = await budget.reserve(10, owner="first")
+    second = await budget.reserve(20, owner="second")
+    await budget._lock.acquire()
+    releases = [asyncio.create_task(first.release()) for _ in range(2)]
+    await asyncio.sleep(0)
+    budget._lock.release()
+    await asyncio.gather(*releases)
+    try:
+        assert budget.reserved_bytes == 20
+        with pytest.raises(InsufficientDiskSpace):
+            await budget.reserve(81)
+    finally:
+        await second.release()
+
+
+@pytest.mark.asyncio
+async def test_cancelled_disk_release_finishes_without_spending_other_owner(tmp_path):
+    budget = DiskBudget(tmp_path, capacity_bytes=100)
+    first = await budget.reserve(10, owner="first")
+    second = await budget.reserve(20, owner="second")
+    await budget._lock.acquire()
+    release = asyncio.create_task(first.release())
+    await asyncio.sleep(0)
+    release.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await release
+    budget._lock.release()
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    try:
+        assert budget.reserved_bytes == 20
+        await first.release()
+        assert budget.reserved_bytes == 20
+    finally:
+        await second.release()
+
+
+@pytest.mark.asyncio
+async def test_ensure_queued_before_release_cannot_grow_released_reservation(tmp_path):
+    budget = DiskBudget(tmp_path, capacity_bytes=100)
+    first = await budget.reserve(10)
+    second = await budget.reserve(20)
+    await budget._lock.acquire()
+    ensure = asyncio.create_task(first.ensure(30))
+    release = asyncio.create_task(first.release())
+    await asyncio.sleep(0)
+    budget._lock.release()
+    await release
+    try:
+        with pytest.raises(RuntimeError, match="released"):
+            await ensure
+        assert budget.reserved_bytes == 20
+    finally:
+        await second.release()
+
+
+@pytest.mark.parametrize(
+    "sidecar",
+    [
+        "[]",
+        "null",
+        '"text"',
+        "{}",
+        '{"owner": [], "expires_at": 9999999999}',
+        '{"owner": "worker", "expires_at": "invalid"}',
+        '{"owner": "worker", "expires_at": NaN}',
+        '{"owner": "worker", "expires_at": Infinity}',
+        '{"owner": "worker", "expires_at": -Infinity}',
+        pytest.param(
+            '{"owner": "worker", "expires_at": ' + "9" * 400 + "}",
+            id="overflowing-expiry",
+        ),
+    ],
+)
+def test_corrupt_lease_is_reclaimable_and_janitor_keeps_cleaning(tmp_path, sidecar):
+    """Invalid JSON shapes and nonfinite expiries must not protect old media."""
+    target = tmp_path / "media_corrupt.mp4"
+    next_target = tmp_path / "media_next.mp4"
+    for path in (target, next_target):
+        path.write_bytes(b"orphan")
+        os.utime(path, (1, 1))
+    marker = Path(f"{target}.lease")
+    marker.write_text(sidecar, encoding="utf-8")
+    assert not is_active_media_lease(target)
+    with patch("app.tasks.janitor.MAX_TEMP_AGE_SECONDS", 10):
+        assert janitor.cleanup_temp_dir(str(tmp_path)) == (2, 2)
+        assert janitor.cleanup_temp_dir(str(tmp_path)) == (0, 0)
+    assert not marker.exists()
+    assert not target.exists()
+    assert not next_target.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "sidecar", ["[]", "null", '"text"', '{"owner": "worker", "expires_at": Infinity}']
+)
+async def test_reservation_can_replace_corrupt_lease_under_target_lock(
+    tmp_path, sidecar
+):
+    budget = DiskBudget(tmp_path, capacity_bytes=100)
+    reservation = await budget.reserve(10, owner="replacement")
+    target = tmp_path / "media_corrupt.mp4"
+    target.write_bytes(b"data")
+    Path(f"{target}.lease").write_text(sidecar, encoding="utf-8")
+    try:
+        reservation.bind(target)
+        assert is_active_media_lease(target)
+        assert json.loads(Path(f"{target}.lease").read_text())["owner"] == "replacement"
+    finally:
+        await reservation.release()

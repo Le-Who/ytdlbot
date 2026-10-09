@@ -5,6 +5,7 @@ import os
 import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -17,6 +18,7 @@ from telegram.ext import (
     filters,
 )
 
+from app.api import routes as api_routes
 from app.api.routes import configure_job_store
 from app.api.routes import router as api_router
 from app.bot import callbacks, commands, messages
@@ -28,6 +30,16 @@ from app.tasks.janitor import janitor_loop
 
 setup_logging()
 logger = logging.getLogger("app.main")
+_deferred_shutdown_tasks: dict[DurableUpdateWorker, asyncio.Task[None]] = {}
+
+
+@dataclass(slots=True)
+class _LifespanOwner:
+    worker: DurableUpdateWorker | None = None
+    shutdown_returned: bool = False
+
+
+_active_lifespan: _LifespanOwner | None = None
 
 
 async def stop_telegram_ingress(bot_app: Any, *, webhook_enabled: bool) -> None:
@@ -52,6 +64,9 @@ async def shutdown_runtime(
     drain_timeout_seconds: float,
 ) -> None:
     """Attempt every shutdown phase even when an earlier phase fails."""
+    if durable_worker in _deferred_shutdown_tasks:
+        return
+    runtime_pipeline = state.media_pipeline
 
     async def attempt(
         label: str,
@@ -59,7 +74,9 @@ async def shutdown_runtime(
     ) -> None:
         try:
             await operation()
-        except Exception as error:
+        # Shutdown crosses independent external services; every phase must get
+        # an attempt even if an earlier adapter raises an unexpected failure.
+        except Exception as error:  # noqa: BLE001
             logger.error(
                 "Shutdown phase failed",
                 extra={"phase": label, "error_type": type(error).__name__},
@@ -88,16 +105,62 @@ async def shutdown_runtime(
             webhook_enabled=webhook_enabled,
         ),
     )
-    await attempt("Telegram application stop", bot_app.stop)
-    await attempt("Telegram application shutdown", bot_app.shutdown)
 
-    state.media_pipeline = None
-    state.bot_app = None
-    configure_job_store(None)
-    await attempt("job store close", job_store.close)
-    if redis_client:
-        await attempt("Redis close", redis_client.aclose)
-        logger.info("Redis connection closed ✅")
+    async def close_runtime() -> None:
+        await attempt("Telegram application stop", bot_app.stop)
+        await attempt("Telegram application shutdown", bot_app.shutdown)
+        await attempt("job store close", job_store.close)
+        # Redis is created at import time and reused by each lifespan. The
+        # runtime that adopted this same client owns its eventual close.
+        redis_adopted = (
+            state.redis_client is redis_client
+            and state.bot_app is not None
+            and state.bot_app is not bot_app
+        )
+        if redis_client and not redis_adopted:
+            await attempt("Redis close", redis_client.aclose)
+            logger.info("Redis connection closed ✅")
+        # A newer lifespan may already own these globals when deferred cleanup
+        # runs. Close captured resources without clearing its runtime bindings.
+        if state.media_pipeline is runtime_pipeline:
+            state.media_pipeline = None
+        if state.bot_app is bot_app:
+            state.bot_app = None
+        if state.job_store is job_store:
+            state.job_store = None
+        if api_routes._job_store is job_store:
+            configure_job_store(None)
+        active_owner = _active_lifespan
+        if active_owner is not None and active_owner.worker is durable_worker:
+            _release_lifespan(active_owner)
+
+    if not getattr(durable_worker, "shutdown_complete", True):
+        logger.error(
+            "Runtime shutdown incomplete; retaining dependencies until worker exits"
+        )
+
+        async def close_after_worker() -> None:
+            await durable_worker.wait_stopped()
+            await close_runtime()
+
+        cleanup = asyncio.create_task(
+            close_after_worker(), name="deferred-runtime-shutdown"
+        )
+        _deferred_shutdown_tasks[durable_worker] = cleanup
+
+        def finish_deferred(task: asyncio.Task[None]) -> None:
+            _deferred_shutdown_tasks.pop(durable_worker, None)
+            if not task.cancelled():
+                error = task.exception()
+                if error is not None:
+                    logger.error(
+                        "Deferred runtime shutdown failed",
+                        extra={"error_type": type(error).__name__},
+                    )
+
+        cleanup.add_done_callback(finish_deferred)
+        return
+    await close_runtime()
 
 
 def _build_telegram_application_builder() -> Any:
@@ -136,8 +199,13 @@ async def _global_error_handler(update, context):
             await update.effective_message.reply_text(
                 "⚠️ Произошла внутренняя ошибка. Попробуйте позже."
             )
-    except Exception:
-        pass
+    # The failed handler is already recorded above; optional error-message UI
+    # must not prevent the separate admin notification from being attempted.
+    except Exception as notify_err:  # noqa: BLE001
+        logger.debug(
+            "Failed to notify user about handler error",
+            extra={"error_type": type(notify_err).__name__},
+        )
 
     # ── Notify admin ──────────────────────────────────────────────
     if not config.ADMIN_CHAT_ID:
@@ -179,12 +247,57 @@ async def _global_error_handler(update, context):
             text=report,
             parse_mode="HTML",
         )
-    except Exception as notify_err:
+    # Traceback formatting and Telegram delivery are optional error-reporting
+    # adapters; a reporting failure must not replace the original handler error.
+    except Exception as notify_err:  # noqa: BLE001
         logger.warning("Failed to send error report to admin: %s", notify_err)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Own the single bot runtime until ordinary or deferred cleanup finishes."""
+    global _active_lifespan
+    if _active_lifespan is not None:
+        raise RuntimeError("bot runtime is already active or shutting down")
+    owner = _LifespanOwner()
+    _active_lifespan = owner
+    try:
+        async with _lifespan_runtime(app, owner):
+            yield
+    finally:
+        cleanup = (
+            _deferred_shutdown_tasks.get(owner.worker)
+            if owner.worker is not None
+            else None
+        )
+        if cleanup is None:
+            _release_lifespan(owner)
+        else:
+
+            def finish_owner(task: asyncio.Task[None]) -> None:
+                if not task.cancelled() and task.exception() is None:
+                    _release_lifespan(owner)
+
+            if cleanup.done():
+                finish_owner(cleanup)
+            else:
+                cleanup.add_done_callback(finish_owner)
+
+
+def _release_lifespan(owner: _LifespanOwner) -> None:
+    global _active_lifespan
+    if owner.worker is not None and (
+        not owner.shutdown_returned or not owner.worker.shutdown_complete
+    ):
+        return
+    if _active_lifespan is owner:
+        _active_lifespan = None
+
+
+@asynccontextmanager
+async def _lifespan_runtime(
+    app: FastAPI, owner: _LifespanOwner
+) -> AsyncGenerator[None, None]:
     logger.info("Starting up...")
     logger.info("aria2c: %s", "enabled ✅" if state.ytdlp.has_aria2 else "not found ❌")
 
@@ -329,6 +442,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         drain_controller,
         process_durable_update,
     )
+    owner.worker = durable_worker
 
     try:
         # Acquire runtime resources only after synchronous application setup so
@@ -377,7 +491,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             redis_client=state.redis_client,
             drain_timeout_seconds=float(os.getenv("DRAIN_TIMEOUT_SECONDS", "30")),
         )
-        state.job_store = None
+        owner.shutdown_returned = True
 
 
 api = FastAPI(lifespan=lifespan)

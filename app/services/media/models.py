@@ -10,8 +10,8 @@ from enum import StrEnum
 from typing import Self
 from urllib.parse import parse_qs, quote, urlsplit
 
-
 YOUTUBE_SHORT_DEFAULT_VARIANT = "youtube-short-default"
+YOUTUBE_COMMAND_DEFAULT_VARIANT = "youtube-command-default"
 
 
 class MediaKind(StrEnum):
@@ -113,6 +113,8 @@ class MediaRequest:
             path_parts = [part for part in urlsplit(url).path.split("/") if part]
             if len(path_parts) >= 2 and path_parts[0] == "shorts":
                 output_variant = YOUTUBE_SHORT_DEFAULT_VARIANT
+            elif kind is MediaKind.VIDEO and caller_scope == "command":
+                output_variant = YOUTUBE_COMMAND_DEFAULT_VARIANT
         return cls(
             canonical_url=canonical_url,
             platform=platform,
@@ -323,10 +325,12 @@ def _parse_media_url(url: str) -> tuple[str, str, str, ClipInterval]:
     if not media_id or not _is_valid_youtube_id(media_id):
         raise UnsupportedMediaUrlError("unsupported or malformed YouTube media URL")
 
-    clip = ClipInterval(
-        start_seconds=_parse_time(_first_query_value(query, "t", "start")),
-        end_seconds=_parse_time(_first_query_value(query, "end")),
-    )
+    start = _parse_time(_first_query_value(query, "t", "start"))
+    end = _parse_time(_first_query_value(query, "end"))
+    try:
+        clip = ClipInterval(start_seconds=start, end_seconds=end)
+    except ValueError as error:
+        raise UnsupportedMediaUrlError("invalid clip interval") from error
     canonical_url = f"https://www.youtube.com/watch?v={quote(media_id, safe='-_')}"
     return canonical_url, "youtube", media_id, clip
 

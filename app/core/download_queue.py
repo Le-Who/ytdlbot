@@ -53,6 +53,7 @@ class DownloadLease:
         self._kb_error = kb_error
         self._acquired = False
         self._released = False
+        self._release_task: asyncio.Task[None] | None = None
 
     def __await__(self) -> Generator[object, None, DownloadLease]:
         return self._enter().__await__()
@@ -77,10 +78,14 @@ class DownloadLease:
 
     async def release(self) -> None:
         """Return this lease once; repeated and concurrent calls are harmless."""
-        if not self._acquired or self._released:
+        if not self._acquired:
             return
-        self._released = True
-        await self._queue._release_slot()
+        if self._release_task is None:
+            self._released = True
+            self._release_task = asyncio.create_task(self._queue._release_slot())
+        # Release belongs to the lease, not to any one caller. Cancellation of
+        # a caller cannot abandon the slot while the queue lock is contended.
+        await asyncio.shield(self._release_task)
 
 
 class DownloadQueue:
@@ -220,7 +225,9 @@ class DownloadQueue:
         )
         try:
             await waiter.update_ui(text, None)
-        except Exception as exc:
+        # Caller-supplied UI callbacks are optional; queue ownership must survive
+        # any callback failure while cancellation continues to propagate.
+        except Exception as exc:  # noqa: BLE001
             logger.debug("Queue position update failed: %s", exc)
 
     @property

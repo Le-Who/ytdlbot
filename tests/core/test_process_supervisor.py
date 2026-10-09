@@ -206,7 +206,7 @@ async def test_token_cancels_long_gallery_dl_service_process(
 
     class GalleryProcessProxy:
         def run(self, _command, **kwargs):
-            output_dir = Path(tuple(kwargs["cleanup_paths"])[0])
+            output_dir = Path(next(iter(kwargs["cleanup_paths"])))
             script = (
                 "import pathlib,socket,time;"
                 f"pathlib.Path({str(output_dir / 'item.part')!r}).touch();"
@@ -381,7 +381,8 @@ async def test_windows_job_kills_child_after_group_leader_exits(tmp_path: Path):
             replacement.bind(("127.0.0.1", port))
     finally:
         if child_pid.exists():
-            subprocess.run(
+            # Failure cleanup must finish reaping the real test child before returning.
+            subprocess.run(  # noqa: ASYNC221
                 ["taskkill", "/F", "/T", "/PID", child_pid.read_text()],
                 capture_output=True,
                 check=False,

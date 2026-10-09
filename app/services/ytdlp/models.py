@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import Optional, List
 
 
 @dataclass(slots=True)
@@ -8,8 +7,8 @@ class FormatItem:
 
     format_id: str
     ext: str
-    height: Optional[int]
-    filesize: Optional[int]
+    height: int | None
+    filesize: int | None
     is_tiktok: bool = False
     protocol: str = ""
     format_note: str = ""
@@ -18,12 +17,12 @@ class FormatItem:
 @dataclass
 class ExtractionResult:
     title: str
-    formats: List[FormatItem]
-    special_format: Optional[FormatItem]
+    formats: list[FormatItem]
+    special_format: FormatItem | None
     duration_str: str
     is_slideshow: bool
-    info_json_path: Optional[str]
-    thumbnail_url: Optional[str]
+    info_json_path: str | None
+    thumbnail_url: str | None
     tiktok_auth_error: bool = False
     youtube_fallback: bool = False
 
@@ -49,8 +48,8 @@ class FormatMetadata:
 
     format_id: str
     ext: str
-    height: Optional[int]
-    filesize: Optional[int]
+    height: int | None
+    filesize: int | None
     protocol: str
     vcodec: str = "none"
     acodec: str = "none"

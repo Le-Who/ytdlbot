@@ -1,13 +1,15 @@
 import re
 from collections import OrderedDict
 from enum import Enum
-from typing import List, Dict, Any, Optional
+from typing import Any
+
 from app.constants import (
-    VIDEO_EXTENSIONS,
-    GIF_FORMAT_ID,
     AUDIO_FORMAT_ID,
+    GIF_FORMAT_ID,
     HEIGHT_PATTERN,
+    VIDEO_EXTENSIONS,
 )
+
 from .models import FormatItem, FormatMetadata
 
 HEIGHT_REGEX = re.compile(HEIGHT_PATTERN)
@@ -16,10 +18,20 @@ BYTES_IN_MB = 1024 * 1024
 BITRATE_COEFFICIENT = 128.0  # 1024 / 8
 
 _COMMON_HEIGHTS = {
-    "1080p": 1080, "1080p60": 1080, "1080p50": 1080,
-    "720p": 720, "720p60": 720, "720p50": 720,
-    "480p": 480, "360p": 360, "240p": 240, "144p": 144,
-    "tiny": None, "small": None, "medium": None, "large": None
+    "1080p": 1080,
+    "1080p60": 1080,
+    "1080p50": 1080,
+    "720p": 720,
+    "720p60": 720,
+    "720p50": 720,
+    "480p": 480,
+    "360p": 360,
+    "240p": 240,
+    "144p": 144,
+    "tiny": None,
+    "small": None,
+    "medium": None,
+    "large": None,
 }
 
 
@@ -87,20 +99,20 @@ def classify_tiktok_error(error_msg: str) -> TikTokError:
     msg = error_msg.lower()
     if "log in" in msg or "cookies" in msg or "sign in" in msg:
         return TikTokError.AUTH_REQUIRED
-    if "not available" in msg or "status code" in msg:
-        return TikTokError.AUTH_REQUIRED
     if "unsupported url" in msg:
         return TikTokError.SLIDESHOW
     if "403" in msg or "forbidden" in msg:
         return TikTokError.FORBIDDEN
     if "404" in msg or "not found" in msg:
         return TikTokError.NOT_FOUND
+    if "not available" in msg or "status code" in msg:
+        return TikTokError.AUTH_REQUIRED
     if "live" in msg and "available" not in msg:
         return TikTokError.LIVE
     return TikTokError.GENERIC
 
 
-def _format_duration(seconds: Optional[float]) -> str:
+def _format_duration(seconds: float | None) -> str:
     """Форматирует длительность в формат HH:MM:SS или MM:SS"""
     if not seconds:
         return "--:--"
@@ -110,13 +122,13 @@ def _format_duration(seconds: Optional[float]) -> str:
     return f"{h}:{m:02d}:{s:02d}" if h > 0 else f"{m:02d}:{s:02d}"
 
 
-def _extract_height(format_note: str) -> Optional[int]:
+def _extract_height(format_note: str) -> int | None:
     if not format_note:
         return None
-        
+
     if format_note in _COMMON_HEIGHTS:
         return _COMMON_HEIGHTS[format_note]
-        
+
     match = HEIGHT_REGEX.search(format_note)
     if match:
         return int(match.group(1))
@@ -124,8 +136,8 @@ def _extract_height(format_note: str) -> Optional[int]:
 
 
 def _calculate_filesize(
-    format_dict: Dict[str, Any], duration_factor: Optional[float]
-) -> Optional[int]:
+    format_dict: dict[str, Any], duration_factor: float | None
+) -> int | None:
     """Вычисляет размер файла используя pre-calculated duration factor"""
     fs = format_dict.get("filesize")
     if fs:
@@ -140,10 +152,10 @@ def _calculate_filesize(
 
 
 def parse_format_metadata(
-    format_dict: Dict[str, Any],
-    duration_factor: Optional[float],
+    format_dict: dict[str, Any],
+    duration_factor: float | None,
     is_tiktok_url: bool,
-) -> Optional[FormatMetadata]:
+) -> FormatMetadata | None:
     vcodec = format_dict.get("vcodec")
     acodec = format_dict.get("acodec")
 
@@ -228,8 +240,8 @@ def _score_format(f: FormatMetadata) -> int:
 
 
 def deduplicate_formats(
-    formats: List[FormatMetadata], is_tiktok_url: bool
-) -> List[FormatMetadata]:
+    formats: list[FormatMetadata], is_tiktok_url: bool
+) -> list[FormatMetadata]:
     if is_tiktok_url:
         # TikTok: dedup by filesize since heights are often identical
         unique = []
@@ -258,9 +270,7 @@ def deduplicate_formats(
         if not h:
             unique_formats.extend(fmts)
         else:
-            best_fmt = sorted(
-                fmts, key=lambda f: (_score_format(f), -pos[id(f)]), reverse=True
-            )[0]
+            best_fmt = max(fmts, key=lambda f: (_score_format(f), -pos[id(f)]))
             unique_formats.append(best_fmt)
 
     return unique_formats
@@ -285,7 +295,7 @@ def get_special_format(url: str) -> FormatItem:
         )
 
 
-def detect_tiktok_slideshow(info: Dict[str, Any], url: str) -> bool:
+def detect_tiktok_slideshow(info: dict[str, Any], url: str) -> bool:
     """
     Detects if a TikTok URL is a slideshow (image carousel) rather than a video.
 

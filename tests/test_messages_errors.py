@@ -15,15 +15,15 @@ class AsyncMockCache(dict):
         self.pop(key, None)
 
 
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.core import state
 from app.core.texts import Texts
 from app.services.ytdlp.exceptions import (
     AccessDeniedError,
-    VideoNotFoundError,
-    LiveStreamError,
     ExtractionError,
+    LiveStreamError,
+    VideoNotFoundError,
 )
 
 
@@ -133,9 +133,7 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         from app.bot.messages import on_message
 
         with patch("app.bot.messages.asyncio.timeout") as mock_timeout:
-            mock_timeout.return_value.__aenter__ = AsyncMock(
-                side_effect=asyncio.TimeoutError()
-            )
+            mock_timeout.return_value.__aenter__ = AsyncMock(side_effect=TimeoutError())
             await on_message(self.update, self.context)
 
         self.status_msg.edit_text.assert_awaited_with(Texts.TIMEOUT_UNAVAILABLE)

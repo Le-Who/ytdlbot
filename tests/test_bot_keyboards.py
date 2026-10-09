@@ -1,11 +1,9 @@
 import unittest
+from unittest.mock import MagicMock, patch
 
 # Ensure app can be imported
 from app.bot.keyboards import build_format_keyboard
 from app.services.ytdlp.models import FormatItem
-
-
-from unittest.mock import patch, MagicMock
 
 
 class TestBuildFormatKeyboard(unittest.TestCase):

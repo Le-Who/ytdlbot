@@ -36,6 +36,22 @@ def test_vertical_1080x1920_satisfies_1080_quality():
     ).usable
 
 
+def test_audio_request_preserves_visual_quality_without_rejecting_audio():
+    """Catches a retained visual request field imposing dimensions on audio."""
+    request = request_fixture(
+        kind=MediaKind.AUDIO, quality=QualityPolicy(1080), audio_format="mp3"
+    )
+    candidate = candidate_fixture(
+        kind=MediaKind.AUDIO,
+        width=None,
+        height=None,
+        has_video=False,
+        audio_formats=("mp3",),
+    )
+    assert validate_candidate(request, candidate).usable
+    assert request.quality.max_edge == 1080
+
+
 def test_rejected_candidate_has_machine_readable_reason():
     """Catches an opaque validation result when a candidate misses requested audio."""
     request = request_fixture(audio_language="uk")

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -16,6 +17,7 @@ from telegram.error import BadRequest, NetworkError
 from app import main as main_module
 from app.api import routes
 from app.bot import callbacks
+from app.core import drain as drain_module
 from app.core import state
 from app.core.job_store import (
     DeliveryOutcome,
@@ -211,6 +213,256 @@ async def test_shutdown_cleanup_continues_after_drain_and_worker_failures(monkey
     redis_client.aclose.assert_awaited_once()
     assert state.media_pipeline is None
     assert routes._job_store is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("replacement_runtime", [False, True, "overlap"])
+async def test_lifespan_retains_dependencies_while_cancelled_handler_is_still_alive(
+    tmp_path, monkeypatch, replacement_runtime
+):
+    """A bounded worker stop cannot close resources still used by its handler."""
+    monkeypatch.setattr(drain_module, "CLEANUP_TIMEOUT_SECONDS", 0.03)
+    monkeypatch.setenv("DRAIN_TIMEOUT_SECONDS", "0")
+    overlap_lifespan = replacement_runtime == "overlap"
+    replacement_runtime = replacement_runtime is True
+    entered = asyncio.Event()
+    finish = asyncio.Event()
+    dependencies_used = asyncio.Event()
+    created_workers = []
+    pipeline = object()
+    replacement_bot = object()
+    replacement_pipeline = object()
+    replacement_store = object()
+
+    class RecordingStore(JobStore):
+        closed = False
+        close_calls = 0
+
+        async def close(self):
+            self.closed = True
+            self.close_calls += 1
+            await super().close()
+
+    class Redis:
+        closed = False
+        close_calls = 0
+
+        async def ping(self):
+            # redis-py can reconnect at a later legitimate lifespan after close.
+            self.closed = False
+
+        async def aclose(self):
+            self.closed = True
+            self.close_calls += 1
+
+    class BotApp:
+        closed = False
+        stopped = False
+        stop_calls = 0
+        shutdown_calls = 0
+        initialized = False
+        updater = None
+        bot = SimpleNamespace(set_webhook=AsyncMock())
+
+        def add_handler(self, handler):
+            pass
+
+        def add_error_handler(self, handler):
+            pass
+
+        async def initialize(self):
+            self.initialized = True
+
+        async def start(self):
+            pass
+
+        async def stop(self):
+            self.stopped = True
+            self.stop_calls += 1
+
+        async def shutdown(self):
+            self.closed = True
+            self.shutdown_calls += 1
+
+        async def process_update(self, update):
+            entered.set()
+            while not finish.is_set():
+                try:
+                    await finish.wait()
+                except asyncio.CancelledError:
+                    continue
+            assert not self.closed and not self.stopped
+            assert not store.closed and not redis.closed
+            assert state.bot_app is (replacement_bot if replacement_runtime else self)
+            assert state.media_pipeline is (
+                replacement_pipeline if replacement_runtime else pipeline
+            )
+            assert state.job_store is (
+                replacement_store if replacement_runtime else store
+            )
+            assert routes._job_store is (
+                replacement_store if replacement_runtime else store
+            )
+            dependencies_used.set()
+
+    class RecordingWorker(main_module.DurableUpdateWorker):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            created_workers.append(self)
+
+    store = RecordingStore(tmp_path / "jobs.sqlite3")
+    await store.accept_update(UPDATE)
+    redis = Redis()
+    bot_app = BotApp()
+
+    async def background(stop_event):
+        await stop_event.wait()
+
+    monkeypatch.setattr(main_module, "JobStore", lambda: store)
+    monkeypatch.setattr(main_module, "DurableUpdateWorker", RecordingWorker)
+    monkeypatch.setattr(main_module, "janitor_loop", background)
+    monkeypatch.setattr(
+        main_module,
+        "_build_telegram_application_builder",
+        lambda: SimpleNamespace(build=lambda: bot_app),
+    )
+    monkeypatch.setattr(main_module.config, "WEBHOOK_URL", "https://bot.example")
+    monkeypatch.setattr(main_module.config, "TELEGRAM_LOCAL_ENDPOINT", None)
+    monkeypatch.setattr(state, "redis_client", redis)
+    monkeypatch.setattr(state, "job_store", None)
+    monkeypatch.setattr(state, "bot_app", None)
+    monkeypatch.setattr(state, "media_pipeline", None)
+    monkeypatch.setattr(
+        "app.services.media.pipeline.build_default_pipeline", lambda _: pipeline
+    )
+    try:
+        async with lifespan(FastAPI()):
+            await asyncio.wait_for(entered.wait(), 1)
+        worker = created_workers[0]
+        assert not bot_app.closed and not bot_app.stopped
+        assert not store.closed and not redis.closed
+        assert state.job_store is store
+        assert state.bot_app is bot_app
+        assert state.media_pipeline is pipeline
+        assert routes._job_store is store
+        assert not worker.shutdown_complete
+        successor_bot = None
+        successor_store = None
+        if overlap_lifespan:
+            successor_bot = BotApp()
+            successor_store = RecordingStore(store.path)
+            monkeypatch.setattr(main_module, "JobStore", lambda: successor_store)
+            monkeypatch.setattr(
+                main_module,
+                "_build_telegram_application_builder",
+                lambda: SimpleNamespace(build=lambda: successor_bot),
+            )
+            # Actual overlapping lifespan, same persistent SQLite and shared
+            # Redis. Rejection must precede all resource/binding acquisition.
+            with pytest.raises(RuntimeError):
+                async with lifespan(FastAPI()):
+                    raise AssertionError("overlapping runtime must not start")
+            assert not redis.closed and redis.close_calls == 0
+            await redis.ping()
+            assert state.bot_app is bot_app
+            assert state.job_store is store
+            assert state.media_pipeline is pipeline
+            assert routes._job_store is store
+            assert not bot_app.closed and not store.closed
+            assert not successor_bot.initialized and not successor_bot.closed
+            assert not successor_store._initialized and not successor_store.closed
+            assert len(created_workers) == 1
+        if replacement_runtime:
+            replacement_bot = BotApp()
+            replacement_store = RecordingStore(tmp_path / "replacement.sqlite3")
+            state.bot_app = replacement_bot
+            state.media_pipeline = replacement_pipeline
+            state.job_store = replacement_store
+            routes.configure_job_store(replacement_store)
+        finish.set()
+        await asyncio.wait_for(dependencies_used.wait(), 1)
+        async with asyncio.timeout(1):
+            while not worker.shutdown_complete:
+                await asyncio.sleep(0.005)
+            while not bot_app.closed:
+                await asyncio.sleep(0.005)
+        assert store.closed
+        assert bot_app.stop_calls == bot_app.shutdown_calls == 1
+        assert store.close_calls == 1
+        assert redis.close_calls == (0 if replacement_runtime else 1)
+        assert state.bot_app is (replacement_bot if replacement_runtime else None)
+        assert state.media_pipeline is (
+            replacement_pipeline if replacement_runtime else None
+        )
+        assert state.job_store is (replacement_store if replacement_runtime else None)
+        assert routes._job_store is (replacement_store if replacement_runtime else None)
+        if overlap_lifespan:
+            cleanup = main_module._deferred_shutdown_tasks.get(worker)
+            if cleanup is not None:
+                await cleanup
+            assert redis.close_calls == 1
+            # The rejected successor can acquire the runtime after the old
+            # handler and its deferred cleanup have actually finished.
+            successor_bot.process_update = AsyncMock()
+            async with lifespan(FastAPI()):
+                assert state.bot_app is successor_bot
+                assert state.job_store is successor_store
+                assert successor_bot.initialized
+                assert not redis.closed
+                assert len(created_workers) == 2
+            successor_worker = created_workers[-1]
+            await successor_worker.wait_stopped()
+            successor_cleanup = main_module._deferred_shutdown_tasks.get(
+                successor_worker
+            )
+            if successor_cleanup is not None:
+                await successor_cleanup
+            assert successor_bot.closed and successor_store.closed
+            # One close for each separate successful lifespan; denied overlap
+            # performed no close or other resource acquisition.
+            assert redis.close_calls == 2
+        if replacement_runtime:
+            # Lifespans adopt the same import-time Redis client. Old cleanup
+            # must leave it usable until the replacement runtime shuts down.
+            assert state.redis_client is redis
+            await redis.ping()
+            replacement_controller = drain_module.DrainController(replacement_store)
+            replacement_worker = RecordingWorker(
+                replacement_store,
+                replacement_controller,
+                lambda payload: asyncio.sleep(0),
+            )
+            await replacement_worker.start()
+            await shutdown_runtime(
+                drain_controller=replacement_controller,
+                durable_worker=replacement_worker,
+                stop_event=asyncio.Event(),
+                background_tasks=(),
+                bot_app=replacement_bot,
+                webhook_enabled=True,
+                job_store=replacement_store,
+                redis_client=redis,
+                drain_timeout_seconds=0,
+            )
+            await replacement_worker.wait_stopped()
+            async with asyncio.timeout(1):
+                while not replacement_bot.closed or not redis.closed:
+                    await asyncio.sleep(0.005)
+            assert replacement_bot.closed and replacement_store.closed
+            assert redis.closed and redis.close_calls == 1
+            assert state.bot_app is state.job_store is state.media_pipeline is None
+            assert routes._job_store is None
+    finally:
+        finish.set()
+        for worker in created_workers:
+            if worker._task is not None:
+                await asyncio.gather(worker._task, return_exceptions=True)
+            await worker.stop()
+            await worker.wait_stopped()
+            cleanup = main_module._deferred_shutdown_tasks.get(worker)
+            if cleanup is not None:
+                await asyncio.gather(cleanup, return_exceptions=True)
+        routes.configure_job_store(None)
 
 
 @pytest.mark.asyncio
@@ -561,6 +813,73 @@ async def test_cached_gif_network_error_is_uncertain_without_generated_fallback(
 
 
 @pytest.mark.asyncio
+async def test_cached_gif_receipt_write_failure_propagates_without_regeneration(
+    tmp_path, monkeypatch
+):
+    class FailingFinalizationStore(JobStore):
+        def _finalize_delivery_attempt_sync(self, *args, **kwargs):
+            raise sqlite3.OperationalError("synthetic receipt write failure")
+
+    store = FailingFinalizationStore(tmp_path / "jobs.sqlite3")
+    await store.accept_update({"update_id": 901})
+    claimed = await store.claim_next("worker-a")
+    assert claimed is not None
+    token = "cached-gif-receipt-failure"
+    sent = SimpleNamespace(
+        message_id=95, document=SimpleNamespace(file_id="cached-fid")
+    )
+    bot = MagicMock()
+    bot.send_document = AsyncMock(return_value=sent)
+    bot.get_file = AsyncMock(
+        side_effect=AssertionError("receipt write failure must not recover a source")
+    )
+    update, context = gif_callback(token, bot)
+    file_cache = MagicMock(spec=dict)
+    file_cache.get.return_value = None
+    convert = AsyncMock(
+        side_effect=AssertionError("receipt write failure must not regenerate a GIF")
+    )
+    monkeypatch.setattr(state, "link_cache", AsyncCache())
+    monkeypatch.setattr(
+        state, "gifdoc_cache", AsyncCache({f"gifdoc:{token}": "cached-fid"})
+    )
+    monkeypatch.setattr(state, "file_cache", file_cache)
+    monkeypatch.setattr(
+        "app.services.converter.MediaConverter.convert_to_native_gif", convert
+    )
+
+    with (
+        delivery_job_context(store, claimed.id, owner_id="worker-a"),
+        pytest.raises(
+            sqlite3.OperationalError, match="synthetic receipt write failure"
+        ),
+    ):
+        await callbacks.on_save_as_gif_file(update, context)
+
+    assert bot.send_document.await_count == 1
+    key = f"gif-document:42:gifdoc:{token}"
+    assert (
+        await store.delivery_outcome(claimed.id, item_key=key)
+        is DeliveryOutcome.UNCERTAIN
+    )
+    file_cache.get.assert_not_called()
+    bot.get_file.assert_not_awaited()
+    convert.assert_not_awaited()
+    update.callback_query.message.reply_text.assert_not_awaited()
+    # The initial spinner is allowed; no done/error/restored button follows the failure.
+    update.callback_query.message.edit_reply_markup.assert_awaited_once()
+
+    # Reservation uncertainty remains authoritative despite the finalization fault.
+    with delivery_job_context(store, claimed.id, owner_id="worker-a"):
+        outcome, replay_sent = await callbacks._send_gif_document_durable(
+            bot, key, chat_id=42, document="cached-fid"
+        )
+    assert outcome is DeliveryOutcome.UNCERTAIN
+    assert replay_sent is None
+    assert bot.send_document.await_count == 1
+
+
+@pytest.mark.asyncio
 async def test_generated_gif_network_error_is_uncertain_and_not_replayed(
     tmp_path, monkeypatch
 ):
@@ -593,6 +912,72 @@ async def test_generated_gif_network_error_is_uncertain_and_not_replayed(
     with delivery_job_context(store, recovered.id, owner_id="worker-b"):
         await callbacks.on_save_as_gif_file(update, context)
 
+    assert bot.send_document.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_generated_gif_receipt_write_failure_propagates_and_cleans_owned_output(
+    tmp_path, monkeypatch
+):
+    class FailingFinalizationStore(JobStore):
+        def _finalize_delivery_attempt_sync(self, *args, **kwargs):
+            raise sqlite3.OperationalError("synthetic receipt write failure")
+
+    store = FailingFinalizationStore(tmp_path / "jobs.sqlite3")
+    await store.accept_update({"update_id": 902})
+    claimed = await store.claim_next("worker-a")
+    assert claimed is not None
+    token = "generated-gif-receipt-failure"
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"synthetic input video")
+    generated = tmp_path / "generated.gif"
+    generated.write_bytes(b"GIF89a")
+    sent = SimpleNamespace(
+        message_id=96, document=SimpleNamespace(file_id="generated-fid")
+    )
+    bot = MagicMock()
+    bot.send_document = AsyncMock(return_value=sent)
+    update, context = gif_callback(token, bot)
+    gifdoc_cache = AsyncCache()
+    processing = set()
+    convert = AsyncMock(return_value=str(generated))
+    monkeypatch.setattr(state, "link_cache", AsyncCache())
+    monkeypatch.setattr(state, "gifdoc_cache", gifdoc_cache)
+    monkeypatch.setattr(state, "file_cache", {token: str(source)})
+    monkeypatch.setattr(state, "processing_gifs", processing)
+    monkeypatch.setattr(state, "gif_file_sem", asyncio.Semaphore(1))
+    monkeypatch.setattr(
+        "app.services.converter.MediaConverter.convert_to_native_gif", convert
+    )
+
+    with (
+        delivery_job_context(store, claimed.id, owner_id="worker-a"),
+        pytest.raises(
+            sqlite3.OperationalError, match="synthetic receipt write failure"
+        ),
+    ):
+        await callbacks.on_save_as_gif_file(update, context)
+
+    assert bot.send_document.await_count == 1
+    key = f"gif-document:42:gifdoc:{token}"
+    assert (
+        await store.delivery_outcome(claimed.id, item_key=key)
+        is DeliveryOutcome.UNCERTAIN
+    )
+    convert.assert_awaited_once_with(str(source))
+    assert not generated.exists()
+    assert source.read_bytes() == b"synthetic input video"
+    assert processing == set()
+    assert gifdoc_cache == {}
+    update.callback_query.message.reply_text.assert_not_awaited()
+    update.callback_query.message.edit_reply_markup.assert_awaited_once()
+
+    with delivery_job_context(store, claimed.id, owner_id="worker-a"):
+        outcome, replay_sent = await callbacks._send_gif_document_durable(
+            bot, key, chat_id=42, document="generated-fid"
+        )
+    assert outcome is DeliveryOutcome.UNCERTAIN
+    assert replay_sent is None
     assert bot.send_document.await_count == 1
 
 

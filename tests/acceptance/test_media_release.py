@@ -320,8 +320,7 @@ def _validate_evidence(evidence: dict[str, Any], case_kinds: dict[str, str]) -> 
             run["independent_route"]["capability"] == "available" for run in cohort
         )
         assert (
-            summary["independent_route_measurement_complete"]
-            is expected_route_complete
+            summary["independent_route_measurement_complete"] is expected_route_complete
         )
         assert summary["independent_route_measurement_complete"], (
             "release comparison fails closed when provider-attempt telemetry "

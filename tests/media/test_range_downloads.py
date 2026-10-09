@@ -6,21 +6,21 @@ import pytest
 
 from app.services.media.models import MediaRequest
 from app.services.media.providers.ytdlp import YtDlpProvider, _source
+from app.services.media.proxies import MediaProxyPool
 from app.services.media.transport import (
     CurlStreamingClient,
     DownloadFailed,
     MediaTransport,
-    URLPolicy,
     UnsafeMediaURL,
+    URLPolicy,
 )
-from app.services.media.proxies import MediaProxyPool
 from tests.media.providers.test_ytdlp_provider import metadata
 from tests.media.test_transport import (
     FakeClient,
     FakeResponse,
     Resolver,
-    source_candidate,
     request,
+    source_candidate,
 )
 
 

@@ -23,8 +23,8 @@ from unittest.mock import MagicMock, patch
 from telegram import Message
 
 from app.bot import callbacks
-from app.core import state
 from app.constants import SLIDESHOW_PHOTO_FORMAT_ID, SLIDESHOW_VIDEO_FORMAT_ID
+from app.core import state
 from app.services.gallery_dl.service import SlideshowResult
 
 
@@ -39,6 +39,7 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
         state.api_sem = asyncio.Semaphore(10)
         # Reset queues each test
         from app.core.download_queue import DownloadQueue
+
         state.download_queue = DownloadQueue(state.download_sem, max_queue_size=15)
         state.api_queue = DownloadQueue(state.api_sem, max_queue_size=15)
         state.parsing_sem = MagicMock()
@@ -175,6 +176,7 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
         self.update.callback_query.data = f"slideshow|{SLIDESHOW_PHOTO_FORMAT_ID}"
         # Replace download_queue with one that rejects immediately (queue cap = 0)
         from app.core.download_queue import DownloadQueue
+
         full_sem = asyncio.Semaphore(0)
         state.download_queue = DownloadQueue(full_sem, max_queue_size=0)
 

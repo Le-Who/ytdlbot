@@ -115,9 +115,7 @@ def _request() -> MediaRequest:
 
 
 def _candidate() -> MediaCandidate:
-    item = MediaItem(
-        "metrics01", MediaKind.VIDEO, "https://cdn.example/video.mp4"
-    )
+    item = MediaItem("metrics01", MediaKind.VIDEO, "https://cdn.example/video.mp4")
     return MediaCandidate(
         candidate_id="metrics-720",
         url=item.url,
@@ -245,9 +243,7 @@ def test_metrics_endpoint_refreshes_runtime_queue_orphan_and_profile_gauges(
     monkeypatch.setattr(routes.config, "APP_RELEASE", "sha-metrics")
     monkeypatch.setattr(routes.config, "MAX_MEDIA_FILE_MB", 2_000)
     monkeypatch.setattr(routes.config, "TELEGRAM_CLOUD_MAX_FILE_MB", 50)
-    monkeypatch.setattr(
-        routes.config, "TELEGRAM_LOCAL_ENDPOINT", "http://tg-api:8081"
-    )
+    monkeypatch.setattr(routes.config, "TELEGRAM_LOCAL_ENDPOINT", "http://tg-api:8081")
 
     with TestClient(app) as client:
         response = client.get("/metrics")
@@ -273,7 +269,10 @@ async def test_pipeline_records_resolve_materialize_deliver_result_and_provider_
     path = tmp_path / "video.mp4"
     path.write_bytes(b"\x00\x00\x00\x18ftypisom")
     materialized = MaterializedItem(
-        (path,), path.stat().st_size, candidate, _Reservation()  # type: ignore[arg-type]
+        (path,),
+        path.stat().st_size,
+        candidate,
+        _Reservation(),  # type: ignore[arg-type]
     )
     provider = _Provider(candidate)
     transport = _Transport(materialized)
@@ -287,9 +286,7 @@ async def test_pipeline_records_resolve_materialize_deliver_result_and_provider_
     receipt = await pipeline.deliver(_request(), DeliveryTarget("42"))
 
     assert receipt.success
-    phases = {
-        labels["phase"] for labels, _, _ in collector.pipeline_duration.collect()
-    }
+    phases = {labels["phase"] for labels, _, _ in collector.pipeline_duration.collect()}
     assert {"resolve", "materialize", "deliver", "total"} <= phases
     assert collector.pipeline_results.collect() == [
         ({"platform": "youtube", "status": "success"}, 1.0)
@@ -384,9 +381,7 @@ async def test_delivery_retry_and_transport_waste_and_transcode_are_recorded(
             _Reservation(),  # type: ignore[arg-type]
         )
 
-    winner, _ = await transport._race_small(
-        candidates, attempt, transport.clock() + 1
-    )
+    winner, _ = await transport._race_small(candidates, attempt, transport.clock() + 1)
     assert winner is not None
     await winner.release(delete=True)
     await transport._run_transform(
@@ -445,7 +440,9 @@ async def test_first_byte_latency_ignores_empty_chunks_and_has_bounded_labels(
 
     class Response:
         status_code = 200
-        headers = {"content-type": "video/mp4"}
+
+        def __init__(self):
+            self.headers = {"content-type": "video/mp4"}
 
         async def iter_bytes(self, chunk_size: int):
             del chunk_size
@@ -489,7 +486,9 @@ async def test_failed_stream_counts_partial_wasted_bytes_with_bounded_labels(
 
     class Response:
         status_code = 200
-        headers = {"content-type": "video/mp4"}
+
+        def __init__(self):
+            self.headers = {"content-type": "video/mp4"}
 
         async def iter_bytes(self, chunk_size: int):
             del chunk_size
@@ -531,7 +530,9 @@ async def test_cancelled_stream_counts_partial_wasted_bytes_before_cleanup(
 
     class Response:
         status_code = 200
-        headers = {"content-type": "video/mp4"}
+
+        def __init__(self):
+            self.headers = {"content-type": "video/mp4"}
 
         async def iter_bytes(self, chunk_size: int):
             del chunk_size

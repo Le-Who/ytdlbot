@@ -40,6 +40,7 @@ class TestCallbacksExceptions(unittest.IsolatedAsyncioTestCase):
         state.download_sem = asyncio.Semaphore(5)
         state.api_sem = asyncio.Semaphore(10)
         from app.core.download_queue import DownloadQueue
+
         state.download_queue = DownloadQueue(state.download_sem, max_queue_size=15)
         state.api_queue = DownloadQueue(state.api_sem, max_queue_size=15)
 

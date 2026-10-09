@@ -92,6 +92,7 @@ def _observation(*, successful: bool = True, cache_hit: bool = False) -> dict[st
         "correlated_events": [
             "webhook-accepted",
             "job-completed" if successful else "job-failed",
+            "delivery-success" if successful else "delivery-failed",
         ],
     }
 
@@ -143,6 +144,30 @@ class FakeAdapter:
     def cancel(self, correlation_id: str) -> bool:
         self.cancelled.append(correlation_id)
         return True
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        ["webhook-accepted", "job-completed"],
+        ["webhook-accepted", "job-completed", "delivery-success", "delivery-failed"],
+        ["webhook-accepted", "job-completed", "delivery-success", "delivery-uncertain"],
+        ["webhook-accepted", "job-completed", "delivery-success", "job-failed"],
+    ],
+)
+def test_success_counters_cannot_override_missing_or_contradictory_delivery_proof(
+    collector: Any,
+    events: list[str],
+) -> None:
+    observation = _observation()
+    observation["correlated_events"] = events
+    run = collector._run_from_observation(
+        case=collector.CaseSpec("short-01", "short", "https://invalid.example"),
+        cache_state="cold",
+        observation=observation,
+    )
+    assert run["full_delivery"] is False
+    assert run["failure_stage"] == "deliver"
 
 
 class LegacySmokeAdapter(FakeAdapter):
@@ -415,6 +440,207 @@ def test_candidate_smoke_rejects_mismatched_resume_before_external_work(
         )
 
     assert resumed.calls == []
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "root-extra",
+        "run-extra",
+        "nested-extra",
+        "reconciliation-extra",
+        "malformed-run",
+        "invalid-identity",
+        "nonfinite-run",
+    ],
+)
+@pytest.mark.parametrize("operation", ["smoke", "resume", "finalize"])
+def test_untrusted_window_fields_fail_before_publishing_or_more_work(
+    collector: Any,
+    tmp_path: Path,
+    mutation: str,
+    operation: str,
+) -> None:
+    paths = []
+    for index in range(1, 4 if operation == "finalize" else 2):
+        output = tmp_path / f"window-{index}.json"
+        collector.collect_window(
+            manifest_path=MANIFEST_PATH,
+            output_path=output,
+            window_id=f"window-{index}",
+            release_sha="a" * 40,
+            adapter=FakeAdapter(),
+            correlation_prefix="release-proof",
+            timeout_seconds=3,
+            collected_at=f"2026-09-2{index}T12:00:00Z",
+            plan="full" if operation == "finalize" else "smoke",
+        )
+        paths.append(output)
+    state = json.loads(paths[0].read_text(encoding="utf-8"))
+    synthetic = "https://synthetic.invalid/?token=fixture-only"
+    if mutation == "root-extra":
+        state["raw_url"] = synthetic
+    elif mutation == "run-extra":
+        state["runs"][0]["raw_url"] = synthetic
+    elif mutation == "nested-extra":
+        state["runs"][0]["measurement"]["first_byte"]["raw_url"] = synthetic
+    elif mutation == "reconciliation-extra":
+        state["reconciliations"] = [{"raw_url": synthetic}]
+    elif mutation == "malformed-run":
+        state["runs"][0]["latency_seconds"]["deliver"] = "fixture-only"
+    elif mutation == "nonfinite-run":
+        state["runs"][0]["process_cpu_seconds"] = float("inf")
+    else:
+        state["image_reference"] = synthetic
+    paths[0].write_text(json.dumps(state), encoding="utf-8")
+    unchanged = paths[0].read_bytes()
+    report = tmp_path / "published.json"
+    adapter = FakeAdapter()
+    with pytest.raises(collector.EvidenceValidationError):
+        if operation == "smoke":
+            collector.finalize_smoke(
+                window_path=paths[0],
+                output_path=report,
+                collected_at="2026-09-25T12:00:00Z",
+            )
+        elif operation == "resume":
+            collector.collect_window(
+                manifest_path=MANIFEST_PATH,
+                output_path=paths[0],
+                window_id="window-1",
+                release_sha="a" * 40,
+                adapter=adapter,
+                correlation_prefix="release-proof",
+                timeout_seconds=3,
+                collected_at="2026-09-25T12:00:00Z",
+                plan="smoke",
+            )
+        else:
+            collector.finalize_evidence(
+                manifest_path=MANIFEST_PATH,
+                schema_path=SCHEMA_PATH,
+                window_paths=paths,
+                output_path=report,
+                collected_at="2026-09-25T12:00:00Z",
+            )
+    assert adapter.calls == []
+    assert paths[0].read_bytes() == unchanged
+    assert not report.exists()
+
+
+def test_sanitized_window_without_optional_plan_remains_resumable(
+    collector: Any,
+    tmp_path: Path,
+) -> None:
+    output = _collect(collector, tmp_path, FakeAdapter())
+    state = json.loads(output.read_text(encoding="utf-8"))
+    del state["plan"]
+    output.write_text(json.dumps(state), encoding="utf-8")
+    adapter = FakeAdapter()
+    _collect(collector, tmp_path, adapter)
+    assert adapter.calls == []
+
+
+@pytest.mark.parametrize(
+    "mutation", ["root", "run", "nested", "reconciliation", "in-flight"]
+)
+def test_invalid_resume_is_rejected_before_every_adapter_boundary(
+    collector: Any, tmp_path: Path, mutation: str
+) -> None:
+    output = tmp_path / "window.json"
+    kwargs = {
+        "manifest_path": MANIFEST_PATH,
+        "output_path": output,
+        "window_id": "window-1",
+        "release_sha": "a" * 40,
+        "correlation_prefix": "release-proof",
+        "timeout_seconds": 3,
+        "collected_at": "2026-09-25T12:00:00Z",
+        "plan": "smoke",
+    }
+    collector.collect_window(adapter=FakeAdapter(), **kwargs)
+    state = json.loads(output.read_text(encoding="utf-8"))
+    synthetic = "https://synthetic.invalid/?token=fixture-only"
+    if mutation == "root":
+        state["raw_url"] = synthetic
+    elif mutation == "run":
+        state["runs"][0]["raw_url"] = synthetic
+    elif mutation == "nested":
+        state["runs"][0]["measurement"]["first_byte"]["raw_url"] = synthetic
+    elif mutation == "reconciliation":
+        state["reconciliations"] = [{"raw_url": synthetic}]
+    else:
+        state["in_flight"] = {
+            "case_id": "short-01",
+            "kind": "short",
+            "cache_state": "cold",
+            "correlation_id": "release-proof:window-1:short-01:cold",
+            "update_id": 1234567890,
+            "reserved_at": "2026-09-25T12:00:00Z",
+            "state": "IN_FLIGHT",
+            "raw_url": synthetic,
+        }
+    output.write_text(json.dumps(state), encoding="utf-8")
+    unchanged = output.read_bytes()
+
+    class DeniedAdapter:
+        def __init__(self) -> None:
+            self.boundaries: list[str] = []
+
+        def deny(self, boundary: str) -> Any:
+            self.boundaries.append(boundary)
+            raise AssertionError(f"invalid saved state reached adapter {boundary}")
+
+        def identity(self) -> Any:
+            return self.deny("identity/preflight")
+
+        def evict_case(self, case: Any) -> Any:
+            return self.deny("evict-case")
+
+        def observe(self, **kwargs: Any) -> Any:
+            return self.deny("observe")
+
+        def observe_isolated(self, **kwargs: Any) -> Any:
+            return self.deny("observe-isolated")
+
+        def cancel(self, correlation_id: str) -> Any:
+            return self.deny("cancel")
+
+    adapter = DeniedAdapter()
+    with pytest.raises(collector.EvidenceValidationError):
+        collector.collect_window(adapter=adapter, **kwargs)
+    assert adapter.boundaries == []
+    assert output.read_bytes() == unchanged
+
+
+@pytest.mark.parametrize("release_changed", [False, True])
+def test_valid_resume_still_verifies_live_adapter_identity(
+    collector: Any, tmp_path: Path, release_changed: bool
+) -> None:
+    output = _collect(collector, tmp_path, FakeAdapter())
+    unchanged = output.read_bytes()
+
+    class RecordedIdentity(FakeAdapter):
+        def __init__(self) -> None:
+            super().__init__()
+            self.identity_calls = 0
+
+        def identity(self) -> dict[str, Any]:
+            self.identity_calls += 1
+            identity = super().identity()
+            if release_changed:
+                identity["release"] = "b" * 40
+            return identity
+
+    adapter = RecordedIdentity()
+    if release_changed:
+        with pytest.raises(collector.EvidenceValidationError, match="release identity"):
+            _collect(collector, tmp_path, adapter)
+    else:
+        _collect(collector, tmp_path, adapter)
+    assert adapter.identity_calls == 1
+    assert adapter.calls == []
+    assert output.read_bytes() == unchanged
 
 
 def test_legacy_smoke_crash_keeps_reservation_and_never_resubmits(

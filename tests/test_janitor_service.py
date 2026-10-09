@@ -1,10 +1,11 @@
 """Tests for app.tasks.janitor — cleanup_temp_dir and janitor_loop."""
 
+import asyncio
 import os
 import time
-import asyncio
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
+
 from app.tasks.janitor import cleanup_temp_dir, janitor_loop
 
 
@@ -56,7 +57,7 @@ class TestCleanupTempDir(unittest.TestCase):
         with open(path, "w") as f:
             f.write("x")
 
-        deleted, orphan = cleanup_temp_dir()
+        deleted, _orphan = cleanup_temp_dir()
         self.assertEqual(deleted, 0)
         self.assertTrue(os.path.exists(path))
 
@@ -68,7 +69,7 @@ class TestCleanupTempDir(unittest.TestCase):
         old_time = time.time() - 100
         os.utime(path, (old_time, old_time))
 
-        deleted, orphan = cleanup_temp_dir()
+        deleted, _orphan = cleanup_temp_dir()
         self.assertEqual(deleted, 1)
 
     def test_ignores_non_matching_files(self):
@@ -79,7 +80,7 @@ class TestCleanupTempDir(unittest.TestCase):
         old_time = time.time() - 100
         os.utime(path, (old_time, old_time))
 
-        deleted, orphan = cleanup_temp_dir()
+        deleted, _orphan = cleanup_temp_dir()
         self.assertEqual(deleted, 0)
         self.assertTrue(os.path.exists(path))
 
@@ -93,14 +94,14 @@ class TestCleanupTempDir(unittest.TestCase):
         old_time = time.time() - 100
         os.utime(dir_path, (old_time, old_time))
 
-        deleted, orphan = cleanup_temp_dir()
+        deleted, _orphan = cleanup_temp_dir()
         self.assertEqual(deleted, 1)
         self.assertFalse(os.path.exists(dir_path))
 
     def test_nonexistent_temp_dir(self):
         """Nonexistent TEMP_DIR returns zeros without error."""
         with patch("app.tasks.janitor.TEMP_DIR", "/nonexistent/dir"):
-            deleted, orphan = cleanup_temp_dir()
+            deleted, _orphan = cleanup_temp_dir()
             self.assertEqual(deleted, 0)
 
 
@@ -108,13 +109,24 @@ class TestJanitorLoop(unittest.IsolatedAsyncioTestCase):
     """Test janitor_loop stops on event."""
 
     async def test_loop_stops_on_event(self):
-        """janitor_loop exits when stop_event is set."""
+        """An actual maintenance cycle runs before the stop event ends the loop."""
         stop = asyncio.Event()
-        stop.set()  # Immediately stop
 
-        with patch("app.tasks.janitor.cleanup_temp_dir", return_value=(0, 0)):
-            with patch("app.tasks.janitor.JANITOR_INTERVAL_SECONDS", 0.01):
-                await janitor_loop(stop)  # Should return immediately
+        async def disk_check():
+            stop.set()
+
+        with (
+            patch(
+                "app.tasks.janitor.cleanup_media_dirs", return_value=(2, 1)
+            ) as cleanup,
+            patch(
+                "app.tasks.janitor.check_disk_space", AsyncMock(side_effect=disk_check)
+            ) as check,
+        ):
+            await asyncio.wait_for(janitor_loop(stop), timeout=1)
+
+        cleanup.assert_called_once()
+        check.assert_awaited_once()
 
 
 if __name__ == "__main__":

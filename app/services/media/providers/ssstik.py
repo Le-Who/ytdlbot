@@ -65,9 +65,7 @@ class SSSTikProvider:
         payload[form.url_field or "id"] = request.canonical_url
         post_url = urljoin(f"{self.endpoint.origin}/", form.action)
         if not same_origin(self.endpoint.origin, post_url):
-            raise ProviderError(
-                FailureKind.CONFIG, "SSSTik form action changed origin"
-            )
+            raise ProviderError(FailureKind.CONFIG, "SSSTik form action changed origin")
         cookie = _session_cookie(index.headers)
         post_headers = dict(headers)
         if cookie:
@@ -86,9 +84,7 @@ class SSSTikProvider:
             raise ProviderError(FailureKind.TRANSIENT, "SSSTik returned no ready link")
         candidates: list[MediaCandidate] = []
         for index_number, (url, label) in enumerate(parser.links):
-            await probe_candidate(
-                self._transport, url, wall_clock=self._wall_clock
-            )
+            await probe_candidate(self._transport, url, wall_clock=self._wall_clock)
             quality = _quality_label(label)
             kind = _kind_from_url(url)
             item = MediaItem(request.media_id, kind, url, container=_extension(url))
@@ -99,7 +95,9 @@ class SSSTikProvider:
                     has_video=kind in {MediaKind.VIDEO, MediaKind.ANIMATION},
                     has_audio=kind is MediaKind.VIDEO,
                     container=item.container,
-                    sources=(MediaSource(str(index_number), url, container=item.container),),
+                    sources=(
+                        MediaSource(str(index_number), url, container=item.container),
+                    ),
                     provider=self.name,
                     backend_family=self.backend_family,
                     media_id=request.media_id,
@@ -122,9 +120,7 @@ class _FormParser(HTMLParser):
         self.url_field: str | None = None
         self._in_form = False
 
-    def handle_starttag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         values = dict(attrs)
         if tag == "form" and self.action is None:
             self._in_form = True
@@ -150,9 +146,7 @@ class _DownloadParser(HTMLParser):
         self._href: str | None = None
         self._label: list[str] = []
 
-    def handle_starttag(
-        self, tag: str, attrs: list[tuple[str, str | None]]
-    ) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         if tag != "a":
             return
         values = dict(attrs)

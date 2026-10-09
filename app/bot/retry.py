@@ -114,7 +114,9 @@ async def _finish_retry(
         await polling_store.record_delivery(f"retry:{token}", outcome)
     try:
         await state.link_cache.delete(f"retry:{token}")
-    except Exception as error:
+    # Cache backends are extensible; cleanup cannot undo durable/in-process
+    # completion, and the diagnostic deliberately exposes only the error type.
+    except Exception as error:  # noqa: BLE001
         logger.warning(
             "retry cache cleanup failed", extra={"error_type": type(error).__name__}
         )
@@ -162,8 +164,9 @@ async def _offer_slideshow(saved: RetryRequest, status: Message) -> bool:
             section=section,
         ),
     )
-    from app.bot.keyboards import build_slideshow_keyboard
     from telegram import InlineKeyboardButton
+
+    from app.bot.keyboards import build_slideshow_keyboard
 
     if request.caller_scope == "group":
         markup = InlineKeyboardMarkup(
@@ -314,14 +317,16 @@ async def on_retry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _finish_retry(token, polling_store)
         try:
             await status.delete()
-        except Exception:
+        # The retry is finalized before optional Telegram UI cleanup.
+        except Exception:  # noqa: BLE001, S110
             pass
         if saved.source_message_id is not None:
             try:
                 await context.bot.delete_message(
                     chat_id=saved.chat_id, message_id=saved.source_message_id
                 )
-            except Exception:
+            # Deleting the original UI must not invalidate completed delivery.
+            except Exception:  # noqa: BLE001, S110
                 pass
     finally:
         _active_retries.discard(token)

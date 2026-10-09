@@ -10,16 +10,16 @@ Changes from v1:
 - Image extraction for carousels (og:image) for non-video pins
 """
 
-import os
-import uuid
-import logging
 import asyncio
+import logging
+import os
+import re
 import time
+import uuid
 from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Optional, Tuple, List
+from typing import TYPE_CHECKING
 
 from curl_cffi.requests import AsyncSession
-import re
 
 from app.core.config import TEMP_DIR
 from app.core.utils import safe_remove
@@ -50,9 +50,8 @@ class PinterestProvider:
     def __init__(
         self,
         *,
-        extract: Callable[
-            [str], Awaitable[tuple[Optional[str], Optional[str]]]
-        ] | None = None,
+        extract: Callable[[str], Awaitable[tuple[str | None, str | None]]]
+        | None = None,
         transport: HttpTransport | None = None,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
@@ -70,6 +69,7 @@ class PinterestProvider:
             MediaKind,
             MediaSource,
         )
+
         if not self.supports(request):
             return []
         try:
@@ -94,9 +94,7 @@ class PinterestProvider:
             kind = MediaKind.PHOTO
             path = url.split("?", 1)[0]
             container = path.rsplit(".", 1)[-1].lower() if "." in path else None
-        await probe_candidate(
-            self._transport, url, wall_clock=self._wall_clock
-        )
+        await probe_candidate(self._transport, url, wall_clock=self._wall_clock)
         item = MediaItem(request.media_id, kind, url, container=container)
         return [
             MediaCandidate(
@@ -119,7 +117,7 @@ class PinterestProvider:
 
 class PinterestNativeService:
     @staticmethod
-    async def extract_media_url(url: str) -> Tuple[Optional[str], Optional[str]]:
+    async def extract_media_url(url: str) -> tuple[str | None, str | None]:
         """Scrape the og:video or og:image using a fast curl_cffi GET request.
 
         Returns:
@@ -132,7 +130,7 @@ class PinterestNativeService:
             return None, None
 
     @staticmethod
-    async def resolve_media_url(url: str) -> Tuple[Optional[str], Optional[str]]:
+    async def resolve_media_url(url: str) -> tuple[str | None, str | None]:
         """Strict native boundary used by the provider contract."""
         try:
             async with AsyncSession() as session:
@@ -168,7 +166,7 @@ class PinterestNativeService:
         return _parse_native_media(html)
 
     @staticmethod
-    async def download_video(url: str) -> Tuple[Optional[str], Optional[str]]:
+    async def download_video(url: str) -> tuple[str | None, str | None]:
         """
         Extract direct MP4 and download it via chunked streaming.
         Tier 1: Native OG Scraper (video)
@@ -198,7 +196,7 @@ class PinterestNativeService:
         return await _cobalt_fallback(url)
 
     @staticmethod
-    async def download_carousel(url: str) -> Tuple[Optional[List[str]], Optional[str]]:
+    async def download_carousel(url: str) -> tuple[list[str] | None, str | None]:
         """
         Attempt to download a Pinterest carousel via Cobalt's picker response.
         Returns (list_of_image_paths, error_message) or (None, error).
@@ -214,7 +212,7 @@ class PinterestNativeService:
             if not image_urls:
                 return None, "Cobalt picker returned empty items"
 
-            paths: List[Optional[str]] = [None] * len(image_urls)
+            paths: list[str | None] = [None] * len(image_urls)
             sem = asyncio.Semaphore(4)
 
             async def _dl_one(idx: int, img_url: str) -> None:
@@ -240,7 +238,7 @@ class PinterestNativeService:
 # ── Private helpers ──────────────────────────────────────────────────────────
 
 
-def _parse_native_media(html: str) -> tuple[Optional[str], Optional[str]]:
+def _parse_native_media(html: str) -> tuple[str | None, str | None]:
     video_url = _extract_og_video(html)
     image_url = _extract_og_image(html)
 
@@ -271,7 +269,7 @@ def _parse_native_media(html: str) -> tuple[Optional[str], Optional[str]]:
     return video_url, image_url
 
 
-def _extract_og_video(html: str) -> Optional[str]:
+def _extract_og_video(html: str) -> str | None:
     """Extract og:video:secure_url or og:video from HTML."""
     match = re.search(
         r'<meta[^>]+property=["\']og:video(:secure_url)?["\'][^>]+content=["\']([^"\']+\.mp4(?:[?#][^"\']*)?)["\']',
@@ -308,7 +306,7 @@ def _extract_og_video(html: str) -> Optional[str]:
     return None
 
 
-def _extract_og_image(html: str) -> Optional[str]:
+def _extract_og_image(html: str) -> str | None:
     """Extract og:image from HTML (for static image pins)."""
     match = re.search(
         r'<meta[^>]+property=["\']og:image["\'][^>]+content=["\']([^"\']+)["\']',
@@ -328,7 +326,7 @@ def _extract_og_image(html: str) -> Optional[str]:
     return None
 
 
-async def _stream_download(direct_url: str, prefix: str, ext: str) -> Optional[str]:
+async def _stream_download(direct_url: str, prefix: str, ext: str) -> str | None:
     """Download a file using chunked async streaming (low memory usage)."""
     out_p = os.path.join(TEMP_DIR, f"{prefix}{uuid.uuid4().hex}.{ext}")
     try:
@@ -370,7 +368,9 @@ async def _stream_download(direct_url: str, prefix: str, ext: str) -> Optional[s
         )
         return out_p
 
-    except Exception as e:
+    # curl streaming is an external adapter boundary; no partial file may be
+    # returned as success and callers use their established fallback on failure.
+    except Exception as e:  # noqa: BLE001
         logger.warning("[PINTEREST] Stream download failed: %s", e)
         if os.path.exists(out_p):
             await asyncio.to_thread(safe_remove, out_p)
@@ -379,7 +379,7 @@ async def _stream_download(direct_url: str, prefix: str, ext: str) -> Optional[s
 
 async def _cobalt_fallback(
     url: str,
-) -> Tuple[Optional[str], Optional[str]]:
+) -> tuple[str | None, str | None]:
     """Cobalt fallback for Pinterest — handles both video and picker responses."""
     from app.services.cobalt import CobaltService
 

@@ -1,6 +1,7 @@
-import httpx
 import re
 import sys
+
+import httpx
 
 url = sys.argv[1]
 resp = httpx.get(url, follow_redirects=True)

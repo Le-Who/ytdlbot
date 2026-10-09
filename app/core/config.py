@@ -3,7 +3,6 @@ import os
 import secrets
 import tempfile
 from collections.abc import Mapping, Sequence
-from typing import Optional
 from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
@@ -148,12 +147,12 @@ YOUTUBE_PIPE_MODE = os.getenv("YOUTUBE_PIPE_MODE", "0").strip() == "1"
 # YouTube POT (Proof-of-Origin Token) provider — bypasses "Sign in to confirm
 # you're not a bot" without requiring YouTube cookies.
 # Set to the bgutil HTTP server URL. Empty string disables POT injection.
-POT_PROVIDER_URL: Optional[str] = os.getenv("POT_PROVIDER_URL", "").strip() or None
+POT_PROVIDER_URL: str | None = os.getenv("POT_PROVIDER_URL", "").strip() or None
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 
 
-def parse_proxy_uri(proxy_raw: Optional[str]) -> Optional[str]:
+def parse_proxy_uri(proxy_raw: str | None) -> str | None:
     if not proxy_raw:
         return None
     proxy_raw = proxy_raw.strip()
@@ -181,12 +180,12 @@ def parse_proxy_uri(proxy_raw: Optional[str]) -> Optional[str]:
 # TikTok proxy — route TikTok requests through WireGuard/SOCKS5 to bypass
 # datacenter IP blocks on age-restricted content.
 # Example: socks5://wireguard-proxy:1080 or host:port:user:pass
-TIKTOK_PROXY: Optional[str] = parse_proxy_uri(os.getenv("TIKTOK_PROXY"))
+TIKTOK_PROXY: str | None = parse_proxy_uri(os.getenv("TIKTOK_PROXY"))
 
 # VK proxy — residential HTTP/SOCKS5 proxy to bypass VK's datacenter IP block.
 # VK redirects datacenter IPs to badbrowser.php even with valid cookies.
 # Format: http://user:pass@host:port, socks5://host:port, or host:port:user:pass
-VK_PROXY: Optional[str] = parse_proxy_uri(os.getenv("VK_PROXY"))
+VK_PROXY: str | None = parse_proxy_uri(os.getenv("VK_PROXY"))
 
 # Cobalt API (Primary TikTok backend) - Supports multiple comma-separated instances for fallback
 # NOTE: The public api.cobalt.tools now requires Turnstile JWT auth and cannot be used by bots.
@@ -306,7 +305,7 @@ IG_SESSIONS_B64 = [
 # Admin chat ID for error reporting. Set to your Telegram user ID.
 # If unset, error reporting to admin is disabled.
 _admin_raw = os.getenv("ADMIN_CHAT_ID", "").strip()
-ADMIN_CHAT_ID: Optional[int] = (
+ADMIN_CHAT_ID: int | None = (
     int(_admin_raw) if _admin_raw.lstrip("-").isdigit() else None
 )
 

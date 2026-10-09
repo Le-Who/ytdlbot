@@ -790,6 +790,302 @@ class RecordingProcessRunner:
 
 
 @pytest.mark.asyncio
+async def test_adopt_local_cancellation_joins_worker_before_releasing_lease(tmp_path):
+    """Catches a thread creating unowned bytes after adoption cancellation."""
+    move_started = threading.Event()
+    finish_move = threading.Event()
+    move_finished = threading.Event()
+
+    def move(source, destination):
+        move_started.set()
+        assert finish_move.wait(5)
+        os.replace(source, destination)
+        move_finished.set()
+
+    media, _ = transport(tmp_path, [])
+    media.file_mover = move
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"ready")
+    task = asyncio.create_task(
+        media.adopt_local(
+            request(), source, replace(source_candidate(size=5), container="mp4")
+        )
+    )
+    assert await asyncio.to_thread(move_started.wait, 5)
+    try:
+        task.cancel()
+        # Queue a marker after cancellation is delivered, without timing assumptions.
+        marker = asyncio.Event()
+        asyncio.get_running_loop().call_soon(marker.set)
+        await marker.wait()
+        assert not task.done()
+        assert media.disk_budget.reserved_bytes == 5
+        task.cancel()
+    finally:
+        finish_move.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert await asyncio.to_thread(move_finished.wait, 5)
+
+    assert not list(tmp_path.glob("media_*"))
+    assert media.disk_budget.reserved_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_cancelled_local_move_error_does_not_start_cross_device_copy(tmp_path):
+    """Catches a late EXDEV error erasing cancellation and starting new I/O."""
+    started = threading.Event()
+    finish = threading.Event()
+
+    def move(source, destination):
+        started.set()
+        assert finish.wait(5)
+        raise OSError(18, "cross device")
+
+    media, _ = transport(tmp_path, [])
+    media.file_mover = move
+    source = tmp_path / "source.mp4"
+    source.write_bytes(b"ready")
+    task = asyncio.create_task(
+        media.adopt_local(
+            request(), source, replace(source_candidate(size=5), container="mp4")
+        )
+    )
+    assert await asyncio.to_thread(started.wait, 5)
+    task.cancel()
+    await asyncio.sleep(0)
+    finish.set()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    finally:
+        if not task.cancelled() and task.exception() is None:
+            await task.result().release(delete=True)
+
+    assert source.read_bytes() == b"ready"
+    assert not list(tmp_path.glob("media_*"))
+    assert media.disk_budget.reserved_bytes == 0
+
+
+@pytest.mark.asyncio
+async def test_small_race_cancellation_during_loser_cleanup_releases_winner(tmp_path):
+    """Catches a chosen winner escaping cleanup when its caller is cancelled."""
+    media, _ = transport(tmp_path, [])
+    winner_path = tmp_path / "winner.mp4"
+    winner_path.write_bytes(b"winner")
+    lease = await media.disk_budget.reserve(6, owner="race-winner")
+    lease.bind(winner_path)
+    winner = MaterializedItem((winner_path,), 6, source_candidate(), lease)
+    loser_started = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    finish_cleanup = asyncio.Event()
+    cleanup_finished = asyncio.Event()
+
+    async def attempt(candidate):
+        if candidate.candidate_id == "winner":
+            await loser_started.wait()
+            return winner
+        loser_started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cleanup_started.set()
+            await finish_cleanup.wait()
+            cleanup_finished.set()
+
+    task = asyncio.create_task(
+        media._race_small(
+            [
+                source_candidate(candidate_id="winner"),
+                source_candidate(candidate_id="loser"),
+            ],
+            attempt,
+            time.monotonic() + 5,
+        )
+    )
+    await cleanup_started.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    finish_cleanup.set()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert cleanup_finished.is_set()
+    assert not winner_path.exists()
+    assert not media_lease_path(winner_path).exists()
+    assert media.disk_budget.reserved_bytes == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("release_error", [False, True])
+async def test_small_race_joins_simultaneous_results_and_releases_each_owner(
+    tmp_path, release_error
+):
+    """Catches a second successful attempt or winner leaking on loser-release error."""
+    media, _ = transport(tmp_path, [])
+    releases: dict[str, int] = {}
+    paths = []
+    items = {}
+
+    class ObservedItem(MaterializedItem):
+        async def release(self, *, delete=False):
+            name = self.candidate.candidate_id
+            releases[name] = releases.get(name, 0) + 1
+            await super().release(delete=delete)
+            if release_error:
+                raise OSError("release outcome failed")
+
+    for name in ("first", "second"):
+        path = tmp_path / f"{name}.mp4"
+        path.write_bytes(b"ready")
+        paths.append(path)
+        reservation = await media.disk_budget.reserve(5, owner=name)
+        reservation.bind(path)
+        items[name] = ObservedItem(
+            (path,), 5, source_candidate(candidate_id=name), reservation
+        )
+
+    async def attempt(candidate):
+        return items[candidate.candidate_id]
+
+    if release_error:
+        with pytest.raises(OSError, match="release outcome failed"):
+            await media._race_small(
+                [item.candidate for item in items.values()],
+                attempt,
+                time.monotonic() + 5,
+            )
+    else:
+        winner, errors = await media._race_small(
+            [item.candidate for item in items.values()], attempt, time.monotonic() + 5
+        )
+        assert errors == []
+        assert winner.paths[0].exists() and media_lease_path(winner.paths[0]).exists()
+        assert media.disk_budget.reserved_bytes == 5
+        assert sum(releases.values()) == 1
+        await winner.release(delete=True)
+
+    assert releases == {"first": 1, "second": 1}
+    assert all(
+        not path.exists() and not media_lease_path(path).exists() for path in paths
+    )
+    assert media.disk_budget.reserved_bytes == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["deadline", "stat"])
+async def test_failure_after_transform_removes_final_output(
+    tmp_path, monkeypatch, failure
+):
+    """Catches final paths omitted from cleanup after successful promotion."""
+    media, _ = transport(
+        tmp_path,
+        [FakeResponse(), FakeResponse()],
+        process_runner=RecordingProcessRunner(),
+    )
+    original = media._finalize_candidate
+
+    async def finalize(*args):
+        paths = await original(*args)
+        if failure == "deadline":
+            media.clock = lambda: args[-1] + 1
+        else:
+            real_stat = Path.stat
+
+            def stat(path, *args, **kwargs):
+                if path in paths:
+                    raise OSError("final stat failed")
+                return real_stat(path, *args, **kwargs)
+
+            monkeypatch.setattr(Path, "stat", stat)
+        return paths
+
+    monkeypatch.setattr(media, "_finalize_candidate", finalize)
+    with pytest.raises((TransferTimeout, OSError)):
+        await media._download_candidate(
+            request(),
+            replace(source_candidate(size=24), mux_mode="copy", container="mp4"),
+            media.clock() + 5,
+        )
+
+    assert not list(tmp_path.glob("media_*"))
+    assert media.disk_budget.reserved_bytes == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("clip", "duration", "ffmpeg_cap", "error"),
+    [
+        (ClipInterval(), 60, "60", None),
+        (ClipInterval(10, 100), 60, "60", None),
+        (ClipInterval(10), 60, "60", None),
+        (ClipInterval(90), 30, "60", None),
+        (ClipInterval(10, 30), 20, "20", None),
+        (ClipInterval(10, 30), 60, "20", "final clip duration"),
+        (ClipInterval(10, 100), 20, "60", "final clip duration"),
+        (ClipInterval(90), 60, "60", "final clip duration"),
+    ],
+)
+async def test_animation_transform_composes_with_final_duration_validation(
+    tmp_path,
+    monkeypatch,
+    clip,
+    duration,
+    ffmpeg_cap,
+    error,
+):
+    """Catches valid capped output rejected against the uncapped source duration."""
+    from app.services.media.pipeline import (
+        ArtifactValidationError,
+        validate_materialized_artifact,
+    )
+
+    runner = RecordingProcessRunner()
+    media, _ = transport(
+        tmp_path, [FakeResponse(), FakeResponse()], process_runner=runner
+    )
+    animation = replace(
+        source_candidate(size=24),
+        kind=MediaKind.ANIMATION,
+        mux_mode="mute-mp4",
+        container="mp4",
+        duration_seconds=120,
+        has_audio=False,
+        width=1280,
+        height=720,
+    )
+    media_request = replace(request(), kind=MediaKind.ANIMATION, clip=clip)
+    monkeypatch.setattr("app.services.media.pipeline._ffprobe", lambda path: _probe())
+
+    async def _probe():
+        return {
+            "streams": [
+                {
+                    "codec_type": "video",
+                    "codec_name": "h264",
+                    "width": 1280,
+                    "height": 720,
+                }
+            ],
+            "format": {"format_name": "mov,mp4", "duration": str(duration)},
+        }
+
+    item = await media.materialize(media_request, [animation])
+    try:
+        if error:
+            with pytest.raises(ArtifactValidationError, match=error):
+                await validate_materialized_artifact(media_request, item)
+        else:
+            await validate_materialized_artifact(media_request, item)
+        command = runner.commands[0]
+        # ffmpeg's requested cap may exceed the remaining source duration.
+        assert command[command.index("-t") + 1] == ffmpeg_cap
+    finally:
+        await item.release(delete=True)
+
+
+@pytest.mark.asyncio
 async def test_adopt_local_owns_and_clips_cross_filesystem_artifact(
     tmp_path: Path,
 ) -> None:

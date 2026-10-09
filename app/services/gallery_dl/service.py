@@ -10,7 +10,6 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Optional
 
 from app.core.config import TEMP_DIR
 from app.core.process import process_supervisor
@@ -25,7 +24,7 @@ class SlideshowResult:
     """Result of a slideshow download."""
 
     images: list[str] = field(default_factory=list)  # Absolute paths to images
-    audio: Optional[str] = None  # Path to audio file (if any)
+    audio: str | None = None  # Path to audio file (if any)
     title: str = ""
 
 
@@ -37,9 +36,9 @@ class GalleryDlService:
     @staticmethod
     async def download_slideshow(
         url: str,
-        cookies_path: Optional[str] = None,
-        proxy: Optional[str] = None,
-    ) -> tuple[Optional[SlideshowResult], Optional[str]]:
+        cookies_path: str | None = None,
+        proxy: str | None = None,
+    ) -> tuple[SlideshowResult | None, str | None]:
         """
         Downloads a TikTok slideshow (images + optional audio).
 
@@ -89,9 +88,7 @@ class GalleryDlService:
             logger.error("[GALLERY-DL] Download timed out")
             return None, "⚠️ Время ожидания загрузки истекло."
         except Exception as e:
-            logger.error(
-                "gallery-dl unexpected error", extra={"error": str(e)}, exc_info=True
-            )
+            logger.exception("gallery-dl unexpected error", extra={"error": str(e)})
             return None, "⚠️ Внутренняя ошибка при загрузке."
 
         # Collect downloaded files
@@ -100,9 +97,9 @@ class GalleryDlService:
     @staticmethod
     async def download_video(
         url: str,
-        cookies_path: Optional[str] = None,
-        proxy: Optional[str] = None,
-    ) -> tuple[Optional[str], Optional[str]]:
+        cookies_path: str | None = None,
+        proxy: str | None = None,
+    ) -> tuple[str | None, str | None]:
         """
         Downloads a TikTok video via gallery-dl.
         Used as fallback when yt-dlp can't access classified/restricted content.
@@ -151,10 +148,9 @@ class GalleryDlService:
             logger.error("[GALLERY-DL] Video download timed out")
             return None, "gallery-dl timeout"
         except Exception as e:
-            logger.error(
+            logger.exception(
                 "Video download unexpected error",
                 extra={"error": str(e)},
-                exc_info=True,
             )
             return None, str(e)
 
@@ -180,10 +176,10 @@ class GalleryDlService:
     @staticmethod
     def _collect_files(
         output_dir: str,
-    ) -> tuple[Optional[SlideshowResult], Optional[str]]:
+    ) -> tuple[SlideshowResult | None, str | None]:
         """Scans the output directory for downloaded images and audio."""
         images: list[str] = []
-        audio: Optional[str] = None
+        audio: str | None = None
         title = ""
 
         image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
@@ -213,7 +209,8 @@ class GalleryDlService:
                             # Truncate long descriptions
                             if len(title) > 200:
                                 title = title[:197] + "..."
-                    except Exception:
+                    except (OSError, ValueError, AttributeError, TypeError):
+                        # Optional provider metadata must not discard downloaded images.
                         pass
 
         if not images:

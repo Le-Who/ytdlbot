@@ -35,7 +35,7 @@ class TestJanitor(unittest.TestCase):
                 patch("app.tasks.janitor.TEMP_DIR", d),
                 patch("app.tasks.janitor.MAX_TEMP_AGE_SECONDS", 10),
             ):
-                deleted, orphan = janitor.cleanup_temp_dir()
+                deleted, _orphan = janitor.cleanup_temp_dir()
                 self.assertEqual(deleted, 0)
                 self.assertTrue(os.path.exists(p))
 

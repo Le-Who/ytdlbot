@@ -69,7 +69,7 @@ def validate_candidate(
     if request.kind is MediaKind.VIDEO and not candidate.has_video:
         reasons.append(CandidateRejectionReason.VIDEO_UNAVAILABLE)
 
-    if request.quality.max_edge is not None:
+    if request.quality.max_edge is not None and request.kind is not MediaKind.AUDIO:
         short_edge = min(candidate.width or 0, candidate.height or 0)
         if short_edge < request.quality.max_edge:
             reasons.append(CandidateRejectionReason.QUALITY_TOO_LOW)

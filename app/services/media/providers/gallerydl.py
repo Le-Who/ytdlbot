@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import importlib.util
 import asyncio
+import importlib.util
 import json
 import sys
 from collections.abc import Awaitable, Callable, Mapping, Sequence

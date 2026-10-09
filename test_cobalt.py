@@ -1,6 +1,7 @@
 import asyncio
-from app.services.cobalt import CobaltService
+
 import app.services.cobalt as c
+from app.services.cobalt import CobaltService
 
 # Override URL to use public instance
 c.COBALT_API_URLS = ["https://api.cobalt.tools"]

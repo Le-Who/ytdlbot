@@ -1,8 +1,8 @@
 # mypy: ignore-errors
-from unittest.mock import AsyncMock
 import asyncio
 import time
 import unittest
+from unittest.mock import AsyncMock
 
 
 class AsyncMockCache(dict):
@@ -18,13 +18,14 @@ class AsyncMockCache(dict):
 
 from unittest.mock import MagicMock, patch
 
+from telegram import Message
+
 # Mock environment variables
 # Ensure app can be imported
 from app.bot import callbacks
-from app.core import state
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
+from app.core import state
 from app.core.config import MAX_TG_UPLOAD_MB
-from telegram import Message
 from app.services.ytdlp.models import ExtractionResult
 
 
@@ -156,11 +157,11 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         await callbacks.on_pick(self.update, self.context)
         self.update.callback_query.answer.assert_awaited()
         self.assertTrue(len(state.link_cache) > 0)
-        token = list(state.link_cache.keys())[0]
+        token = next(iter(state.link_cache))
         cached_data = state.link_cache[token]
         self.assertEqual(cached_data.format_id, "137")
 
-        args, kwargs = self.update.callback_query.edit_message_text.call_args
+        args, _kwargs = self.update.callback_query.edit_message_text.call_args
         self.assertIn("✅ <b>Готово", args[0])
         self.assertIn("1080p", args[0])
 
@@ -449,6 +450,9 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             "title": "Video",
         }
         self.context.user_data = {"size_map": {}}
+        self.update.callback_query.edit_message_text.side_effect = RuntimeError(
+            "Telegram status message cannot be edited"
+        )
 
         with (
             patch(
@@ -463,8 +467,10 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             mock_send.return_value = True
 
             await callbacks.on_send(self.update, self.context)
-            # The test validates that the handler completes without crashing
             mock_dl.assert_awaited_once()
+            mock_send.assert_awaited_once()
+            self.update.callback_query.edit_message_text.assert_awaited()
+            self.update.callback_query.delete_message.assert_awaited_once()
 
     async def test_on_send_malformed_data(self):
         self.update.callback_query.data = "invalid_data"

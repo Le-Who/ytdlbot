@@ -1,15 +1,15 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "--cov=app --cov-report=term-missing:skip-covered --cov-fail-under=60 -q -m 'not integration'"
+addopts = "--cov=app --cov=scripts --cov=tools --cov-report=term-missing:skip-covered --cov-fail-under=60 -q -m 'not integration'"
 markers = [
     "integration: requires real yt-dlp/ffmpeg binaries (skipped by default)",
 ]
 
 [tool.coverage.run]
-source = ["app"]
+source = ["app", "scripts", "tools"]
+branch = true
 omit = [
-    "app/main.py",
     "app/__init__.py",
     "*/tests/*",
 ]
@@ -23,6 +23,11 @@ exclude_lines = [
     "if __name__ == .__main__.",
     "if TYPE_CHECKING:",
 ]
+
+[tool.ruff]
+target-version = "py312"
+extend-exclude = [".worktrees", ".superpowers", "artifacts", "docs"]
+force-exclude = true
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E402"]
@@ -41,10 +46,6 @@ strict_equality = true
 check_untyped_defs = true
 disallow_incomplete_defs = true
 disallow_untyped_decorators = true
-
-[[tool.mypy.overrides]]
-module = "tests.*"
-ignore_errors = true
 
 [tool.mutmut]
 paths_to_mutate = "app/services/ytdlp/parsers.py"

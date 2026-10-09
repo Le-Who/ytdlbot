@@ -1,7 +1,7 @@
-from unittest.mock import AsyncMock, patch, MagicMock
-import unittest
 import os
 import tempfile
+import unittest
+from unittest.mock import AsyncMock, MagicMock, patch
 
 try:
     import curl_cffi  # noqa: F401
@@ -136,9 +136,11 @@ class TestTikWMProcess(unittest.IsolatedAsyncioTestCase):
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = AsyncMock(side_effect=ConnectionError("timeout"))
 
-        with patch("app.services.tikwm.AsyncSession", return_value=mock_session):
-            with patch("app.services.tikwm.MAX_RETRIES", 2):
-                res = await TikWMService.process("https://tiktok.com/@user/video/123")
+        with (
+            patch("app.services.tikwm.AsyncSession", return_value=mock_session),
+            patch("app.services.tikwm.MAX_RETRIES", 2),
+        ):
+            res = await TikWMService.process("https://tiktok.com/@user/video/123")
 
         self.assertEqual(res.status, "error")
         self.assertIn("timeout", res.error_message.lower())
@@ -150,7 +152,7 @@ class TestTikWMDownloadVideo(unittest.IsolatedAsyncioTestCase):
     """Test TikWMService.download_video."""
 
     async def test_process_error_propagated(self):
-        from app.services.tikwm import TikWMService, TikWMResult
+        from app.services.tikwm import TikWMResult, TikWMService
 
         with patch.object(
             TikWMService,
@@ -166,15 +168,17 @@ class TestTikWMDownloadVideo(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error, "TikWM: not found")
 
     async def test_download_success_writes_file(self):
-        from app.services.tikwm import TikWMService, TikWMResult
+        from app.services.tikwm import TikWMResult, TikWMService
 
         tmpdir = tempfile.mkdtemp()
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
+
         async def video_chunks(chunk_size):
             del chunk_size
             yield b"fake video data" * 1024
+
         mock_resp.aiter_content = video_chunks
 
         mock_session = AsyncMock()
@@ -182,21 +186,21 @@ class TestTikWMDownloadVideo(unittest.IsolatedAsyncioTestCase):
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = AsyncMock(return_value=mock_resp)
 
-        with patch.object(
-            TikWMService,
-            "process",
-            new_callable=AsyncMock,
-            return_value=TikWMResult(
-                status="video", url="https://cdn.tikwm.com/video.mp4", title="Title"
+        with (
+            patch.object(
+                TikWMService,
+                "process",
+                new_callable=AsyncMock,
+                return_value=TikWMResult(
+                    status="video", url="https://cdn.tikwm.com/video.mp4", title="Title"
+                ),
             ),
+            patch("app.services.tikwm.TEMP_DIR", tmpdir),
+            patch("app.services.tikwm.AsyncSession", return_value=mock_session),
         ):
-            with patch("app.services.tikwm.TEMP_DIR", tmpdir):
-                with patch(
-                    "app.services.tikwm.AsyncSession", return_value=mock_session
-                ):
-                    path, error = await TikWMService.download_video(
-                        "https://tiktok.com/video/123"
-                    )
+            path, error = await TikWMService.download_video(
+                "https://tiktok.com/video/123"
+            )
 
         self.assertIsNone(error)
         self.assertIsNotNone(path)

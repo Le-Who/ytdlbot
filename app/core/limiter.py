@@ -2,7 +2,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-__all__ = ["TokenBucketLimiter", "RedisTokenBucketLimiter", "LimiterRegistry"]
+__all__ = ["LimiterRegistry", "RedisTokenBucketLimiter", "TokenBucketLimiter"]
 
 
 class AsyncLimiter(Protocol):
@@ -119,7 +119,9 @@ return allowed
                 args=[self.capacity, self.refill_rate, cost, now],
             )
             return bool(result)
-        except Exception:
+        # The injected Redis script adapter is a fail-open availability boundary;
+        # rate-limit infrastructure failures must not disable every download.
+        except Exception:  # noqa: BLE001
             # Fallback to allow if redis is down to prevent full outage
             return True
 

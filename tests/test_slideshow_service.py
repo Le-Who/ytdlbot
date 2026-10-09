@@ -3,8 +3,8 @@ from unittest.mock import AsyncMock
 """Tests for app.services.slideshow — SlideshowPipeline."""
 
 import os
-import tempfile
 import shutil
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 

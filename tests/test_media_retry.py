@@ -12,12 +12,12 @@ from app.core import state
 from app.core.storage.memory import MemoryStorage
 from app.core.storage.redis_storage import RedisStorage
 from app.services.media.models import (
+    YOUTUBE_SHORT_DEFAULT_VARIANT,
     DeliveredItem,
     DeliveryReceipt,
     DeliveryStatus,
     MediaItem,
     MediaKind,
-    YOUTUBE_SHORT_DEFAULT_VARIANT,
 )
 from app.services.media.pipeline import MediaPipelineError, build_media_request
 
@@ -615,8 +615,9 @@ async def test_interrupted_polling_retry_cannot_send_again_after_restart(
 async def test_polling_retry_can_recover_a_telegram_error_before_media_started(
     retry_env, operation
 ):
-    from app.bot.retry import on_retry, save_retry_request
     from telegram.error import NetworkError
+
+    from app.bot.retry import on_retry, save_retry_request
 
     env = retry_env
     env.pipeline.failures = 0
@@ -641,11 +642,11 @@ async def test_manual_retry_retires_failed_jobs_before_worker_restart(
     from app.bot import messages
     from app.bot.retry import on_retry
     from app.core.job_store import (
-        JobStore,
         DeliveryOutcome,
+        JobStore,
+        begin_current_delivery,
         delivery_job_context,
         record_current_delivery,
-        begin_current_delivery,
     )
     from tests.core.test_job_store import update_payload
 

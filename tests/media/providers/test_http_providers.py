@@ -42,9 +42,7 @@ async def test_default_provider_probe_delegates_to_safe_streaming_boundary(
         calls.append((url, headers))
         return b"\x00\x00\x00\x18ftyp"
 
-    monkeypatch.setattr(
-        "app.services.media.transport.MediaTransport.probe", safe_probe
-    )
+    monkeypatch.setattr("app.services.media.transport.MediaTransport.probe", safe_probe)
 
     async def forbid_legacy_probe(*args, **kwargs):
         del args, kwargs
@@ -514,8 +512,14 @@ async def test_fxtwitter_falls_back_to_quoted_media_when_outer_status_is_empty()
 async def test_ssstik_extracts_live_hidden_token_and_ready_link_from_html_fixtures():
     """Catches hard-coding the historical tt token name or a brittle regex."""
     transport = RecordingTransport(
-        response(text=fixture_html("ssstik-index.html"), headers={"Content-Type": "text/html"}),
-        response(text=fixture_html("ssstik-result.html"), headers={"Content-Type": "text/html"}),
+        response(
+            text=fixture_html("ssstik-index.html"),
+            headers={"Content-Type": "text/html"},
+        ),
+        response(
+            text=fixture_html("ssstik-result.html"),
+            headers={"Content-Type": "text/html"},
+        ),
         ok_probe(),
     )
     provider = SSSTikProvider(transport=transport)
@@ -606,7 +610,10 @@ async def test_snapsave_is_disabled_until_ready_link_contract_is_verified():
 async def test_snapsave_ready_link_is_candidate_with_quality_metadata():
     """Catches treating a verified ready link as an opaque success."""
     transport = RecordingTransport(
-        response(text=fixture_html("snapsave-ready.html"), headers={"Content-Type": "text/html"}),
+        response(
+            text=fixture_html("snapsave-ready.html"),
+            headers={"Content-Type": "text/html"},
+        ),
         ok_probe(),
     )
     provider = SnapSaveProvider(transport=transport, contract_verified=True)
@@ -680,8 +687,13 @@ def provider_cases(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider,media_request", provider_cases(response(status=429, headers={"Retry-After": "7"})))
-async def test_http_adapters_surface_retry_after(provider: object, media_request: MediaRequest):
+@pytest.mark.parametrize(
+    "provider,media_request",
+    provider_cases(response(status=429, headers={"Retry-After": "7"})),
+)
+async def test_http_adapters_surface_retry_after(
+    provider: object, media_request: MediaRequest
+):
     """Catches adapter-local retries hiding an upstream rate limit from the race."""
     with pytest.raises(ProviderError) as raised:
         await provider.resolve(media_request)  # type: ignore[attr-defined]
@@ -691,8 +703,12 @@ async def test_http_adapters_surface_retry_after(provider: object, media_request
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provider,media_request", provider_cases(TimeoutError("slow upstream")))
-async def test_http_adapters_classify_timeout(provider: object, media_request: MediaRequest):
+@pytest.mark.parametrize(
+    "provider,media_request", provider_cases(TimeoutError("slow upstream"))
+)
+async def test_http_adapters_classify_timeout(
+    provider: object, media_request: MediaRequest
+):
     """Catches timeouts escaping without a circuit-breaker classification."""
     with pytest.raises(ProviderError) as raised:
         await provider.resolve(media_request)  # type: ignore[attr-defined]
@@ -735,9 +751,7 @@ async def test_expired_cdn_url_is_rejected_before_it_can_win_the_race():
     provider = TikWMProvider(transport=transport, wall_clock=lambda: 20)
 
     with pytest.raises(ProviderError) as raised:
-        await provider.resolve(
-            request("tiktok", "https://tiktok.com/@u/video/1", "1")
-        )
+        await provider.resolve(request("tiktok", "https://tiktok.com/@u/video/1", "1"))
 
     assert raised.value.kind is FailureKind.TRANSIENT
     assert "expired" in str(raised.value).lower()
@@ -787,9 +801,7 @@ async def test_pinterest_provider_rejects_expired_native_url_before_probe():
     )
 
     with pytest.raises(ProviderError, match="expired") as raised:
-        await provider.resolve(
-            request("pinterest", "https://pinterest.com/pin/1", "1")
-        )
+        await provider.resolve(request("pinterest", "https://pinterest.com/pin/1", "1"))
 
     assert raised.value.kind is FailureKind.TRANSIENT
     assert transport.requests == []
@@ -805,9 +817,7 @@ async def test_pinterest_provider_preserves_typed_transient_extraction_failure()
     provider = PinterestProvider(extract=extract, transport=RecordingTransport())
 
     with pytest.raises(ProviderError) as raised:
-        await provider.resolve(
-            request("pinterest", "https://pinterest.com/pin/1", "1")
-        )
+        await provider.resolve(request("pinterest", "https://pinterest.com/pin/1", "1"))
 
     assert raised.value.kind is FailureKind.TRANSIENT
 
@@ -896,8 +906,14 @@ async def test_tikwm_default_route_applies_configured_pacing():
 async def test_ssstik_paces_each_request_to_its_configured_origin():
     pacer = RecordingPacer()
     transport = RecordingTransport(
-        response(text=fixture_html("ssstik-index.html"), headers={"Content-Type": "text/html"}),
-        response(text=fixture_html("ssstik-result.html"), headers={"Content-Type": "text/html"}),
+        response(
+            text=fixture_html("ssstik-index.html"),
+            headers={"Content-Type": "text/html"},
+        ),
+        response(
+            text=fixture_html("ssstik-result.html"),
+            headers={"Content-Type": "text/html"},
+        ),
         ok_probe(),
     )
     provider = SSSTikProvider(
@@ -918,7 +934,10 @@ async def test_ssstik_paces_each_request_to_its_configured_origin():
 async def test_snapsave_uses_endpoint_specific_pacing():
     pacer = RecordingPacer()
     transport = RecordingTransport(
-        response(text=fixture_html("snapsave-ready.html"), headers={"Content-Type": "text/html"}),
+        response(
+            text=fixture_html("snapsave-ready.html"),
+            headers={"Content-Type": "text/html"},
+        ),
         ok_probe(),
     )
     provider = SnapSaveProvider(

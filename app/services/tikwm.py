@@ -15,7 +15,6 @@ import time
 import urllib.parse
 import uuid
 from dataclasses import dataclass
-from typing import List, Optional
 from urllib.parse import quote
 
 from curl_cffi.requests import AsyncSession, Response
@@ -68,14 +67,14 @@ async def _stream_response(response: Response, output_path: str) -> int:
 class TikWMResult:
     status: str  # "video", "picker" (slideshow), or "error"
     title: str = ""
-    url: Optional[str] = None  # video url
-    images: Optional[List[str]] = None  # for slideshow
-    audio_url: Optional[str] = None  # for slideshow
-    error_message: Optional[str] = None
+    url: str | None = None  # video url
+    images: list[str] | None = None  # for slideshow
+    audio_url: str | None = None  # for slideshow
+    error_message: str | None = None
     # The resolved (unshortened) page URL used as the _tikwm_cache key.
     # download_video() must use this — not the original short URL — for
     # correct cache eviction when the CDN URL turns out to be invalid.
-    canonical_url: Optional[str] = None
+    canonical_url: str | None = None
 
     @property
     def is_slideshow(self) -> bool:
@@ -110,7 +109,9 @@ class TikWMService:
                         "[TIKWM] Unshortened URL %s -> %s", url, unshortened_url
                     )
                     url = unshortened_url
-            except Exception as e:
+            # URL expansion is an optional HTTP adapter; process the original
+            # URL when redirects or transport adapters fail unexpectedly.
+            except Exception as e:  # noqa: BLE001
                 logger.warning(
                     "[TIKWM] Failed to unshorten URL %s (%s)",
                     redact_url(url),
@@ -118,7 +119,7 @@ class TikWMService:
                 )
 
         api_url = f"{API_BASE}?url={quote(url, safe='')}&hd=1"
-        last_error: Optional[str] = None
+        last_error: str | None = None
         global _last_request_time
 
         now_ts = time.time()
@@ -148,7 +149,9 @@ class TikWMService:
                         timeout=TIMEOUT,
                     )
                     data = resp.json()
-            except Exception as e:
+            # Each attempt crosses the configured HTTP/JSON provider adapter;
+            # preserve retry behavior for all its operational failure types.
+            except Exception as e:  # noqa: BLE001
                 last_error = f"TikWM API error: {e}"
                 logger.warning(
                     "[TIKWM] Attempt %d/%d failed: %s",
@@ -227,7 +230,7 @@ class TikWMService:
                         remaining = expire_ts - time.time()
                         if remaining > 0:
                             ttl = int(remaining * 0.8)
-                except Exception as e:
+                except (ValueError, TypeError, IndexError, OverflowError) as e:
                     logger.debug("[TIKWM] URL expiration parse error: %s", e)
 
                 # Cache under both the canonical (long) URL and the original
@@ -249,9 +252,9 @@ class TikWMService:
     @staticmethod
     async def download_video(
         url: str,
-        direct_video_url: Optional[str] = None,
+        direct_video_url: str | None = None,
         _cdn_retry: bool = True,
-    ) -> tuple[Optional[str], Optional[str]]:
+    ) -> tuple[str | None, str | None]:
         """
         Fetch video URL via TikWM API (or use direct url), then download to a temp file.
 
@@ -267,7 +270,7 @@ class TikWMService:
             (None, error_message) on failure.
         """
         # Resolve video URL (from cache/API or direct override)
-        _canonical: Optional[str] = None  # cache key for potential eviction
+        _canonical: str | None = None  # cache key for potential eviction
         if not direct_video_url:
             res = await TikWMService.process(url)
             if res.status != "video" or not res.url:
@@ -338,14 +341,16 @@ class TikWMService:
             logger.info("[TIKWM] Downloaded: %s (%.1f MB)", output_path, size_mb)
             return output_path, None
 
-        except Exception as e:
+        # Downloading spans provider resolution, HTTP streaming and filesystem
+        # publication; errors return no path after cleaning the partial file.
+        except Exception as e:  # noqa: BLE001
             logger.error("[TIKWM] Download failed (%s)", type(e).__name__)
             # Clean up partial file
             await asyncio.to_thread(safe_remove, output_path)
             return None, "TikWM download error: Download failed"
 
     @staticmethod
-    async def download_audio(audio_url: str) -> Optional[str]:
+    async def download_audio(audio_url: str) -> str | None:
         """
         Download the audio file for a slideshow.
         Returns the path to the downloaded mp3/m4a, or None on failure.
@@ -370,7 +375,9 @@ class TikWMService:
             size_mb = file_size / (1024 * 1024)
             logger.info("[TIKWM] Downloaded audio: %s (%.1f MB)", output_path, size_mb)
             return output_path
-        except Exception as e:
+        # Optional slideshow audio must not prevent successful image delivery
+        # when the external HTTP/stream adapter fails with an unknown error type.
+        except Exception as e:  # noqa: BLE001
             logger.error(
                 "[TIKWM] Audio download failed for %s (%s)",
                 redact_url(audio_url),
@@ -380,7 +387,7 @@ class TikWMService:
             return None
 
     @staticmethod
-    async def download_slideshow(res: TikWMResult) -> tuple[List[str], Optional[str]]:
+    async def download_slideshow(res: TikWMResult) -> tuple[list[str], str | None]:
         """
         Download all images and the audio track from a TikWM picker response.
         Returns:
@@ -390,7 +397,7 @@ class TikWMService:
             return [], None
 
         images = res.images  # bind to local for type narrowing
-        image_paths: List[Optional[str]] = [None] * len(images)
+        image_paths: list[str | None] = [None] * len(images)
         _dl_sem = asyncio.Semaphore(3)  # max 3 concurrent CDN fetches
 
         async def _download_one(idx: int, img_url: str) -> None:
@@ -434,7 +441,9 @@ class TikWMService:
                         ct,
                     )
                     image_paths[idx] = out_path
-                except Exception as e:
+                # Each independent image adapter may fail; clean its partial
+                # output and retain the other successful ordered image paths.
+                except Exception as e:  # noqa: BLE001
                     logger.error(
                         "[TIKWM] Image %d/%d download error (%s)",
                         idx + 1,
@@ -456,10 +465,10 @@ class TikWMService:
                 len(valid_paths),
                 len(images),
             )
-        except Exception as e:
-            logger.error(
-                "TikWM slideshow image download failed (%s)", type(e).__name__
-            )
+        # Aggregate image setup/HTTP adapter failures invalidate this slideshow
+        # result and trigger cleanup of the image paths collected so far.
+        except Exception as e:  # noqa: BLE001
+            logger.error("TikWM slideshow image download failed (%s)", type(e).__name__)
             for p in image_paths:
                 if p:
                     await asyncio.to_thread(safe_remove, p)

@@ -55,30 +55,31 @@ class TestTikWMDownloadVideoOptimized(unittest.IsolatedAsyncioTestCase):
         mock_session.__aexit__ = AsyncMock(return_value=False)
         mock_session.get = AsyncMock(return_value=mock_resp)
 
-        with patch.object(
-            TikWMService,
-            "process",
-            new_callable=AsyncMock,
-            return_value=TikWMResult(
-                status="video", url="https://cdn.tikwm.com/video.mp4", title="Title"
+        with (
+            patch.object(
+                TikWMService,
+                "process",
+                new_callable=AsyncMock,
+                return_value=TikWMResult(
+                    status="video", url="https://cdn.tikwm.com/video.mp4", title="Title"
+                ),
             ),
+            patch("app.services.tikwm.TEMP_DIR", tmpdir),
+            patch("app.services.tikwm.AsyncSession", return_value=mock_session),
+            patch("uuid.uuid4") as mock_uuid,
         ):
-            with patch("app.services.tikwm.TEMP_DIR", tmpdir):
-                with patch(
-                    "app.services.tikwm.AsyncSession", return_value=mock_session
-                ):
-                    with patch("uuid.uuid4") as mock_uuid:
-                        mock_uuid.return_value.hex = "test"
-                        expected_path = os.path.join(tmpdir, "tikwm_test.mp4")
+            mock_uuid.return_value.hex = "test"
+            expected_path = os.path.join(tmpdir, "tikwm_test.mp4")
 
-                        path, error = await TikWMService.download_video(
-                            "https://tiktok.com/video/123"
-                        )
+            path, error = await TikWMService.download_video(
+                "https://tiktok.com/video/123"
+            )
 
         self.assertIsNone(error)
         self.assertEqual(path, expected_path)
         self.assertTrue(os.path.exists(path))
-        with open(path, "rb") as f:
+        # Small synthetic fixture I/O completes inline; no runtime worker ownership.
+        with open(path, "rb") as f:  # noqa: ASYNC230
             self.assertEqual(f.read(), b"fake video data" * 1024)
 
         os.unlink(path)
@@ -95,23 +96,23 @@ class TestTikWMDownloadVideoOptimized(unittest.IsolatedAsyncioTestCase):
         # Force an error during download
         mock_session.get = AsyncMock(side_effect=Exception("Download failed"))
 
-        with patch.object(
-            TikWMService,
-            "process",
-            new_callable=AsyncMock,
-            return_value=TikWMResult(
-                status="video", url="https://cdn.tikwm.com/video.mp4", title="Title"
+        with (
+            patch.object(
+                TikWMService,
+                "process",
+                new_callable=AsyncMock,
+                return_value=TikWMResult(
+                    status="video", url="https://cdn.tikwm.com/video.mp4", title="Title"
+                ),
             ),
+            patch("app.services.tikwm.TEMP_DIR", tmpdir),
+            patch("app.services.tikwm.AsyncSession", return_value=mock_session),
+            patch("uuid.uuid4") as mock_uuid,
         ):
-            with patch("app.services.tikwm.TEMP_DIR", tmpdir):
-                with patch(
-                    "app.services.tikwm.AsyncSession", return_value=mock_session
-                ):
-                    with patch("uuid.uuid4") as mock_uuid:
-                        mock_uuid.return_value.hex = "failure_test"
-                        path, error = await TikWMService.download_video(
-                            "https://tiktok.com/video/123"
-                        )
+            mock_uuid.return_value.hex = "failure_test"
+            path, error = await TikWMService.download_video(
+                "https://tiktok.com/video/123"
+            )
 
         self.assertIsNone(path)
         self.assertIn("Download failed", error)

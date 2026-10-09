@@ -1,6 +1,8 @@
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from app.bot.format_formatter import format_label
+from typing import Any
 
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+from app.bot.format_formatter import format_label
 from app.constants import (
     AUDIO_FORMAT_ID,
     SLIDESHOW_PHOTO_FORMAT_ID,
@@ -8,9 +10,6 @@ from app.constants import (
 )
 from app.core.texts import Texts
 from app.services.media.pipeline import encode_callback_data
-
-
-from typing import Any
 
 
 def build_format_keyboard(

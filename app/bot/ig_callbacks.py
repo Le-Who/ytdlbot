@@ -11,7 +11,9 @@ Handles:
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from telegram import (
     InlineKeyboardButton,
@@ -23,6 +25,7 @@ from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
 from app.core import state
+from app.core.job_store import mark_current_job_failed
 from app.core.models import DownloadContext
 from app.core.texts import Texts
 from app.services.media.models import (
@@ -40,13 +43,16 @@ from app.services.media.pipeline import (
 )
 from app.services.sender import TelegramSender
 
+if TYPE_CHECKING:
+    from app.services.instagram import IGStoryItem
+
 logger = logging.getLogger("app.bot.ig_callbacks")
 
 
 async def _deliver_authorized_stories(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
-    stories: list[object],
+    stories: Sequence["IGStoryItem"],
     *,
     auth_scope: str,
     caller_scope: str = "ig_callback",
@@ -60,9 +66,9 @@ async def _deliver_authorized_stories(
     items: list[MediaItem] = []
     sources: list[MediaSource] = []
     for index, story in enumerate(stories):
-        is_video = bool(getattr(story, "is_video"))
-        url = str(getattr(story, "url"))
-        media_id = str(getattr(story, "mediaid"))
+        is_video = bool(story.is_video)
+        url = str(story.url)
+        media_id = str(story.mediaid)
         kind = MediaKind.VIDEO if is_video else MediaKind.PHOTO
         container = "mp4" if is_video else "jpg"
         items.append(MediaItem(media_id, kind, url, container=container))
@@ -105,7 +111,9 @@ async def _deliver_authorized_stories(
             candidate,
             caption=f"📷 {getattr(stories[0], 'label', '')}",
         )
-    except Exception as error:
+    # Preserve the False/UI contract while retaining unexpected failures for the worker.
+    except Exception as error:  # noqa: BLE001
+        mark_current_job_failed(error)
         logger.warning("Authorized Instagram delivery failed: %s", error)
         return False
     return receipt.success
@@ -200,7 +208,8 @@ async def on_ig_stories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             reply_markup=InlineKeyboardMarkup(btn_rows),
             parse_mode="HTML",
         )
-    except Exception as e:
+    # Story-menu UI is best effort; transport adapter failures must not escape the callback.
+    except Exception as e:  # noqa: BLE001
         logger.warning("Failed to show stories: %s", e)
 
 
@@ -420,13 +429,14 @@ async def on_ig_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
     if state.media_pipeline is not None:
-        success = await _deliver_authorized_stories(
+        pipeline_success = await _deliver_authorized_stories(
             context,
             q.message.chat_id,
             [story],
             auth_scope=token,
+            clip=payload.section,
         )
-        if not success:
+        if not pipeline_success:
             await q.message.reply_text(Texts.IG_DOWNLOAD_ERROR)
         return
 
@@ -436,7 +446,8 @@ async def on_ig_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if error or not file_path:
         try:
             await q.message.reply_text(error or Texts.IG_DOWNLOAD_ERROR)
-        except Exception:
+        # Download failure is established; its Telegram notice is best effort.
+        except Exception:  # noqa: BLE001, S110
             pass
         return
 
@@ -447,10 +458,11 @@ async def on_ig_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 ChatAction.UPLOAD_VIDEO if story.is_video else ChatAction.UPLOAD_PHOTO
             ),
         )
-    except Exception:
+    # Upload-action feedback is optional and must not block authorized story delivery.
+    except Exception:  # noqa: BLE001, S110
         pass
 
-    success = await TelegramSender.send_file(
+    receipt = await TelegramSender.send_file(
         context.bot,
         q.message.chat_id,
         file_path,
@@ -459,10 +471,11 @@ async def on_ig_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         caption=f"📷 {story.label}",
         operation_key=f"instagram-story:{token}:{story.mediaid}",
     )
-    if not success:
+    if not receipt:
         try:
             await q.message.reply_text(Texts.IG_DOWNLOAD_ERROR)
-        except Exception:
+        # The sender receipt determines failure; its Telegram notice is best effort.
+        except Exception:  # noqa: BLE001, S110
             pass
 
 
@@ -513,15 +526,16 @@ async def on_ig_download_all(
     ]
 
     if state.media_pipeline is not None:
-        success = await _deliver_authorized_stories(
+        pipeline_success = await _deliver_authorized_stories(
             context,
             q.message.chat_id,
             list(stories),
             auth_scope=token,
+            clip=payload.section,
         )
         await q.edit_message_text(
             f"✅ Скачано {len(stories)}/{len(stories)} историй."
-            if success
+            if pipeline_success
             else Texts.IG_DOWNLOAD_ERROR
         )
         return
@@ -550,10 +564,11 @@ async def on_ig_download_all(
                     else ChatAction.UPLOAD_PHOTO
                 ),
             )
-        except Exception:
+        # Upload-action feedback is optional; other selected stories must still be sent.
+        except Exception:  # noqa: BLE001, S110
             pass
 
-        success = await TelegramSender.send_file(
+        receipt = await TelegramSender.send_file(
             context.bot,
             q.message.chat_id,
             path,
@@ -562,13 +577,14 @@ async def on_ig_download_all(
             caption=f"📷 {item.label}",
             operation_key=f"instagram-stories:{token}:{item.mediaid}",
         )
-        if success:
+        if receipt:
             sent += 1
 
     total = len(stories)
     try:
         await q.edit_message_text(f"✅ Скачано {sent}/{total} историй.")
-    except Exception:
+    # Count feedback is optional; individual story receipts already determine delivery.
+    except Exception:  # noqa: BLE001, S110
         pass
 
 
@@ -609,13 +625,13 @@ async def on_ig_hl_download(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     )
 
     if state.media_pipeline is not None:
-        success = await _deliver_authorized_stories(
+        pipeline_success = await _deliver_authorized_stories(
             context,
             q.message.chat_id,
             [story],
             auth_scope=cache_key,
         )
-        if not success:
+        if not pipeline_success:
             await q.message.reply_text(Texts.IG_DOWNLOAD_ERROR)
         return
 
@@ -623,11 +639,12 @@ async def on_ig_hl_download(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if error or not file_path:
         try:
             await q.message.reply_text(error or Texts.IG_DOWNLOAD_ERROR)
-        except Exception:
+        # Highlight download failure is established; its Telegram notice is best effort.
+        except Exception:  # noqa: BLE001, S110
             pass
         return
 
-    success = await TelegramSender.send_file(
+    receipt = await TelegramSender.send_file(
         context.bot,
         q.message.chat_id,
         file_path,
@@ -636,10 +653,11 @@ async def on_ig_hl_download(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         caption=f"📷 {story.label}",
         operation_key=f"instagram-highlight:{cache_key}:{story.mediaid}",
     )
-    if not success:
+    if not receipt:
         try:
             await q.message.reply_text(Texts.IG_DOWNLOAD_ERROR)
-        except Exception:
+        # The highlight sender receipt determines failure; its Telegram notice is best effort.
+        except Exception:  # noqa: BLE001, S110
             pass
 
 
@@ -682,7 +700,7 @@ async def on_ig_hl_download_all(
     ]
 
     if state.media_pipeline is not None:
-        success = await _deliver_authorized_stories(
+        pipeline_success = await _deliver_authorized_stories(
             context,
             q.message.chat_id,
             list(items),
@@ -690,7 +708,7 @@ async def on_ig_hl_download_all(
         )
         await q.edit_message_text(
             f"✅ Скачано {len(items)}/{len(items)} элементов хайлайта."
-            if success
+            if pipeline_success
             else Texts.IG_DOWNLOAD_ERROR
         )
         return
@@ -720,7 +738,8 @@ async def on_ig_hl_download_all(
 
     try:
         await q.edit_message_text(f"✅ Скачано {sent}/{len(items)} элементов хайлайта.")
-    except Exception:
+    # Count feedback is optional; individual highlight receipts already determine delivery.
+    except Exception:  # noqa: BLE001, S110
         pass
 
 

@@ -37,9 +37,7 @@ def client(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(routes.config, "APP_RELEASE", "sha-test")
     monkeypatch.setattr(routes.config, "MAX_MEDIA_FILE_MB", 2_000)
     monkeypatch.setattr(routes.config, "TELEGRAM_CLOUD_MAX_FILE_MB", 50)
-    monkeypatch.setattr(
-        routes.config, "TELEGRAM_LOCAL_ENDPOINT", "http://tg-api:8081"
-    )
+    monkeypatch.setattr(routes.config, "TELEGRAM_LOCAL_ENDPOINT", "http://tg-api:8081")
     monkeypatch.setattr(routes.config, "TELEGRAM_LOCAL_REQUIRED", True)
     bot = SimpleNamespace(get_me=AsyncMock(return_value=SimpleNamespace(id=42)))
     monkeypatch.setattr(state, "bot_app", SimpleNamespace(bot=bot))
@@ -245,9 +243,7 @@ async def test_local_api_probe_coalesces_concurrent_callers(
             return object()
 
     bot = BlockingBot()
-    monkeypatch.setattr(
-        routes.config, "TELEGRAM_LOCAL_ENDPOINT", "http://tg-api:8081"
-    )
+    monkeypatch.setattr(routes.config, "TELEGRAM_LOCAL_ENDPOINT", "http://tg-api:8081")
     monkeypatch.setattr(state, "bot_app", SimpleNamespace(bot=bot))
     callers = [
         asyncio.create_task(routes._local_bot_api_functional()) for _ in range(8)
@@ -277,9 +273,7 @@ async def test_local_api_probe_expires_success_and_caches_current_failure(
             return object()
 
     bot = ChangingBot()
-    monkeypatch.setattr(
-        routes.config, "TELEGRAM_LOCAL_ENDPOINT", "http://tg-api:8081"
-    )
+    monkeypatch.setattr(routes.config, "TELEGRAM_LOCAL_ENDPOINT", "http://tg-api:8081")
     monkeypatch.setattr(state, "bot_app", SimpleNamespace(bot=bot))
     monkeypatch.setattr(
         routes, "_LOCAL_API_PROBE_FRESHNESS_SECONDS", 10.0, raising=False

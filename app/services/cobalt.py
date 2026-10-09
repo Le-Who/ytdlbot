@@ -9,11 +9,12 @@ import logging
 import os
 import uuid
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from curl_cffi.requests import AsyncSession, Response
 
 from app.core.config import COBALT_API_KEYS, COBALT_API_URLS, TEMP_DIR, _cobalt_origin
+from app.core.utils import safe_remove
 
 __all__ = ["CobaltPickerItem", "CobaltResult", "CobaltService"]
 
@@ -23,6 +24,10 @@ TIMEOUT = 15  # seconds
 MAX_RETRIES = 2
 CHUNK_SIZE = 1024 * 1024
 MAX_MEDIA_BYTES = 2_000_000_000
+
+
+class CobaltResponseError(ValueError):
+    """A configured Cobalt origin returned a retryable invalid response."""
 
 
 async def _stream_response(response: Response, output_path: str) -> int:
@@ -56,7 +61,7 @@ class CobaltPickerItem:
 
     type: str  # 'photo', 'video', 'gif'
     url: str
-    thumb: Optional[str] = None
+    thumb: str | None = None
 
 
 @dataclass
@@ -64,14 +69,14 @@ class CobaltResult:
     """Result of a Cobalt API request."""
 
     status: str  # 'tunnel', 'redirect', 'picker', 'error'
-    url: Optional[str] = None  # Direct video URL
-    filename: Optional[str] = None
+    url: str | None = None  # Direct video URL
+    filename: str | None = None
     # For picker (slideshows)
-    audio: Optional[str] = None
-    audio_filename: Optional[str] = None
-    picker: List[CobaltPickerItem] = field(default_factory=list)
+    audio: str | None = None
+    audio_filename: str | None = None
+    picker: list[CobaltPickerItem] = field(default_factory=list)
     # Custom error field
-    error_message: Optional[str] = None
+    error_message: str | None = None
 
     @property
     def is_slideshow(self) -> bool:
@@ -82,7 +87,7 @@ class CobaltService:
     """Interacts with the Cobalt API to resolve media URLs."""
 
     @staticmethod
-    def _get_headers(api_base: str) -> Dict[str, str]:
+    def _get_headers(api_base: str) -> dict[str, str]:
         headers = {
             "Accept": "application/json",
             "Content-Type": "application/json",
@@ -111,7 +116,7 @@ class CobaltService:
             "filenameStyle": "basic",
         }
 
-        last_error: Optional[str] = None
+        last_error: str | None = None
 
         for api_base in COBALT_API_URLS:
             api_url = f"{api_base.rstrip('/')}/"
@@ -127,12 +132,16 @@ class CobaltService:
                         )
 
                         if resp.status_code >= 500:
-                            raise Exception(f"Server error {resp.status_code}")
+                            raise CobaltResponseError(
+                                f"Server error {resp.status_code}"
+                            )
 
-                        data: Dict[str, Any] = resp.json()
+                        data: dict[str, Any] = resp.json()
 
                         if "status" not in data:
-                            raise Exception("Invalid response: missing 'status' field")
+                            raise CobaltResponseError(
+                                "Invalid response: missing 'status' field"
+                            )
 
                         status = data["status"]
 
@@ -175,7 +184,9 @@ class CobaltService:
                             error_message=f"Unsupported Cobalt status: {status}",
                         )
 
-                except Exception as e:
+                # Each independently configured HTTP origin is an external
+                # request/decoding boundary; failure advances to the next attempt.
+                except Exception as e:  # noqa: BLE001
                     last_error = str(e)
                     logger.warning(
                         "[COBALT] Attempt %d/%d for %s failed: %s",
@@ -197,7 +208,7 @@ class CobaltService:
         )
 
     @staticmethod
-    async def download_file(url: str, ext: str) -> Optional[str]:
+    async def download_file(url: str, ext: str) -> str | None:
         """Generic binary file downloader (for video, images, audio)."""
         output_path = os.path.join(TEMP_DIR, f"cblt_{uuid.uuid4().hex}.{ext}")
         try:
@@ -213,7 +224,9 @@ class CobaltService:
 
                 await _stream_response(resp, output_path)
             return output_path
-        except Exception as e:
+        # Network iteration and file publication share this failure boundary;
+        # callers receive no path until the complete download succeeds.
+        except Exception as e:  # noqa: BLE001
             logger.error("[COBALT] File download error: %s", e)
             if os.path.exists(output_path):
                 os.unlink(output_path)
@@ -222,7 +235,7 @@ class CobaltService:
     @staticmethod
     async def download_slideshow(
         result: CobaltResult,
-    ) -> tuple[Optional[List[str]], Optional[str]]:
+    ) -> tuple[list[str] | None, str | None]:
         """
         Downloads a slideshow's images and audio to a temp directory.
         Returns: (list_of_image_paths, audio_path) or (None, None) on error.
@@ -254,7 +267,9 @@ class CobaltService:
 
         try:
             image_paths = await asyncio.gather(*tasks)
-        except Exception as e:
+        # Any image task failure makes this optional slideshow result unusable;
+        # retain the legacy failure result for arbitrary HTTP adapter errors.
+        except Exception as e:  # noqa: BLE001
             logger.error("[COBALT] Slideshow image download error: %s", e)
             return None, None
 
@@ -269,8 +284,13 @@ class CobaltService:
                     if resp.status_code != 200:
                         raise RuntimeError(f"media returned HTTP {resp.status_code}")
                     await _stream_response(resp, audio_path)
-            except Exception as e:
+            # Audio is optional; arbitrary HTTP/stream adapter failures remove
+            # its partial path and preserve the already downloaded image result.
+            except Exception as e:  # noqa: BLE001
                 logger.error("[COBALT] Slideshow audio download error: %s", e)
+                if audio_path is not None:
+                    safe_remove(audio_path)
+                audio_path = None
                 # It's okay to proceed without audio
 
         return list(image_paths), audio_path

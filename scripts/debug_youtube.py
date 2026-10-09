@@ -13,9 +13,10 @@ async def debug_youtube():
     url = "https://www.youtube.com/watch?v=NjW8iy5OP2g"
     print(f"DEBUG: Extracting formats for {url}")
     try:
-        title, formats, special_format, duration = service.list_formats(url)
-        print(f"SUCCESS: Found {len(formats)} formats for '{title}'")
-    except Exception as e:
+        result = await service.list_formats(url)
+        print(f"SUCCESS: Found {len(result.formats)} formats for '{result.title}'")
+    # This CLI reports arbitrary provider/plugin failures; cancellation still propagates.
+    except Exception as e:  # noqa: BLE001
         print(f"FAILURE: {e}")
 
 

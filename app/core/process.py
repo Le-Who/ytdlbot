@@ -115,6 +115,8 @@ class _BasicAccountingInformation(ctypes.Structure):
 
 
 def _windows_kernel32():
+    if sys.platform != "win32":
+        raise OSError("Windows Job Objects require Windows")
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     kernel32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
     kernel32.CreateJobObjectW.restype = wintypes.HANDLE
@@ -143,6 +145,8 @@ def _windows_kernel32():
 
 
 def _create_windows_job() -> int:
+    if sys.platform != "win32":
+        raise OSError("Windows Job Objects require Windows")
     kernel32 = _windows_kernel32()
     job = kernel32.CreateJobObjectW(None, None)
     if not job:
@@ -173,6 +177,8 @@ def _windows_process_handle(proc: asyncio.subprocess.Process) -> int:
 def _assign_windows_job_and_resume(
     job_handle: int, proc: asyncio.subprocess.Process
 ) -> None:
+    if sys.platform != "win32":
+        raise OSError("Windows Job Objects require Windows")
     kernel32 = _windows_kernel32()
     process_handle = _windows_process_handle(proc)
     if not kernel32.AssignProcessToJobObject(job_handle, process_handle):

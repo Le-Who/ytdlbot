@@ -43,7 +43,8 @@ jobs:
         run: |
           python -m ruff check .
           python -m ruff format --check .
-          python -m mypy app/ --no-incremental
+          python -m mypy app/ --no-incremental --platform linux
+          python -m mypy app/ --no-incremental --platform win32
 
       - name: Run tests with coverage
         env:

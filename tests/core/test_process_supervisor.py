@@ -12,6 +12,33 @@ import pytest
 from app.core.process import ProcessHandle, ProcessOwnerCancelled, ProcessSupervisor
 
 
+@pytest.mark.parametrize(
+    ("helper", "arguments"),
+    [
+        ("_windows_kernel32", ()),
+        ("_create_windows_job", ()),
+        ("_assign_windows_job_and_resume", (99, object())),
+        ("_terminate_windows_job", (99,)),
+        ("_windows_job_active_processes", (99,)),
+        ("_close_windows_job", (99,)),
+    ],
+)
+def test_windows_job_helpers_reject_unsupported_platform_before_native_access(
+    monkeypatch, helper, arguments
+):
+    from app.core import process
+
+    class ForbiddenNativeApi:
+        def __getattr__(self, name):
+            raise AssertionError(f"unsupported platform accessed ctypes.{name}")
+
+    monkeypatch.setattr(process, "sys", SimpleNamespace(platform="linux"))
+    monkeypatch.setattr(process, "ctypes", ForbiddenNativeApi())
+
+    with pytest.raises(OSError, match="Windows"):
+        getattr(process, helper)(*arguments)
+
+
 async def _wait_for_file(path: Path, task: asyncio.Task) -> None:
     """Observe fixture readiness before measuring cancellation or completion."""
     try:

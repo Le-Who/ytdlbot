@@ -202,7 +202,8 @@ Deterministic local suite:
 ```sh
 python -m pytest tests -q
 ruff check app tests
-mypy app
+mypy app --no-incremental --platform linux
+mypy app --no-incremental --platform win32
 ```
 
 Offline release acceptance:

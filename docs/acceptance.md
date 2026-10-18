@@ -102,6 +102,9 @@ The CI regression injects an error into each script in turn and verifies that
 valid scripts are parsed without executing them before Compose validation.
 Windows subprocess fixtures observe readiness before measuring behavior, retaining
 the two-second cancellation and five-second singleflight reentry limits.
+Type checks target both Linux and Windows in pre-commit and CI. The native Job
+Object helpers reject unsupported platforms before loading a Windows DLL or
+acquiring native resources; their host-independent regressions run on both OSes.
 
 The previous callback shape must remain accepted for at least
 `LINK_TTL_MINUTES` (currently 60 minutes by default) after the release that starts
@@ -113,7 +116,8 @@ The full local verification checkpoint for this task is:
 ```sh
 python -m pytest tests -q
 ruff check app tests
-mypy app
+mypy app --no-incremental --platform linux
+mypy app --no-incremental --platform win32
 for script in scripts/bootstrap-production.sh scripts/bootstrap-migrate-production.sh \
   scripts/deploy-release.sh scripts/preflight-production.sh scripts/rollback-release.sh; do
   bash -n "$script" || exit

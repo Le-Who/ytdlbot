@@ -16,11 +16,17 @@ repos:
   - repo: local
     hooks:
       - id: mypy
-        name: mypy (project environment)
+        name: mypy (Linux)
         language: system
         types: [python]
         pass_filenames: false
-        entry: python -m mypy app/ --no-incremental
+        entry: python -m mypy app/ --no-incremental --platform linux
+      - id: mypy-windows
+        name: mypy (Windows)
+        language: system
+        types: [python]
+        pass_filenames: false
+        entry: python -m mypy app/ --no-incremental --platform win32
 
   # General file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks

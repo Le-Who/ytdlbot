@@ -207,12 +207,65 @@ bridge Starlette/httpx и два Windows selector предупреждения `
 Логи, JUnit, coverage JSON, RED/GREEN-проверки, SHA-256 manifests, отдельный
 review и patch находятся в `artifacts/legacy-audit-2026-10-18/`.
 
-## Граница доказательств
+## Дополнительная проверка при публикации
 
-Проверка остаётся offline. Docker, Redis server, ffmpeg/ffprobe и WSL отсутствуют
-в окружении; stub Docker не считается настоящим `docker compose config`,
-запуском образа или проверкой mount/UID. Настоящие POSIX descendant/socket tests
-на Windows пропускаются, при этом их platform-boundary regressions исполняются.
-Real provider/Telegram requests, production-IP acceptance, деплой и измерение
-production performance не входят в проведённые проверки. Они не следуют из
-прохождения unit/contract suite.
+Перед публикацией полный offline-прогон в чистом Windows-окружении прошёл:
+**1723 passed, 3 skipped, 5 deselected, 42 subtests passed**, 521,60 секунды;
+branch/line coverage — **78,08%**. Доказательства сохранены в
+`pytest-pre-push.log`, `pytest-pre-push.xml` и `coverage-pre-push.json`.
+
+Первая проверка на Linux выявила отсутствовавший executable bit у трёх Python
+CLI со shebang. Исправлены только Git modes у
+`scripts/collect-media-release-evidence.py`,
+`scripts/media-acceptance-docker-adapter.py` и `tools/export_cookies.py`.
+Следующая проверка выявила восемь mypy-ошибок Windows ctypes API при Linux
+target. Native Job Object helpers теперь отклоняют неподдерживаемую платформу
+до загрузки DLL; шесть новых регрессий проверяют этот порядок без native calls.
+Mypy проверяет оба target, Linux и Windows, в CI и pre-commit: все 77 модулей
+приложения прошли обе проверки. Offline Media Acceptance на GitHub также прошёл
+для `c694c6c` (run `39118796979`).
+
+Полный Linux run `39118797011` пришлось отменить после потери прогресса на
+pytest; runner не сохранил журналы, поэтому точная причина его остановки
+не установлена. Независимый безопасный replay выявил опасный дефект старых
+`tests/test_core_process.py`: оба теста проходили, передавая `AsyncMock.pid`
+в незамоканный `os.killpg`. Преобразование PID давало группу `1`; replay
+зарегистрировал TERM/KILL/KILL, не отправляя настоящие сигналы.
+
+Исправленные fixtures задают целочисленный PID и изолируют POSIX signals,
+Windows taskkill и создание Job Object. Оба сценария проверяют обе платформы
+на любом host, включая реальные аргументы сигналов и Windows fallback.
+Совместная проверка supervisor, platform boundaries и fixtures прошла:
+**28 passed, 2 skipped, 4 subtests passed**, 9,70 секунды. Все восемь
+pre-commit hooks прошли; независимое ревью не обнаружило открытых замечаний.
+Доказательства — `mock-process-linux-unsafe-replay.log`,
+`mock-process-pre-commit.log` и `mock-process-pre-commit-hooks.log`.
+
+Полный повторный Linux-прогон
+[run 39120732201](https://github.com/Le-Who/ytdlbot/actions/runs/39120732201)
+прошёл на Python 3.12.15: **1728 passed, 4 skipped, 5 deselected,
+46 subtests passed**, 101,81 секунды; суммарное branch/line coverage —
+**77,57%**, строки — **80,75%**, ветви — **67,50%**. Итоговая коллекция после
+platform regressions содержит 1732 выбранных теста и пять исключённых
+integration cases. Четыре Linux-пропуска — настоящие Windows Job Object
+сценарии, прошедшие локальную проверку на Windows. Обе настоящие POSIX
+descendant/socket регрессии прошли на Linux.
+
+В том же GitHub run прошли Ruff check, Ruff format для 198 файлов, оба mypy
+target для 77 модулей, offline acceptance, настоящий
+`docker compose config --quiet` и отдельный `bash -n` для всех пяти release
+scripts. Live diagnostics остались выключены. Прогон выполнялся в отдельной
+технической ветке: относительно `a62d669` изменён только workflow запуска
+диагностики, все application/test/dependency bytes совпадают. Этот временный
+workflow не входит в публикуемую ветку `vps`. Журналы и JUnit/coverage XML
+сохранены в `github-linux-final.log` и `linux-final-evidence/`.
+
+## Граница локальных доказательств
+
+Проверка остаётся offline. В локальном Windows-окружении отсутствуют Docker,
+Redis server, ffmpeg/ffprobe и WSL; соответствующие Linux-проверки отдельно
+описаны выше. Stub Docker не считается запуском образа или проверкой mount/UID.
+Настоящие POSIX descendant/socket tests на Windows пропускаются, при этом их
+platform-boundary regressions исполняются. Real provider/Telegram requests,
+production-IP acceptance и измерение production performance не входят в
+проведённые проверки. Они не следуют из прохождения unit/contract suite.

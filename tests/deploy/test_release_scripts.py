@@ -4,6 +4,7 @@ import hashlib
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -12,6 +13,7 @@ import tomllib
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -63,6 +65,97 @@ def test_bash_path_preserves_windows_unc_paths(monkeypatch: pytest.MonkeyPatch) 
 def _write_executable(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8", newline="\n")
     path.chmod(0o755)
+
+
+def _start_fixture_bash(
+    command: list[str],
+    *,
+    env: dict[str, str],
+    cwd: Path | None = None,
+) -> tuple[subprocess.Popen[str], int | None]:
+    job = None
+    flags = 0
+    if os.name == "nt":
+        from app.core.process import _CREATE_SUSPENDED, _create_windows_job
+
+        job = _create_windows_job()
+        flags = _CREATE_SUSPENDED | subprocess.CREATE_NEW_PROCESS_GROUP
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            start_new_session=os.name != "nt",
+            creationflags=flags,
+        )
+        try:
+            if job is not None:
+                from app.core.process import _assign_windows_job_and_resume
+
+                # The audited production bridge reads only this transport's
+                # Popen handle; synchronous fixtures retain the same ownership.
+                adapter = SimpleNamespace(
+                    _transport=SimpleNamespace(get_extra_info=lambda _: process)
+                )
+                _assign_windows_job_and_resume(job, adapter)
+        except BaseException:
+            process.kill()
+            process.communicate(timeout=10)
+            raise
+        return process, job
+    except BaseException:
+        if job is not None:
+            from app.core.process import _close_windows_job
+
+            _close_windows_job(job)
+        raise
+
+
+def _run_fixture_bash(
+    command: list[str],
+    *,
+    env: dict[str, str],
+    timeout: float,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Bound a simulated script and terminate its owned tree on watchdog expiry."""
+    started = time.monotonic()
+    process, job = _start_fixture_bash(command, env=env, cwd=cwd)
+    try:
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            if job is not None:
+                from app.core.process import _terminate_windows_job
+
+                _terminate_windows_job(job)
+            else:
+                os.killpg(process.pid, signal.SIGKILL)
+            try:
+                stdout, stderr = process.communicate(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=10)
+                raise AssertionError(
+                    "fixture process tree did not close its output pipes"
+                ) from error
+            error.add_note(
+                f"simulated Bash watchdog expired after {time.monotonic() - started:.3f}s; "
+                f"owned process {process.pid} terminated before returning"
+            )
+            raise
+        print(f"simulated Bash elapsed={time.monotonic() - started:.3f}s")
+        return subprocess.CompletedProcess(command, process.returncode, stdout, stderr)
+    finally:
+        if job is not None:
+            from app.core.process import _close_windows_job, _terminate_windows_job
+
+            _terminate_windows_job(job)
+            _close_windows_job(job)
 
 
 def _activation_workflow_script() -> str:
@@ -144,15 +237,16 @@ class FakeHost:
             return subprocess.CompletedProcess(
                 [str(script)], 127, "", f"missing script: {script}"
             )
-        return subprocess.run(
+        result = _run_fixture_bash(
             [str(BASH), _bash_path(script)],
             cwd=self.root,
             env=env,
-            capture_output=True,
-            text=True,
-            timeout=15,
-            check=False,
+            # This watchdog includes all MSYS process startup, not a production
+            # readiness/drain deadline; those remain asserted independently.
+            timeout=60 if os.name == "nt" else 15,
         )
+        print(f"simulated release command_count={len(self.commands())}")
+        return result
 
     def commands(self) -> list[str]:
         if not self.command_log.exists():
@@ -848,7 +942,6 @@ def test_workflows_gate_exact_sha_build_once_and_validate_known_host() -> None:
     assert 'python-version: ["3.12"]' in test_workflow
     assert "docker compose config" in test_workflow
     assert "scripts/bootstrap-migrate-production.sh" in test_workflow
-    assert "bash -n scripts/bootstrap-production.sh" in test_workflow
     assert "scripts/deploy-release.sh" in test_workflow
     assert "scripts/preflight-production.sh" in test_workflow
     assert "scripts/rollback-release.sh" in test_workflow
@@ -1121,6 +1214,7 @@ def test_uploaded_payload_ownership_is_normalized_only_after_shape_validation() 
 
 
 @pytest.mark.parametrize("initial_failure", ["interrupted-promotion", "activation"])
+@pytest.mark.timeout(300 if os.name == "nt" else 60)
 def test_same_sha_promotion_reuses_only_an_identical_immutable_release(
     tmp_path: Path,
     initial_failure: str,
@@ -1168,14 +1262,10 @@ exit 99
     }
 
     def run(upload_id: str, **overrides: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+        return _run_fixture_bash(
             [str(BASH), "-c", script],
             env=base_env | {"DEPLOY_UPLOAD_ID": upload_id} | overrides,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            timeout=10,
-            check=False,
+            timeout=60 if os.name == "nt" else 10,
         )
 
     first_staging = incoming / "upload-first"

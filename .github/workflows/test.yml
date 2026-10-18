@@ -49,7 +49,7 @@ jobs:
         env:
           BOT_TOKEN: test_token
           WEBHOOK_URL: https://example.com
-          TELEGRAM_SECRET_TOKEN: ci-secret
+          TELEGRAM_SECRET_TOKEN: test-secret
           REDIS_URL: redis://localhost:6379/0
         run: |
           python -m pytest tests/ \
@@ -65,7 +65,12 @@ jobs:
           TELEGRAM_API_ID: "1"
           TELEGRAM_API_HASH: test
         run: |
-          bash -n scripts/bootstrap-production.sh scripts/bootstrap-migrate-production.sh scripts/deploy-release.sh scripts/preflight-production.sh scripts/rollback-release.sh
+          for script in scripts/bootstrap-production.sh scripts/bootstrap-migrate-production.sh \
+            scripts/deploy-release.sh scripts/preflight-production.sh scripts/rollback-release.sh; do
+            bash -n "$script" || exit
+          done
+          install -m 600 .env.example .env
+          trap 'rm -f .env' EXIT
           docker compose config --quiet
           python -m pytest tests/deploy/test_release_scripts.py --no-cov -q
 

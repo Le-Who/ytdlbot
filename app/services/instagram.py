@@ -5,6 +5,7 @@ Implemented via Tier 1 Anonymous Mobile API Forgery (GraphQL Bypass).
 Uses `curl_cffi` to bypass datacenter TLS fingerprints.
 """
 
+import asyncio
 import base64
 import logging
 import os
@@ -15,15 +16,47 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import ClassVar, Literal
 
-from curl_cffi.requests import AsyncSession
+from curl_cffi.requests import AsyncSession, Response
 
 from app.core import state
+from app.core.asyncio_utils import await_owned
 from app.core.config import IG_SESSIONS_B64, TEMP_DIR
+from app.core.policy import max_media_file_bytes
 from app.core.utils import safe_remove
 
 __all__ = ["IGHighlight", "IGStoryItem", "InstagramService", "parse_instagram_url"]
 
 logger = logging.getLogger("app.services.instagram")
+MAX_MEDIA_BYTES = max_media_file_bytes()
+
+
+async def _stream_media_response(response: Response, out_path: str) -> None:
+    """Keep disk ownership until the complete bounded response is validated."""
+    encoding = response.headers.get("Content-Encoding")
+    identity_encoding = not isinstance(encoding, str) or encoding.strip().lower() in {
+        "",
+        "identity",
+    }
+    declared = response.headers.get("Content-Length")
+    expected = (
+        int(declared)
+        if identity_encoding and isinstance(declared, (str, int))
+        else None
+    )
+    if expected is not None and (expected < 0 or expected > MAX_MEDIA_BYTES):
+        raise ValueError("invalid media response length")
+    written = 0
+    with open(out_path, "wb") as output:  # noqa: ASYNC230
+        async for chunk in response.aiter_content():
+            if not chunk:
+                continue
+            written += len(chunk)
+            if written > MAX_MEDIA_BYTES:
+                raise ValueError("media exceeds configured byte limit")
+            await await_owned(asyncio.to_thread(output.write, chunk))
+    if written == 0 or (expected is not None and written != expected):
+        raise ValueError("empty or truncated media response")
+
 
 # ── Data Models ──────────────────────────────────────────────────────────────
 
@@ -144,10 +177,6 @@ def parse_instagram_url(url: str) -> tuple[str, str | None, str | None]:
         return "profile", username, None
 
     return "unknown", None, None
-
-
-def is_instagram_url(url: str) -> bool:
-    return bool(parse_instagram_url(url)[0] != "unknown")
 
 
 # ── Shortcode ↔ Media PK Conversion ─────────────────────────────────────────
@@ -601,7 +630,7 @@ class InstagramService:
                 ext = possible_ext
 
         out_path = os.path.join(TEMP_DIR, f"ig_{uuid.uuid4().hex}{ext}")
-
+        completed = False
         try:
             cls._init_pool()
             sess_idx, cookies_to_use = await cls._get_available_session()
@@ -615,12 +644,9 @@ class InstagramService:
                 if resp.status_code != 200:
                     return None, f"⚠️ Ошибка CDN Instagram: {resp.status_code}"
 
-                # This legacy stream owns open/write/close synchronously between
-                # network awaits; cancellation cannot strand a detached disk writer.
-                with open(out_path, "wb") as f:  # noqa: ASYNC230
-                    async for chunk in resp.aiter_content():
-                        f.write(chunk)
-                return out_path, None
+                await _stream_media_response(resp, out_path)
+            completed = True
+            return out_path, None
 
         # No partial file is returned after an arbitrary external stream failure;
         # the synchronous context manager has closed its handle before cleanup.
@@ -628,6 +654,9 @@ class InstagramService:
             logger.error("[INSTAGRAM] Download error: %s", e)
             safe_remove(out_path)
             return None, "⚠️ Внутренняя ошибка загрузки."
+        finally:
+            if not completed:
+                safe_remove(out_path)
 
     @classmethod
     async def download_post(cls, url: str) -> tuple[str | None, str | None]:
@@ -780,6 +809,7 @@ class InstagramService:
                     return None, "⚠️ Внутренняя ошибка нативного парсера."
 
         # 3. Download the actual video buffer (for both Cobalt link and Native link)
+        completed = False
         try:
             # Re-init impersonate session without cookies for pure CDN download to avoid tracking
             async with AsyncSession(impersonate=cls.IMPERSONATE) as session:
@@ -790,12 +820,8 @@ class InstagramService:
                         f"⚠️ Ошибка сети при скачивании медиа (CDN: {resp.status_code})",
                     )
 
-                # Keep the legacy CDN handle and writes inside this coroutine's
-                # synchronous ownership; no disk operation may outlive cleanup.
-                with open(out_path, "wb") as f:  # noqa: ASYNC230
-                    async for chunk in resp.aiter_content():
-                        f.write(chunk)
-
+                await _stream_media_response(resp, out_path)
+            completed = True
             return out_path, None
 
         # Arbitrary CDN stream failures must remove the closed partial file and
@@ -804,3 +830,6 @@ class InstagramService:
             logger.error("[INSTAGRAM] Post video pipe error: %s", e)
             safe_remove(out_path)
             return None, "⚠️ Ошибка скачивания видео потока."
+        finally:
+            if not completed:
+                safe_remove(out_path)

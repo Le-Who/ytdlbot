@@ -179,7 +179,6 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
         state.info_cache = AsyncMockCache()
         state.link_cache = AsyncMockCache()
         state.cancel_cache = AsyncMockCache()
-        state.tasks_sem = asyncio.Semaphore(5)
         state.download_sem = asyncio.Semaphore(5)
         state.api_sem = asyncio.Semaphore(10)
         from app.core.download_queue import DownloadQueue

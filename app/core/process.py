@@ -239,6 +239,8 @@ class ProcessHandle:
                 return
             self.cancel_requested = True
             await self._terminate_group()
+            if sys.platform != "win32":
+                self._tree_closed = True
             await self._cleanup_cancelled_paths()
 
     async def _terminate_group(self) -> None:
@@ -276,12 +278,14 @@ class ProcessHandle:
                 pass
             try:
                 await asyncio.wait_for(self.proc.wait(), timeout=0.5)
-                return
             except TimeoutError:
-                try:
-                    os.killpg(self.process_group_id, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
+                pass
+            # Waiting for the leader does not prove its descendants exited.
+            # Kill any remaining group members before releasing their files.
+            try:
+                os.killpg(self.process_group_id, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
         try:
             await asyncio.wait_for(self.proc.wait(), timeout=0.5)
@@ -338,6 +342,11 @@ class ProcessHandle:
                 await self._wait_for_windows_job_exit()
                 _close_windows_job(self.windows_job)
                 self.windows_job = None
+            elif sys.platform != "win32":
+                try:
+                    os.killpg(self.process_group_id, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             self._tree_closed = True
 
     async def wait(self) -> int:

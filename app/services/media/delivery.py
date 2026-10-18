@@ -525,7 +525,9 @@ class TelegramDelivery:
                 )
             if kind is MediaKind.VIDEO:
                 kwargs["supports_streaming"] = True
-            return await method(**kwargs)
+            message = await method(**kwargs)
+            self._remember_local_source(prepared, message)
+            return message
 
     async def _send_group(
         self,
@@ -554,7 +556,31 @@ class TelegramDelivery:
                 connect_timeout=self.connect_timeout,
                 pool_timeout=self.pool_timeout,
             )
-        return tuple(result)
+        messages = tuple(result)
+        for item, message in zip(prepared, messages, strict=False):
+            self._remember_local_source(item, message)
+        return messages
+
+    @staticmethod
+    def _remember_local_source(prepared: _PreparedAsset, message: Any) -> None:
+        if prepared.cached is not None or prepared.asset.item.kind not in {
+            MediaKind.VIDEO,
+            MediaKind.ANIMATION,
+        }:
+            return
+        source = prepared.source
+        if not isinstance(source, os.PathLike) and not (
+            isinstance(source, str) and not source.startswith(("http://", "https://"))
+        ):
+            return
+        try:
+            from app.core import state
+
+            state.remember_sent_media_source(
+                _message_media(message, prepared.asset.item.kind), source
+            )
+        except Exception:  # noqa: BLE001 - optional non-owning source metadata
+            logger.debug("Unable to retain Telegram source metadata")
 
     @contextmanager
     def _open_source(self, prepared: _PreparedAsset) -> Iterator[Any]:

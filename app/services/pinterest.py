@@ -21,7 +21,9 @@ from typing import TYPE_CHECKING
 
 from curl_cffi.requests import AsyncSession
 
+from app.core.asyncio_utils import await_owned
 from app.core.config import TEMP_DIR
+from app.core.policy import max_media_file_bytes
 from app.core.utils import safe_remove
 from app.services.media.providers.http import (
     CurlProviderTransport,
@@ -38,6 +40,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger("app.services.pinterest")
 
 CHUNK_SIZE = 512 * 1024  # 512 KB chunks for streaming
+MAX_MEDIA_BYTES = max_media_file_bytes()
 
 
 class PinterestProvider:
@@ -221,16 +224,31 @@ class PinterestNativeService:
                     if p:
                         paths[idx] = p
 
-            await asyncio.gather(*[_dl_one(i, u) for i, u in enumerate(image_urls)])
-            valid = [p for p in paths if p is not None]
-            if valid:
-                logger.info(
-                    "[PINTEREST] Carousel: downloaded %d/%d images",
-                    len(valid),
-                    len(image_urls),
-                )
+            tasks = [
+                asyncio.create_task(_dl_one(i, u)) for i, u in enumerate(image_urls)
+            ]
+            completed = False
+            try:
+                await asyncio.gather(*tasks)
+                valid = [p for p in paths if p is not None]
+                if len(valid) != len(image_urls):
+                    return None, "Failed to download complete carousel"
+                completed = True
                 return valid, None
-            return None, "Failed to download carousel images"
+            finally:
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                try:
+                    if not completed:
+                        await await_owned(
+                            asyncio.gather(*tasks, return_exceptions=True)
+                        )
+                finally:
+                    if not completed:
+                        for path in paths:
+                            if path is not None:
+                                safe_remove(path)
 
         return None, "Not a carousel or Cobalt failed"
 
@@ -329,6 +347,7 @@ def _extract_og_image(html: str) -> str | None:
 async def _stream_download(direct_url: str, prefix: str, ext: str) -> str | None:
     """Download a file using chunked async streaming (low memory usage)."""
     out_p = os.path.join(TEMP_DIR, f"{prefix}{uuid.uuid4().hex}.{ext}")
+    completed = False
     try:
         async with AsyncSession() as session:
             resp = await session.get(
@@ -345,6 +364,21 @@ async def _stream_download(direct_url: str, prefix: str, ext: str) -> str | None
                 )
                 return None
 
+            encoding = resp.headers.get("Content-Encoding")
+            identity_encoding = not isinstance(
+                encoding, str
+            ) or encoding.strip().lower() in {
+                "",
+                "identity",
+            }
+            declared = resp.headers.get("Content-Length")
+            expected = (
+                int(declared)
+                if identity_encoding and isinstance(declared, (str, int))
+                else None
+            )
+            if expected is not None and (expected < 0 or expected > MAX_MEDIA_BYTES):
+                raise ValueError("invalid media response length")
             total_bytes = 0
 
             def _write_chunks(path: str, data: bytes) -> None:
@@ -354,18 +388,20 @@ async def _stream_download(direct_url: str, prefix: str, ext: str) -> str | None
 
             async for chunk in resp.aiter_content():
                 if chunk:
-                    await asyncio.to_thread(_write_chunks, out_p, chunk)
                     total_bytes += len(chunk)
+                    if total_bytes > MAX_MEDIA_BYTES:
+                        raise ValueError("media exceeds configured byte limit")
+                    await await_owned(asyncio.to_thread(_write_chunks, out_p, chunk))
 
-        if total_bytes == 0:
-            await asyncio.to_thread(safe_remove, out_p)
-            return None
+        if total_bytes == 0 or (expected is not None and total_bytes != expected):
+            raise ValueError("empty or truncated media response")
 
         logger.info(
             "[PINTEREST] Stream download OK: %.1f MB -> %s",
             total_bytes / (1024 * 1024),
             out_p,
         )
+        completed = True
         return out_p
 
     # curl streaming is an external adapter boundary; no partial file may be
@@ -373,8 +409,11 @@ async def _stream_download(direct_url: str, prefix: str, ext: str) -> str | None
     except Exception as e:  # noqa: BLE001
         logger.warning("[PINTEREST] Stream download failed: %s", e)
         if os.path.exists(out_p):
-            await asyncio.to_thread(safe_remove, out_p)
+            safe_remove(out_p)
         return None
+    finally:
+        if not completed:
+            safe_remove(out_p)
 
 
 async def _cobalt_fallback(

@@ -446,18 +446,3 @@ class TestFacebookFormats(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-import pytest
-
-
-@pytest.mark.parametrize(
-    "message, expected",
-    [
-        ("HTTP status code 404", "not_found"),
-        ("HTTP status code 403", "forbidden"),
-        ("TikTok status code 10231", "auth"),
-    ],
-)
-def test_tiktok_http_status_classification(message, expected):
-    from app.services.ytdlp.parsers import classify_tiktok_error
-
-    assert classify_tiktok_error(message).value == expected

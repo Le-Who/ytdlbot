@@ -10,9 +10,12 @@ import pytest
 from app.services.media.singleflight import SingleFlightGroup, SingleFlightReentryError
 
 
-async def _wait_for_file(path: Path) -> None:
-    async with asyncio.timeout(2):
+async def _wait_for_file(path: Path, task: asyncio.Task[str]) -> None:
+    async with asyncio.timeout(10):
         while not path.exists():
+            if task.done():
+                await task
+                raise AssertionError("shared process exited before readiness")
             await asyncio.sleep(0.01)
 
 
@@ -85,7 +88,7 @@ async def test_owner_cancel_does_not_kill_another_subscribers_shared_process(
     first = asyncio.create_task(subscribe("singleflight-first"))
     second = asyncio.create_task(subscribe("singleflight-second"))
     try:
-        await _wait_for_file(ready)
+        await _wait_for_file(ready, first)
         while group.subscriber_count < 2:
             await asyncio.sleep(0)
 
@@ -139,7 +142,7 @@ async def test_last_owner_cancel_cleans_shared_factory_process(tmp_path: Path):
 
     subscriber = asyncio.create_task(subscribe())
     try:
-        await _wait_for_file(ready)
+        await _wait_for_file(ready, subscriber)
         await process_supervisor.cancel_owner("singleflight-last")
 
         with pytest.raises(asyncio.CancelledError):
@@ -239,6 +242,8 @@ async def test_same_group_same_key_factory_reentry_fails_fast_and_recovers():
     script = textwrap.dedent(
         """
         import asyncio
+        import sys
+        import app.core.process
         from app.services.media.singleflight import SingleFlightGroup
 
         async def main():
@@ -264,6 +269,8 @@ async def test_same_group_same_key_factory_reentry_fails_fast_and_recovers():
                 "same", lambda: asyncio.sleep(0, result="fresh")
             ) == "fresh"
 
+        print("ready", flush=True)
+        assert sys.stdin.readline().strip() == "start"
         asyncio.run(main())
         """
     )
@@ -271,14 +278,22 @@ async def test_same_group_same_key_factory_reentry_fails_fast_and_recovers():
         sys.executable,
         "-c",
         script,
+        stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5)
-    except TimeoutError:
-        process.kill()
-        stdout, stderr = await process.communicate()
+        assert process.stdout is not None
+        assert (
+            await asyncio.wait_for(process.stdout.readline(), timeout=10)
+        ).strip() == b"ready"
+        stdout, stderr = await asyncio.wait_for(
+            process.communicate(input=b"start\n"), timeout=5
+        )
+    finally:
+        if process.returncode is None:
+            process.kill()
+            await process.communicate()
 
     assert process.returncode == 0, (stdout + stderr).decode(errors="replace")
 

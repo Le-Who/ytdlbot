@@ -1,7 +1,9 @@
 import asyncio
+import hashlib
 import html
 import logging
 import os
+import tempfile
 import uuid
 from typing import Any
 
@@ -18,17 +20,24 @@ from telegram.ext import ContextTypes
 
 from app.bot.keyboards import build_format_keyboard
 from app.bot.retry import on_retry
-from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID, SLIDESHOW_PHOTO_FORMAT_ID
+from app.constants import (
+    AUDIO_FORMAT_ID,
+    GIF_FORMAT_ID,
+    SLIDESHOW_PHOTO_FORMAT_ID,
+    SLIDESHOW_VIDEO_FORMAT_ID,
+)
 from app.core import state
 from app.core.config import (
     BASE_URL,
     ENABLE_TELEGRAM_UPLOAD,
     LINK_TTL_MINUTES,
+    TEMP_DIR,
 )
 from app.core.job_store import (
     DeliveryOutcome,
     begin_current_delivery,
     current_delivery_outcome,
+    current_job_can_retry,
     record_current_delivery,
 )
 from app.core.logging import set_correlation_id
@@ -39,7 +48,7 @@ from app.core.utils import (
     safe_remove,
 )
 from app.services.downloader import MediaSender
-from app.services.media.models import DeliveryTarget
+from app.services.media.models import DeliveryReceipt, DeliveryTarget
 from app.services.media.pipeline import (
     CallbackDataError,
     MediaPipelineError,
@@ -65,6 +74,33 @@ logger = logging.getLogger("app.bot.callbacks")
 
 def _gif_document_delivery_key(chat_id: int, cache_key: str) -> str:
     return f"gif-document:{chat_id}:{cache_key}"
+
+
+def _gif_source_cache_key(message: Message, token: str) -> tuple[str, Any | None]:
+    """Scope exports to their exact sent source and original request token."""
+    source = message.animation or message.video
+    file_id = getattr(source, "file_id", None)
+    if not isinstance(file_id, str) or not file_id:
+        return f"gifdoc:{token}", None
+    unique_id = getattr(source, "file_unique_id", None)
+    identity = unique_id if isinstance(unique_id, str) and unique_id else file_id
+    digest = hashlib.sha256(f"{token}:{identity}".encode()).hexdigest()
+    return f"gifdoc:v2:{digest}", source
+
+
+async def _recover_telegram_gif_source(
+    bot: Any, telegram_source: Any, owned_paths: list[str]
+) -> str | None:
+    """Track a unique source before its download can fail or be cancelled."""
+    local_source = state.local_sent_media_source(telegram_source)
+    if local_source is not None:
+        return local_source
+    tg_file = await bot.get_file(telegram_source.file_id)
+    descriptor, path = tempfile.mkstemp(prefix="gif_src_", suffix=".mp4", dir=TEMP_DIR)
+    os.close(descriptor)
+    owned_paths.append(path)
+    await tg_file.download_to_drive(path)
+    return path if os.path.getsize(path) > 0 else None
 
 
 async def _send_gif_document_durable(
@@ -444,74 +480,85 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except (CallbackDataError, ValueError):
         return
 
-    # 1. Get file path from cache
-    video_path = state.file_cache.get(token)
-    if not video_path or not os.path.exists(video_path):
-        try:
-            await q.message.reply_text(Texts.GIF_FILE_EXPIRED, do_quote=True)
-        # An expired-file notice is best effort; no media remains to deliver.
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                "Failed to reply about missing file", extra={"error": str(e)}
-            )
+    # This single-send callback must also honor receipts from earlier releases.
+    if not await current_job_can_retry():
         return
-
-    # Check/Add to processing set (Debounce) — operations on sets are atomic in asyncio
-    if token in state.processing_gifs:
+    source_key, telegram_source = _gif_source_cache_key(q.message, token)
+    debounce_key = f"animation:{source_key}"
+    if debounce_key in state.processing_gifs:
         try:
             await q.message.reply_text(Texts.GIF_ALREADY_IN_PROGRESS, do_quote=True)
-        # The debounce notice is optional; an existing conversion retains ownership.
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                "Failed to reply about in-progress GIF", extra={"error": str(e)}
-            )
+        except Exception:  # noqa: BLE001, S110 - optional progress feedback
+            pass
         return
-    state.processing_gifs.add(token)
-
+    state.processing_gifs.add(debounce_key)
+    owned_paths: list[str] = []
     try:
-        # 2. Convert (Strip Audio)
+        video_path: str | None = None
+        if telegram_source is None:
+            video_path = state.file_cache.get(token)
+        else:
+            try:
+                video_path = await _recover_telegram_gif_source(
+                    context.bot, telegram_source, owned_paths
+                )
+            except Exception as error:  # noqa: BLE001 - optional source recovery
+                logger.warning(
+                    "Animation source recovery failed",
+                    extra={"error_type": type(error).__name__},
+                )
+        if not video_path or not os.path.exists(video_path):
+            try:
+                await q.message.reply_text(Texts.GIF_FILE_EXPIRED, do_quote=True)
+            except Exception:  # noqa: BLE001, S110 - optional expiry feedback
+                pass
+            return
+
         with process_owner_scope(token):
             gif_path = await MediaSender.convert_to_gif_ffmpeg(video_path)
+        if gif_path and gif_path != video_path:
+            owned_paths.append(gif_path)
+        if not gif_path:
+            try:
+                await q.message.reply_text(Texts.GIF_CONVERSION_ERROR, do_quote=True)
+            except Exception:  # noqa: BLE001, S110 - optional failure feedback
+                pass
+            return
+
+        from app.bot.keyboards import build_sent_gif_keyboard
+
+        receipt = await MediaSender.send_file(
+            context.bot,
+            q.message.chat_id,
+            gif_path,
+            is_gif=True,
+            reply_to_message_id=q.message.message_id,
+            caption="🎬 GIF",
+            reply_markup=build_sent_gif_keyboard(token),
+            operation_key=f"callback-gif:{source_key}",
+        )
+        if (
+            isinstance(receipt, DeliveryReceipt)
+            and receipt.success
+            and len(receipt.items) == 1
+            and gif_path != video_path
+            and gif_path in owned_paths
+            and state.local_sent_media_source(receipt.items[0])
+            == os.path.realpath(gif_path)
+        ):
+            # The native-GIF button needs this exact confirmed animation. Give
+            # its generated file a unique bounded cache owner before relinquishing it.
+            state.file_cache[f"animation-source:{uuid.uuid4().hex}"] = gif_path
+            owned_paths.remove(gif_path)
+        if not receipt:
+            try:
+                await q.message.reply_text(Texts.GIF_SEND_ERROR, do_quote=True)
+            except Exception:  # noqa: BLE001, S110 - optional failure feedback
+                pass
     finally:
-        state.processing_gifs.discard(token)
-
-    if not gif_path:
-        try:
-            await q.message.reply_text(Texts.GIF_CONVERSION_ERROR, do_quote=True)
-        # Conversion failure is already authoritative; its Telegram notice is best effort.
-        except Exception as e:  # noqa: BLE001
-            logger.warning(
-                "Failed to reply about conversion error", extra={"error": str(e)}
-            )
-        return
-
-    # 3. Send as Reply to the VIDEO message
-    target_msg_id = q.message.message_id
-
-    # Sending GIF
-    from app.bot.keyboards import build_sent_gif_keyboard
-
-    receipt = await MediaSender.send_file(
-        context.bot,
-        q.message.chat_id,
-        gif_path,
-        is_gif=True,
-        reply_to_message_id=target_msg_id,
-        caption="🎬 GIF",
-        reply_markup=build_sent_gif_keyboard(token),
-        operation_key=f"callback-gif:{token}",
-    )
-
-    if not receipt:
-        try:
-            await q.message.reply_text(Texts.GIF_SEND_ERROR, do_quote=True)
-        # Delivery failure is already authoritative; its Telegram notice is best effort.
-        except Exception as e:  # noqa: BLE001
-            logger.warning("Failed to reply about send error", extra={"error": str(e)})
-
-    # Do NOT delete gif_path if it is the same as video_path (cached source)
-    if gif_path != video_path:
-        await asyncio.to_thread(safe_remove, gif_path)
+        state.processing_gifs.discard(debounce_key)
+        for owned_path in reversed(owned_paths):
+            safe_remove(owned_path)
 
 
 async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -595,8 +642,12 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await _edit_or_reply(q, Texts.DATA_EXPIRED_RESEND)
             return
     if is_api:
+        if mode not in {"photo", "video"}:
+            return
         is_photo_mode = mode == "photo"
     else:
+        if mode not in {SLIDESHOW_PHOTO_FORMAT_ID, SLIDESHOW_VIDEO_FORMAT_ID}:
+            return
         is_photo_mode = mode == SLIDESHOW_PHOTO_FORMAT_ID
 
     async def _queue_ui(text: str, _markup: object | None = None) -> None:
@@ -769,18 +820,13 @@ async def on_save_as_gif_file(
 
     On-demand native GIF export pipeline:
     1. Immediate Toast feedback + spinner button state.
-    2. Check Redis cache for existing doc_file_id (instant re-send).
-    3. Fetch source video path from file_cache (must still exist on disk).
-       If missing: fall back to re-downloading from Telegram via bot.get_file().
+    2. Check for an export of this exact Telegram source and request token.
+    3. Recover the message's actual Telegram media, or its legacy local source.
     4. Convert to palettized .gif via convert_to_native_gif().
     5. Send as sendDocument (reply to the animation) — routes via Local API if configured.
-    6. Cache the document.file_id in link_cache for future requests.
-    7. Update button state to ✅ done.
+    6. Cache the document.file_id in gifdoc_cache for the same source.
+    7. Update the button state on confirmed delivery.
     """
-    from telegram import InputFile
-
-    from app.services.converter import MediaConverter
-
     q = update.callback_query
     assert q is not None and isinstance(q.message, Message) and q.data is not None
 
@@ -792,17 +838,46 @@ async def on_save_as_gif_file(
     except (CallbackDataError, ValueError):
         return
 
-    # Needs to get URL from context to determine global cache key
-    ctx = await state.link_cache.get(token)
-    page_url = None
-    cache_key = f"gifdoc:{token}"  # fallback
-    if ctx and hasattr(ctx, "page_url"):
-        page_url = ctx.page_url
-        import hashlib
+    cache_key, telegram_source = _gif_source_cache_key(q.message, token)
+    debounce_key = f"giffile_lock:{cache_key}"
+    if debounce_key in state.processing_gifs:
+        try:
+            await q.answer(Texts.GIF_FILE_QUEUE_TOAST, show_alert=False)
+        except Exception:  # noqa: BLE001, S110 - optional progress feedback
+            pass
+        return
+    # Claim the source before cache/UI/download awaits can interleave another export.
+    state.processing_gifs.add(debounce_key)
+    owned_paths: list[str] = []
+    try:
+        await _export_native_gif(
+            q, context, token, cache_key, telegram_source, owned_paths
+        )
+    finally:
+        state.processing_gifs.discard(debounce_key)
+        # These are closed, request-owned files. Synchronous unlink cannot leave
+        # a detached cleanup worker after repeated task cancellation.
+        for owned_path in reversed(owned_paths):
+            safe_remove(owned_path)
 
-        h = hashlib.md5(page_url.encode()).hexdigest()
-        cache_key = f"gifdoc_{h}"
+
+async def _export_native_gif(
+    q: Any,
+    context: ContextTypes.DEFAULT_TYPE,
+    token: str,
+    cache_key: str,
+    telegram_source: Any,
+    owned_paths: list[str],
+) -> None:
+    from telegram import InputFile
+
+    from app.services.converter import MediaConverter
+
     delivery_key = _gif_document_delivery_key(q.message.chat_id, cache_key)
+    # This callback owns one media send. Any prior success/uncertainty remains
+    # authoritative, including old receipt keys after link-cache expiry.
+    if not await current_job_can_retry():
+        return
 
     # -- 1. Immediate UX feedback --
     try:
@@ -832,11 +907,7 @@ async def on_save_as_gif_file(
     except Exception as e:  # noqa: BLE001
         logger.debug("Spinner button update failed: %s", e)
 
-    prior_delivery = await current_delivery_outcome(delivery_key)
-    if prior_delivery in {DeliveryOutcome.SUCCESS, DeliveryOutcome.UNCERTAIN}:
-        return
-
-    # -- 2. Check Global Redis cache for previously uploaded native GIF --
+    # Only reuse an export of this exact sent source and request token.
     cached_doc_id = await state.gifdoc_cache.get(cache_key)
     if cached_doc_id and isinstance(cached_doc_id, str):
         # Storage errors propagate: they do not prove a cached file_id is bad.
@@ -855,7 +926,7 @@ async def on_save_as_gif_file(
         if outcome is DeliveryOutcome.FAILED:
             logger.warning("Cached gif file_id was rejected, regenerating")
         else:
-            # Update button to done
+            # Update the button after confirmed delivery.
             try:
                 done_kb = InlineKeyboardMarkup(
                     [
@@ -874,30 +945,21 @@ async def on_save_as_gif_file(
             return
 
     # -- 3. Locate source video --
-    # Try in-memory file_cache first (file is still on disk, fast path)
-    video_path: str | None = state.file_cache.get(token)
+    # A token can be shared by several output messages. Use a token-only local
+    # file only when the callback has no concrete Telegram source identity.
+    video_path: str | None = (
+        state.file_cache.get(token) if telegram_source is None else None
+    )
     if video_path and not os.path.exists(video_path):
         video_path = None  # stale entry — evict implicitly
 
     if not video_path:
-        # Fallback 1: re-download from Telegram using the animation's file_id
-        # Local API serves this at full size with zero external traffic
+        # Recover exactly the media attached to this callback message.
         try:
-            anim = getattr(q.message, "animation", None) or getattr(
-                q.message, "video", None
-            )
-            if anim:
-                tg_file = await context.bot.get_file(anim.file_id)
-                tmp = os.path.join(
-                    __import__("app.core.config", fromlist=["TEMP_DIR"]).TEMP_DIR,
-                    f"gif_src_{token}.mp4",
+            if telegram_source is not None:
+                video_path = await _recover_telegram_gif_source(
+                    context.bot, telegram_source, owned_paths
                 )
-                await tg_file.download_to_drive(tmp)
-                if os.path.exists(tmp) and os.path.getsize(tmp) > 0:
-                    video_path = tmp
-                    logger.info(
-                        "on_save_as_gif_file: re-fetched source from TG → %s", tmp
-                    )
         # Source recovery spans Telegram download and local I/O; a safe expiry UI follows failure.
         except Exception as e:  # noqa: BLE001
             logger.warning("on_save_as_gif_file: TG re-download failed: %s", e)
@@ -930,117 +992,98 @@ async def on_save_as_gif_file(
     except OSError:
         pass
 
-    # -- 4. Check if already being processed (debounce) --
-    debounce_key = f"giffile_lock:{token}"
-    if state.processing_gifs and debounce_key in state.processing_gifs:
+    # -- Queue toast if semaphore is crowded --
+    if state.gif_file_sem.locked():
         try:
-            await q.answer("⏳ Конвертация уже идёт, подождите...", show_alert=False)
-        # The debounce toast is optional; the active GIF task retains the source.
+            await q.answer(Texts.GIF_FILE_QUEUE_TOAST, show_alert=False)
+        # Queue feedback is optional and must not abort a conversion waiting for capacity.
+        except Exception:  # noqa: BLE001, S110
+            pass
+
+    # -- 5. Convert using palette-based native GIF export --
+    gif_path: str | None
+    if video_path.lower().endswith(".gif"):
+        logger.info(
+            "on_save_as_gif_file: bypassing FFmpeg, source is already .gif (%s)",
+            video_path,
+        )
+        gif_path = video_path
+    else:
+        with process_owner_scope(token):
+            gif_path = await MediaConverter.convert_to_native_gif(video_path)
+        if gif_path and gif_path != video_path:
+            owned_paths.append(gif_path)
+
+    if not gif_path:
+        try:
+            await q.message.reply_text(Texts.GIF_FILE_ERROR, do_quote=True)
+        # Conversion failure is established; sending its Telegram notice is best effort.
         except Exception:  # noqa: BLE001, S110
             pass
         return
-    if state.processing_gifs is not None:
-        state.processing_gifs.add(debounce_key)
 
-    gif_path: str | None = None
-    tmp_src_created = video_path and "gif_src_" in video_path  # cleanup flag
-
+    # -- 6. Send as document (reply to animation) --
+    durable_send_active = False
     try:
-        # -- Queue toast if semaphore is crowded --
-        if state.gif_file_sem.locked():
-            try:
-                await q.answer(Texts.GIF_FILE_QUEUE_TOAST, show_alert=False)
-            # Queue feedback is optional and must not abort a conversion waiting for capacity.
-            except Exception:  # noqa: BLE001, S110
-                pass
-
-        # -- 5. Convert using palette-based native GIF export --
-        if video_path.lower().endswith(".gif"):
-            logger.info(
-                "on_save_as_gif_file: bypassing FFmpeg, source is already .gif (%s)",
-                video_path,
+        # Keep the upload handle owned by this task through send/cancellation;
+        # offloading only open() could leave a late worker holding the source.
+        with open(gif_path, "rb") as source:  # noqa: ASYNC230
+            doc_input = InputFile(source, filename=f"animation_{token[:8]}.gif")
+            durable_send_active = True
+            outcome, sent = await _send_gif_document_durable(
+                context.bot,
+                delivery_key,
+                chat_id=q.message.chat_id,
+                document=doc_input,
+                caption="🎞 Нативный .gif файл",
+                reply_to_message_id=q.message.message_id,
+                disable_content_type_detection=True,
+                read_timeout=120,
+                write_timeout=120,
+                connect_timeout=30,
             )
-            gif_path = video_path
-        else:
-            with process_owner_scope(token):
-                gif_path = await MediaConverter.convert_to_native_gif(video_path)
-
-        if not gif_path:
+            durable_send_active = False
+        if outcome is not DeliveryOutcome.SUCCESS:
             try:
                 await q.message.reply_text(Texts.GIF_FILE_ERROR, do_quote=True)
-            # Conversion failure is established; sending its Telegram notice is best effort.
+            # The durable receipt determines delivery failure; its UI notice is best effort.
             except Exception:  # noqa: BLE001, S110
                 pass
             return
 
-        # -- 6. Send as document (reply to animation) --
-        durable_send_active = False
+        # Cache the exported file ID only for this exact sent source.
+        if sent is not None and sent.document:
+            await state.gifdoc_cache.set(cache_key, sent.document.file_id)
+            logger.info(
+                "on_save_as_gif_file: cached gif doc_file_id globally (%s)",
+                cache_key,
+            )
+
+        # Update the button after confirmed delivery.
         try:
-            # Keep the upload handle owned by this task through send/cancellation;
-            # offloading only open() could leave a late worker holding the source.
-            with open(gif_path, "rb") as source:  # noqa: ASYNC230
-                doc_input = InputFile(source, filename=f"animation_{token[:8]}.gif")
-                durable_send_active = True
-                outcome, sent = await _send_gif_document_durable(
-                    context.bot,
-                    delivery_key,
-                    chat_id=q.message.chat_id,
-                    document=doc_input,
-                    caption="🎞 Нативный .gif файл",
-                    reply_to_message_id=q.message.message_id,
-                    disable_content_type_detection=True,
-                    read_timeout=120,
-                    write_timeout=120,
-                    connect_timeout=30,
-                )
-                durable_send_active = False
-            if outcome is not DeliveryOutcome.SUCCESS:
-                try:
-                    await q.message.reply_text(Texts.GIF_FILE_ERROR, do_quote=True)
-                # The durable receipt determines delivery failure; its UI notice is best effort.
-                except Exception:  # noqa: BLE001, S110
-                    pass
-                return
-
-            # -- 7. Cache the Telegram file_id purely by URL hash for 7-days instant future re-sends --
-            if sent is not None and sent.document:
-                await state.gifdoc_cache.set(cache_key, sent.document.file_id)
-                logger.info(
-                    "on_save_as_gif_file: cached gif doc_file_id globally (%s)",
-                    cache_key,
-                )
-
-            # Update button state to ✅ done
-            try:
-                done_kb = InlineKeyboardMarkup(
+            done_kb = InlineKeyboardMarkup(
+                [
                     [
-                        [
-                            InlineKeyboardButton(
-                                Texts.BTN_SAVE_GIF_DONE,
-                                callback_data=encode_callback_data("giffile", token),
-                            )
-                        ]
+                        InlineKeyboardButton(
+                            Texts.BTN_SAVE_GIF_DONE,
+                            callback_data=encode_callback_data("giffile", token),
+                        )
                     ]
-                )
-                await q.message.edit_reply_markup(reply_markup=done_kb)
-            # Done-button UI is optional; the durable receipt and cached file_id are authoritative.
-            except Exception:  # noqa: BLE001, S110
-                pass
+                ]
+            )
+            await q.message.edit_reply_markup(reply_markup=done_kb)
+        # Done-button UI is optional; the durable receipt and cached file_id are authoritative.
+        except Exception:  # noqa: BLE001, S110
+            pass
 
-        except Exception:
-            # Escapes from the durable helper include receipt-store failures;
-            # the job runner must observe them instead of export-error recovery.
-            if durable_send_active:
-                raise
-            logger.exception("on_save_as_gif_file: send_document failed")
-            try:
-                await q.message.reply_text(Texts.GIF_FILE_ERROR, do_quote=True)
-            # Document/export failure is already logged; its Telegram notice is best effort.
-            except Exception:  # noqa: BLE001, S110
-                pass
-    finally:
-        state.processing_gifs.discard(debounce_key)
-        if gif_path and gif_path != video_path:
-            await asyncio.to_thread(safe_remove, gif_path)
-        if tmp_src_created and video_path:
-            await asyncio.to_thread(safe_remove, video_path)
+    except Exception:
+        # Escapes from the durable helper include receipt-store failures;
+        # the job runner must observe them instead of export-error recovery.
+        if durable_send_active:
+            raise
+        logger.exception("on_save_as_gif_file: send_document failed")
+        try:
+            await q.message.reply_text(Texts.GIF_FILE_ERROR, do_quote=True)
+        # Document/export failure is already logged; its Telegram notice is best effort.
+        except Exception:  # noqa: BLE001, S110
+            pass

@@ -37,7 +37,6 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.cancel_cache = AsyncMockCache()
         state.ytdlp = MagicMock()
         state.ytdlp.list_formats = AsyncMock()
-        state.tasks_sem = asyncio.Semaphore(5)
         state.download_sem = asyncio.Semaphore(5)
         state.api_sem = asyncio.Semaphore(10)
         # Reset queues each test so _queue_full tests don't pollute successors

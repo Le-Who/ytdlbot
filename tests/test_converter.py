@@ -39,7 +39,7 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
 
         result = await MediaConverter.convert_to_gif_ffmpeg("/tmp/video.mp4")
 
-        self.assertEqual(result, "/tmp/video_gif.mp4")
+        self.assertEqual(result, mock_exec.call_args[0][0][-1])
         # ffmpeg should have been called once (copy mode)
         mock_exec.assert_called_once()
         cmd_args = mock_exec.call_args[0][0]
@@ -59,7 +59,7 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
 
         result = await MediaConverter.convert_to_gif_ffmpeg("/tmp/video.webm")
 
-        self.assertEqual(result, "/tmp/video_gif.mp4")
+        self.assertEqual(result, mock_exec.call_args[0][0][-1])
         mock_exec.assert_called_once()
         cmd_args = mock_exec.call_args[0][0]
         self.assertIn("libx264", cmd_args)
@@ -82,7 +82,7 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
 
         result = await MediaConverter.convert_to_gif_ffmpeg("/tmp/video.mp4")
 
-        self.assertEqual(result, "/tmp/video_gif.mp4")
+        self.assertEqual(result, mock_exec.call_args[0][0][-1])
         self.assertEqual(mock_exec.call_count, 2)
         # Second call should use libx264
         second_call_args = mock_exec.call_args_list[1][0][0]
@@ -115,7 +115,7 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
 
         result = await MediaConverter.convert_to_gif_ffmpeg("/tmp/video.mp4")
 
-        self.assertEqual(result, "/tmp/video_gif.mp4")
+        self.assertEqual(result, mock_exec.call_args[0][0][-1])
         mock_exec.assert_called_once()
         cmd_args = mock_exec.call_args[0][0]
         self.assertIn("libx264", cmd_args)

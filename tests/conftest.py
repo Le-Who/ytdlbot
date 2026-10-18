@@ -35,6 +35,7 @@ def mock_state():
     state.info_cache = MemoryStorage(maxsize=100, ttl=3600)
     state.link_cache = MemoryStorage(maxsize=100, ttl=3600)
     state.cancel_cache = MemoryStorage(maxsize=100, ttl=3600)
+    state.sent_media_sources.clear()
     state.limiter = MagicMock()
     state.limiter.allow_user = AsyncMock(return_value=True)
     state.limiter.allow_chat = AsyncMock(return_value=True)
@@ -43,10 +44,6 @@ def mock_state():
     state.parsing_sem = MagicMock()
     state.parsing_sem.__aenter__ = AsyncMock(return_value=None)
     state.parsing_sem.__aexit__ = AsyncMock(return_value=None)
-    state.tasks_sem = MagicMock()
-    state.tasks_sem.locked.return_value = False
-    state.tasks_sem.__aenter__ = AsyncMock(return_value=None)
-    state.tasks_sem.__aexit__ = AsyncMock(return_value=None)
     state.download_sem = MagicMock()
     state.download_sem.locked.return_value = False
     state.download_sem.acquire = AsyncMock()

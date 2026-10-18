@@ -7,12 +7,14 @@ API Documentation: https://github.com/imputnet/cobalt
 import asyncio
 import logging
 import os
+import shutil
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 from curl_cffi.requests import AsyncSession, Response
 
+from app.core.asyncio_utils import await_owned
 from app.core.config import COBALT_API_KEYS, COBALT_API_URLS, TEMP_DIR, _cobalt_origin
 from app.core.utils import safe_remove
 
@@ -33,26 +35,30 @@ class CobaltResponseError(ValueError):
 async def _stream_response(response: Response, output_path: str) -> int:
     """Stream one response with the shared decimal media cap."""
     written = 0
-    output = await asyncio.to_thread(open, output_path, "wb")
+    output = open(output_path, "wb")  # noqa: ASYNC230, SIM115 - close joins owned I/O
     try:
-        async for chunk in response.aiter_content(chunk_size=CHUNK_SIZE):
-            if not chunk:
-                continue
-            written += len(chunk)
-            if written > MAX_MEDIA_BYTES:
-                raise ValueError("media exceeds 2,000,000,000 byte limit")
-            await asyncio.to_thread(output.write, chunk)
-    finally:
-        await asyncio.to_thread(output.close)
-    declared = response.headers.get("content-length")
-    if isinstance(declared, (str, int)):
         try:
-            expected = int(declared)
-        except ValueError:
-            expected = -1
-        if expected >= 0 and written != expected:
-            raise ValueError("truncated media response")
-    return written
+            async for chunk in response.aiter_content(chunk_size=CHUNK_SIZE):
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > MAX_MEDIA_BYTES:
+                    raise ValueError("media exceeds 2,000,000,000 byte limit")
+                await await_owned(asyncio.to_thread(output.write, chunk))
+        finally:
+            await await_owned(asyncio.to_thread(output.close))
+        declared = response.headers.get("content-length")
+        if isinstance(declared, (str, int)):
+            try:
+                expected = int(declared)
+            except ValueError:
+                expected = -1
+            if expected >= 0 and written != expected:
+                raise ValueError("truncated media response")
+        return written
+    except BaseException:
+        safe_remove(output_path)
+        raise
 
 
 @dataclass
@@ -226,6 +232,9 @@ class CobaltService:
             return output_path
         # Network iteration and file publication share this failure boundary;
         # callers receive no path until the complete download succeeds.
+        except asyncio.CancelledError:
+            safe_remove(output_path)
+            raise
         except Exception as e:  # noqa: BLE001
             logger.error("[COBALT] File download error: %s", e)
             if os.path.exists(output_path):
@@ -248,7 +257,6 @@ class CobaltService:
         os.makedirs(base_dir, exist_ok=True)
 
         image_urls = [p.url for p in result.picker if p.type == "photo" and p.url]
-        tasks = []
 
         # Download images concurrently
         async def dl_image(idx: int, img_url: str) -> str:
@@ -262,35 +270,42 @@ class CobaltService:
                 await _stream_response(resp, path)
                 return path
 
-        for i, url in enumerate(image_urls):
-            tasks.append(dl_image(i, url))
-
+        published = False
         try:
-            image_paths = await asyncio.gather(*tasks)
-        # Any image task failure makes this optional slideshow result unusable;
-        # retain the legacy failure result for arbitrary HTTP adapter errors.
-        except Exception as e:  # noqa: BLE001
-            logger.error("[COBALT] Slideshow image download error: %s", e)
-            return None, None
-
-        audio_path = None
-        if result.audio:
             try:
-                async with AsyncSession() as session:
-                    resp = await session.get(
-                        result.audio, impersonate="chrome", timeout=30, stream=True
-                    )
-                    audio_path = os.path.join(base_dir, "audio.mp3")
-                    if resp.status_code != 200:
-                        raise RuntimeError(f"media returned HTTP {resp.status_code}")
-                    await _stream_response(resp, audio_path)
-            # Audio is optional; arbitrary HTTP/stream adapter failures remove
-            # its partial path and preserve the already downloaded image result.
+                async with asyncio.TaskGroup() as group:
+                    tasks = [
+                        group.create_task(dl_image(i, url))
+                        for i, url in enumerate(image_urls)
+                    ]
+                image_paths = [task.result() for task in tasks]
+            # Join all image owners before deleting an unpublished directory.
             except Exception as e:  # noqa: BLE001
-                logger.error("[COBALT] Slideshow audio download error: %s", e)
-                if audio_path is not None:
-                    safe_remove(audio_path)
-                audio_path = None
-                # It's okay to proceed without audio
+                logger.error("[COBALT] Slideshow image download error: %s", e)
+                return None, None
 
-        return list(image_paths), audio_path
+            audio_path = None
+            if result.audio:
+                try:
+                    async with AsyncSession() as session:
+                        resp = await session.get(
+                            result.audio, impersonate="chrome", timeout=30, stream=True
+                        )
+                        audio_path = os.path.join(base_dir, "audio.mp3")
+                        if resp.status_code != 200:
+                            raise RuntimeError(
+                                f"media returned HTTP {resp.status_code}"
+                            )
+                        await _stream_response(resp, audio_path)
+                # Optional audio failure preserves the completed image result.
+                except Exception as e:  # noqa: BLE001
+                    logger.error("[COBALT] Slideshow audio download error: %s", e)
+                    if audio_path is not None:
+                        safe_remove(audio_path)
+                    audio_path = None
+
+            published = True
+            return image_paths, audio_path
+        finally:
+            if not published:
+                shutil.rmtree(base_dir, ignore_errors=True)

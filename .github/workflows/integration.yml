@@ -20,7 +20,7 @@ jobs:
     env:
       BOT_TOKEN: test_token
       WEBHOOK_URL: https://example.com
-      TELEGRAM_SECRET_TOKEN: test_secret_token
+      TELEGRAM_SECRET_TOKEN: test-secret
       REDIS_URL: redis://localhost:6379/0
 
     services:

@@ -5,16 +5,12 @@ import unittest
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from app.services.ytdlp.models import FormatMetadata
 from app.services.ytdlp.parsers import (
-    TikTokError,
     _calculate_filesize,
     _extract_height,
     _format_duration,
-    _is_facebook,
     _is_pinterest,
     _is_tiktok,
-    _is_youtube,
     classify_tiktok_content,
-    classify_tiktok_error,
     create_format_item,
     deduplicate_formats,
     detect_tiktok_slideshow,
@@ -30,20 +26,10 @@ class TestPlatformDetection(unittest.TestCase):
         self.assertTrue(_is_tiktok("https://www.tiktok.com/@user/video/123"))
         self.assertFalse(_is_tiktok("https://youtube.com"))
 
-    def test_is_youtube(self):
-        self.assertTrue(_is_youtube("https://www.youtube.com/watch?v=abc"))
-        self.assertTrue(_is_youtube("https://youtu.be/abc"))
-        self.assertFalse(_is_youtube("https://tiktok.com"))
-
     def test_is_pinterest(self):
         self.assertTrue(_is_pinterest("https://pinterest.com/pin/123"))
         self.assertTrue(_is_pinterest("https://pin.it/abc"))
         self.assertFalse(_is_pinterest("https://youtube.com"))
-
-    def test_is_facebook(self):
-        self.assertTrue(_is_facebook("https://facebook.com/watch"))
-        self.assertTrue(_is_facebook("https://fb.watch/abc"))
-        self.assertFalse(_is_facebook("https://youtube.com"))
 
 
 # ── TikTok classification ────────────────────────────────────────
@@ -60,47 +46,6 @@ class TestClassifyTikTokContent(unittest.TestCase):
         self.assertEqual(
             classify_tiktok_content("https://tiktok.com/@user/video/123"),
             "video",
-        )
-
-
-class TestClassifyTikTokError(unittest.TestCase):
-    def test_auth_required_login(self):
-        self.assertEqual(
-            classify_tiktok_error("Please log in"), TikTokError.AUTH_REQUIRED
-        )
-
-    def test_auth_required_cookies(self):
-        self.assertEqual(
-            classify_tiktok_error("cookies required"), TikTokError.AUTH_REQUIRED
-        )
-
-    def test_auth_required_sign_in(self):
-        self.assertEqual(
-            classify_tiktok_error("Sign in to continue"), TikTokError.AUTH_REQUIRED
-        )
-
-    def test_auth_required_not_available(self):
-        self.assertEqual(
-            classify_tiktok_error("Video not available"), TikTokError.AUTH_REQUIRED
-        )
-
-    def test_slideshow(self):
-        self.assertEqual(
-            classify_tiktok_error("Unsupported URL"), TikTokError.SLIDESHOW
-        )
-
-    def test_forbidden(self):
-        self.assertEqual(classify_tiktok_error("HTTP Error 403"), TikTokError.FORBIDDEN)
-
-    def test_not_found(self):
-        self.assertEqual(classify_tiktok_error("404 Not Found"), TikTokError.NOT_FOUND)
-
-    def test_live(self):
-        self.assertEqual(classify_tiktok_error("Live stream"), TikTokError.LIVE)
-
-    def test_generic(self):
-        self.assertEqual(
-            classify_tiktok_error("some random error"), TikTokError.GENERIC
         )
 
 

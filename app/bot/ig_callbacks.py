@@ -49,6 +49,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger("app.bot.ig_callbacks")
 
 
+def _story_from_cache(data: dict) -> "IGStoryItem":
+    """Decode a cached item before any selected media enters delivery."""
+    from app.services.instagram import IGStoryItem
+
+    return IGStoryItem(
+        mediaid=data["mediaid"],
+        is_video=data["is_video"],
+        url=data["url"],
+        thumbnail_url=data["thumbnail_url"],
+        timestamp=datetime.fromisoformat(data["timestamp"]),
+        duration=data.get("duration"),
+        typename=data.get("typename", ""),
+    )
+
+
 async def _deliver_authorized_stories(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
@@ -330,7 +345,9 @@ async def on_ig_highlight_items(
         }
         for item in items
     ]
-    await state.link_cache.set(hl_cache_key, hl_items_data)
+    await state.link_cache.set(
+        hl_cache_key, {"items": hl_items_data, "section": payload.section}
+    )
 
     # Build item list
     lines = [f"📁 <b>{hl_title}</b>\n"]
@@ -416,17 +433,11 @@ async def on_ig_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await q.edit_message_text("⚠️ Элемент не найден.")
         return
 
-    from app.services.instagram import IGStoryItem
-
-    story = IGStoryItem(
-        mediaid=story_data["mediaid"],
-        is_video=story_data["is_video"],
-        url=story_data["url"],
-        thumbnail_url=story_data["thumbnail_url"],
-        timestamp=datetime.fromisoformat(story_data["timestamp"]),
-        duration=story_data.get("duration"),
-        typename=story_data.get("typename", ""),
-    )
+    try:
+        story = _story_from_cache(story_data)
+    except (KeyError, TypeError, ValueError):
+        await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
+        return
 
     if state.media_pipeline is not None:
         pipeline_success = await _deliver_authorized_stories(
@@ -512,18 +523,11 @@ async def on_ig_download_all(
 
     from app.services.instagram import IGStoryItem, InstagramService
 
-    stories = [
-        IGStoryItem(
-            mediaid=s["mediaid"],
-            is_video=s["is_video"],
-            url=s["url"],
-            thumbnail_url=s["thumbnail_url"],
-            timestamp=datetime.fromisoformat(s["timestamp"]),
-            duration=s.get("duration"),
-            typename=s.get("typename", ""),
-        )
-        for s in ig_data["stories"]
-    ]
+    try:
+        stories = [_story_from_cache(item) for item in ig_data["stories"]]
+    except (KeyError, TypeError, ValueError):
+        await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
+        return
 
     if state.media_pipeline is not None:
         pipeline_success = await _deliver_authorized_stories(
@@ -602,7 +606,9 @@ async def on_ig_hl_download(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except (CallbackDataError, ValueError):
         return
 
-    items_data = await state.link_cache.get(cache_key)
+    selection = await state.link_cache.get(cache_key)
+    clip = selection.get("section") if isinstance(selection, dict) else None
+    items_data = selection.get("items") if isinstance(selection, dict) else selection
     if not items_data or not isinstance(items_data, list):
         await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
         return
@@ -612,17 +618,13 @@ async def on_ig_hl_download(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await q.edit_message_text("⚠️ Элемент не найден.")
         return
 
-    from app.services.instagram import IGStoryItem, InstagramService
+    from app.services.instagram import InstagramService
 
-    story = IGStoryItem(
-        mediaid=item_data["mediaid"],
-        is_video=item_data["is_video"],
-        url=item_data["url"],
-        thumbnail_url=item_data["thumbnail_url"],
-        timestamp=datetime.fromisoformat(item_data["timestamp"]),
-        duration=item_data.get("duration"),
-        typename=item_data.get("typename", ""),
-    )
+    try:
+        story = _story_from_cache(item_data)
+    except (KeyError, TypeError, ValueError):
+        await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
+        return
 
     if state.media_pipeline is not None:
         pipeline_success = await _deliver_authorized_stories(
@@ -630,6 +632,7 @@ async def on_ig_hl_download(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             q.message.chat_id,
             [story],
             auth_scope=cache_key,
+            clip=clip,
         )
         if not pipeline_success:
             await q.message.reply_text(Texts.IG_DOWNLOAD_ERROR)
@@ -677,7 +680,9 @@ async def on_ig_hl_download_all(
     except (CallbackDataError, ValueError):
         return
 
-    items_data = await state.link_cache.get(cache_key)
+    selection = await state.link_cache.get(cache_key)
+    clip = selection.get("section") if isinstance(selection, dict) else None
+    items_data = selection.get("items") if isinstance(selection, dict) else selection
     if not items_data or not isinstance(items_data, list):
         await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
         return
@@ -686,18 +691,11 @@ async def on_ig_hl_download_all(
 
     from app.services.instagram import IGStoryItem, InstagramService
 
-    items = [
-        IGStoryItem(
-            mediaid=d["mediaid"],
-            is_video=d["is_video"],
-            url=d["url"],
-            thumbnail_url=d["thumbnail_url"],
-            timestamp=datetime.fromisoformat(d["timestamp"]),
-            duration=d.get("duration"),
-            typename=d.get("typename", ""),
-        )
-        for d in items_data
-    ]
+    try:
+        items = [_story_from_cache(item) for item in items_data]
+    except (KeyError, TypeError, ValueError):
+        await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
+        return
 
     if state.media_pipeline is not None:
         pipeline_success = await _deliver_authorized_stories(
@@ -705,6 +703,7 @@ async def on_ig_hl_download_all(
             q.message.chat_id,
             list(items),
             auth_scope=cache_key,
+            clip=clip,
         )
         await q.edit_message_text(
             f"✅ Скачано {len(items)}/{len(items)} элементов хайлайта."

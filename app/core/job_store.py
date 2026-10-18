@@ -1064,7 +1064,11 @@ class _Transaction:
         self.connection = connection
 
     def __enter__(self) -> sqlite3.Connection:
-        self.connection.execute("BEGIN IMMEDIATE")
+        try:
+            self.connection.execute("BEGIN IMMEDIATE")
+        except BaseException:
+            self.connection.close()
+            raise
         return self.connection
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:

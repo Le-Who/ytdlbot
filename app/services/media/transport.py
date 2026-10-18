@@ -28,6 +28,7 @@ from urllib.parse import urljoin, urlsplit, urlunsplit
 from curl_cffi import CurlOpt
 from curl_cffi.requests import AsyncSession, Response
 
+from app.core.asyncio_utils import await_owned
 from app.core.metrics import metrics
 from app.core.process import run_subprocess
 from app.core.resource_budget import DiskBudget, DiskReservation
@@ -696,9 +697,7 @@ class MediaTransport:
         try:
             reservation.bind(adopted)
             try:
-                await _await_thread_io(
-                    asyncio.to_thread(self.file_mover, source, adopted)
-                )
+                await await_owned(asyncio.to_thread(self.file_mover, source, adopted))
             except OSError as error:
                 if (
                     error.errno != errno.EXDEV
@@ -751,13 +750,13 @@ class MediaTransport:
         with source.open("rb") as input_stream, destination.open("xb") as output_stream:
             while True:
                 self._remaining(deadline)
-                chunk = await _await_thread_io(
+                chunk = await await_owned(
                     asyncio.to_thread(input_stream.read, self.chunk_size)
                 )
                 if not chunk:
                     break
-                await _await_thread_io(asyncio.to_thread(output_stream.write, chunk))
-            await _await_thread_io(asyncio.to_thread(output_stream.flush))
+                await await_owned(asyncio.to_thread(output_stream.write, chunk))
+            await await_owned(asyncio.to_thread(output_stream.flush))
 
     async def _race_small(
         self,
@@ -814,10 +813,10 @@ class MediaTransport:
                     task.cancel()
                 # A cancelled gather would cancel attempts again while their
                 # cleanup runs. Join all attempts before transferring ownership.
-                await _await_thread_io(discard_losers())
+                await await_owned(discard_losers())
         except BaseException:
             if winner is not None:
-                await _await_thread_io(winner.release(delete=True))
+                await await_owned(winner.release(delete=True))
             raise
         return winner, errors
 
@@ -1197,7 +1196,7 @@ class MediaTransport:
                         write_timeout = self._remaining(deadline)
                         try:
                             await asyncio.wait_for(
-                                asyncio.to_thread(output.write, chunk),
+                                await_owned(asyncio.to_thread(output.write, chunk)),
                                 timeout=write_timeout,
                             )
                         except TimeoutError as error:
@@ -1206,6 +1205,13 @@ class MediaTransport:
                     output.close()
                 if written == 0:
                     raise DownloadFailed("media response was empty")
+                encoding = _header(response.headers, "content-encoding")
+                if (
+                    declared_response is not None
+                    and (encoding is None or encoding.strip().lower() == "identity")
+                    and written != declared_response
+                ):
+                    raise DownloadFailed("media response was truncated")
                 self._check_signature(bytes(signature), response.headers)
                 self._remaining(deadline)
                 reservation.promote(partial_path, final_path)
@@ -1631,26 +1637,6 @@ def _reencode_arguments(candidate: MediaCandidate, extension: str) -> list[str]:
 
 def _format_seconds(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else f"{value:.6f}".rstrip("0")
-
-
-async def _await_thread_io(operation: Awaitable[Any]) -> Any:
-    """Join local I/O or ownership cleanup, then restore caller cancellation."""
-    task: asyncio.Future[Any] = asyncio.ensure_future(operation)
-    cancellation: asyncio.CancelledError | None = None
-    while not task.done():
-        try:
-            await asyncio.shield(task)
-        except asyncio.CancelledError as error:
-            cancellation = error
-        except BaseException:
-            if cancellation is None:
-                raise
-            break
-    if cancellation is not None:
-        if not task.cancelled():
-            task.exception()
-        raise cancellation
-    return task.result()
 
 
 async def _run_process(command: list[str], timeout: float) -> int:

@@ -146,14 +146,15 @@ async def _durable_store_health() -> dict[str, object]:
     store = _job_store
     if store is None:
         return {"ready": False}
+    probes = (
+        asyncio.ensure_future(store.schema_version()),
+        asyncio.ensure_future(store.journal_mode()),
+        asyncio.ensure_future(store.busy_timeout()),
+        asyncio.ensure_future(store.write_probe()),
+    )
     try:
         schema_version, journal_mode, busy_timeout_ms, _ = await asyncio.wait_for(
-            asyncio.gather(
-                store.schema_version(),
-                store.journal_mode(),
-                store.busy_timeout(),
-                store.write_probe(),
-            ),
+            asyncio.gather(*probes),
             timeout=_DURABLE_STORE_PROBE_TIMEOUT_SECONDS,
         )
     except Exception as error:  # noqa: BLE001 - dependency readiness boundary
@@ -162,6 +163,11 @@ async def _durable_store_health() -> dict[str, object]:
             extra={"error_type": type(error).__name__},
         )
         return {"ready": False}
+    finally:
+        for probe in probes:
+            if not probe.done():
+                probe.cancel()
+        await asyncio.gather(*probes, return_exceptions=True)
     ready = (
         schema_version == JobStore.CURRENT_SCHEMA_VERSION
         and journal_mode == "wal"
@@ -282,6 +288,14 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
         if materialized.size_bytes > max_bytes:
             await _exit_materialized(lease)
             raise HTTPException(413, "Media exceeds HTTP download size limit")
+        released = False
+
+        async def release_materialized() -> None:
+            nonlocal released
+            if not released:
+                released = True
+                await _exit_materialized(lease)
+
         media_path = materialized.paths[0]
         suffix = media_path.suffix.lower()
         media_type = {
@@ -318,7 +332,7 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
                 raise
             finally:
                 renewal_error = await _stop_lease_renewal(renewal)
-                await _exit_materialized(lease)
+                await release_materialized()
                 if renewal_error is not None:
                     if active_error is None:
                         raise renewal_error
@@ -327,8 +341,9 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
                         extra={"error_type": type(renewal_error).__name__},
                     )
 
-        return StreamingResponse(
+        return _DownloadStreamingResponse(
             stream_materialized(),
+            cleanup=release_materialized,
             media_type=media_type,
             headers={
                 "Content-Disposition": (
@@ -370,12 +385,15 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
                     ffmpeg_cmd, stdin=asyncio.subprocess.PIPE, timeout=300
                 ) as ff_handle,
             ):
+                source_complete = False
 
                 async def read_ytdlp_write_ffmpeg():
+                    nonlocal source_complete
                     try:
                         while True:
                             chunk = await dl_handle.proc.stdout.read(CHUNK_SIZE)  # type: ignore[union-attr]
                             if not chunk:
+                                source_complete = True
                                 break
                             ff_handle.proc.stdin.write(chunk)  # type: ignore[union-attr]
                             await ff_handle.proc.stdin.drain()  # type: ignore[union-attr]
@@ -403,6 +421,18 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
                         yield chunk
                 finally:
                     pipe_task.cancel()
+                    await _await_download_cleanup(
+                        asyncio.gather(pipe_task, return_exceptions=True)
+                    )
+                if await ff_handle.proc.wait() != 0:
+                    raise RuntimeError("Media conversion subprocess failed")
+                # ffmpeg deliberately stops after 60 seconds. Do not wait on an
+                # unread source that still needs its context to terminate it.
+                source_code = dl_handle.proc.returncode
+                if source_complete:
+                    source_code = await dl_handle.proc.wait()
+                if source_code not in (None, 0):
+                    raise RuntimeError("Media download subprocess failed")
         else:
             cmd = state.ytdlp.build_command(
                 payload.page_url,
@@ -423,8 +453,10 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
                         )
                         return
                     yield chunk
+                if await proc.wait() != 0:
+                    raise RuntimeError("Media download subprocess failed")
 
-    return StreamingResponse(
+    return _DownloadStreamingResponse(
         stream_video_subprocess(),
         media_type=media_type,
         headers={
@@ -433,9 +465,43 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
     )
 
 
+class _DownloadStreamingResponse(StreamingResponse):
+    """Own the stream even when ASGI send fails outside its next iteration."""
+
+    def __init__(
+        self,
+        content: Any,
+        *,
+        cleanup: Callable[[], Awaitable[None]] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(content, **kwargs)
+        self._download_content = content
+        self._download_cleanup = cleanup
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+
+            async def close() -> None:
+                try:
+                    await self._download_content.aclose()
+                finally:
+                    if self._download_cleanup is not None:
+                        await self._download_cleanup()
+
+            await _await_download_cleanup(close())
+
+
 async def _exit_materialized(lease) -> None:  # type: ignore[no-untyped-def]
     """Await lease cleanup even when the streaming response is cancelled."""
-    cleanup = asyncio.create_task(lease.__aexit__(None, None, None))
+    await _await_download_cleanup(lease.__aexit__(None, None, None))
+
+
+async def _await_download_cleanup(work: Awaitable[Any]) -> None:
+    """Join owned cleanup through repeated cancellation before propagating it."""
+    cleanup = asyncio.ensure_future(work)
     cancellation: asyncio.CancelledError | None = None
     while not cleanup.done():
         try:

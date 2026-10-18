@@ -1,4 +1,5 @@
 import json
+import math
 import os
 import secrets
 import tempfile
@@ -78,6 +79,19 @@ def _positive_int(name: str, raw: str, *, maximum: int | None = None) -> int:
     if value <= 0 or (maximum is not None and value > maximum):
         suffix = f" and at most {maximum}" if maximum is not None else ""
         raise RuntimeError(f"{name} must be positive{suffix}")
+    return value
+
+
+def read_drain_timeout_seconds() -> float:
+    """Validate shutdown work grace before a lifespan acquires resources."""
+    try:
+        value = float(os.getenv("DRAIN_TIMEOUT_SECONDS", "30"))
+    except ValueError:
+        raise RuntimeError(
+            "DRAIN_TIMEOUT_SECONDS must be finite and non-negative"
+        ) from None
+    if not math.isfinite(value) or value < 0:
+        raise RuntimeError("DRAIN_TIMEOUT_SECONDS must be finite and non-negative")
     return value
 
 

@@ -140,8 +140,12 @@ async def test_token_cancellation_cleans_ytdlp_within_two_seconds(
         )
     )
     try:
-        async with asyncio.timeout(1):
+        # Fixture startup has its own watchdog; the two-second cancellation
+        # contract below begins only after the child owns its socket and file.
+        async with asyncio.timeout(10):
             while not ready.exists():
+                if task.done():
+                    pytest.fail(f"Downloader exited before readiness: {await task!r}")
                 await asyncio.sleep(0.01)
         await asyncio.sleep(phase_offset)
 

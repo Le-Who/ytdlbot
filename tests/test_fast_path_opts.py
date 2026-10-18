@@ -2,7 +2,6 @@
 """Unit tests for fast-path pipeline optimizations (OPT-1 to OPT-4)."""
 
 import asyncio
-import io
 import os
 import tempfile
 import unittest
@@ -76,104 +75,6 @@ class TestFindThumbnail(unittest.TestCase):
             self.assertEqual(result, jpg)
 
 
-class TestNativeAudioBypass(unittest.TestCase):
-    """Tests for orchestrator Opus bypass helpers – OPT-3."""
-
-    def test_is_native_audio_mp3(self):
-        from app.services.orchestrator import _is_native_audio_container
-
-        self.assertTrue(_is_native_audio_container("/tmp/audio.mp3"))
-
-    def test_is_native_audio_m4a(self):
-        from app.services.orchestrator import _is_native_audio_container
-
-        self.assertTrue(_is_native_audio_container("/tmp/audio.m4a"))
-
-    def test_is_native_audio_ogg(self):
-        from app.services.orchestrator import _is_native_audio_container
-
-        self.assertTrue(_is_native_audio_container("/tmp/audio.ogg"))
-
-    def test_is_native_audio_opus(self):
-        from app.services.orchestrator import _is_native_audio_container
-
-        self.assertTrue(_is_native_audio_container("/tmp/audio.opus"))
-
-    def test_is_not_native_audio_webm(self):
-        from app.services.orchestrator import _is_native_audio_container
-
-        self.assertFalse(_is_native_audio_container("/tmp/audio.webm"))
-
-    def test_is_not_native_audio_mp4(self):
-        from app.services.orchestrator import _is_native_audio_container
-
-        self.assertFalse(_is_native_audio_container("/tmp/video.mp4"))
-
-    def test_detect_opus_from_webm_positive(self):
-        from app.services.orchestrator import _detect_opus_from_webm
-
-        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
-            # OpusHead signature within first 512 bytes
-            f.write(b"\x1a\x45\xdf\xa3" + b"\x00" * 100 + b"OpusHead" + b"\x00" * 50)
-            fname = f.name
-        try:
-            self.assertTrue(_detect_opus_from_webm(fname))
-        finally:
-            os.unlink(fname)
-
-    def test_detect_opus_from_webm_negative(self):
-        from app.services.orchestrator import _detect_opus_from_webm
-
-        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as f:
-            f.write(b"\x1a\x45\xdf\xa3" + b"\x00" * 200)
-            fname = f.name
-        try:
-            self.assertFalse(_detect_opus_from_webm(fname))
-        finally:
-            os.unlink(fname)
-
-    def test_detect_opus_from_webm_missing_file(self):
-        from app.services.orchestrator import _detect_opus_from_webm
-
-        self.assertFalse(_detect_opus_from_webm("/nonexistent/path.webm"))
-
-    def test_maybe_rename_non_webm_unchanged(self):
-        from app.services.orchestrator import _maybe_rename_webm_to_ogg
-
-        result = asyncio.run(_maybe_rename_webm_to_ogg("/tmp/audio.ogg"))
-        self.assertEqual(result, "/tmp/audio.ogg")
-
-    def test_maybe_rename_webm_with_opus_header(self):
-        from app.services.converter import MediaConverter
-        from app.services.orchestrator import _maybe_rename_webm_to_ogg
-
-        with tempfile.TemporaryDirectory() as d:
-            webm_path = os.path.join(d, "audio.webm")
-            with open(webm_path, "wb") as f:
-                f.write(b"\x1a\x45\xdf\xa3" + b"\x00" * 50 + b"OpusHead" + b"\x00" * 50)
-
-            expected = os.path.join(d, "audio.ogg")
-            with patch.object(
-                MediaConverter,
-                "remux_webm_opus",
-                new=AsyncMock(return_value=expected),
-            ) as remux:
-                result = asyncio.run(_maybe_rename_webm_to_ogg(webm_path))
-            self.assertEqual(result, expected)
-            remux.assert_awaited_once_with(webm_path)
-
-    def test_maybe_rename_webm_no_opus_unchanged(self):
-        from app.services.orchestrator import _maybe_rename_webm_to_ogg
-
-        with tempfile.TemporaryDirectory() as d:
-            webm_path = os.path.join(d, "video.webm")
-            with open(webm_path, "wb") as f:
-                f.write(b"\x1a\x45\xdf\xa3" + b"\x00" * 200)
-
-            result = asyncio.run(_maybe_rename_webm_to_ogg(webm_path))
-            self.assertEqual(result, webm_path)  # unchanged
-
-
 class TestCobaltUrlHeadSize(unittest.IsolatedAsyncioTestCase):
     """Tests for _cobalt_url_head_size – OPT-4."""
 
@@ -219,43 +120,6 @@ class TestCobaltUrlHeadSize(unittest.IsolatedAsyncioTestCase):
             result = await _cobalt_url_head_size("https://cdn.example.com/video.mp4")
 
         self.assertIsNone(result)
-
-
-class TestOpenMediaPassthrough(unittest.TestCase):
-    """Tests for sender._open_media URL pass-through – OPT-4."""
-
-    def test_https_url_passes_through(self):
-        from app.services.sender import _open_media
-
-        url = "https://cdn.cobalt.tools/video.mp4"
-        with _open_media(url) as result:
-            self.assertEqual(result, url)
-
-    def test_http_url_passes_through(self):
-        from app.services.sender import _open_media
-
-        url = "http://example.com/video.mp4"
-        with _open_media(url) as result:
-            self.assertEqual(result, url)
-
-    def test_bytesio_passes_through(self):
-        from app.services.sender import _open_media
-
-        buf = io.BytesIO(b"video data")
-        with _open_media(buf) as result:
-            self.assertIs(result, buf)
-
-    def test_file_path_opens_binary(self):
-        from app.services.sender import _open_media
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as f:
-            f.write(b"fake video")
-            fname = f.name
-        try:
-            with _open_media(fname) as result:
-                self.assertEqual(result.read(), b"fake video")
-        finally:
-            os.unlink(fname)
 
 
 class TestSplitVideoStreamCopy(unittest.IsolatedAsyncioTestCase):
@@ -712,7 +576,6 @@ async def test_split_failure_cleans_all_owned_parts(tmp_path, monkeypatch, failu
 async def test_compression_enforces_actual_output_size(
     tmp_path, monkeypatch, output_bytes
 ):
-    import asyncio
 
     from app.core import state
     from app.services import converter

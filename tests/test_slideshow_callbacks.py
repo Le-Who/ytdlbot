@@ -34,7 +34,6 @@ class TestSlideshowCallbacks(unittest.IsolatedAsyncioTestCase):
         state.link_cache = AsyncMockCache()
         state.cancel_cache = AsyncMockCache()
         state.ytdlp = MagicMock()
-        state.tasks_sem = asyncio.Semaphore(5)
         state.download_sem = asyncio.Semaphore(5)
         state.api_sem = asyncio.Semaphore(10)
         # Reset queues each test

@@ -12,10 +12,21 @@ import pytest
 from app.core.process import ProcessHandle, ProcessOwnerCancelled, ProcessSupervisor
 
 
-async def _wait_for_file(path: Path) -> None:
-    async with asyncio.timeout(1):
-        while not path.exists():
-            await asyncio.sleep(0.01)
+async def _wait_for_file(path: Path, task: asyncio.Task) -> None:
+    """Observe fixture readiness before measuring cancellation or completion."""
+    try:
+        async with asyncio.timeout(10):
+            while not path.exists():
+                if task.done():
+                    pytest.fail(
+                        f"Process finished before fixture readiness: {await task!r}"
+                    )
+                await asyncio.sleep(0.01)
+    except BaseException:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        raise
 
 
 @pytest.mark.asyncio
@@ -45,7 +56,7 @@ async def test_request_cancel_leaves_no_process_socket_or_partial_after_two_seco
             cleanup_paths=(partial,),
         )
     )
-    await _wait_for_file(ready)
+    await _wait_for_file(ready, task)
 
     started = time.monotonic()
     await supervisor.cancel_owner("req-1")
@@ -74,7 +85,7 @@ async def test_supervisor_bounds_concurrent_processes(tmp_path: Path):
             owner="first",
         )
     )
-    await _wait_for_file(first_ready)
+    await _wait_for_file(first_ready, first)
     second = asyncio.create_task(
         supervisor.run(
             [
@@ -90,6 +101,7 @@ async def test_supervisor_bounds_concurrent_processes(tmp_path: Path):
 
     await supervisor.cancel_owner("first")
     await asyncio.wait_for(first, timeout=2)
+    await _wait_for_file(second_ready, second)
     await asyncio.wait_for(second, timeout=2)
     assert second_ready.exists()
 
@@ -123,7 +135,7 @@ async def test_scoped_owner_cancels_implicit_child_process(tmp_path: Path):
                 ]
             )
         )
-    await _wait_for_file(ready)
+    await _wait_for_file(ready, task)
 
     await supervisor.cancel_owner("request-token")
     await asyncio.wait_for(task, timeout=2)
@@ -148,7 +160,7 @@ async def test_explicit_owner_overrides_scoped_owner(tmp_path: Path):
                 owner="explicit-owner",
             )
         )
-    await _wait_for_file(ready)
+    await _wait_for_file(ready, task)
 
     await supervisor.cancel_owner("request-token")
     assert not task.done()
@@ -225,7 +237,7 @@ async def test_token_cancels_long_gallery_dl_service_process(
                 "https://example.invalid/video"
             )
         )
-    await _wait_for_file(ready)
+    await _wait_for_file(ready, task)
 
     started = time.monotonic()
     await supervisor.cancel_owner("gallery-token")
@@ -267,7 +279,7 @@ async def test_token_cancels_long_ffmpeg_conversion(
     monkeypatch.setattr(converter, "process_supervisor", FfmpegProcessProxy())
     with process_owner_scope("ffmpeg-token"):
         task = asyncio.create_task(converter.MediaConverter.convert_to_mp3(str(source)))
-    await _wait_for_file(ready)
+    await _wait_for_file(ready, task)
 
     started = time.monotonic()
     await supervisor.cancel_owner("ffmpeg-token")
@@ -286,6 +298,7 @@ async def test_same_owner_nested_processes_have_a_separate_hard_bound(tmp_path: 
     """Nested pipeline capacity must be finite even when its owner is shared."""
     supervisor = ProcessSupervisor(max_processes=1, max_child_processes=2)
     ready = [tmp_path / f"ready-{index}" for index in range(3)]
+    release = [tmp_path / f"release-{index}" for index in range(3)]
 
     def command(index: int) -> list[str]:
         return [
@@ -293,7 +306,8 @@ async def test_same_owner_nested_processes_have_a_separate_hard_bound(tmp_path: 
             "-c",
             (
                 f"import pathlib,time;pathlib.Path({str(ready[index])!r}).touch();"
-                "time.sleep(0.5)"
+                f"release=pathlib.Path({str(release[index])!r});"
+                "\nwhile not release.exists(): time.sleep(0.01)"
             ),
         ]
 
@@ -302,10 +316,15 @@ async def test_same_owner_nested_processes_have_a_separate_hard_bound(tmp_path: 
         for index in range(3)
     ]
     try:
-        await _wait_for_file(ready[0])
-        await _wait_for_file(ready[1])
+        await _wait_for_file(ready[0], tasks[0])
+        await _wait_for_file(ready[1], tasks[1])
         await asyncio.sleep(0.1)
         assert not ready[2].exists()
+        release[0].touch()
+        await _wait_for_file(ready[2], tasks[2])
+        assert not tasks[1].done()
+        release[1].touch()
+        release[2].touch()
         await asyncio.wait_for(asyncio.gather(*tasks), timeout=2)
         assert ready[2].exists()
     finally:
@@ -331,7 +350,7 @@ async def test_ytdlp_owned_stem_cleanup_removes_format_partials(tmp_path: Path):
             owner="stem-cleanup",
         )
     )
-    await _wait_for_file(ready)
+    await _wait_for_file(ready, task)
 
     await supervisor.cancel_owner("stem-cleanup")
     await asyncio.wait_for(task, timeout=2)
@@ -365,13 +384,34 @@ async def test_windows_job_kills_child_after_group_leader_exits(tmp_path: Path):
     task = asyncio.create_task(
         supervisor.run([sys.executable, "-c", parent_script], owner="tree")
     )
-    try:
-        await _wait_for_file(ready)
-        async with asyncio.timeout(1):
-            while not any(
+
+    async def wait_for_tree_setup() -> None:
+        while not (
+            ready.exists()
+            and any(
                 proc.returncode is not None for proc in supervisor.processes_for("tree")
-            ):
-                await asyncio.sleep(0.01)
+            )
+        ):
+            await asyncio.sleep(0.01)
+
+    setup_task = asyncio.create_task(wait_for_tree_setup())
+    try:
+        # Bound stalled fixture construction separately from measured cancellation.
+        done, _ = await asyncio.wait(
+            (setup_task, task), timeout=10, return_when=asyncio.FIRST_COMPLETED
+        )
+        if task in done:
+            result = await task
+            pytest.fail(
+                "Owned process finished before descendant cancellation: "
+                f"returncode={result.returncode}, stderr={result.stderr!r}"
+            )
+        assert setup_task in done, (
+            "Timed out constructing child-ready/leader-exited fixture: "
+            f"ready={ready.exists()}, "
+            f"processes={[(p.pid, p.returncode) for p in supervisor.processes_for('tree')]}"
+        )
+        await setup_task
 
         started = time.monotonic()
         await supervisor.cancel_owner("tree")
@@ -380,6 +420,8 @@ async def test_windows_job_kills_child_after_group_leader_exits(tmp_path: Path):
         with socket.socket() as replacement:
             replacement.bind(("127.0.0.1", port))
     finally:
+        setup_task.cancel()
+        await asyncio.gather(setup_task, return_exceptions=True)
         if child_pid.exists():
             # Failure cleanup must finish reaping the real test child before returning.
             subprocess.run(  # noqa: ASYNC221
@@ -400,6 +442,7 @@ async def test_windows_normal_finish_closes_job_and_kills_descendant(tmp_path: P
         port = probe.getsockname()[1]
 
     ready = tmp_path / "normal-child-ready"
+    release = tmp_path / "release-parent"
     child_script = (
         "import pathlib,socket,time;"
         "s=socket.socket();"
@@ -409,17 +452,19 @@ async def test_windows_normal_finish_closes_job_and_kills_descendant(tmp_path: P
     )
     parent_script = (
         "import pathlib,subprocess,sys,time;"
-        f"ready=pathlib.Path({str(ready)!r});"
+        f"release=pathlib.Path({str(release)!r});"
         f"subprocess.Popen([sys.executable,'-c',{child_script!r}],"
         "stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL);"
-        "\nwhile not ready.exists(): time.sleep(0.01)"
+        "\nwhile not release.exists(): time.sleep(0.01)"
     )
 
     supervisor = ProcessSupervisor(max_processes=1)
-    result = await asyncio.wait_for(
-        supervisor.run([sys.executable, "-c", parent_script], owner="normal-tree"),
-        timeout=2,
+    task = asyncio.create_task(
+        supervisor.run([sys.executable, "-c", parent_script], owner="normal-tree")
     )
+    await _wait_for_file(ready, task)
+    release.touch()
+    result = await asyncio.wait_for(task, timeout=2)
 
     assert result.returncode == 0
     async with asyncio.timeout(1):

@@ -34,10 +34,6 @@ logger = logging.getLogger("app.services.orchestrator")
 # Telegram-compatible video codecs — anything else needs re-encoding
 TG_SAFE_CODECS = {"h264", "mpeg4"}
 
-# Telegram hard upload limit for URL-mode delivery (server-side fetch).
-# Files above this must be downloaded locally and uploaded as binary.
-_TG_URL_DELIVERY_MAX_BYTES = int(19.5 * 1024 * 1024)  # 19.5 MB
-
 # Telegram 50 MB upload ceiling (Bot API).
 _TG_UPLOAD_LIMIT_BYTES = int(48.5 * 1024 * 1024)  # 48.5 MB — absorbs moov-atom overhead
 
@@ -233,57 +229,6 @@ def _build_gif_reply_markup(token: str, is_gif: bool) -> object | None:
     from app.bot.keyboards import build_sent_gif_keyboard
 
     return build_sent_gif_keyboard(token)
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# OPT-3: Native Opus / M4A Audio Bypass
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-def _is_native_audio_container(file_path: str) -> bool:
-    """Return True if the file is already in a Telegram-compatible audio container.
-
-    Telegram natively accepts: .mp3, .m4a (AAC), .ogg (Opus), .opus.
-    These can be sent as-is via send_audio / send_voice without FFmpeg transcoding.
-    """
-    ext = os.path.splitext(file_path)[1].lower()
-    return ext in (".mp3", ".m4a", ".aac", ".ogg", ".opus")
-
-
-def _detect_opus_from_webm(file_path: str) -> bool:
-    """Fast heuristic: read first 512 bytes to detect OpusHead signature in WebM.
-
-    WebM files containing Opus audio have 'OpusHead' in the first few hundred bytes.
-    This allows us to identify them for zero-cost container rename to .ogg.
-    """
-    try:
-        with open(file_path, "rb") as f:
-            header = f.read(512)
-        return b"OpusHead" in header
-    except OSError:
-        return False
-
-
-async def _maybe_rename_webm_to_ogg(file_path: str) -> str:
-    """If the file is WebM+Opus, remux it into a real Ogg container.
-
-    Telegram's sendVoice/sendAudio accepts .ogg (Opus) natively.
-    FFmpeg stream-copies the Opus packets, so this is lossless but does not
-    mislabel WebM container bytes with an ``.ogg`` suffix.
-
-    Returns the (possibly renamed) file path.
-    """
-    if not file_path.lower().endswith(".webm"):
-        return file_path
-
-    if _detect_opus_from_webm(file_path):
-        ogg_path = await MediaConverter.remux_webm_opus(file_path)
-        if ogg_path is not None:
-            logger.info("OPT-3 Opus fast-path: remuxed %s → %s", file_path, ogg_path)
-            return ogg_path
-        logger.warning("OPT-3 Opus remux failed: %s", file_path)
-
-    return file_path
 
 
 # ──────────────────────────────────────────────────────────────────────────────

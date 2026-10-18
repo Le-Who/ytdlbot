@@ -46,24 +46,6 @@ class TestAudioContainerConversion(unittest.IsolatedAsyncioTestCase):
     @patch("app.core.process.process_supervisor.run", new_callable=AsyncMock)
     @patch("app.services.converter.os.path.getsize", return_value=128)
     @patch("app.services.converter.os.path.exists", return_value=True)
-    async def test_webm_opus_is_remuxed_to_ogg_with_stream_copy(
-        self, _exists, _size, run
-    ):
-        """Catches relabeling WebM bytes as Ogg instead of remuxing them."""
-        from app.services.converter import MediaConverter
-
-        run.return_value = MagicMock(returncode=0, stderr=b"")
-        result = await MediaConverter.remux_webm_opus("/tmp/audio.webm")
-
-        self.assertEqual(result, "/tmp/audio.ogg")
-        command = run.await_args.args[0]
-        self.assertIn("-c:a", command)
-        self.assertEqual(command[command.index("-c:a") + 1], "copy")
-        self.assertIn("ogg", command)
-
-    @patch("app.core.process.process_supervisor.run", new_callable=AsyncMock)
-    @patch("app.services.converter.os.path.getsize", return_value=128)
-    @patch("app.services.converter.os.path.exists", return_value=True)
     async def test_strict_mp3_transcodes_non_mp3_input(self, _exists, _size, run):
         """Catches strict MP3 delivery returning Opus/AAC under an MP3 request."""
         from app.services.converter import MediaConverter

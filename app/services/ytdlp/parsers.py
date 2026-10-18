@@ -1,6 +1,5 @@
 import re
 from collections import OrderedDict
-from enum import Enum
 from typing import Any
 
 from app.constants import (
@@ -39,47 +38,15 @@ def _is_tiktok(url: str) -> bool:
     return "tiktok.com" in url.lower()
 
 
-def _is_youtube(url: str) -> bool:
-    return "youtube.com" in url.lower() or "youtu.be" in url.lower()
-
-
 def _is_pinterest(url: str) -> bool:
     return "pinterest.com" in url.lower() or "pin.it" in url.lower()
-
-
-def _is_facebook(url: str) -> bool:
-    low = url.lower()
-    return "facebook.com" in low or "fb.watch" in low
 
 
 def _is_vk(url: str) -> bool:
     return "vk.com" in url.lower()
 
 
-def _is_vk_audio(url: str) -> bool:
-    """True for VK audio tracks: vk.com/audio{owner}_{id}[_{hash}]"""
-    low = url.lower()
-    return "vk.com" in low and "/audio" in low
-
-
-def _is_vk_video(url: str) -> bool:
-    """True for VK video clips: vk.com/video*, vk.com/clip*"""
-    low = url.lower()
-    return "vk.com" in low and ("/video" in low or "/clip" in low)
-
-
 # ── TikTok content-type classification ─────────────────────────────
-
-
-class TikTokError(Enum):
-    """Structured classification of TikTok extraction errors."""
-
-    AUTH_REQUIRED = "auth"  # login / cookies / sign in
-    SLIDESHOW = "slideshow"  # unsupported url → photo content
-    FORBIDDEN = "forbidden"  # 403
-    NOT_FOUND = "not_found"  # 404
-    LIVE = "live"  # live stream
-    GENERIC = "generic"  # everything else
 
 
 def classify_tiktok_content(url: str) -> str:
@@ -92,24 +59,6 @@ def classify_tiktok_content(url: str) -> str:
     if "/photo/" in url.lower():
         return "slideshow"
     return "video"
-
-
-def classify_tiktok_error(error_msg: str) -> TikTokError:
-    """Classify a TikTok extraction error into a structured enum."""
-    msg = error_msg.lower()
-    if "log in" in msg or "cookies" in msg or "sign in" in msg:
-        return TikTokError.AUTH_REQUIRED
-    if "unsupported url" in msg:
-        return TikTokError.SLIDESHOW
-    if "403" in msg or "forbidden" in msg:
-        return TikTokError.FORBIDDEN
-    if "404" in msg or "not found" in msg:
-        return TikTokError.NOT_FOUND
-    if "not available" in msg or "status code" in msg:
-        return TikTokError.AUTH_REQUIRED
-    if "live" in msg and "available" not in msg:
-        return TikTokError.LIVE
-    return TikTokError.GENERIC
 
 
 def _format_duration(seconds: float | None) -> str:

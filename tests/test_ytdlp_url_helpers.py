@@ -1,10 +1,8 @@
 import unittest
 
 from app.services.ytdlp.parsers import (
-    _is_facebook,
     _is_pinterest,
     _is_tiktok,
-    _is_youtube,
 )
 
 
@@ -23,22 +21,6 @@ class TestUrlHelpers(unittest.TestCase):
         self.assertFalse(_is_tiktok("example.com"))
         self.assertFalse(_is_tiktok(""))
 
-    def test_is_youtube(self):
-        # Valid URLs
-        self.assertTrue(_is_youtube("https://www.youtube.com/watch?v=123"))
-        self.assertTrue(_is_youtube("https://youtu.be/123"))
-        self.assertTrue(_is_youtube("youtube.com"))
-        self.assertTrue(_is_youtube("http://youtu.be/"))
-
-        # Case insensitivity
-        self.assertTrue(_is_youtube("YoUtUbE.cOm"))
-        self.assertTrue(_is_youtube("YoUtU.bE"))
-
-        # Invalid URLs
-        self.assertFalse(_is_youtube("tiktok.com"))
-        self.assertFalse(_is_youtube("google.com"))
-        self.assertFalse(_is_youtube(""))
-
     def test_is_pinterest(self):
         # Valid URLs
         self.assertTrue(_is_pinterest("https://www.pinterest.com/pin/123"))
@@ -54,21 +36,6 @@ class TestUrlHelpers(unittest.TestCase):
         )  # Based on current implementation which checks for .com specifically
         self.assertFalse(_is_pinterest("google.com"))
         self.assertFalse(_is_pinterest(""))
-
-    def test_is_facebook(self):
-        # Valid URLs
-        self.assertTrue(_is_facebook("https://www.facebook.com/watch/123"))
-        self.assertTrue(_is_facebook("https://m.facebook.com/reel/456"))
-        self.assertTrue(_is_facebook("https://fb.watch/abc123/"))
-
-        # Case insensitivity
-        self.assertTrue(_is_facebook("FaCeBoOk.CoM"))
-        self.assertTrue(_is_facebook("FB.WATCH"))
-
-        # Invalid URLs
-        self.assertFalse(_is_facebook("youtube.com"))
-        self.assertFalse(_is_facebook("tiktok.com"))
-        self.assertFalse(_is_facebook(""))
 
 
 if __name__ == "__main__":

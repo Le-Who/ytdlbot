@@ -48,7 +48,7 @@ jobs:
         env:
           BOT_TOKEN: test_token
           WEBHOOK_URL: https://example.com
-          TELEGRAM_SECRET_TOKEN: ci-secret
+          TELEGRAM_SECRET_TOKEN: test-secret
           REDIS_URL: redis://localhost:6379/0
           APP_RELEASE: ${{ github.sha }}
           BOT_IMAGE: ghcr.io/example/ytdlbot@sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
@@ -79,7 +79,10 @@ jobs:
             tests/deploy/test_release_scripts.py::test_release_automation_contains_no_host_wide_or_secret_rewrite_operations \
             tests/deploy/test_release_scripts.py::test_deploy_release_gate_is_bounded_and_not_repeated \
             --no-cov --timeout=60 -q
-          bash -n scripts/bootstrap-production.sh scripts/bootstrap-migrate-production.sh scripts/deploy-release.sh scripts/preflight-production.sh scripts/rollback-release.sh
+          for script in scripts/bootstrap-production.sh scripts/bootstrap-migrate-production.sh \
+            scripts/deploy-release.sh scripts/preflight-production.sh scripts/rollback-release.sh; do
+            bash -n "$script" || exit
+          done
           install -m 600 .env.example .env
           trap 'rm -f .env' EXIT
           docker compose config --quiet

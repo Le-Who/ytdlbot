@@ -30,6 +30,17 @@ Routine deployment does not run `compose down`, pull or recreate dependency
 services, remove orphans, restart Docker or the host, edit Caddy or Portainer,
 globally prune images, or regenerate `.env`.
 
+Release, bootstrap, and rollback entrypoints discard inherited `COMPOSE_FILE`,
+`COMPOSE_PROJECT_NAME`, `COMPOSE_PROFILES`, `COMPOSE_ENV_FILES`, and
+`COMPOSE_DISABLE_ENV_FILE` overrides. Validation and activation use the verified
+project configuration and explicit rollback overrides rather than a caller's
+unrelated Compose selection.
+
+Standalone release, bootstrap, preflight, and rollback scripts clear inherited
+Compose file, project, profile, and environment-file overrides before selecting
+the verified project configuration. Rollback still applies its explicit captured
+image override.
+
 ## Required production topology
 
 Production is a single active bot worker backed by the existing Compose project.
@@ -165,6 +176,11 @@ to persist incoming updates. Active work receives a bounded 30-second drain
 budget; Compose allows 45 seconds before forced termination. At the deadline the
 worker checkpoints or cancels supervised work and the next worker recovers it.
 Normal release shutdown does not delete the webhook.
+
+`DRAIN_TIMEOUT_SECONDS` defaults to 30 and must be finite and non-negative;
+zero starts cleanup immediately. Each lifespan validates and captures it before
+acquiring runtime resources, so invalid configuration fails at startup and later
+environment changes cannot bypass shutdown cleanup.
 
 Delivery receipts are durable per logical item:
 

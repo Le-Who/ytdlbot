@@ -1288,6 +1288,7 @@ async def test_materialization_logs_source_bytes_formats_and_phase_timings(
     """Catches successful downloads remaining opaque inside materialize latency."""
     responses = [FakeResponse(), FakeResponse()]
     media, _ = transport(tmp_path, responses)
+    media.clock = lambda: 0.0
     candidate = source_candidate(size=24, candidate_id="18")
 
     with caplog.at_level(logging.INFO, logger="app.services.media.transport"):
@@ -1307,7 +1308,7 @@ async def test_materialization_logs_source_bytes_formats_and_phase_timings(
         "container": None,
         "video_codecs": [],
         "audio_codecs": [],
-        "download_seconds": pytest.approx(0, abs=0.1),
+        "download_seconds": 0.0,
         "transform_seconds": 0.0,
         "output_bytes": item.size_bytes,
     }

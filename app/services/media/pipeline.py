@@ -339,13 +339,13 @@ class MediaPipeline:
         ``auth_scope`` while still sharing transport, cache, receipts, and leases.
         """
         _validate_delivery_scope(request, target)
-        candidate = _project_album_selection(request, candidate)
         validation = validate_candidate(request, candidate)
         if not validation.usable:
             reasons = ",".join(reason.value for reason in validation.reasons)
             raise MediaResolutionError(
                 f"authorized-instagram: candidate rejected ({reasons})"
             )
+        candidate = _project_album_selection(request, candidate)
         cached_receipt = await self._deliver_cached(request, target, delivery_options)
         if cached_receipt is not None:
             if cached_receipt.success:

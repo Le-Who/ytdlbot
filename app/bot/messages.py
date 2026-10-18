@@ -857,7 +857,9 @@ async def _handle_instagram(
             }
             for item in items
         ]
-        await state.link_cache.set(hl_cache_key, hl_items_data)
+        await state.link_cache.set(
+            hl_cache_key, {"items": hl_items_data, "section": section}
+        )
 
         lines = [f"📁 <b>{target}</b>\n"]
         for i, item in enumerate(items, 1):

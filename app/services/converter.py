@@ -10,6 +10,7 @@ import time
 import uuid
 
 from app.core import state
+from app.core.asyncio_utils import await_owned
 from app.core.config import TEMP_DIR
 from app.core.metrics import metrics
 from app.core.process import ProcessResult, process_supervisor
@@ -534,47 +535,6 @@ class MediaConverter:
     """Handles ffmpeg-based media conversions."""
 
     @staticmethod
-    async def remux_webm_opus(file_path: str) -> str | None:
-        """Put an Opus stream in a real Ogg container without re-encoding."""
-        if not file_path.lower().endswith(".webm") or not os.path.exists(file_path):
-            return None
-        output_path = file_path[:-5] + ".ogg"
-        command = [
-            "ffmpeg",
-            "-nostdin",
-            "-y",
-            "-i",
-            file_path,
-            "-map",
-            "0:a:0",
-            "-vn",
-            "-c:a",
-            "copy",
-            "-f",
-            "ogg",
-            output_path,
-        ]
-        try:
-            result = await _run_transform_process(
-                command,
-                operation="remux_opus",
-                stdout_pipe=False,
-                timeout=_FFMPEG_TIMEOUT,
-                cleanup_paths=(output_path,),
-            )
-        except (OSError, TimeoutError):
-            return None
-        if (
-            result.returncode != 0
-            or not os.path.exists(output_path)
-            or os.path.getsize(output_path) <= 0
-        ):
-            safe_remove(output_path)
-            return None
-        safe_remove(file_path)
-        return output_path
-
-    @staticmethod
     async def convert_to_mp3(file_path: str) -> str | None:
         """Satisfy a strict MP3 request with MP3 bytes, never an alias."""
         if not file_path or not os.path.exists(file_path):
@@ -684,7 +644,8 @@ class MediaConverter:
         if not video_path or not os.path.exists(video_path):
             return None
 
-        gif_path = video_path.rsplit(".", 1)[0] + "_gif.mp4"
+        gif_path = video_path.rsplit(".", 1)[0] + f"_{uuid.uuid4().hex}_gif.mp4"
+        succeeded = False
 
         try:
             # Probe codec to decide copy vs transcode
@@ -736,12 +697,16 @@ class MediaConverter:
             if not os.path.exists(gif_path) or os.path.getsize(gif_path) == 0:
                 return None
 
+            succeeded = True
             return gif_path
         # This compatibility facade translates external converter failures into
         # its established None result; process cancellation remains a BaseException.
         except Exception as e:  # noqa: BLE001
             logger.error("FFmpeg exception", extra={"error": str(e)})
             return None
+        finally:
+            if not succeeded:
+                safe_remove(gif_path)
 
     @staticmethod
     async def convert_to_native_gif(video_path: str) -> str | None:
@@ -763,7 +728,8 @@ class MediaConverter:
 
         base = video_path.rsplit(".", 1)[0]
         palette_path = os.path.join(TEMP_DIR, f"palette_{uuid.uuid4().hex}.png")
-        gif_path = f"{base}_native.gif"
+        gif_path = f"{base}_{uuid.uuid4().hex}_native.gif"
+        succeeded = False
 
         # Scale to max 480px wide, 15fps; odd-dimension safety with force_divisible_by=2
         scale_filter = (
@@ -838,7 +804,6 @@ class MediaConverter:
                         rc2,
                         err2[-400:],
                     )
-                    safe_remove(gif_path)
                     return None
 
             if not os.path.exists(gif_path) or os.path.getsize(gif_path) == 0:
@@ -847,14 +812,16 @@ class MediaConverter:
 
             size_mb = os.path.getsize(gif_path) / (1024 * 1024)
             logger.info("convert_to_native_gif: OK → %s (%.1f MB)", gif_path, size_mb)
+            succeeded = True
             return gif_path
 
         except Exception:
             logger.exception("convert_to_native_gif failed")
-            safe_remove(gif_path)
             return None
         finally:
             safe_remove(palette_path)
+            if not succeeded:
+                safe_remove(gif_path)
 
     @staticmethod
     async def images_to_video(
@@ -883,7 +850,9 @@ class MediaConverter:
             # --- Adaptive duration ---
             image_dur = 3.0  # default: 3 seconds per image
             if audio_path and os.path.exists(audio_path):
-                audio_dur = await asyncio.to_thread(_get_audio_duration, audio_path)
+                audio_dur = await await_owned(
+                    asyncio.to_thread(_get_audio_duration, audio_path)
+                )
                 if audio_dur and audio_dur > 0 and len(images) > 0:
                     image_dur = audio_dur / len(images)
                     # Clamp between 1s and 10s to avoid extremes
@@ -906,7 +875,7 @@ class MediaConverter:
                         escaped = images[-1].replace("'", "'\\''")
                         f.write(f"file '{escaped}'\n")
 
-            await asyncio.to_thread(_write_concat)
+            await await_owned(asyncio.to_thread(_write_concat))
 
             # --- Build ffmpeg command ---
             # Shared video encoding parameters (optimised for static images)

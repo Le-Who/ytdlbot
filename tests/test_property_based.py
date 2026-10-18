@@ -8,14 +8,10 @@ from hypothesis import strategies as st
 from app.core.utils import extract_supported_url, is_supported_url
 from app.services.ytdlp.models import FormatMetadata
 from app.services.ytdlp.parsers import (
-    TikTokError,
     _calculate_filesize,
     _format_duration,
-    _is_facebook,
     _is_pinterest,
     _is_tiktok,
-    _is_youtube,
-    classify_tiktok_error,
     deduplicate_formats,
 )
 
@@ -126,15 +122,6 @@ class TestFilesizeProperties(unittest.TestCase):
 # ── TikTok error classification properties ───────────────────────
 
 
-class TestTikTokErrorProperties(unittest.TestCase):
-    @given(msg=st.text(min_size=0, max_size=500))
-    @settings(max_examples=200)
-    def test_classify_tiktok_error_always_returns_enum(self, msg):
-        """classify_tiktok_error always returns a TikTokError member."""
-        result = classify_tiktok_error(msg)
-        self.assertIsInstance(result, TikTokError)
-
-
 # ── URL detection properties ─────────────────────────────────────
 
 
@@ -144,9 +131,7 @@ class TestURLDetectionProperties(unittest.TestCase):
     def test_platform_detectors_never_crash(self, url):
         """Platform detectors never raise for any string."""
         _is_tiktok(url)
-        _is_youtube(url)
         _is_pinterest(url)
-        _is_facebook(url)
 
     @given(url=st.text(min_size=0, max_size=300))
     @settings(max_examples=200)

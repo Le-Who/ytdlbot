@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from cachetools import TTLCache
@@ -45,9 +47,6 @@ ytdlp = YtDlpService()
 # api_sem     : TikWM / Cobalt / Pinterest fetches (near-zero CPU).
 # download_sem: yt-dlp + aria2 downloads (IO-bound, moderate CPU).
 # conversion_sem / gif_file_sem retain their existing limits.
-tasks_sem = asyncio.Semaphore(
-    MAX_CONCURRENT_TASKS
-)  # kept for legacy callbacks.py usage
 api_sem = asyncio.Semaphore(int(os.getenv("MAX_API_TASKS", "10")))
 download_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
 parsing_sem = asyncio.Semaphore(5)  # Лимит на одновременный парсинг форматов
@@ -138,6 +137,55 @@ inflight_parsing: TTLCache = TTLCache(
 file_cache: FileTTLCache = FileTTLCache(
     maxsize=30, ttl=LINK_TTL_MINUTES * 60, on_eviction=safe_remove
 )  # token -> file_path
+
+
+@dataclass(frozen=True, slots=True)
+class _SentMediaSource:
+    path: str
+    version: tuple[int, int, int, int]
+
+
+# Metadata only: the original cache/materialization still owns these files.
+sent_media_sources: TTLCache[tuple[str, str], _SentMediaSource] = TTLCache(
+    maxsize=500, ttl=LINK_TTL_MINUTES * 60
+)
+
+
+def _telegram_source_keys(media: Any) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (name, value)
+        for name in ("file_unique_id", "file_id")
+        if isinstance(value := getattr(media, name, None), str) and value
+    )
+
+
+def _source_version(path: str) -> tuple[int, int, int, int]:
+    status = os.stat(path)
+    return status.st_dev, status.st_ino, status.st_size, status.st_mtime_ns
+
+
+def remember_sent_media_source(media: Any, path: str | os.PathLike[str]) -> None:
+    """Bind a confirmed Telegram identity without adopting its local file."""
+    resolved = str(Path(path).resolve(strict=True))
+    source = _SentMediaSource(resolved, _source_version(resolved))
+    for key in _telegram_source_keys(media):
+        sent_media_sources[key] = source
+
+
+def local_sent_media_source(media: Any) -> str | None:
+    """Use only the unchanged source of this exact successful Telegram upload."""
+    for key in _telegram_source_keys(media):
+        source = sent_media_sources.get(key)
+        if source is None:
+            continue
+        try:
+            if _source_version(source.path) == source.version:
+                return source.path
+        except OSError:
+            pass
+        sent_media_sources.pop(key, None)
+    return None
+
 
 if redis_client:
     from app.core.limiter import RedisTokenBucketLimiter

@@ -780,7 +780,9 @@ def test_offline_acceptance_aggregates_release_critical_contracts() -> None:
         cwd=ROOT,
         capture_output=True,
         text=True,
-        timeout=180,
+        # This aggregates multiple bounded mock deployments. MSYS process
+        # startup adds substantial fixture cost on Windows; keep Linux's gate.
+        timeout=600 if sys.platform == "win32" else 180,
         check=False,
     )
 

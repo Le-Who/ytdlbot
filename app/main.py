@@ -1,7 +1,6 @@
 import asyncio
 import html
 import logging
-import os
 import traceback
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -298,6 +297,7 @@ def _release_lifespan(owner: _LifespanOwner) -> None:
 async def _lifespan_runtime(
     app: FastAPI, owner: _LifespanOwner
 ) -> AsyncGenerator[None, None]:
+    drain_timeout_seconds = config.read_drain_timeout_seconds()
     logger.info("Starting up...")
     logger.info("aria2c: %s", "enabled ✅" if state.ytdlp.has_aria2 else "not found ❌")
 
@@ -489,7 +489,7 @@ async def _lifespan_runtime(
             webhook_enabled=bool(config.WEBHOOK_URL),
             job_store=job_store,
             redis_client=state.redis_client,
-            drain_timeout_seconds=float(os.getenv("DRAIN_TIMEOUT_SECONDS", "30")),
+            drain_timeout_seconds=drain_timeout_seconds,
         )
         owner.shutdown_returned = True
 

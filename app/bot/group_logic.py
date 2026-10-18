@@ -508,6 +508,8 @@ async def on_group_slideshow(
             max_parts=2,
         )
         token, mode = parts
+        if mode not in {"photo", "video"}:
+            return
     except (CallbackDataError, ValueError, AttributeError) as e:
         logger.error(
             "Invalid callback data in on_group_slideshow", extra={"error": str(e)}

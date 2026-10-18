@@ -19,6 +19,7 @@ from urllib.parse import quote
 
 from curl_cffi.requests import AsyncSession, Response
 
+from app.core.asyncio_utils import await_owned
 from app.core.config import TEMP_DIR
 from app.core.utils import safe_remove
 from app.services.media.transport import redact_url
@@ -41,26 +42,30 @@ MAX_MEDIA_BYTES = 2_000_000_000
 async def _stream_response(response: Response, output_path: str) -> int:
     """Stream a response to disk without ever materializing the whole body."""
     written = 0
-    output = await asyncio.to_thread(open, output_path, "wb")
+    output = open(output_path, "wb")  # noqa: ASYNC230, SIM115 - close joins owned I/O
     try:
-        async for chunk in response.aiter_content(chunk_size=CHUNK_SIZE):
-            if not chunk:
-                continue
-            written += len(chunk)
-            if written > MAX_MEDIA_BYTES:
-                raise ValueError("media exceeds 2,000,000,000 byte limit")
-            await asyncio.to_thread(output.write, chunk)
-    finally:
-        await asyncio.to_thread(output.close)
-    declared = response.headers.get("content-length")
-    if isinstance(declared, (str, int)):
         try:
-            expected = int(declared)
-        except ValueError:
-            expected = -1
-        if expected >= 0 and written != expected:
-            raise ValueError("truncated media response")
-    return written
+            async for chunk in response.aiter_content(chunk_size=CHUNK_SIZE):
+                if not chunk:
+                    continue
+                written += len(chunk)
+                if written > MAX_MEDIA_BYTES:
+                    raise ValueError("media exceeds 2,000,000,000 byte limit")
+                await await_owned(asyncio.to_thread(output.write, chunk))
+        finally:
+            await await_owned(asyncio.to_thread(output.close))
+        declared = response.headers.get("content-length")
+        if isinstance(declared, (str, int)):
+            try:
+                expected = int(declared)
+            except ValueError:
+                expected = -1
+            if expected >= 0 and written != expected:
+                raise ValueError("truncated media response")
+        return written
+    except BaseException:
+        safe_remove(output_path)
+        raise
 
 
 @dataclass
@@ -325,7 +330,7 @@ class TikWMService:
                     content_size,
                     ct,
                 )
-                await asyncio.to_thread(safe_remove, output_path)
+                await await_owned(asyncio.to_thread(safe_remove, output_path))
                 for _key in {url, _canonical}:
                     if _key:
                         _tikwm_cache.pop(_key, None)
@@ -336,17 +341,20 @@ class TikWMService:
                     return await TikWMService.download_video(url, _cdn_retry=False)
                 return None, "TikWM CDN returned empty/invalid body"
 
-            file_size = await asyncio.to_thread(os.path.getsize, output_path)
+            file_size = os.path.getsize(output_path)
             size_mb = file_size / (1024 * 1024)
             logger.info("[TIKWM] Downloaded: %s (%.1f MB)", output_path, size_mb)
             return output_path, None
 
         # Downloading spans provider resolution, HTTP streaming and filesystem
         # publication; errors return no path after cleaning the partial file.
+        except asyncio.CancelledError:
+            safe_remove(output_path)
+            raise
         except Exception as e:  # noqa: BLE001
             logger.error("[TIKWM] Download failed (%s)", type(e).__name__)
             # Clean up partial file
-            await asyncio.to_thread(safe_remove, output_path)
+            await await_owned(asyncio.to_thread(safe_remove, output_path))
             return None, "TikWM download error: Download failed"
 
     @staticmethod
@@ -371,19 +379,22 @@ class TikWMService:
                     return None
                 await _stream_response(resp, output_path)
 
-            file_size = await asyncio.to_thread(os.path.getsize, output_path)
+            file_size = os.path.getsize(output_path)
             size_mb = file_size / (1024 * 1024)
             logger.info("[TIKWM] Downloaded audio: %s (%.1f MB)", output_path, size_mb)
             return output_path
         # Optional slideshow audio must not prevent successful image delivery
         # when the external HTTP/stream adapter fails with an unknown error type.
+        except asyncio.CancelledError:
+            safe_remove(output_path)
+            raise
         except Exception as e:  # noqa: BLE001
             logger.error(
                 "[TIKWM] Audio download failed for %s (%s)",
                 redact_url(audio_url),
                 type(e).__name__,
             )
-            await asyncio.to_thread(safe_remove, output_path)
+            await await_owned(asyncio.to_thread(safe_remove, output_path))
             return None
 
     @staticmethod
@@ -429,7 +440,7 @@ class TikWMService:
                             len(images),
                             content_size,
                         )
-                        await asyncio.to_thread(safe_remove, out_path)
+                        await await_owned(asyncio.to_thread(safe_remove, out_path))
                         return
 
                     ct = resp.headers.get("content-type", "unknown")
@@ -443,6 +454,9 @@ class TikWMService:
                     image_paths[idx] = out_path
                 # Each independent image adapter may fail; clean its partial
                 # output and retain the other successful ordered image paths.
+                except asyncio.CancelledError:
+                    safe_remove(out_path)
+                    raise
                 except Exception as e:  # noqa: BLE001
                     logger.error(
                         "[TIKWM] Image %d/%d download error (%s)",
@@ -450,12 +464,13 @@ class TikWMService:
                         len(images),
                         type(e).__name__,
                     )
-                    await asyncio.to_thread(safe_remove, out_path)
+                    await await_owned(asyncio.to_thread(safe_remove, out_path))
 
+        published = False
         try:
-            await asyncio.gather(
-                *[_download_one(i, url) for i, url in enumerate(images)]
-            )
+            async with asyncio.TaskGroup() as group:
+                for i, url in enumerate(images):
+                    group.create_task(_download_one(i, url))
 
             # Filter out failed downloads (None), preserving order
             valid_paths = [p for p in image_paths if p is not None]
@@ -465,17 +480,18 @@ class TikWMService:
                 len(valid_paths),
                 len(images),
             )
+            audio_path = None
+            if res.audio_url:
+                audio_path = await TikWMService.download_audio(res.audio_url)
+            published = True
+            return valid_paths, audio_path
         # Aggregate image setup/HTTP adapter failures invalidate this slideshow
         # result and trigger cleanup of the image paths collected so far.
         except Exception as e:  # noqa: BLE001
             logger.error("TikWM slideshow image download failed (%s)", type(e).__name__)
-            for p in image_paths:
-                if p:
-                    await asyncio.to_thread(safe_remove, p)
             return [], None
-
-        audio_path = None
-        if res.audio_url:
-            audio_path = await TikWMService.download_audio(res.audio_url)
-
-        return valid_paths, audio_path
+        finally:
+            if not published:
+                for path in image_paths:
+                    if path:
+                        safe_remove(path)

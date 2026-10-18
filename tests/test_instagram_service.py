@@ -102,30 +102,6 @@ class TestInstagramUrlParsing(unittest.TestCase):
         self.assertEqual(user, "user123")
 
 
-class TestIsInstagramUrl(unittest.TestCase):
-    """Test is_instagram_url helper."""
-
-    def test_instagram_com(self):
-        from app.services.instagram import is_instagram_url
-
-        self.assertTrue(is_instagram_url("https://www.instagram.com/natgeo"))
-
-    def test_instagr_am(self):
-        from app.services.instagram import is_instagram_url
-
-        self.assertTrue(is_instagram_url("https://instagr.am/p/ABC123"))
-
-    def test_non_instagram(self):
-        from app.services.instagram import is_instagram_url
-
-        self.assertFalse(is_instagram_url("https://tiktok.com/@user"))
-
-    def test_non_instagram_containing_word(self):
-        from app.services.instagram import is_instagram_url
-
-        self.assertFalse(is_instagram_url("https://notinstagram.xyz/page"))
-
-
 class TestIGStoryItem(unittest.TestCase):
     """Test IGStoryItem dataclass properties."""
 

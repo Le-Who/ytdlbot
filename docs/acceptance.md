@@ -39,6 +39,70 @@ copying its assertions:
 | Immutable retry | an interrupted same-SHA promotion is reusable only when every allowlisted payload byte matches |
 | Callback compatibility | v2 is emitted while the previous callback shape still decodes for the existing link-cache TTL |
 
+Additional lifecycle regressions live in
+`tests/test_download_stream_lifecycle.py`, `tests/test_readiness_lifecycle.py`,
+`tests/core/test_job_store_transactions.py`, and
+`tests/test_ig_callback_chains.py`. They exercise these boundaries:
+
+- HTTP responses retain ownership of materialized media until response cleanup,
+  including a disconnect before the first body chunk. Fallback subprocess
+  failures terminate the stream rather than produce a successful EOF; once
+  headers have been sent, the failure cannot become a JSON error response.
+  GIF relay cleanup is awaited while preserving the intentional 60-second
+  conversion cutoff for a source that is still running.
+- Durable readiness probes cancel and await their sibling async probes on
+  dependency failure, timeout, or request cancellation. Local Bot API probes
+  remain shared when an individual readiness caller disconnects.
+- Failed SQLite transaction admission closes its connection. Album reservations
+  roll back as a unit, and a failed delivery-receipt commit retains the prior
+  uncertain reservation after reopening the store.
+- Authorized Instagram menu selections retain item order, authorization scope,
+  and the requested clip through the shared pipeline. New highlight cache
+  entries retain `items` and `section`; existing list-shaped entries remain
+  readable. Malformed cached item timestamps expire the selection before any
+  selected media is sent. Partial success/uncertainty prevents replay within
+  the same durable job.
+
+The legacy-cleanup regressions in `tests/test_callback_resource_regressions.py`,
+`tests/test_gif_local_source_binding.py`, `tests/test_gif_callback_chain.py`,
+`tests/test_direct_highlight_chain.py`,
+`tests/media/test_legacy_cleanup_regressions.py`,
+`tests/test_legacy_instagram_pinterest_streams.py`, and
+`tests/core/test_posix_process_cleanup.py` additionally cover:
+
+- GIF export and animation conversion use the actual callback message's Telegram
+  source identity when available. URL-only GIF cache entries are no longer read;
+  they expire naturally. Existing successful or uncertain receipts for the same
+  single-media callback job still prevent replay after link-cache expiry.
+  Owned downloads and generated files are cleaned on early return, failure, and
+  cancellation; unrelated cached sources remain available.
+- Confirmed local video/animation uploads bind their exact Telegram identity to
+  the unchanged local source. GIF callbacks can reuse that source when cloud
+  `getFile` rejects a file over 20 MB or Local Bot API recovery is unavailable.
+  A successfully generated animation transfers into the bounded file cache so
+  its native GIF button uses those exact bytes. Expiry and eviction remove the
+  retained output; failed, uncertain, and cancelled sends retain no such owner.
+- Direct highlight producers retain clip metadata, and direct authorized album
+  candidates validate source indexes before applying an ordered selection.
+- Download cancellation retains file ownership until an active disk worker
+  settles. Failed slideshow image siblings are cancelled and joined before
+  cleanup. Legacy streams enforce actual byte caps, reject empty or truncated
+  identity-encoded responses, and retain support for decoded compressed bodies.
+- POSIX group cleanup kills remaining descendants after the leader exits,
+  including normal completion. Cross-platform boundary tests run on Windows;
+  real POSIX socket/descendant tests require a POSIX host.
+
+`tests/test_runtime_configuration.py` verifies that invalid drain deadlines fail
+before acquiring lifespan resources and that shutdown uses the captured valid
+deadline. `tests/deploy/test_ci_environment.py` and
+`tests/deploy/test_release_environment.py` execute isolated workflow/release
+boundaries with test fixtures and stub Docker; these are not real Compose checks.
+Both test and deploy workflows parse all five release scripts individually.
+The CI regression injects an error into each script in turn and verifies that
+valid scripts are parsed without executing them before Compose validation.
+Windows subprocess fixtures observe readiness before measuring behavior, retaining
+the two-second cancellation and five-second singleflight reentry limits.
+
 The previous callback shape must remain accepted for at least
 `LINK_TTL_MINUTES` (currently 60 minutes by default) after the release that starts
 emitting v2 callbacks. Extending that decoder is harmless; removing it before the
@@ -50,9 +114,10 @@ The full local verification checkpoint for this task is:
 python -m pytest tests -q
 ruff check app tests
 mypy app
-bash -n scripts/bootstrap-production.sh scripts/bootstrap-migrate-production.sh \
-  scripts/deploy-release.sh scripts/preflight-production.sh \
-  scripts/rollback-release.sh
+for script in scripts/bootstrap-production.sh scripts/bootstrap-migrate-production.sh \
+  scripts/deploy-release.sh scripts/preflight-production.sh scripts/rollback-release.sh; do
+  bash -n "$script" || exit
+done
 ```
 
 Run `docker compose config --quiet` when Docker is installed so resolved proxy

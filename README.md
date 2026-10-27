@@ -32,6 +32,11 @@ cookies, a proxy, payment, or manual CAPTCHA. See
 - A bounded provider race: at most two cheap external resolves at once and one
   heavy local extractor for a request. Invalid or non-equivalent candidates do
   not win because they returned first.
+- Temporary resolver and CDN probe failures receive up to two automatic retries
+  within the same request deadline. Fresh provider alternatives run first;
+  retries wait at least 0.5 and 1 second and honor a longer `Retry-After`.
+  Sequential local extractors share the remaining time so a slow first route
+  leaves a resolve window for its fallback.
 - Streaming materialization with redirect/DNS/private-address checks, byte caps,
   disk reservation, renewable leases, stall failover, and partial-file cleanup.
 - Telegram `file_id` reuse before provider work. Public results may be shared
@@ -53,6 +58,9 @@ cookies, a proxy, payment, or manual CAPTCHA. See
   downloads. Other configured local extractors try direct access before the
   proxy fallback. Media streams keep the extraction route; native API providers
   retain their direct paths.
+- Empty gallery-dl extraction results try the remaining configured routes
+  without cooling a shared route needed by another extractor. Policy-aware
+  extraction selects its route explicitly, including direct access.
 - HTTP streams honor yt-dlp's bounded range size, validate every partial
   response, and abort unread transfers during cancellation and failover.
 - A direct FxTwitter MP4 may be delivered without an audio track when no audio

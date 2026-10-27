@@ -246,19 +246,46 @@ second owns the atomic release transaction.
 only in the existing protected VPS `.env`. Do not print `docker compose config`
 or container environment values when diagnosing credentials. YouTube uses the
 pool first. Local yt-dlp/gallery-dl extractors for the configured known platforms
-try direct first, then the pool after a transient/auth failure. Native API
+try direct first, then the pool after a transient/auth failure or an empty
+gallery-dl result. Empty extraction does not cool the shared route for other
+extractors; an all-empty gallery-dl result remains a no-media failure. Native API
 providers retain their direct fast path. A stream source carries an opaque route
 key; probes, redirects and downloads keep that route, with local DNS validation
-and pinning. A transfer failure cools that platform/route for 60 seconds and the
+and pinning. Policy-aware yt-dlp/gallery-dl and curl requests explicitly select
+direct or the configured proxy; standard `HTTP_PROXY`, `HTTPS_PROXY`,
+`ALL_PROXY` and `NO_PROXY` variables cannot change that selection. Legacy
+`TIKTOK_PROXY`/`VK_PROXY` settings apply only to legacy service callers; configure
+the shared pipeline through `MEDIA_PROXY_URLS` and `MEDIA_PROXY_PLATFORMS`.
+A transfer failure cools that platform/route for 60 seconds and the
 single refresh obtains new URLs on the next available route. Proxy extraction
 attempts are bounded to 20 seconds; direct fallback attempts to 3 seconds.
 For yt-dlp, the network socket timeout is capped at 3 seconds and one extractor
 retry, independently of the process budget. The provider resolve timeout covers
 all configured proxy attempts, direct fallback and cleanup; the total race adds
-4 seconds. With two proxies these limits are 44 and 48 seconds. This leaves time
-for subprocess startup, YouTube's JS/PO-token work and a backup route after a
-slow primary, while stalled sockets fail promptly. Route failure logs include
+4 seconds. With two proxies these upper limits are 44 and 48 seconds. When more
+than one local extractor is eligible, each gets at most its share of the
+remaining race time, so a slow gallery-dl cannot consume yt-dlp's entire window.
+A single local route, including YouTube, retains its full resolve budget.
+This bounds the overall wait while allowing a sequential fallback; it can
+shorten an individual extractor's proxy window. Route failure logs include
 elapsed time, the applied budget and the error without proxy credentials.
+
+Cheap HTTP resolvers retry classified temporary failures at most twice per
+race, after fresh alternatives have been admitted. Backoff is at least 0.5 and
+1 second; a larger `Retry-After` from resolver or CDN probe HTTP 429/503 responses is
+preserved. Retries stop at the existing request deadline and circuit boundary.
+CDN connection failures, timeouts and temporary DNS failures use this policy;
+unsafe addresses, size limits, authentication/configuration failures and adapter
+bugs retain their distinct classifications. Cancellation joins active work and
+backoff timers. These retries resolve media before delivery and do not replay a
+Telegram send.
+
+TikWM can probe its distinct SD URL after a temporary HD probe failure. That
+fallback carries its actual variant label and does not inherit unknown HD
+dimensions; explicit quality requests still pass shared equivalence validation.
+SSSTik retains usable links when another optional link fails. When all alternate
+probes fail, a temporary failure remains retryable and the longest supplied
+`Retry-After` is retained.
 
 Failed private/group requests, `/mp3`, `/mp4` and picker downloads expose a
 `🔄 Повторить` button. The link cache stores the original media request and its

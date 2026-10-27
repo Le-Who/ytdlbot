@@ -14,6 +14,7 @@ from .http import (
     OriginPacer,
     OriginPacing,
     ProviderEndpoint,
+    combine_probe_failures,
     endpoint_headers,
     probe_candidate,
     request_json,
@@ -122,12 +123,37 @@ class TikWMProvider:
         hd_url = info.get("hdplay")
         sd_url = info.get("play")
         url = hd_url if isinstance(hd_url, str) and hd_url else sd_url
+        used_sd_fallback = False
         if not isinstance(url, str) or not url:
             raise ProviderError(FailureKind.PERMANENT, "TikWM returned no media")
-        await probe_candidate(self._transport, url, wall_clock=self._wall_clock)
-        width = _integer(info.get("width"))
-        height = _integer(info.get("height"))
-        quality_limited = _quality_limited(request, width, height)
+        try:
+            await probe_candidate(self._transport, url, wall_clock=self._wall_clock)
+        except ProviderError as error:
+            if (
+                error.kind is not FailureKind.TRANSIENT
+                or url != hd_url
+                or not isinstance(sd_url, str)
+                or not sd_url
+                or sd_url == url
+            ):
+                raise
+            try:
+                await probe_candidate(
+                    self._transport, sd_url, wall_clock=self._wall_clock
+                )
+            except ProviderError as fallback_error:
+                if fallback_error.kind in {FailureKind.AUTH, FailureKind.CONFIG}:
+                    raise
+                raise combine_probe_failures(error, fallback_error) from fallback_error
+            url = sd_url
+            used_sd_fallback = True
+        width = None if used_sd_fallback else _integer(info.get("width"))
+        height = None if used_sd_fallback else _integer(info.get("height"))
+        quality_limited = (
+            request.quality.max_edge is not None
+            if used_sd_fallback
+            else _quality_limited(request, width, height)
+        )
         size_key = "hd_size" if url == hd_url else "size"
         size = _integer(info.get(size_key))
         item = MediaItem(

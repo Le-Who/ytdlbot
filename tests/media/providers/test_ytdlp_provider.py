@@ -12,6 +12,7 @@ import pytest
 from app.services.media.models import MediaKind, MediaRequest, QualityPolicy
 from app.services.media.pipeline import MediaPipeline, build_media_request
 from app.services.media.providers.ytdlp import YtDlpProvider
+from app.services.media.proxies import MediaProxyPool
 from app.services.media.race import RaceConfig, race_candidates
 from app.services.media.registry import (
     FailureKind,
@@ -763,3 +764,83 @@ async def test_legacy_service_extract_preserves_configured_cookie_behavior(
 ):
     await YtDlpService().extract(URL)
     assert "--cookies" in extraction_commands_with_global_cookies[0]
+
+
+@pytest.mark.parametrize(
+    "pool",
+    [
+        MediaProxyPool(),
+        MediaProxyPool(("socks5://localhost:1080",), platforms=frozenset({"youtube"})),
+    ],
+)
+async def test_direct_media_extraction_ignores_legacy_tiktok_proxy(
+    extraction_commands_with_global_cookies, pool, monkeypatch
+):
+    import yt_dlp
+
+    monkeypatch.delenv("https_proxy", raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://localhost:18080")
+    provider = YtDlpProvider(proxy_pool=pool)
+    provider._service.tiktok_proxy = "socks5://localhost:1081"
+    request = MediaRequest(
+        canonical_url="https://www.tiktok.com/@user/video/123",
+        platform="tiktok",
+        media_id="123",
+    )
+
+    candidates = await provider.resolve(request)
+
+    assert candidates
+    assert all(
+        source.proxy_key is None
+        for candidate in candidates
+        for source in candidate.sources
+    )
+    command = extraction_commands_with_global_cookies[0]
+    options = yt_dlp.parse_options(command[3:]).ydl_opts
+    assert yt_dlp.YoutubeDL(options).proxies == {"all": "__noproxy__"}
+
+
+async def test_policy_media_extraction_keeps_selected_socks_proxy(
+    extraction_commands_with_global_cookies,
+):
+    import yt_dlp
+
+    pool = MediaProxyPool(("socks5://localhost:1080",))
+    provider = YtDlpProvider(proxy_pool=pool)
+    request = MediaRequest.from_url(URL)
+
+    candidates = await provider.resolve(request)
+
+    command = extraction_commands_with_global_cookies[0]
+    options = yt_dlp.parse_options(command[3:]).ydl_opts
+    assert yt_dlp.YoutubeDL(options).proxies == {"all": "socks5://localhost:1080"}
+    assert candidates[0].sources[0].proxy_key == "proxy-1"
+
+
+async def test_legacy_service_keeps_environment_proxy_default(
+    extraction_commands_with_global_cookies, monkeypatch
+):
+    import yt_dlp
+
+    monkeypatch.delenv("https_proxy", raising=False)
+    monkeypatch.setenv("HTTPS_PROXY", "http://localhost:18080")
+    await YtDlpService().extract(URL)
+
+    command = extraction_commands_with_global_cookies[0]
+    options = yt_dlp.parse_options(command[3:]).ydl_opts
+    assert yt_dlp.YoutubeDL(options).proxies["https"] == "http://localhost:18080"
+
+
+async def test_legacy_service_keeps_configured_tiktok_proxy(
+    extraction_commands_with_global_cookies,
+):
+    import yt_dlp
+
+    service = YtDlpService()
+    service.tiktok_proxy = "socks5://localhost:1081"
+    await service.extract("https://www.tiktok.com/@user/video/123")
+
+    command = extraction_commands_with_global_cookies[0]
+    options = yt_dlp.parse_options(command[3:]).ydl_opts
+    assert yt_dlp.YoutubeDL(options).proxies == {"all": "socks5://localhost:1081"}

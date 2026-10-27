@@ -95,17 +95,17 @@ class YtDlpProvider:
             if self._proxy_extract is not None:
                 return await self._proxy_extract(request.canonical_url, proxy)
             if self._service is not None:
-                options: dict[str, Any] = {}
+                options: dict[str, Any] = {"proxy_url": proxy, "override_proxy": True}
                 if self._proxy_pool.configured(request.platform):
-                    options = {
-                        "proxy_url": proxy,
-                        "override_proxy": True,
-                        "timeout": self._proxy_pool.attempt_timeout
-                        if proxy
-                        else self._proxy_pool.direct_timeout,
-                        "socket_timeout": 3.0,
-                        "extractor_retries": 1,
-                    }
+                    options.update(
+                        {
+                            "timeout": self._proxy_pool.attempt_timeout
+                            if proxy
+                            else self._proxy_pool.direct_timeout,
+                            "socket_timeout": 3.0,
+                            "extractor_retries": 1,
+                        }
+                    )
                 info = await self._service.extract(
                     request.canonical_url,
                     use_cookies=request.auth_scope in self._cookie_auth_scopes,

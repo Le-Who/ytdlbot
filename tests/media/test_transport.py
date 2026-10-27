@@ -487,6 +487,21 @@ async def test_probe_rejects_declared_media_with_non_media_signature(
         await media.probe("https://cdn.example/video.mp4")
 
 
+@pytest.mark.parametrize("status", [429, 503])
+async def test_probe_preserves_server_retry_after_and_closes_response(
+    tmp_path: Path, status: int
+) -> None:
+    response = FakeResponse(status_code=status, headers={"Retry-After": "7"})
+    media, _ = transport(tmp_path, [response])
+
+    with pytest.raises(DownloadFailed) as raised:
+        await media.probe("https://cdn.example/video.mp4")
+
+    assert raised.value.retry_after == 7
+    assert response.closed
+    assert response.body_reads == 0
+
+
 @pytest.mark.asyncio
 async def test_declared_size_over_decimal_limit_is_rejected_before_open(
     tmp_path: Path,

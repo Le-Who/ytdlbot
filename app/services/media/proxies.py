@@ -159,7 +159,8 @@ class MediaProxyPool:
                     extra={"duration_ms": round((self.clock() - started) * 1000, 3)},
                 )
                 return result, key
-            self.failed(platform, key)
+            if last_error.affects_route_health:
+                self.failed(platform, key)
             logger.warning(
                 "media route failed: platform=%s route=%s kind=%s",
                 platform,

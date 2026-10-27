@@ -33,6 +33,7 @@ from app.core.metrics import metrics
 from app.core.process import run_subprocess
 from app.core.resource_budget import DiskBudget, DiskReservation
 
+from .http_utils import parse_retry_after
 from .models import (
     YOUTUBE_SHORT_DEFAULT_VARIANT,
     MediaCandidate,
@@ -61,6 +62,10 @@ class UnsafeMediaURL(MaterializationError):
     """A URL or one of its resolved addresses is not safe for remote fetching."""
 
 
+class MediaHostResolutionError(UnsafeMediaURL):
+    """A host could not be resolved; no remote address was approved or fetched."""
+
+
 class CredentialRedirectError(MaterializationError):
     """A body-preserving redirect would cross an origin boundary."""
 
@@ -75,6 +80,10 @@ class TransferTimeout(MaterializationError):
 
 class DownloadFailed(MaterializationError):
     """The remote response could not produce a media file."""
+
+    def __init__(self, message: str = "", *, retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
 
 
 Resolver = Callable[[str, int], Awaitable[tuple[str, ...]]]
@@ -113,10 +122,12 @@ class URLPolicy:
         try:
             raw_addresses = await self._resolver(host, effective_port)
             addresses = tuple(ipaddress.ip_address(value) for value in raw_addresses)
-        except (OSError, ValueError) as error:
+        except OSError as error:
+            raise MediaHostResolutionError("media host resolution failed") from error
+        except ValueError as error:
             raise UnsafeMediaURL("media host resolution failed") from error
         if not addresses:
-            raise UnsafeMediaURL("media host resolved to no addresses")
+            raise MediaHostResolutionError("media host resolved to no addresses")
         if any(
             not address.is_global
             or address.is_multicast
@@ -213,7 +224,11 @@ class CurlStreamingClient:
         port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
         address = f"[{resolved_ip}]" if resolved_ip.version == 6 else str(resolved_ip)
         session: AsyncSession[Response] = AsyncSession(
-            curl_options={CurlOpt.RESOLVE: [f"{host}:{port}:{address}"]},
+            curl_options={
+                CurlOpt.RESOLVE: [f"{host}:{port}:{address}"],
+                CurlOpt.PROXY: self._proxy_url or "",
+                CurlOpt.NOPROXY: "",
+            },
             trust_env=False,
         )
         try:
@@ -1336,7 +1351,7 @@ class MediaTransport:
         except TimeoutError as error:
             if deadline_limited:
                 raise TransferTimeout("materialization deadline exceeded") from error
-            raise UnsafeMediaURL("media host resolution timed out") from error
+            raise MediaHostResolutionError("media host resolution timed out") from error
 
     def _validate_refreshed_candidate(
         self,
@@ -1484,7 +1499,10 @@ class MediaTransport:
         if response.status_code in {401, 403, 404, 410}:
             raise DownloadFailed("media URL expired or denied")
         if response.status_code == 429 or response.status_code >= 500:
-            raise DownloadFailed("media source temporarily unavailable")
+            raise DownloadFailed(
+                "media source temporarily unavailable",
+                retry_after=parse_retry_after(response.headers),
+            )
         if response.status_code not in {200, 206}:
             raise DownloadFailed("unexpected media response")
         declared = _content_length(response.headers)

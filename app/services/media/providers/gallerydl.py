@@ -45,6 +45,15 @@ _SAFE_HEADERS = frozenset(
 )
 
 
+class _NoGalleryMedia(ProviderError):
+    def __init__(self) -> None:
+        super().__init__(
+            FailureKind.TRANSIENT,
+            "gallery-dl found no media",
+            affects_route_health=False,
+        )
+
+
 class GalleryDlProvider:
     name = "gallery-dl"
     backend_family = "local-gallery-dl"
@@ -81,14 +90,21 @@ class GalleryDlProvider:
 
         async def extract(proxy: str | None) -> Sequence[object]:
             if self._proxy_extract is not None:
-                return await self._proxy_extract(request.canonical_url, proxy)
-            if self._extract is _dump_gallery:
-                return await _dump_gallery(request.canonical_url, proxy=proxy)
-            return await self._extract(request.canonical_url)
+                messages = await self._proxy_extract(request.canonical_url, proxy)
+            elif self._extract is _dump_gallery:
+                messages = await _dump_gallery(request.canonical_url, proxy=proxy)
+            else:
+                messages = await self._extract(request.canonical_url)
+            if not any(_media_message(message) is not None for message in messages):
+                raise _NoGalleryMedia()
+            return messages
 
-        messages, proxy_key = await self._proxy_pool.extract(
-            request.platform, extract, deadline=request.deadline
-        )
+        try:
+            messages, proxy_key = await self._proxy_pool.extract(
+                request.platform, extract, deadline=request.deadline
+            )
+        except _NoGalleryMedia as error:
+            raise ProviderError(FailureKind.PERMANENT, str(error)) from error
         items: list[MediaItem] = []
         sources: list[MediaSource] = []
         directory: Mapping[str, Any] = {}
@@ -98,14 +114,10 @@ class GalleryDlProvider:
             if message[0] == 2 and len(message) >= 2 and isinstance(message[-1], dict):
                 directory = message[-1]
                 continue
-            if message[0] != 3 or len(message) < 3:
+            media = _media_message(message)
+            if media is None:
                 continue
-            url, metadata = message[1], message[2]
-            if not isinstance(url, str) or not isinstance(metadata, dict):
-                continue
-            kind, container = _kind_and_container(url, metadata)
-            if kind is None:
-                continue
+            url, metadata, kind, container = media
             index = len(items)
             media_id = str(
                 metadata.get("id")
@@ -228,6 +240,9 @@ async def _dump_gallery(url: str, *, proxy: str | None = None) -> Sequence[objec
         "extractor.timeout=10",
         "--option",
         "extractor.retries=0",
+        "--option",
+        "extractor.proxy-env=false",
+        *([] if proxy else ["--option", 'extractor.raw-options={"proxy":""}']),
         *(["--proxy", proxy] if proxy else []),
         "--",
         url,
@@ -270,6 +285,20 @@ def _kind_and_container(
     if extension in _PHOTO_EXTENSIONS:
         return MediaKind.PHOTO, extension
     return None, extension or None
+
+
+def _media_message(
+    message: object,
+) -> tuple[str, dict[str, Any], MediaKind, str | None] | None:
+    if not isinstance(message, (list, tuple)) or len(message) < 3 or message[0] != 3:
+        return None
+    url, metadata = message[1], message[2]
+    if not isinstance(url, str) or not isinstance(metadata, dict):
+        return None
+    kind, container = _kind_and_container(url, metadata)
+    if kind is None:
+        return None
+    return url, metadata, kind, container
 
 
 def _safe_headers(metadata: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:

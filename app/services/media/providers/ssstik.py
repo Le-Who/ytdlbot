@@ -16,6 +16,7 @@ from .http import (
     OriginPacer,
     OriginPacing,
     ProviderEndpoint,
+    combine_probe_failures,
     endpoint_headers,
     probe_candidate,
     request_html,
@@ -83,8 +84,19 @@ class SSSTikProvider:
         if not parser.links:
             raise ProviderError(FailureKind.TRANSIENT, "SSSTik returned no ready link")
         candidates: list[MediaCandidate] = []
+        first_error: ProviderError | None = None
         for index_number, (url, label) in enumerate(parser.links):
-            await probe_candidate(self._transport, url, wall_clock=self._wall_clock)
+            try:
+                await probe_candidate(self._transport, url, wall_clock=self._wall_clock)
+            except ProviderError as error:
+                if error.kind in {FailureKind.AUTH, FailureKind.CONFIG}:
+                    raise
+                first_error = (
+                    error
+                    if first_error is None
+                    else combine_probe_failures(first_error, error)
+                )
+                continue
             quality = _quality_label(label)
             kind = _kind_from_url(url)
             item = MediaItem(request.media_id, kind, url, container=_extension(url))
@@ -109,6 +121,8 @@ class SSSTikProvider:
                     watermark_free=_watermark_free(label),
                 )
             )
+        if not candidates and first_error is not None:
+            raise first_error
         return candidates
 
 

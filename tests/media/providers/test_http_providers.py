@@ -16,6 +16,7 @@ from app.services.media.providers.http import (
     HttpResponse,
     OriginPacer,
     ProviderEndpoint,
+    parse_retry_after,
     probe_candidate,
     request_response,
 )
@@ -25,10 +26,24 @@ from app.services.media.providers.snapsave import (
 )
 from app.services.media.providers.ssstik import SSSTikProvider
 from app.services.media.providers.tikwm import TikWMProvider
-from app.services.media.registry import FailureKind, ProviderError
+from app.services.media.race import RaceConfig, race_candidates
+from app.services.media.registry import FailureKind, ProviderError, ProviderRoute
+from app.services.media.transport import (
+    CredentialRedirectError,
+    DownloadFailed,
+    MediaSizeExceeded,
+    TransferTimeout,
+    UnsafeMediaURL,
+)
+from app.services.media.validation import CandidateRejectionReason, validate_candidate
 from app.services.pinterest import PinterestProvider
 
 FIXTURES = Path(__file__).parents[2] / "fixtures" / "providers"
+
+
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf", "1e999"])
+def test_retry_after_rejects_nonfinite_delay(value):
+    assert parse_retry_after({"Retry-After": value}) is None
 
 
 @pytest.mark.asyncio
@@ -55,6 +70,147 @@ async def test_default_provider_probe_delegates_to_safe_streaming_boundary(
     )
 
     assert calls == [("https://cdn.example/video.mp4?token=secret", None)]
+
+
+@pytest.mark.parametrize(
+    "error,kind",
+    [
+        (TransferTimeout("media connection failed"), FailureKind.TRANSIENT),
+        (DownloadFailed("media source temporarily unavailable"), FailureKind.TRANSIENT),
+        (
+            UnsafeMediaURL("media host resolved to a non-public address"),
+            FailureKind.PERMANENT,
+        ),
+        (
+            MediaSizeExceeded("declared media size exceeds configured limit"),
+            FailureKind.PERMANENT,
+        ),
+        (CredentialRedirectError("cross-origin redirect"), FailureKind.CONFIG),
+    ],
+)
+async def test_production_candidate_probe_classifies_transport_failures(
+    monkeypatch: pytest.MonkeyPatch, error: Exception, kind: FailureKind
+) -> None:
+    async def failed_probe(self, url: str, **kwargs):
+        del self, url, kwargs
+        raise error
+
+    monkeypatch.setattr(
+        "app.services.media.transport.MediaTransport.probe", failed_probe
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        await probe_candidate(CurlProviderTransport(), "https://cdn.example/video.mp4")
+
+    assert raised.value.kind is kind
+    assert raised.value.__cause__ is error
+
+
+@pytest.mark.parametrize(
+    "error", [asyncio.CancelledError(), RuntimeError("adapter bug")]
+)
+async def test_production_candidate_probe_preserves_cancellation_and_unknown_errors(
+    monkeypatch: pytest.MonkeyPatch, error: BaseException
+) -> None:
+    async def failed_probe(self, url: str, **kwargs):
+        del self, url, kwargs
+        raise error
+
+    monkeypatch.setattr(
+        "app.services.media.transport.MediaTransport.probe", failed_probe
+    )
+
+    with pytest.raises(type(error)) as raised:
+        await probe_candidate(CurlProviderTransport(), "https://cdn.example/video.mp4")
+
+    assert raised.value is error
+
+
+async def test_production_candidate_probe_preserves_server_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error = DownloadFailed("media source temporarily unavailable", retry_after=7)
+
+    async def failed_probe(self, url: str, **kwargs):
+        del self, url, kwargs
+        raise error
+
+    monkeypatch.setattr(
+        "app.services.media.transport.MediaTransport.probe", failed_probe
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        await probe_candidate(CurlProviderTransport(), "https://cdn.example/video.mp4")
+
+    assert raised.value.kind is FailureKind.TRANSIENT
+    assert raised.value.retry_after == 7
+
+
+@pytest.mark.parametrize(
+    "answer,kind",
+    [
+        (OSError("DNS temporarily unavailable"), FailureKind.TRANSIENT),
+        ((), FailureKind.TRANSIENT),
+        (("127.0.0.1",), FailureKind.PERMANENT),
+    ],
+)
+async def test_production_candidate_probe_distinguishes_dns_failure_from_unsafe_answer(
+    monkeypatch: pytest.MonkeyPatch,
+    answer: OSError | tuple[str, ...],
+    kind: FailureKind,
+) -> None:
+    async def resolve(host: str, port: int) -> tuple[str, ...]:
+        del host, port
+        if isinstance(answer, OSError):
+            raise answer
+        return answer
+
+    monkeypatch.setattr("app.services.media.transport._system_resolver", resolve)
+
+    with pytest.raises(ProviderError) as raised:
+        await probe_candidate(CurlProviderTransport(), "https://cdn.example/video.mp4")
+
+    assert raised.value.kind is kind
+    assert isinstance(raised.value.__cause__, UnsafeMediaURL)
+
+
+async def test_production_tikwm_probe_failure_recovers_in_same_provider_race(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ApiTransport(CurlProviderTransport):
+        async def request(self, *args, **kwargs):
+            return response(
+                payload={"code": 0, "data": {"hdplay": "https://cdn.example/hd.mp4"}}
+            )
+
+    probes = 0
+
+    async def probe(self, url: str, **kwargs):
+        nonlocal probes
+        del self, url, kwargs
+        probes += 1
+        if probes == 1:
+            raise TransferTimeout("media connection failed")
+        return b"\x00\x00\x00\x18ftyp"
+
+    monkeypatch.setattr("app.services.media.transport.MediaTransport.probe", probe)
+    media_request = request("tiktok", "https://tiktok.com/@u/video/42", "42")
+    provider = TikWMProvider(
+        endpoint("https://tikwm.example", "tiktok"), transport=ApiTransport()
+    )
+
+    result = await race_candidates(
+        media_request,
+        [ProviderRoute(provider)],
+        validate_candidate,
+        config=RaceConfig(total_timeout=2),
+    )
+
+    assert result.winner is not None
+    assert result.winner.provider == "tikwm"
+    assert probes == 2
+    assert len(result.failures) == 1
+    assert result.failures[0].kind is FailureKind.TRANSIENT
 
 
 @dataclass(frozen=True)
@@ -339,6 +495,127 @@ async def test_tikwm_prefers_hd_url_even_when_hd_size_is_smaller():
     assert not candidate.quality_limited
 
 
+def tikwm_video_response() -> HttpResponse:
+    return response(
+        payload={
+            "code": 0,
+            "data": {
+                "hdplay": "https://cdn.example/hd.mp4",
+                "play": "https://cdn.example/sd.mp4",
+                "width": 576,
+                "height": 1024,
+                "hd_size": 200,
+                "size": 100,
+            },
+        }
+    )
+
+
+async def test_tikwm_tries_distinct_sd_after_transient_hd_probe_failure():
+    transport = RecordingTransport(
+        tikwm_video_response(), ProviderError(FailureKind.TRANSIENT), ok_probe()
+    )
+    media_request = request(
+        "tiktok", "https://tiktok.com/@u/video/42", "42", quality=1080
+    )
+
+    candidate = (await TikWMProvider(transport=transport).resolve(media_request))[0]
+
+    assert candidate.url == "https://cdn.example/sd.mp4"
+    assert candidate.quality_label == "sd"
+    assert candidate.candidate_id == "tikwm:sd"
+    assert candidate.filesize_bytes == 100
+    assert candidate.quality_limited
+    assert (
+        CandidateRejectionReason.QUALITY_TOO_LOW
+        in validate_candidate(media_request, candidate).reasons
+    )
+
+
+@pytest.mark.parametrize("quality", [None, 1080])
+async def test_tikwm_sd_fallback_does_not_inherit_hd_dimensions(quality):
+    transport = RecordingTransport(
+        response(
+            payload={
+                "code": 0,
+                "data": {
+                    "hdplay": "https://cdn.example/hd.mp4",
+                    "play": "https://cdn.example/sd.mp4",
+                    "width": 1080,
+                    "height": 1920,
+                },
+            }
+        ),
+        ProviderError(FailureKind.TRANSIENT),
+        ok_probe(),
+    )
+    media_request = request(
+        "tiktok", "https://tiktok.com/@u/video/42", "42", quality=quality
+    )
+
+    candidate = (await TikWMProvider(transport=transport).resolve(media_request))[0]
+
+    assert candidate.url == "https://cdn.example/sd.mp4"
+    assert (candidate.width, candidate.height) == (None, None)
+    assert (candidate.items[0].width, candidate.items[0].height) == (None, None)
+    assert not candidate.metadata_complete
+    assert candidate.quality_limited is (quality is not None)
+    assert validate_candidate(media_request, candidate).usable is (quality is None)
+
+
+@pytest.mark.parametrize(
+    "kind", [FailureKind.AUTH, FailureKind.CONFIG, FailureKind.PERMANENT]
+)
+async def test_tikwm_does_not_try_sd_after_nontransient_hd_failure(kind):
+    error = ProviderError(kind)
+    transport = RecordingTransport(tikwm_video_response(), error, ok_probe())
+
+    with pytest.raises(ProviderError) as raised:
+        await TikWMProvider(transport=transport).resolve(
+            request("tiktok", "https://tiktok.com/@u/video/42", "42")
+        )
+
+    assert raised.value is error
+    assert len(transport.requests) == 2
+
+
+async def test_tikwm_preserves_preferred_probe_failure_when_all_alternatives_fail():
+    error = ProviderError(FailureKind.TRANSIENT, "HD limited", retry_after=7)
+    transport = RecordingTransport(
+        tikwm_video_response(), error, ProviderError(FailureKind.TRANSIENT, "SD failed")
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        await TikWMProvider(transport=transport).resolve(
+            request("tiktok", "https://tiktok.com/@u/video/42", "42")
+        )
+
+    assert raised.value is error
+    assert len(transport.requests) == 3
+
+
+async def test_tikwm_does_not_probe_duplicate_hd_sd_url_twice():
+    transport = RecordingTransport(
+        response(
+            payload={
+                "code": 0,
+                "data": {
+                    "hdplay": "https://cdn.example/same.mp4",
+                    "play": "https://cdn.example/same.mp4",
+                },
+            }
+        ),
+        ProviderError(FailureKind.TRANSIENT),
+    )
+
+    with pytest.raises(ProviderError):
+        await TikWMProvider(transport=transport).resolve(
+            request("tiktok", "https://tiktok.com/@u/video/42", "42")
+        )
+
+    assert len(transport.requests) == 2
+
+
 @pytest.mark.asyncio
 async def test_tikwm_album_preserves_image_order():
     """Catches slideshow normalization reordering or dropping images."""
@@ -539,6 +816,121 @@ async def test_ssstik_extracts_live_hidden_token_and_ready_link_from_html_fixtur
     }
 
 
+def ssstik_two_link_responses() -> tuple[HttpResponse, HttpResponse]:
+    return (
+        response(text=fixture_html("ssstik-index.html")),
+        response(
+            text=fixture_html("ssstik-result.html")
+            + '<a download href="https://cdn.ss.example/alternate.mp4">Without watermark 720p</a>'
+        ),
+    )
+
+
+@pytest.mark.parametrize("failed_first", [False, True])
+async def test_ssstik_retains_good_link_when_an_optional_alternative_fails(
+    failed_first,
+):
+    failure = ProviderError(FailureKind.TRANSIENT, "candidate failed")
+    probes = (failure, ok_probe()) if failed_first else (ok_probe(), failure)
+    provider = SSSTikProvider(
+        transport=RecordingTransport(*ssstik_two_link_responses(), *probes)
+    )
+
+    candidates = await provider.resolve(
+        request("tiktok", "https://tiktok.com/@u/video/42", "42")
+    )
+
+    assert len(candidates) == 1
+    expected = "alternate.mp4" if failed_first else "video.mp4"
+    assert candidates[0].url == f"https://cdn.ss.example/{expected}"
+    assert candidates[0].watermark_free is True
+
+
+@pytest.mark.parametrize("kind", [FailureKind.AUTH, FailureKind.CONFIG])
+async def test_ssstik_stops_optional_probes_on_hard_failure(kind):
+    error = ProviderError(kind)
+    transport = RecordingTransport(*ssstik_two_link_responses(), error, ok_probe())
+
+    with pytest.raises(ProviderError) as raised:
+        await SSSTikProvider(transport=transport).resolve(
+            request("tiktok", "https://tiktok.com/@u/video/42", "42")
+        )
+
+    assert raised.value is error
+    assert len(transport.requests) == 3
+
+
+async def test_ssstik_preserves_first_probe_failure_when_all_alternatives_fail():
+    error = ProviderError(FailureKind.TRANSIENT, "rate limited", retry_after=7)
+    transport = RecordingTransport(
+        *ssstik_two_link_responses(), error, ProviderError(FailureKind.TRANSIENT)
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        await SSSTikProvider(transport=transport).resolve(
+            request("tiktok", "https://tiktok.com/@u/video/42", "42")
+        )
+
+    assert raised.value is error
+    assert len(transport.requests) == 4
+
+
+async def test_ssstik_all_failed_transient_alternative_remains_retryable():
+    transport = RecordingTransport(
+        *ssstik_two_link_responses(),
+        ProviderError(FailureKind.PERMANENT, "oversized candidate"),
+        ProviderError(FailureKind.TRANSIENT, "connection failed"),
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        await SSSTikProvider(transport=transport).resolve(
+            request("tiktok", "https://tiktok.com/@u/video/42", "42")
+        )
+
+    assert raised.value.kind is FailureKind.TRANSIENT
+
+
+@pytest.mark.parametrize("provider_type", [TikWMProvider, SSSTikProvider])
+async def test_tiktok_all_failed_alternatives_preserve_later_retry_after(provider_type):
+    metadata = (
+        (tikwm_video_response(),)
+        if provider_type is TikWMProvider
+        else ssstik_two_link_responses()
+    )
+    transport = RecordingTransport(
+        *metadata,
+        ProviderError(FailureKind.TRANSIENT, "connection failed"),
+        ProviderError(FailureKind.TRANSIENT, "rate limited", retry_after=7),
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        await provider_type(transport=transport).resolve(
+            request("tiktok", "https://tiktok.com/@u/video/42", "42")
+        )
+
+    assert raised.value.kind is FailureKind.TRANSIENT
+    assert raised.value.retry_after == 7
+
+
+@pytest.mark.parametrize("provider_type", [TikWMProvider, SSSTikProvider])
+async def test_tiktok_optional_probe_cancellation_does_not_try_another_link(
+    provider_type,
+):
+    metadata = (
+        (tikwm_video_response(),)
+        if provider_type is TikWMProvider
+        else ssstik_two_link_responses()
+    )
+    transport = RecordingTransport(*metadata, asyncio.CancelledError(), ok_probe())
+
+    with pytest.raises(asyncio.CancelledError):
+        await provider_type(transport=transport).resolve(
+            request("tiktok", "https://tiktok.com/@u/video/42", "42")
+        )
+
+    assert len(transport.requests) == len(metadata) + 1
+
+
 @pytest.mark.asyncio
 async def test_ssstik_rejects_cross_origin_form_action_without_leaking_credentials():
     """Catches an upstream HTML change exfiltrating endpoint key/session state."""
@@ -689,7 +1081,8 @@ def provider_cases(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "provider,media_request",
-    provider_cases(response(status=429, headers={"Retry-After": "7"})),
+    provider_cases(response(status=429, headers={"Retry-After": "7"}))
+    + provider_cases(response(status=503, headers={"Retry-After": "7"})),
 )
 async def test_http_adapters_surface_retry_after(
     provider: object, media_request: MediaRequest

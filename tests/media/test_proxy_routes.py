@@ -235,6 +235,93 @@ async def test_gallery_tries_direct_then_proxy_and_preserves_album_order():
     assert [source.proxy_key for source in result[0].sources] == ["proxy-1", "proxy-1"]
 
 
+@pytest.mark.parametrize(
+    "empty_messages", [[], [[3, "https://cdn.example/file.bin", {"extension": "bin"}]]]
+)
+async def test_gallery_retries_proxy_when_direct_finds_no_media(empty_messages):
+    calls = []
+
+    async def extract(url, proxy):
+        calls.append(proxy)
+        if proxy is None:
+            return empty_messages
+        return [[3, "https://cdn.example/video.mp4", {"id": "1", "extension": "mp4"}]]
+
+    pool = MediaProxyPool((PRIMARY,))
+    provider = GalleryDlProvider(proxy_pool=pool, proxy_extract=extract)
+    result = await provider.resolve(
+        build_media_request("https://www.tiktok.com/@user/video/123")
+    )
+
+    assert calls == [None, PRIMARY]
+    assert result[0].sources[0].proxy_key == "proxy-1"
+    assert pool.routes("tiktok") == (None, "proxy-1")
+
+
+async def test_gallery_all_empty_routes_remain_permanent_no_media():
+    calls = []
+
+    async def extract(url, proxy):
+        calls.append(proxy)
+        return []
+
+    pool = MediaProxyPool((PRIMARY,))
+    provider = GalleryDlProvider(proxy_pool=pool, proxy_extract=extract)
+    with pytest.raises(ProviderError) as caught:
+        await provider.resolve(
+            build_media_request("https://www.tiktok.com/@user/video/123")
+        )
+
+    assert calls == [None, PRIMARY]
+    assert caught.value.kind is FailureKind.PERMANENT
+    assert str(caught.value) == "gallery-dl found no media"
+    assert pool.routes("tiktok") == (None, "proxy-1")
+
+
+async def test_gallery_empty_result_does_not_skip_ytdlp_direct_route():
+    pool = MediaProxyPool((PRIMARY,))
+    calls = []
+
+    async def empty_gallery(url, proxy):
+        return []
+
+    async def ytdlp_extract(url, proxy):
+        calls.append(proxy)
+        return metadata()
+
+    request = build_media_request("https://www.tiktok.com/@user/video/123")
+    gallery = GalleryDlProvider(proxy_pool=pool, proxy_extract=empty_gallery)
+    with pytest.raises(ProviderError):
+        await gallery.resolve(request)
+
+    candidates = await YtDlpProvider(
+        proxy_pool=pool, proxy_extract=ytdlp_extract
+    ).resolve(request)
+
+    assert candidates
+    assert calls == [None]
+    assert candidates[0].sources[0].proxy_key is None
+
+
+async def test_gallery_known_permanent_error_does_not_retry_proxy():
+    calls = []
+
+    async def extract(url, proxy):
+        calls.append(proxy)
+        raise ProviderError(FailureKind.PERMANENT, "private media")
+
+    provider = GalleryDlProvider(
+        proxy_pool=MediaProxyPool((PRIMARY,)), proxy_extract=extract
+    )
+    with pytest.raises(ProviderError) as caught:
+        await provider.resolve(
+            build_media_request("https://www.tiktok.com/@user/video/123")
+        )
+
+    assert caught.value.kind is FailureKind.PERMANENT
+    assert calls == [None]
+
+
 async def test_route_cooldown_is_platform_scoped_and_recovers():
     now = [0.0]
     pool = MediaProxyPool((PRIMARY, BACKUP), clock=lambda: now[0], cooldown=10)

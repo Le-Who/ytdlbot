@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
+from heapq import heappop, heappush
+from itertools import count
 
 from app.core.metrics import metrics
 
@@ -15,6 +18,7 @@ from .validation import CandidateValidationResult
 
 Sleeper = Callable[[float], Awaitable[None]]
 Validator = Callable[[MediaRequest, MediaCandidate], CandidateValidationResult]
+_RETRY_DELAYS = (0.5, 1.0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,8 +106,8 @@ async def race_candidates(
 ) -> RaceResult:
     """Return the first validated candidate, respecting all request constraints.
 
-    Two cheap workers hold their slots through Retry-After waits. A single
-    delayed heavy worker invokes local routes sequentially, never concurrently.
+    Two cheap workers try fresh routes before bounded transient retries. A single
+    delayed heavy worker shares the remaining budget across local routes.
     Adapters can consume the same RaceConfig.connect_timeout when they construct
     their HTTP clients.
     """
@@ -116,7 +120,12 @@ async def race_candidates(
     eligible = [route for route in routes if route.is_available(request)]
     if not eligible or deadline <= started:
         return RaceResult(None)
-    cheap = iter(route for route in eligible if not route.provider.is_heavy)
+    cheap = [
+        (started, index, route, 0, "")
+        for index, route in enumerate(eligible)
+        if not route.provider.is_heavy
+    ]
+    retry_order = count(len(eligible))
     heavy = [route for route in eligible if route.provider.is_heavy]
     cheap_count = min(2, sum(not route.provider.is_heavy for route in eligible))
     pending = cheap_count + bool(heavy)
@@ -129,23 +138,36 @@ async def race_candidates(
     route_positions = {id(route): index for index, route in enumerate(eligible)}
     validated: list[tuple[int, int, CandidateWinner]] = []
 
-    async def attempt_route(route: ProviderRoute) -> bool:
-        """Return whether this route actually acquired admission and ran."""
+    async def attempt_route(
+        route: ProviderRoute,
+        attempt_number: int = 0,
+        retry_reason: str = "",
+        timeout: float | None = None,
+    ) -> tuple[float, str] | None:
+        """Run one admitted resolve and return a bounded retry delay, if useful."""
         provider = route.provider.name
-        ran = False
-        while not finished.done() and clock() < deadline:
+        if not finished.done() and clock() < deadline:
             if not route.is_available(request) or not route.breaker.try_acquire(
                 provider, request.platform
             ):
-                return ran
-            ran = True
+                return None
+            if attempt_number:
+                metrics.retries.inc(
+                    reason=retry_reason,
+                    provider=provider,
+                    platform=request.platform,
+                )
             if provider not in attempted_providers:
                 attempted_providers.append(provider)
             try:
                 candidates = await _resolve(
                     route,
                     request,
-                    min(config.resolve_timeout, deadline - clock()),
+                    min(
+                        config.resolve_timeout,
+                        deadline - clock(),
+                        timeout if timeout is not None else config.resolve_timeout,
+                    ),
                     sleep,
                 )
             except ProviderError as error:
@@ -153,23 +175,25 @@ async def race_candidates(
                 failures.append(
                     ProviderFailure(provider, error.kind, str(error), error.retry_after)
                 )
-                delay = error.retry_after
                 if (
                     not route.provider.is_heavy
                     and error.kind is FailureKind.TRANSIENT
-                    and delay is not None
-                    and 0 < delay < deadline - clock()
+                    and attempt_number < len(_RETRY_DELAYS)
                     and not finished.done()
                     and route.is_available(request)
                 ):
-                    metrics.retries.inc(
-                        reason="provider_retry_after",
-                        provider=provider,
-                        platform=request.platform,
-                    )
-                    await sleep(delay)
-                    continue
-                return ran
+                    delay = error.retry_after
+                    if delay is not None and (not math.isfinite(delay) or delay < 0):
+                        return None
+                    delay = max(_RETRY_DELAYS[attempt_number], delay or 0)
+                    if delay < deadline - clock():
+                        return (
+                            delay,
+                            "provider_retry_after"
+                            if error.retry_after is not None
+                            else "provider_transient",
+                        )
+                return None
             except asyncio.CancelledError:
                 route.breaker.release(provider, request.platform)
                 raise
@@ -197,24 +221,42 @@ async def race_candidates(
                         finished.set_result(
                             CandidateWinner(provider, usable[0], tuple(usable[1:]))
                         )
-                    return ran
-                return ran
-        return ran
+                    return None
+        return None
 
     async def worker(*, is_heavy: bool = False) -> None:
         nonlocal pending
         try:
             if is_heavy:
                 await sleep(max(0, started + config.heavy_delay - clock()))
-                for route in heavy:
-                    await attempt_route(route)
+                for index, route in enumerate(heavy):
+                    # A slow first extractor must leave a usable window for its
+                    # sequential fallback without extending the request deadline.
+                    await attempt_route(
+                        route, timeout=(deadline - clock()) / (len(heavy) - index)
+                    )
                     if finished.done():
                         break
             else:
-                for route in cheap:
+                while cheap:
                     if finished.done() or clock() >= deadline:
                         break
-                    await attempt_route(route)
+                    ready_at, _, route, attempt_number, retry_reason = heappop(cheap)
+                    if ready_at > clock():
+                        await sleep(ready_at - clock())
+                    retry = await attempt_route(route, attempt_number, retry_reason)
+                    if retry is not None:
+                        delay, reason = retry
+                        heappush(
+                            cheap,
+                            (
+                                clock() + delay,
+                                next(retry_order),
+                                route,
+                                attempt_number + 1,
+                                reason,
+                            ),
+                        )
         finally:
             pending -= 1
             if not pending and not finished.done():

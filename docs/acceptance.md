@@ -92,6 +92,21 @@ The legacy-cleanup regressions in `tests/test_callback_resource_regressions.py`,
   including normal completion. Cross-platform boundary tests run on Windows;
   real POSIX socket/descendant tests require a POSIX host.
 
+Transient recovery regressions in `tests/media/test_race.py`,
+`tests/media/test_proxy_routes.py`, `tests/media/providers/test_http_providers.py`
+and `tests/media/test_transport.py` exercise same-request recovery after
+connection/probe failure, bounded retries and `Retry-After`, fresh-route
+priority, cancellation during backoff, local-extractor time sharing, and
+gallery-dl empty-result fallback without poisoning shared route health.
+Production probe errors are tested through the real transport boundary with
+controlled responses, including DNS failure versus an unsafe DNS answer.
+`tests/media/test_curl_routes.py` additionally uses local HTTP and SOCKS peers
+with isolated subprocess environments to verify that actual libcurl ignores
+ambient proxy variables for direct routes and honors a configured proxy even
+under `NO_PROXY=*`.
+These offline checks do not establish current provider reachability or identify
+which production SOCKS endpoint caused a previously reported refusal.
+
 `tests/test_runtime_configuration.py` verifies that invalid drain deadlines fail
 before acquiring lifespan resources and that shutdown uses the captured valid
 deadline. `tests/deploy/test_ci_environment.py` and

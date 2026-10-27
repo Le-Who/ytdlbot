@@ -212,7 +212,7 @@ class YtDlpCLIBuilder:
     ) -> None:
         if cookies_path:
             cmd.extend(["--cookies", cookies_path])
-        if proxy:
+        if proxy is not None:
             cmd.extend(["--proxy", proxy])
         if user_agent:
             cmd.extend(["--user-agent", user_agent])

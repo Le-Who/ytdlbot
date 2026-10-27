@@ -8,12 +8,13 @@ import math
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
-from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 from urllib.parse import urljoin, urlsplit
 
+from curl_cffi import CurlOpt
 from curl_cffi.requests import AsyncSession
 
+from ..http_utils import parse_retry_after
 from ..registry import FailureKind, ProviderError
 
 _SENSITIVE_HEADERS = frozenset(
@@ -133,7 +134,9 @@ class CurlProviderTransport:
         data: object | None = None,
         timeout: float,
     ) -> HttpResponse:
-        async with AsyncSession() as session:
+        async with AsyncSession(
+            trust_env=False, curl_options={CurlOpt.PROXY: ""}
+        ) as session:
             response = await session.request(
                 method,
                 url,
@@ -298,9 +301,30 @@ async def probe_candidate(
         # transports retain the small protocol below for deterministic tests.
         import tempfile
 
-        from ..transport import MediaTransport
+        from ..transport import (
+            CredentialRedirectError,
+            DownloadFailed,
+            MediaHostResolutionError,
+            MediaSizeExceeded,
+            MediaTransport,
+            TransferTimeout,
+            UnsafeMediaURL,
+        )
 
-        await MediaTransport(output_dir=tempfile.gettempdir()).probe(url)
+        try:
+            await MediaTransport(output_dir=tempfile.gettempdir()).probe(url)
+        except MediaHostResolutionError as error:
+            raise ProviderError(FailureKind.TRANSIENT, str(error)) from error
+        except (UnsafeMediaURL, MediaSizeExceeded) as error:
+            raise ProviderError(FailureKind.PERMANENT, str(error)) from error
+        except CredentialRedirectError as error:
+            raise ProviderError(FailureKind.CONFIG, str(error)) from error
+        except TransferTimeout as error:
+            raise ProviderError(FailureKind.TRANSIENT, str(error)) from error
+        except DownloadFailed as error:
+            raise ProviderError(
+                FailureKind.TRANSIENT, str(error), retry_after=error.retry_after
+            ) from error
         return
     response = await request_response(
         transport,
@@ -329,6 +353,27 @@ async def probe_candidate(
         raise ProviderError(FailureKind.TRANSIENT, "candidate returned HTML")
 
 
+def combine_probe_failures(first: ProviderError, other: ProviderError) -> ProviderError:
+    """Keep any retryable alternative and the longest valid server retry delay."""
+    representative = (
+        other
+        if first.kind is not FailureKind.TRANSIENT
+        and other.kind is FailureKind.TRANSIENT
+        else first
+    )
+    delay = max(
+        (
+            max(0.0, error.retry_after)
+            for error in (first, other)
+            if error.retry_after is not None and math.isfinite(error.retry_after)
+        ),
+        default=None,
+    )
+    if representative.retry_after == delay:
+        return representative
+    return ProviderError(representative.kind, str(representative), retry_after=delay)
+
+
 def ensure_not_expired(
     url: str, *, wall_clock: Callable[[], float] = time.time
 ) -> None:
@@ -348,20 +393,6 @@ def ensure_not_expired(
             continue
         if expiry <= float(wall_clock()):
             raise ProviderError(FailureKind.TRANSIENT, "candidate URL is expired")
-
-
-def parse_retry_after(headers: Mapping[str, str]) -> float | None:
-    value = _header(headers, "retry-after")
-    if not value:
-        return None
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        try:
-            parsed = parsedate_to_datetime(value)
-            return max(0.0, parsed.timestamp() - time.time())
-        except (TypeError, ValueError, OverflowError):
-            return None
 
 
 def is_challenge(text: str) -> bool:
@@ -387,6 +418,7 @@ def _raise_for_response(response: HttpResponse, *, authenticated: bool) -> None:
         raise ProviderError(
             FailureKind.TRANSIENT,
             f"upstream returned HTTP {response.status_code}",
+            retry_after=parse_retry_after(response.headers),
         )
     if response.status_code >= 400:
         raise ProviderError(

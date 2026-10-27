@@ -35,14 +35,20 @@ class FailureKind(StrEnum):
 
 
 class ProviderError(Exception):
-    """An adapter-classified failure; Retry-After is a delay in seconds."""
+    """Adapter failure; route health controls proxy cooldown, not circuit breakers."""
 
     def __init__(
-        self, kind: FailureKind, message: str = "", *, retry_after: float | None = None
+        self,
+        kind: FailureKind,
+        message: str = "",
+        *,
+        retry_after: float | None = None,
+        affects_route_health: bool = True,
     ) -> None:
         super().__init__(message or kind.value)
         self.kind = kind
         self.retry_after = retry_after
+        self.affects_route_health = affects_route_health
 
 
 @dataclass

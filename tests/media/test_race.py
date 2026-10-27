@@ -401,6 +401,147 @@ async def test_retry_after_within_budget_waits_before_retry():
     assert provider.starts == [0, 2]
 
 
+async def test_transient_connection_failure_recovers_in_same_request():
+    clock = ManualClock()
+    provider = Provider(
+        "flaky", clock, error=ProviderError(FailureKind.TRANSIENT, "connection refused")
+    )
+    task = start(clock, [provider])
+    await clock.advance(0.49)
+    assert provider.starts == [0]
+    await clock.advance(0.01)
+    result = await result_of(task)
+    assert result.winner is not None
+    assert result.winner.provider == "flaky"
+    assert provider.starts == [0, 0.5]
+    assert result.attempted_providers == ("flaky",)
+    assert clock.sleepers == []
+
+
+async def test_fresh_alternative_runs_before_transient_retry_backoff():
+    clock = ManualClock()
+    providers = [
+        Provider("flaky", clock, error=ProviderError(FailureKind.TRANSIENT)),
+        Provider("hung", clock, delay=15),
+        Provider("reserve", clock),
+    ]
+    result = await result_of(start(clock, providers))
+    assert result.winner is not None
+    assert result.winner.provider == "reserve"
+    assert providers[0].starts == [0]
+    assert providers[2].starts == [0]
+    assert clock.sleepers == []
+
+
+async def test_long_retry_after_cannot_block_an_earlier_ready_retry():
+    clock = ManualClock()
+
+    class LimitedProvider(Provider):
+        async def resolve(self, request):
+            self.error = ProviderError(FailureKind.TRANSIENT, retry_after=9)
+            return await super().resolve(request)
+
+    class RecoveringProvider(Provider):
+        async def resolve(self, request):
+            self.delay = 2 if self.starts else 0
+            return await super().resolve(request)
+
+    recovering = RecoveringProvider(
+        "recovering", clock, error=ProviderError(FailureKind.TRANSIENT)
+    )
+    task = start(
+        clock,
+        [LimitedProvider("a", clock), LimitedProvider("b", clock), recovering],
+        total_timeout=10,
+    )
+    await clock.advance(0.5)
+    assert recovering.starts == [0, 0.5]
+    await clock.advance(2)
+    result = await result_of(task)
+    assert result.winner is not None
+    assert result.winner.provider == "recovering"
+    assert clock.sleepers == []
+
+
+@pytest.mark.parametrize(
+    "kind",
+    [FailureKind.AUTH, FailureKind.CONFIG, FailureKind.PERMANENT, FailureKind.INTERNAL],
+)
+async def test_non_transient_failure_is_never_automatically_retried(kind):
+    clock = ManualClock()
+    provider = Provider("failed", clock, error=ProviderError(kind))
+    result = await result_of(start(clock, [provider]))
+    assert result.winner is None
+    assert provider.starts == [0]
+    assert clock.sleepers == []
+
+
+@pytest.mark.parametrize(
+    "retry_after,delays", [(None, (0.5, 1)), (0, (0.5, 1)), (61, (61, 61))]
+)
+async def test_transient_retries_are_bounded_per_request(retry_after, delays):
+    clock = ManualClock()
+    breaker = CircuitBreaker(clock=clock)
+
+    class FailingProvider(Provider):
+        async def resolve(self, request):
+            self.error = ProviderError(FailureKind.TRANSIENT, retry_after=retry_after)
+            return await super().resolve(request)
+
+    provider = FailingProvider("flaky", clock)
+    task = start(clock, [ProviderRoute(provider, breaker=breaker)], total_timeout=200)
+    await clock.advance(delays[0])
+    await clock.advance(delays[1])
+    result = await result_of(task)
+    assert result.winner is None
+    assert len(result.failures) == 3
+    assert provider.starts == [0, delays[0], sum(delays)]
+    assert clock.sleepers == []
+
+
+async def test_transient_retry_does_not_outlive_request_deadline():
+    clock = ManualClock()
+    provider = Provider("flaky", clock, error=ProviderError(FailureKind.TRANSIENT))
+    result = await result_of(
+        start(clock, [provider], request=replace(REQUEST, deadline=0.25))
+    )
+    assert result.winner is None
+    assert provider.starts == [0]
+    assert clock.sleepers == []
+
+
+async def test_cancelling_transient_backoff_joins_all_timers():
+    clock = ManualClock()
+    provider = Provider("flaky", clock, error=ProviderError(FailureKind.TRANSIENT))
+    task = start(clock, [provider])
+    await settle()
+    assert not task.done()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await result_of(task)
+    assert provider.starts == [0]
+    assert clock.sleepers == []
+
+
+async def test_slow_heavy_route_leaves_resolve_time_for_next_local_provider():
+    clock = ManualClock()
+    first = Provider("gallery", clock, delay=30, is_heavy=True)
+    second = Provider("ytdlp", clock, delay=1, is_heavy=True)
+    task = start(
+        clock, [first, second], resolve_timeout=12, total_timeout=14, heavy_delay=0
+    )
+    await clock.advance(0)
+    await clock.advance(7)
+    assert first.cancelled and first.finished
+    assert second.starts == [7]
+    await clock.advance(1)
+    result = await result_of(task)
+    assert result.winner is not None
+    assert result.winner.provider == "ytdlp"
+    assert first.starts == [0]
+    assert clock.sleepers == []
+
+
 async def test_resolve_timeout_at_eight_seconds_releases_slot_for_next_route():
     clock = ManualClock()
     first, second, third = (

@@ -101,7 +101,7 @@ class YtDlpService:
             self.tiktok_proxy if _is_tiktok(url) else (self.vk_proxy if is_vk else None)
         )
         if override_proxy:
-            proxy = proxy_url
+            proxy = proxy_url if proxy_url is not None else ""
 
         cmd = self.builder.build_extraction_cmd(
             url=url,

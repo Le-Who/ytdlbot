@@ -245,7 +245,8 @@ second owns the atomic release transaction.
 `MEDIA_PROXY_URLS` is a JSON array of SOCKS5 URLs in primary/backup order, stored
 in the existing protected VPS `.env`. The optional GitHub Actions secret
 `MEDIA_PROXY_URLS` updates only this setting during deployment. The secret accepts
-one `socks5://user:password@host:port` URL or a JSON array of SOCKS5 URLs; `[]`
+one `socks5://user:password@host:port` URL, comma-separated URLs, or a JSON array
+of SOCKS5 URLs; `[]`
 selects direct-only extraction. An absent/empty secret preserves the VPS setting.
 The workflow masks and encodes the secret before SSH forwarding. Under the
 project deployment lock, the release validates it, captures the previous private

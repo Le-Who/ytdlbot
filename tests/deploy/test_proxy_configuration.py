@@ -16,14 +16,26 @@ from tests.deploy.test_release_scripts import ROOT, FakeHost
 pytest_plugins = ["tests.deploy.test_release_scripts"]
 
 PROXY = "socks5://trial:p$a'ss%22@proxy.example:1080"
+BACKUP = "socks5://backup:pa,ss@backup.example:1081"
 
 
 def encoded(value: str) -> str:
     return base64.b64encode(value.encode()).decode()
 
 
-@pytest.mark.parametrize("value", [PROXY, json.dumps([PROXY]), "[]"])
-def test_release_applies_only_explicit_proxy_configuration(fake_host: FakeHost, value):
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (PROXY, [PROXY]),
+        (json.dumps([PROXY]), [PROXY]),
+        ("[]", []),
+        (PROXY + "," + BACKUP, [PROXY, BACKUP]),
+        (PROXY + ", " + BACKUP, [PROXY, BACKUP]),
+    ],
+)
+def test_release_applies_only_explicit_proxy_configuration(
+    fake_host: FakeHost, value, expected
+):
     environment = fake_host.root / ".env"
     prefix = "# protected settings\nBOT_TOKEN=keep-secret\n"
     suffix = "# retained comment\nVK_PROXY=keep-existing\n"
@@ -33,7 +45,6 @@ def test_release_applies_only_explicit_proxy_configuration(fake_host: FakeHost, 
     result = fake_host.run(MEDIA_PROXY_URLS_B64=encoded(value))
 
     assert result.returncode == 0, result.stderr
-    expected = [] if value == "[]" else [PROXY]
     assert json.loads(dotenv_values(environment)["MEDIA_PROXY_URLS"]) == expected
     updated = environment.read_text(encoding="utf-8")
     assert updated.startswith(prefix) and updated.endswith(suffix)

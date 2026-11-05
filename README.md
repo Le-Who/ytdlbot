@@ -182,7 +182,7 @@ Selected configuration:
 | `TELEGRAM_LOCAL_REQUIRED` | Require Local Bot API for readiness |
 | `MEDIA_DIR` | Persistent shared media directory |
 | `YTDLBOT_JOB_DB` | Persistent SQLite job-store path |
-| `MEDIA_PROXY_URLS` | JSON array of SOCKS5 URLs in primary/backup order; the optional GitHub Actions secret also accepts a single URL and updates this VPS setting during deploy |
+| `MEDIA_PROXY_URLS` | JSON array of SOCKS5 URLs in primary/backup order; the optional GitHub Actions secret also accepts one URL or comma-separated URLs and updates this VPS setting during deploy |
 | `MEDIA_PROXY_PLATFORMS` | Platforms whose local extractors may use the pool; YouTube uses proxies first |
 | `POT_PROVIDER_URL` | bgutil PO-token server origin; Compose uses the project sidecar |
 | `COBALT_API_URL` | Comma-separated exact Cobalt origins; no origin is trusted automatically |

@@ -154,7 +154,10 @@ from urllib.parse import urlsplit
 
 try:
     raw = base64.b64decode(os.environ["MEDIA_PROXY_URLS_B64"], validate=True).decode().strip()
-    urls = json.loads(raw) if raw.startswith("[") else [raw]
+    urls = (
+        json.loads(raw) if raw.startswith("[") else
+        [value.strip() for value in re.split(r",(?=\s*socks5h?://)", raw, flags=re.IGNORECASE)]
+    )
     if not isinstance(urls, list) or not all(isinstance(url, str) for url in urls):
         raise ValueError
     for url in urls:
@@ -165,7 +168,7 @@ try:
                 or any(ord(char) < 33 or ord(char) == 127 for char in url)):
             raise ValueError
 except (ValueError, TypeError, UnicodeError):
-    raise SystemExit("MEDIA_PROXY_URLS must be a SOCKS5 URL with a port or a JSON array of those URLs.") from None
+    raise SystemExit("MEDIA_PROXY_URLS must contain SOCKS5 URLs with ports: one URL, comma-separated URLs, or a JSON array.") from None
 
 root = Path(os.environ["PROJECT_ROOT"])
 state = root / ".deploy"

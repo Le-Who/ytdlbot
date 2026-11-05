@@ -98,6 +98,9 @@ and `tests/media/test_transport.py` exercise same-request recovery after
 connection/probe failure, bounded retries and `Retry-After`, fresh-route
 priority, cancellation during backoff, local-extractor time sharing, and
 gallery-dl empty-result fallback without poisoning shared route health.
+The proxy-route suite also verifies YouTube direct fallback after both configured
+SOCKS routes refuse connections, direct source affinity, and a full extraction
+budget for the fallback within the overall race timeout.
 Production probe errors are tested through the real transport boundary with
 controlled responses, including DNS failure versus an unsafe DNS answer.
 `tests/media/test_curl_routes.py` additionally uses local HTTP and SOCKS peers

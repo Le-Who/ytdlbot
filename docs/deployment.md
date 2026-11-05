@@ -243,13 +243,26 @@ second owns the atomic release transaction.
 ## Media proxies and PO-token sidecar maintenance
 
 `MEDIA_PROXY_URLS` is a JSON array of SOCKS5 URLs in primary/backup order, stored
-only in the existing protected VPS `.env`. Do not print `docker compose config`
-or container environment values when diagnosing credentials. YouTube uses the
-pool first. Local yt-dlp/gallery-dl extractors for the configured known platforms
-try direct first, then the pool after a transient/auth failure or an empty
-gallery-dl result. Empty extraction does not cool the shared route for other
-extractors; an all-empty gallery-dl result remains a no-media failure. Native API
-providers retain their direct fast path. A stream source carries an opaque route
+in the existing protected VPS `.env`. The optional GitHub Actions secret
+`MEDIA_PROXY_URLS` updates only this setting during deployment. The secret accepts
+one `socks5://user:password@host:port` URL or a JSON array of SOCKS5 URLs; `[]`
+selects direct-only extraction. An absent/empty secret preserves the VPS setting.
+The workflow masks and encodes the secret before SSH forwarding. Under the
+project deployment lock, the release validates it, captures the previous private
+environment file and atomically changes only the proxy assignment. Activation
+failure and manual rollback restore that captured environment with the previous
+bot image. Existing rollback manifests without an environment snapshot remain
+supported. GitHub's legacy `TIKTOK_PROXY`/`VK_PROXY` secrets do not update the
+shared pool. Production Compose reads the resulting file. Configuration
+changes take effect when the bot container is recreated through the documented
+release procedure. Do not print `docker compose config` or container environment
+values when diagnosing credentials. YouTube tries the pool first, then direct
+access if the configured proxies fail. Local yt-dlp/gallery-dl extractors for the
+configured known platforms try direct first, then the pool after a transient/auth
+failure or an empty gallery-dl result. Empty extraction does not cool the shared
+route for other extractors; an all-empty gallery-dl result remains a no-media
+failure. Native API providers retain their direct fast path. A stream source
+carries an opaque route
 key; probes, redirects and downloads keep that route, with local DNS validation
 and pinning. Policy-aware yt-dlp/gallery-dl and curl requests explicitly select
 direct or the configured proxy; standard `HTTP_PROXY`, `HTTPS_PROXY`,
@@ -258,11 +271,12 @@ direct or the configured proxy; standard `HTTP_PROXY`, `HTTPS_PROXY`,
 the shared pipeline through `MEDIA_PROXY_URLS` and `MEDIA_PROXY_PLATFORMS`.
 A transfer failure cools that platform/route for 60 seconds and the
 single refresh obtains new URLs on the next available route. Proxy extraction
-attempts are bounded to 20 seconds; direct fallback attempts to 3 seconds.
+attempts and YouTube direct fallback attempts are bounded to 20 seconds; other
+direct attempts are bounded to 3 seconds.
 For yt-dlp, the network socket timeout is capped at 3 seconds and one extractor
 retry, independently of the process budget. The provider resolve timeout covers
 all configured proxy attempts, direct fallback and cleanup; the total race adds
-4 seconds. With two proxies these upper limits are 44 and 48 seconds. When more
+4 seconds. With two proxies these upper limits are 61 and 65 seconds. When more
 than one local extractor is eligible, each gets at most its share of the
 remaining race time, so a slow gallery-dl cannot consume yt-dlp's entire window.
 A single local route, including YouTube, retains its full resolve budget.
@@ -331,6 +345,14 @@ bounded extraction result and the opaque route identifier. In the ordinary
 pipeline, a YouTube access denial is transient and allows the next configured
 proxy route; it does not permanently disable that provider as an auth failure.
 The default pipeline has no independent external YouTube downloader.
+
+SOCKS reply 2 (`connection not allowed by ruleset`) is a proxy CONNECT refusal.
+If authentication succeeds but both domain and numeric-IP CONNECT requests fail
+for unrelated public destinations, investigate the proxy account's service state
+and allowlist. This is not evidence that the requested video was removed. The
+direct fallback can still resolve the request when the VPS can reach YouTube;
+its source URLs, probes and downloads all stay direct. Direct access remains
+subject to YouTube's network restrictions.
 
 Do not use a signed CDN URL extracted on one route for a direct or different
 proxy download. The reported October 4 Short returned HTTP 403 in that mixed

@@ -54,10 +54,10 @@ cookies, a proxy, payment, or manual CAPTCHA. See
   Refreshed YouTube URLs must preserve a known selected audio language. Default
   audible YouTube requests have a separate cache policy identity so older
   translated downloads and Telegram file IDs are not reused.
-- YouTube uses the configured primary/backup SOCKS5 pool for extraction and
-  downloads. Other configured local extractors try direct access before the
-  proxy fallback. Media streams keep the extraction route; native API providers
-  retain their direct paths.
+- YouTube tries the configured primary/backup SOCKS5 pool, then direct access
+  if those routes fail. Other configured local extractors try direct access
+  before the proxy fallback. Media streams keep the extraction route; native
+  API providers retain their direct paths.
 - Empty gallery-dl extraction results try the remaining configured routes
   without cooling a shared route needed by another extractor. Policy-aware
   extraction selects its route explicitly, including direct access.
@@ -179,7 +179,7 @@ Selected configuration:
 | `TELEGRAM_LOCAL_REQUIRED` | Require Local Bot API for readiness |
 | `MEDIA_DIR` | Persistent shared media directory |
 | `YTDLBOT_JOB_DB` | Persistent SQLite job-store path |
-| `MEDIA_PROXY_URLS` | JSON array of SOCKS5 URLs in primary/backup order; keep credentials outside Git |
+| `MEDIA_PROXY_URLS` | JSON array of SOCKS5 URLs in primary/backup order; the optional GitHub Actions secret also accepts a single URL and updates this VPS setting during deploy |
 | `MEDIA_PROXY_PLATFORMS` | Platforms whose local extractors may use the pool; YouTube uses proxies first |
 | `POT_PROVIDER_URL` | bgutil PO-token server origin; Compose uses the project sidecar |
 | `COBALT_API_URL` | Comma-separated exact Cobalt origins; no origin is trusted automatically |

@@ -27,7 +27,11 @@ from app.services.media.transport import (
     UnsafeMediaURL,
     URLPolicy,
 )
-from app.services.ytdlp.exceptions import AccessDeniedError, VideoNotFoundError
+from app.services.ytdlp.exceptions import (
+    AccessDeniedError,
+    ExtractionError,
+    VideoNotFoundError,
+)
 from tests.media.providers.test_ytdlp_provider import metadata
 from tests.media.test_transport import (
     FakeClient,
@@ -64,6 +68,70 @@ async def test_youtube_retries_backup_and_keeps_credentials_out_of_candidates():
     calls.clear()
     await provider.resolve(MediaRequest.from_url("https://youtu.be/example"))
     assert calls == [BACKUP]
+
+
+async def test_runtime_youtube_uses_direct_when_both_proxies_refuse(monkeypatch):
+    from app.core import config, state
+    from app.services.media import pipeline as pipeline_module
+
+    monkeypatch.setattr(config, "MEDIA_PROXY_URLS", (PRIMARY, BACKUP))
+    monkeypatch.setattr(state, "redis_client", None)
+    pipeline = pipeline_module.build_default_pipeline(SimpleNamespace(id=1))
+    calls = []
+
+    async def extract(url, proxy):
+        calls.append(proxy)
+        if proxy == PRIMARY:
+            raise ExtractionError("Connection refused")
+        if proxy == BACKUP:
+            raise ExtractionError("connection not allowed by ruleset")
+        return metadata()
+
+    pipeline.refreshers["ytdlp"]._proxy_extract = extract
+    resolved = await pipeline.resolve(
+        build_media_request("https://www.youtube.com/shorts/example")
+    )
+
+    assert calls == [PRIMARY, BACKUP, None]
+    assert resolved.provider == "ytdlp"
+    assert resolved.candidates
+    assert all(
+        source.proxy_key is None
+        for item in resolved.candidates
+        for source in item.sources
+    )
+    calls.clear()
+    await pipeline.resolve(build_media_request("https://youtu.be/another"))
+    assert calls == [None]
+
+
+async def test_youtube_direct_fallback_has_full_extraction_budget(monkeypatch):
+    from app.services.media import proxies
+
+    budgets = []
+
+    async def wait_for(operation, *, timeout):
+        budgets.append(timeout)
+        return await operation
+
+    monkeypatch.setattr(proxies, "asyncio", SimpleNamespace(wait_for=wait_for))
+    pool = MediaProxyPool((PRIMARY, BACKUP), attempt_timeout=20, direct_timeout=3)
+    provider = YtDlpProvider(proxy_pool=pool)
+    calls = []
+
+    async def extract(url, **options):
+        calls.append(options)
+        if options["proxy_url"] is not None:
+            raise ExtractionError("connection not allowed by ruleset")
+        return metadata()
+
+    monkeypatch.setattr(provider._service, "extract", extract)
+    assert await provider.resolve(MediaRequest.from_url("https://youtu.be/example"))
+    assert budgets == [20, 20, 20]
+    assert [options["timeout"] for options in calls] == budgets
+    assert calls[-1]["override_proxy"] is True
+    assert calls[-1]["use_cookies"] is False
+    assert pool.extraction_timeout >= sum(budgets) + 1
 
 
 async def test_permanent_error_does_not_retry_proxy():
@@ -326,10 +394,10 @@ async def test_route_cooldown_is_platform_scoped_and_recovers():
     now = [0.0]
     pool = MediaProxyPool((PRIMARY, BACKUP), clock=lambda: now[0], cooldown=10)
     pool.failed("youtube", "proxy-1")
-    assert pool.routes("youtube") == ("proxy-2",)
+    assert pool.routes("youtube") == ("proxy-2", None)
     assert pool.routes("instagram") == (None, "proxy-1", "proxy-2")
     now[0] = 11
-    assert pool.routes("youtube") == ("proxy-1", "proxy-2")
+    assert pool.routes("youtube") == ("proxy-1", "proxy-2", None)
     assert pool.routes("other") == (None,)
 
 
@@ -510,7 +578,7 @@ async def test_transfer_failure_refreshes_urls_on_backup(tmp_path):
 
     class Refresher:
         async def refresh(self, req, descriptor, *, attempt, deadline):
-            assert pool.routes("youtube") == ("proxy-2",)
+            assert pool.routes("youtube") == ("proxy-2", None)
             return replace(
                 original,
                 sources=tuple(

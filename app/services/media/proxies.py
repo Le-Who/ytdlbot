@@ -87,7 +87,15 @@ class MediaProxyPool:
     @property
     def extraction_timeout(self) -> float:
         """Cover direct fallback, every configured proxy and process cleanup."""
-        return self.direct_timeout + len(self._urls) * self.attempt_timeout + 1.0
+        direct_budget = self.direct_timeout
+        if self.configured("youtube"):
+            direct_budget = max(direct_budget, self.attempt_timeout)
+        return direct_budget + len(self._urls) * self.attempt_timeout + 1.0
+
+    def route_timeout(self, platform: str, *, proxied: bool) -> float:
+        if proxied or platform == "youtube":
+            return self.attempt_timeout
+        return self.direct_timeout
 
     def url(self, key: str) -> str:
         try:
@@ -99,8 +107,7 @@ class MediaProxyPool:
         if not self.configured(platform):
             return (None,)
         keys: tuple[str | None, ...] = tuple(self._urls)
-        if platform != "youtube":
-            keys = (None, *keys)
+        keys = (*keys, None) if platform == "youtube" else (None, *keys)
         now = self.clock()
         healthy = tuple(
             key for key in keys if self._failed_until.get((platform, key), 0) <= now
@@ -131,7 +138,7 @@ class MediaProxyPool:
         last_error: ProviderError | None = None
         for key in self.routes(platform):
             started = self.clock()
-            budget = self.attempt_timeout if key else self.direct_timeout
+            budget = self.route_timeout(platform, proxied=key is not None)
             if deadline is not None:
                 budget = min(budget, deadline - self.clock())
             if budget <= 0:

@@ -50,6 +50,7 @@ OFFLINE_ACCEPTANCE_NODES = (
     "tests/media/test_race.py::test_slow_heavy_route_leaves_resolve_time_for_next_local_provider",
     "tests/media/providers/test_http_providers.py::test_production_tikwm_probe_failure_recovers_in_same_provider_race",
     "tests/media/test_proxy_routes.py::test_gallery_empty_result_does_not_skip_ytdlp_direct_route",
+    "tests/media/test_proxy_routes.py::test_runtime_youtube_uses_direct_when_both_proxies_refuse",
     "tests/media/test_curl_routes.py",
     "tests/media/test_transport.py::test_cancellation_closes_stream_and_removes_partial_and_lease",
     "tests/core/test_process_supervisor.py::test_request_cancel_leaves_no_process_socket_or_partial_after_two_seconds",

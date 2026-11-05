@@ -50,6 +50,18 @@ previous_health_contract=$(manifest_field HEALTH_CONTRACT)
 previous_health_url=$(manifest_field HEALTH_URL)
 previous_current_manifest_state=$(manifest_field CURRENT_MANIFEST_STATE)
 previous_current_manifest=$(manifest_field CURRENT_MANIFEST_FILE)
+previous_environment_state=unchanged
+if grep -q '^ENVIRONMENT_STATE=' "$ROLLBACK_MANIFEST"; then
+  previous_environment_state=$(manifest_field ENVIRONMENT_STATE)
+fi
+case "$previous_environment_state" in
+  captured)
+    [ -f "$DEPLOY_STATE_DIR/rollback.env" ] && [ ! -L "$DEPLOY_STATE_DIR/rollback.env" ] ||
+      fail "Rollback environment is unavailable or unsafe."
+    ;;
+  unchanged) ;;
+  *) fail "Rollback environment state is invalid." ;;
+esac
 [ "$previous_project" = "$COMPOSE_PROJECT" ] ||
   fail "Rollback project mismatch."
 [ "$previous_compose" = "$DEPLOY_STATE_DIR/rollback-compose.yml" ] ||
@@ -83,6 +95,13 @@ if [ "${DEPLOY_LOCK_HELD:-0}" != 1 ]; then
     printf '%s\n' "Another project release is already running." >&2
     exit 1
   fi
+fi
+
+if [ "$previous_environment_state" = captured ]; then
+  environment_tmp="$PROJECT_ROOT/.env.rollback.$$"
+  cp "$DEPLOY_STATE_DIR/rollback.env" "$environment_tmp"
+  chmod 600 "$environment_tmp"
+  "$MV_BIN" -f "$environment_tmp" "$PROJECT_ROOT/.env"
 fi
 
 rollback_tmp="$PROJECT_ROOT/.docker-compose.rollback.$$"

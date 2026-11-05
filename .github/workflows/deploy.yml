@@ -62,6 +62,7 @@ jobs:
             tests/media/providers/test_gallerydl_provider.py \
             tests/test_compose_contract.py \
             tests/acceptance/test_media_release.py \
+            tests/deploy/test_proxy_configuration.py \
             tests/deploy/test_release_scripts.py::test_routine_deploy_only_replaces_bot_and_preserves_host_state \
             tests/deploy/test_release_scripts.py::test_concurrent_deploy_is_rejected_by_project_lock \
             tests/deploy/test_release_scripts.py::test_project_root_must_match_existing_compose_identity \
@@ -263,6 +264,24 @@ jobs:
           strip_components: 1
           rm: false
 
+      - name: Encode optional media proxy secret
+        id: proxy_secret
+        if: steps.freshness.outputs.should_deploy == 'true'
+        env:
+          MEDIA_PROXY_URLS: ${{ secrets.MEDIA_PROXY_URLS }}
+        run: |
+          python3 - <<'PY'
+          import base64
+          import os
+
+          value = os.environ.get("MEDIA_PROXY_URLS", "").strip()
+          encoded = base64.b64encode(value.encode()).decode() if value else ""
+          if encoded:
+              print(f"::add-mask::{encoded}")
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"encoded={encoded}\n")
+          PY
+
       - name: Activate immutable release over verified SSH
         if: steps.freshness.outputs.should_deploy == 'true'
         uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17
@@ -276,6 +295,7 @@ jobs:
           DEPLOY_UPLOAD_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           GHCR_USERNAME: ${{ github.actor }}
           GHCR_TOKEN: ${{ github.token }}
+          MEDIA_PROXY_URLS_B64: ${{ steps.proxy_secret.outputs.encoded }}
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USERNAME }}
@@ -283,7 +303,7 @@ jobs:
           port: ${{ secrets.VPS_PORT || '22' }}
           fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
           command_timeout: 20m
-          envs: PROJECT_ROOT,RELEASE_SHA,EXPECTED_BRANCH_SHA,BOT_IMAGE,COMPOSE_PROJECT,PUBLIC_BASE_URL,DEPLOY_UPLOAD_ID,GHCR_USERNAME,GHCR_TOKEN
+          envs: PROJECT_ROOT,RELEASE_SHA,EXPECTED_BRANCH_SHA,BOT_IMAGE,COMPOSE_PROJECT,PUBLIC_BASE_URL,DEPLOY_UPLOAD_ID,GHCR_USERNAME,GHCR_TOKEN,MEDIA_PROXY_URLS_B64
           script: |
             set -eu
             test -d "$PROJECT_ROOT/.deploy"

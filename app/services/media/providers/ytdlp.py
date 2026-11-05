@@ -99,9 +99,9 @@ class YtDlpProvider:
                 if self._proxy_pool.configured(request.platform):
                     options.update(
                         {
-                            "timeout": self._proxy_pool.attempt_timeout
-                            if proxy
-                            else self._proxy_pool.direct_timeout,
+                            "timeout": self._proxy_pool.route_timeout(
+                                request.platform, proxied=proxy is not None
+                            ),
                             "socket_timeout": 3.0,
                             "extractor_retries": 1,
                         }

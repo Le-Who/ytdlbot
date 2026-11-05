@@ -141,6 +141,72 @@ rollback_override_tmp="$DEPLOY_STATE_DIR/rollback-bot.override.yml.tmp.$$"
 current_manifest="$DEPLOY_STATE_DIR/current.manifest"
 rollback_current_manifest="$DEPLOY_STATE_DIR/rollback-current.manifest"
 previous_current_manifest_state=absent
+previous_environment_state=unchanged
+if [ -n "${MEDIA_PROXY_URLS_B64:-}" ]; then
+  "$PYTHON_BIN" - <<'PY'
+import base64
+import json
+import os
+import re
+import tempfile
+from pathlib import Path
+from urllib.parse import urlsplit
+
+try:
+    raw = base64.b64decode(os.environ["MEDIA_PROXY_URLS_B64"], validate=True).decode().strip()
+    urls = json.loads(raw) if raw.startswith("[") else [raw]
+    if not isinstance(urls, list) or not all(isinstance(url, str) for url in urls):
+        raise ValueError
+    for url in urls:
+        parsed = urlsplit(url)
+        if (parsed.scheme not in {"socks5", "socks5h"} or not parsed.hostname
+                or parsed.port is None or not 1 <= parsed.port <= 65535
+                or parsed.path or parsed.query or parsed.fragment
+                or any(ord(char) < 33 or ord(char) == 127 for char in url)):
+            raise ValueError
+except (ValueError, TypeError, UnicodeError):
+    raise SystemExit("MEDIA_PROXY_URLS must be a SOCKS5 URL with a port or a JSON array of those URLs.") from None
+
+root = Path(os.environ["PROJECT_ROOT"])
+state = root / ".deploy"
+before = (root / ".env").read_bytes()
+lines = before.decode().splitlines(keepends=True)
+matches = [i for i, line in enumerate(lines)
+           if re.match(r"^[ \t]*(?:export[ \t]+)?MEDIA_PROXY_URLS[ \t]*=", line)]
+if len(matches) > 1:
+    raise SystemExit("Existing MEDIA_PROXY_URLS assignment must be unique.")
+literal = json.dumps(urls, ensure_ascii=True).replace("\\", "\\\\").replace("'", "\\'")
+replacement = "MEDIA_PROXY_URLS='" + literal + "'\n"
+if matches:
+    index = matches[0]
+    old = lines[index].split("=", 1)[1].strip()
+    if old.startswith(("'", '"')) and not re.fullmatch(
+        r'''(?:'(?:\\.|[^'\\])*'|"(?:\\.|[^"\\])*")[ \t]*(?:\#.*)?''', old
+    ):
+        raise SystemExit("Existing MEDIA_PROXY_URLS assignment must occupy one line.")
+    lines[index] = replacement
+else:
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    lines.append(replacement)
+
+def atomic_private_file(name, data):
+    descriptor, temporary = tempfile.mkstemp(prefix=name + ".", dir=state)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(data)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, state / name)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+atomic_private_file("rollback.env", before)
+atomic_private_file("media-proxy.env.candidate", "".join(lines).encode())
+PY
+  previous_environment_state=captured
+fi
+unset MEDIA_PROXY_URLS_B64
 if [ -e "$current_manifest" ] || [ -L "$current_manifest" ]; then
   [ -f "$current_manifest" ] && [ ! -L "$current_manifest" ] ||
     fail "Current release manifest is unsafe."
@@ -167,6 +233,7 @@ mv -f "$rollback_override_tmp" "$DEPLOY_STATE_DIR/rollback-bot.override.yml"
   printf 'HEALTH_URL=%s\n' "$previous_health_url"
   printf 'CURRENT_MANIFEST_STATE=%s\n' "$previous_current_manifest_state"
   printf 'CURRENT_MANIFEST_FILE=%s\n' "$rollback_current_manifest"
+  printf 'ENVIRONMENT_STATE=%s\n' "$previous_environment_state"
 } >"$rollback_manifest_tmp"
 mv -f "$rollback_manifest_tmp" "$DEPLOY_STATE_DIR/rollback.manifest"
 
@@ -187,6 +254,10 @@ on_exit() {
 }
 trap on_exit EXIT
 trap 'exit 130' HUP INT TERM
+
+if [ "$previous_environment_state" = captured ]; then
+  "$MV_BIN" -f "$DEPLOY_STATE_DIR/media-proxy.env.candidate" "$PROJECT_ROOT/.env"
+fi
 
 candidate_tmp="$PROJECT_ROOT/.docker-compose.candidate.$$"
 cp "$RELEASE_DIR/docker-compose.yml" "$candidate_tmp"

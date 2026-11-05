@@ -26,6 +26,7 @@ from app.core.models import DownloadContext
 from app.core.process import run_subprocess
 
 from .delivery import DeliveryAsset, TelegramDelivery
+from .materialization_race import MaterializationRaceError, race_materializations
 from .models import (
     YOUTUBE_SHORT_DEFAULT_VARIANT,
     ClipInterval,
@@ -115,6 +116,7 @@ class Materializer(Protocol):
         *,
         refreshers: Mapping[str, Any] | None = None,
         deadline: float | None = None,
+        record_measurement: bool = True,
     ) -> MaterializedItem: ...
 
     async def adopt_local(
@@ -173,9 +175,12 @@ class MediaPipeline:
         enforce_route_matrix: bool = False,
         lease_renew_interval: float = 5 * 60,
         slideshow_converter: SlideshowConverter | None = None,
+        youtube_routes: Sequence[ProviderRoute] = (),
     ) -> None:
         if not math.isfinite(lease_renew_interval) or lease_renew_interval <= 0:
             raise ValueError("lease renewal interval must be finite and positive")
+        if len(youtube_routes) > 2:
+            raise ValueError("YouTube materialization permits at most two routes")
         self.registry = registry
         self.transport = transport
         self.delivery = delivery
@@ -186,6 +191,7 @@ class MediaPipeline:
         self.enforce_route_matrix = enforce_route_matrix
         self.lease_renew_interval = lease_renew_interval
         self.slideshow_converter = slideshow_converter or _convert_slideshow
+        self.youtube_routes = tuple(youtube_routes)
         # Domain separation is intentional: the same textual key can never make
         # a resolve factory subscribe to its own materialization flight.
         self._resolve_flights: SingleFlightGroup[str, ResolvedMedia] = (
@@ -621,6 +627,19 @@ class MediaPipeline:
             if item is None:
 
                 async def materialize_once() -> MaterializedItem:
+                    if (
+                        self.youtube_routes
+                        and work_request.platform == "youtube"
+                        and work_request.auth_scope == "public"
+                        and resolved is None
+                    ):
+                        (
+                            raced_selected,
+                            raced_item,
+                        ) = await self._race_youtube_materialization(work_request)
+                        return await self._complete_materialization(
+                            key, raced_selected, raced_item
+                        )
                     selected = resolved or await self.resolve(request)
                     attempted = {
                         candidate.provider
@@ -750,30 +769,9 @@ class MediaPipeline:
                                         completed.release(delete=True)
                                     )
                                 raise
-                    try:
-                        await self._store_metadata(selected)
-                    except BaseException:
-                        # Bytes are owned by the factory until ready publication.
-                        # Cache cancellation must not leave them between owners.
-                        await _await_preserving_cancellation(
-                            completed.release(delete=True)
-                        )
-                        raise
-                    try:
-                        # Publish inside the shared factory.  If its final
-                        # subscriber is cancelled after the bytes are ready,
-                        # the registered user still owns and releases them.
-                        await _await_preserving_cancellation(
-                            self._publish_materialization(key, completed)
-                        )
-                    except asyncio.CancelledError:
-                        raise
-                    except BaseException:
-                        await _await_preserving_cancellation(
-                            completed.release(delete=True)
-                        )
-                        raise
-                    return completed
+                    return await self._complete_materialization(
+                        key, selected, completed
+                    )
 
                 with metrics.pipeline_duration.time(
                     phase="materialize", platform=work_request.platform
@@ -786,8 +784,83 @@ class MediaPipeline:
                 self._release_materialization_user(key, item, registered=registered)
             )
 
-    async def _resolve_once(self, request: MediaRequest) -> ResolvedMedia:
-        routes = self._routes_for(request)
+    async def _complete_materialization(
+        self, key: str, selected: ResolvedMedia, completed: MaterializedItem
+    ) -> MaterializedItem:
+        try:
+            await self._store_metadata(selected)
+        except BaseException:
+            # Bytes stay factory-owned until publication, including cancellation.
+            await _await_preserving_cancellation(completed.release(delete=True))
+            raise
+        try:
+            # Publication retains the final subscriber's ownership across cancellation.
+            await _await_preserving_cancellation(
+                self._publish_materialization(key, completed)
+            )
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            await _await_preserving_cancellation(completed.release(delete=True))
+            raise
+        return completed
+
+    async def _race_youtube_materialization(
+        self, request: MediaRequest
+    ) -> tuple[ResolvedMedia, MaterializedItem]:
+        async def attempt(
+            route: ProviderRoute,
+        ) -> tuple[ResolvedMedia, MaterializedItem]:
+            with metrics.pipeline_duration.time(
+                phase="resolve", platform=request.platform
+            ):
+                selected = await self._resolve_once(request, routes=(route,))
+            candidates = _materialization_candidates(selected.candidates)
+            while candidates:
+                completed = await self.transport.materialize(
+                    request,
+                    candidates,
+                    refreshers={route.provider.name: route.provider},
+                    record_measurement=False,
+                )
+                try:
+                    await self.artifact_validator(request, completed)
+                except BaseException as error:
+                    await _await_preserving_cancellation(completed.release(delete=True))
+                    if (
+                        isinstance(error, ArtifactValidationError)
+                        and request.output_variant == YOUTUBE_SHORT_DEFAULT_VARIANT
+                    ):
+                        candidates = tuple(
+                            candidate
+                            for candidate in candidates
+                            if candidate.candidate_id
+                            != completed.candidate.candidate_id
+                        )
+                        continue
+                    raise
+                return selected, completed
+            raise ArtifactValidationError("no valid artifact on this YouTube route")
+
+        def operation(
+            route: ProviderRoute,
+        ) -> Callable[[], Awaitable[tuple[ResolvedMedia, MaterializedItem]]]:
+            return lambda: attempt(route)
+
+        try:
+            selected, completed = await race_materializations(
+                tuple(operation(route) for route in self.youtube_routes)
+            )
+            MediaTransport.record_measurement(request, completed)
+            return selected, completed
+        except MaterializationRaceError as error:
+            raise MediaPipelineError(str(error)) from error
+
+    async def _resolve_once(
+        self, request: MediaRequest, *, routes: Sequence[ProviderRoute] | None = None
+    ) -> ResolvedMedia:
+        store_metadata = routes is None
+        routes = self._routes_for(request) if routes is None else tuple(routes)
         config = self.race_config
         if request.platform == "youtube":
             config = RaceConfig(
@@ -816,7 +889,8 @@ class MediaPipeline:
             provider=result.winner.provider,
             attempted_providers=result.attempted_providers,
         )
-        await self._store_metadata(resolved)
+        if store_metadata:
+            await self._store_metadata(resolved)
         return resolved
 
     async def _resolve_reserve(
@@ -1554,6 +1628,15 @@ def build_default_pipeline(bot: Any) -> MediaPipeline:
     )
     ytdlp = YtDlpProvider(proxy_pool=proxy_pool)
     routes.append(ProviderRoute(ytdlp))
+    youtube_routes: tuple[ProviderRoute, ...] = ()
+    if proxy_pool.configured("youtube"):
+        proxy_keys = tuple(
+            key for key in proxy_pool.routes("youtube") if key is not None
+        )
+        youtube_routes = tuple(
+            ProviderRoute(YtDlpProvider(proxy_pool=proxy_pool.for_routes(keys)))
+            for keys in ((None,), proxy_keys)
+        )
     cache = MediaCache(state.redis_client)
     bot_id = str(getattr(bot, "id", "")) or None
     delivery = TelegramDelivery(bot, media_cache=cache, bot_id=bot_id)
@@ -1570,6 +1653,7 @@ def build_default_pipeline(bot: Any) -> MediaPipeline:
         if proxy_pool.enabled
         else None,
         enforce_route_matrix=True,
+        youtube_routes=youtube_routes,
     )
 
 

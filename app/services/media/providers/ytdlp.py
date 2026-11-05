@@ -61,12 +61,17 @@ class YtDlpProvider:
 
     def supports(self, request: MediaRequest) -> bool:
         # yt-dlp's generic extractor also handles embedded media on arbitrary sites.
-        return request.kind in (
-            MediaKind.AUTO,
-            MediaKind.VIDEO,
-            MediaKind.AUDIO,
-            MediaKind.ANIMATION,
-        ) and urlsplit(request.canonical_url).scheme in ("http", "https")
+        return (
+            bool(self._proxy_pool.routes(request.platform))
+            and request.kind
+            in (
+                MediaKind.AUTO,
+                MediaKind.VIDEO,
+                MediaKind.AUDIO,
+                MediaKind.ANIMATION,
+            )
+            and urlsplit(request.canonical_url).scheme in ("http", "https")
+        )
 
     async def resolve(self, request: MediaRequest) -> list[MediaCandidate]:
         if not self.supports(request):

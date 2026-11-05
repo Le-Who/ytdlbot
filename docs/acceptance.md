@@ -101,6 +101,12 @@ gallery-dl empty-result fallback without poisoning shared route health.
 The proxy-route suite also verifies YouTube direct fallback after both configured
 SOCKS routes refuse connections, direct source affinity, and a full extraction
 budget for the fallback within the overall race timeout.
+`tests/media/test_youtube_route_race.py` verifies that parallel public YouTube
+downloads choose the first validated complete file, cancel and join the losing
+route, retain one delivery, bypass both lanes on a file-ID cache hit, and share
+one pair of attempts across concurrent callers. It also covers cancellation
+during validation and loser cleanup, simultaneous completions, scoped network
+affinity and shared cooldown, and one winning materialization measurement.
 Production probe errors are tested through the real transport boundary with
 controlled responses, including DNS failure versus an unsafe DNS answer.
 `tests/media/test_curl_routes.py` additionally uses local HTTP and SOCKS peers

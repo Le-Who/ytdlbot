@@ -504,6 +504,7 @@ class MediaTransport:
         *,
         refreshers: Mapping[str, RefreshProvider] | None = None,
         deadline: float | None = None,
+        record_measurement: bool = True,
     ) -> MaterializedItem:
         if not candidates:
             raise MaterializationError("no media candidates")
@@ -598,7 +599,11 @@ class MediaTransport:
             )
             errors.extend(parallel_errors)
             if winner is not None:
-                return self._record_measurement(request, winner)
+                return (
+                    self.record_measurement(request, winner)
+                    if record_measurement
+                    else winner
+                )
             safe = safe[2:]
 
         for candidate in safe:
@@ -606,7 +611,11 @@ class MediaTransport:
                 break
             try:
                 item = await attempt(candidate)
-                return self._record_measurement(request, item)
+                return (
+                    self.record_measurement(request, item)
+                    if record_measurement
+                    else item
+                )
             except MaterializationError as error:
                 errors.append(error)
         if len(errors) == 1:
@@ -616,7 +625,7 @@ class MediaTransport:
         raise MaterializationError(f"materialization failed ({summary})")
 
     @staticmethod
-    def _record_measurement(
+    def record_measurement(
         request: MediaRequest, item: MaterializedItem
     ) -> MaterializedItem:
         candidate = item.candidate

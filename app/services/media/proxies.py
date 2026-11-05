@@ -7,6 +7,7 @@ import logging
 import math
 import time
 from collections.abc import Awaitable, Callable, Sequence
+from copy import copy
 from typing import TypeVar
 from urllib.parse import urlsplit, urlunsplit
 
@@ -76,6 +77,15 @@ class MediaProxyPool:
         self.cooldown = cooldown
         self.clock = clock
         self._failed_until: dict[tuple[str, str | None], float] = {}
+        self._parent: MediaProxyPool | None = None
+        self._route_scope: tuple[str | None, ...] = ()
+
+    def for_routes(self, keys: Sequence[str | None]) -> MediaProxyPool:
+        """Share credentials and health while confining a lane to its routes."""
+        scoped = copy(self)
+        scoped._parent = self
+        scoped._route_scope = tuple(keys)
+        return scoped
 
     @property
     def enabled(self) -> bool:
@@ -104,6 +114,10 @@ class MediaProxyPool:
             raise ValueError("unknown media proxy route") from None
 
     def routes(self, platform: str) -> tuple[str | None, ...]:
+        if self._parent is not None:
+            return tuple(
+                key for key in self._parent.routes(platform) if key in self._route_scope
+            )
         if not self.configured(platform):
             return (None,)
         keys: tuple[str | None, ...] = tuple(self._urls)
@@ -180,7 +194,12 @@ class MediaProxyPool:
                     "metrics": {"timeout_seconds": budget},
                 },
             )
-        assert last_error is not None
+        if last_error is None:
+            raise ProviderError(
+                FailureKind.TRANSIENT,
+                "no available extraction route in this lane",
+                affects_route_health=False,
+            )
         if auth_scope == "public" and last_error.kind is FailureKind.AUTH:
             raise ProviderError(FailureKind.TRANSIENT, str(last_error)) from last_error
         raise last_error

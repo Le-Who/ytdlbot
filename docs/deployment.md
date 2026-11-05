@@ -256,8 +256,17 @@ supported. GitHub's legacy `TIKTOK_PROXY`/`VK_PROXY` secrets do not update the
 shared pool. Production Compose reads the resulting file. Configuration
 changes take effect when the bot container is recreated through the documented
 release procedure. Do not print `docker compose config` or container environment
-values when diagnosing credentials. YouTube tries the pool first, then direct
-access if the configured proxies fail. Local yt-dlp/gallery-dl extractors for the
+values when diagnosing credentials. Ordinary public YouTube downloads start
+direct access and the configured proxy pool concurrently. Each lane resolves,
+downloads and validates its own file on the same network route. Only the first
+fully validated result reaches delivery; the loser is cancelled and joined,
+including subprocesses, HTTP transfers, temporary files and disk reservations.
+There are at most two local extraction processes for this race. Proxy backups
+remain sequential, and the shared transport retains its bounded candidate work
+inside each lane. Partial losing transfers consume bandwidth and are counted as
+wasted bytes. A successful file-ID cache hit bypasses the race. Metadata-only
+lookups and explicitly selected candidates retain sequential proxy/direct
+fallback. Local yt-dlp/gallery-dl extractors for the
 configured known platforms try direct first, then the pool after a transient/auth
 failure or an empty gallery-dl result. Empty extraction does not cool the shared
 route for other extractors; an all-empty gallery-dl result remains a no-media
@@ -273,6 +282,9 @@ A transfer failure cools that platform/route for 60 seconds and the
 single refresh obtains new URLs on the next available route. Proxy extraction
 attempts and YouTube direct fallback attempts are bounded to 20 seconds; other
 direct attempts are bounded to 3 seconds.
+Route cooldown is shared by the two lanes, while their provider circuits are
+independent. A failed direct route does not disable a healthy proxy lane. An
+expired cooldown permits recovery; an all-cooled pool admits one recovery route.
 For yt-dlp, the network socket timeout is capped at 3 seconds and one extractor
 retry, independently of the process budget. The provider resolve timeout covers
 all configured proxy attempts, direct fallback and cleanup; the total race adds

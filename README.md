@@ -30,8 +30,9 @@ cookies, a proxy, payment, or manual CAPTCHA. See
   with clip, quality, audio, album, transform, caller, and authorization scope in
   the versioned cache key.
 - A bounded provider race: at most two cheap external resolves at once and one
-  heavy local extractor for a request. Invalid or non-equivalent candidates do
-  not win because they returned first.
+  heavy local extractor for ordinary provider fallback. Public YouTube downloads
+  with configured proxies use two bounded lanes: direct and the proxy pool.
+  The first complete, validated file wins; the losing lane is cancelled and joined.
 - Temporary resolver and CDN probe failures receive up to two automatic retries
   within the same request deadline. Fresh provider alternatives run first;
   retries wait at least 0.5 and 1 second and honor a longer `Retry-After`.
@@ -54,10 +55,12 @@ cookies, a proxy, payment, or manual CAPTCHA. See
   Refreshed YouTube URLs must preserve a known selected audio language. Default
   audible YouTube requests have a separate cache policy identity so older
   translated downloads and Telegram file IDs are not reused.
-- YouTube tries the configured primary/backup SOCKS5 pool, then direct access
-  if those routes fail. Other configured local extractors try direct access
-  before the proxy fallback. Media streams keep the extraction route; native
-  API providers retain their direct paths.
+- Public YouTube downloads race direct access against the configured SOCKS5 pool
+  through extraction, transfer and artifact validation. Backup proxies remain
+  sequential within their lane. File-ID cache hits bypass both lanes. Metadata
+  lookups and explicitly selected candidates retain sequential route fallback.
+  Other configured local extractors try direct access before proxy fallback.
+  Media streams keep their extraction route; native API providers stay direct.
 - Empty gallery-dl extraction results try the remaining configured routes
   without cooling a shared route needed by another extractor. Policy-aware
   extraction selects its route explicitly, including direct access.

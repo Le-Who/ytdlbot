@@ -425,24 +425,26 @@ def test_download_context_rejects_non_finite_clip_values(section: str):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "accepted"),
+    [
+        ("watch?v=dQw4w9WgXcQ", True),
+        ("live/dQw4w9WgXcQ", True),
+        ("embed/dQw4w9WgXcQ", True),
+        ("embed/videoseries?list=PLexample", False),
+    ],
+)
 async def test_private_and_group_messages_invoke_the_common_pipeline(
     monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    accepted: bool,
 ):
     from app.bot import group_logic, messages
+    from app.core.texts import Texts
 
     pipeline = _CapturingPipeline()
     monkeypatch.setattr(messages.state, "media_pipeline", pipeline)
     monkeypatch.setattr(messages, "get_prefs", AsyncMock(return_value={}))
-    monkeypatch.setattr(
-        messages, "extract_url_from_update", lambda message: (YOUTUBE_URL, "10-20")
-    )
-    monkeypatch.setattr(
-        group_logic, "extract_url_from_update", lambda message: (YOUTUBE_URL, "10-20")
-    )
-    monkeypatch.setattr(
-        "app.services.instagram.parse_instagram_url",
-        lambda url: ("unknown", None, None),
-    )
     limiter = SimpleNamespace(
         allow_user=AsyncMock(return_value=True),
         allow_chat=AsyncMock(return_value=True),
@@ -451,7 +453,7 @@ async def test_private_and_group_messages_invoke_the_common_pipeline(
 
     status = SimpleNamespace(delete=AsyncMock(), edit_text=AsyncMock())
     message = MagicMock()
-    message.text = YOUTUBE_URL
+    message.text = f"https://www.youtube.com/{path} 00:10-00:20"
     message.reply_text = AsyncMock(return_value=status)
     message.delete = AsyncMock()
     user = SimpleNamespace(id=7, username="tester", mention_html=lambda: "tester")
@@ -468,8 +470,20 @@ async def test_private_and_group_messages_invoke_the_common_pipeline(
     await group_logic.handle_group_message(update, context)
     assert message.reply_text.await_count == 2
 
+    if not accepted:
+        assert not pipeline.requests
+        assert [call.args for call in status.edit_text.await_args_list] == [
+            (Texts.URL_NOT_SUPPORTED,),
+            (Texts.URL_NOT_SUPPORTED,),
+        ]
+        return
     private, group = pipeline.requests
-    assert private.canonical_url == group.canonical_url
+    assert (
+        private.canonical_url
+        == group.canonical_url
+        == "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+    )
+    assert private.platform == group.platform == "youtube"
     assert private.clip == group.clip == ClipInterval(10, 20)
     assert private.kind is group.kind is MediaKind.AUTO
     assert not private.exact and not group.exact

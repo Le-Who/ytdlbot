@@ -26,9 +26,10 @@ cookies, a proxy, payment, or manual CAPTCHA. See
 
 ## Capabilities
 
-- Canonical YouTube identity across watch, Shorts, mobile, and `youtu.be` URLs,
-  with clip, quality, audio, album, transform, caller, and authorization scope in
-  the versioned cache key.
+- Canonical YouTube identity across watch, Shorts, mobile, `youtu.be`, and
+  single-video `/embed/<id>` and `/live/<id>` URLs. The latter supports replay
+  when the live stream has ended. The versioned cache key includes clip,
+  quality, audio, album, transform, caller, and authorization scope.
 - A bounded provider race: at most two cheap external resolves at once and one
   heavy local extractor for ordinary provider fallback. Public YouTube downloads
   with configured proxies use two bounded lanes: direct and the proxy pool.
@@ -69,6 +70,8 @@ cookies, a proxy, payment, or manual CAPTCHA. See
 - A direct FxTwitter MP4 may be delivered without an audio track when no audio
   was requested. Clips, transformed files, and explicit audio requests still
   require the expected audio stream.
+- X links ending in `/video/<number>` select that attachment in the original post
+  order. FxTwitter uses its ordered attachment list, with yt-dlp as fallback.
 - TikTok keeps a lightweight reserve resolver running while a selected yt-dlp
   source downloads, so a failed transfer can use the ready fallback. A successful
   native download is not held up by that reserve lookup.
@@ -103,9 +106,11 @@ Personal cookies are not part of the ordinary public-provider race. Configured
 authorized Instagram/session or legacy cookie paths remain separate scopes and
 must not populate public cache entries.
 Instagram highlight links in `/stories/highlights/<id>/` and `/s/<token>` form
-resolve through Instagram's web API with the configured `IG_SESSIONS_B64` pool.
-A link with `story_media_id` downloads only that item. A highlight link without
-an item selector opens the existing selection menu.
+resolve through Instagram's web API with the configured `IG_SESSIONS_B64` pool,
+as do profile menus and active stories. A link with `story_media_id` downloads
+only that item. A highlight link without an item selector opens the existing
+selection menu. `/mp3` and `/mp4` accept links to individual Instagram story
+or highlight videos.
 
 The default pipeline has no implemented independent YouTube provider. The
 `independent-youtube` entry is a routing slot, not a working external fallback.

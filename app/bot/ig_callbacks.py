@@ -73,6 +73,7 @@ async def _deliver_authorized_stories(
     caller_scope: str = "ig_callback",
     clip: str | None = None,
     canonical_url: str | None = None,
+    extract_audio: bool = False,
 ) -> bool:
     """Deliver selected authorized CDN items through the common pipeline."""
     pipeline = state.media_pipeline
@@ -86,7 +87,14 @@ async def _deliver_authorized_stories(
         media_id = str(story.mediaid)
         kind = MediaKind.VIDEO if is_video else MediaKind.PHOTO
         container = "mp4" if is_video else "jpg"
-        items.append(MediaItem(media_id, kind, url, container=container))
+        items.append(
+            MediaItem(
+                media_id,
+                MediaKind.AUDIO if extract_audio else kind,
+                url,
+                container="mp3" if extract_audio else container,
+            )
+        )
         sources.append(MediaSource(str(index), url, container=container))
     kind = items[0].kind if len(items) == 1 else MediaKind.ALBUM
     stable_media_id = (
@@ -97,6 +105,7 @@ async def _deliver_authorized_stories(
     request = build_media_request(
         canonical_url or f"https://www.instagram.com/stories/{stable_media_id}/",
         kind=kind,
+        audio_format="mp3" if extract_audio else None,
         clip=clip,
         caller_scope=caller_scope,
         auth_scope=f"instagram:{auth_scope}",
@@ -105,8 +114,10 @@ async def _deliver_authorized_stories(
     candidate = MediaCandidate(
         candidate_id=f"authorized:{request.media_id}",
         url=items[0].url,
-        has_video=any(item.kind is MediaKind.VIDEO for item in items),
-        has_audio=any(item.kind is MediaKind.VIDEO for item in items),
+        has_video=any(story.is_video for story in stories),
+        has_audio=any(story.is_video for story in stories),
+        audio_formats=("mp3",) if extract_audio else (),
+        mux_mode="extract-mp3" if extract_audio else None,
         sources=tuple(sources),
         provider="authorized-instagram",
         backend_family="instagram-session",

@@ -1,5 +1,6 @@
 """Tests for Instagram service — URL parsing, profile metadata, downloads."""
 
+import json
 import unittest
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -39,6 +40,22 @@ class TestInstagramUrlParsing(unittest.TestCase):
         self.assertEqual(t, "profile")
         self.assertEqual(user, "natgeo")
         self.assertIsNone(item)
+
+    def test_story_url_uses_host_and_path_instead_of_query_or_fragment(self):
+        from app.services.instagram import parse_instagram_url
+
+        self.assertEqual(
+            parse_instagram_url(
+                "https://WWW.INSTAGRAM.COM/stories/tester/41/#fragment"
+            ),
+            ("stories", "tester", "41"),
+        )
+        self.assertEqual(
+            parse_instagram_url(
+                "https://www.instagram.com/tester/?next=https://www.instagram.com/stories/other/41/"
+            ),
+            ("profile", "tester", None),
+        )
 
     def test_profile_url_without_trailing_slash(self):
         from app.services.instagram import parse_instagram_url
@@ -208,6 +225,75 @@ class TestInstagramServiceGetProfile(unittest.IsolatedAsyncioTestCase):
         assert result.error is not None
         self.assertIn("не найден", result.error)
 
+    async def test_profile_web_requests_return_active_stories_and_highlights(self):
+        from curl_cffi.requests import Response
+
+        from app.services.instagram import InstagramService
+
+        def graph(field, node):
+            response = Response()
+            response.status_code = 200
+            response.content = json.dumps(
+                {"data": {field: {"edges": [{"node": node}]}}}
+            ).encode()
+            return response
+
+        page = Response()
+        page.status_code = 200
+        page.url = "https://www.instagram.com/tester/"
+        page.content = b'["LSD",[],{"token":"lsd-test"}] {"profile_id":"12"}'
+        story = {
+            "pk": "41",
+            "media_type": 1,
+            "image_versions2": {
+                "candidates": [{"url": "https://cdn.example/story.jpg"}]
+            },
+        }
+        highlight = {
+            "id": "highlight:7",
+            "title": "Travel",
+            "cover_media": {
+                "cropped_image_version": {"url": "https://cdn.example/cover.jpg"}
+            },
+        }
+        session = AsyncMock()
+        session.__aenter__.return_value = session
+        session.cookies = {}
+
+        async def get(url, **kwargs):
+            if url == page.url:
+                return page
+            unavailable = Response()
+            unavailable.status_code = 404
+            unavailable.ok = False
+            return unavailable
+
+        async def post(url, *, data, **kwargs):
+            if (
+                data["fb_api_req_friendly_name"]
+                == "PolarisStoriesV3HighlightsPageQuery"
+            ):
+                return graph(
+                    "xdt_api__v1__feed__reels_media__connection",
+                    {"id": "12", "items": [story]},
+                )
+            return graph("highlights", highlight)
+
+        session.get.side_effect = get
+        session.post.side_effect = post
+        with (
+            patch.object(
+                InstagramService,
+                "_get_available_session",
+                return_value=(0, {"sessionid": "test"}),
+            ),
+            patch("app.services.instagram.AsyncSession", return_value=session),
+        ):
+            result = await InstagramService.get_profile_media("tester")
+        self.assertIsNone(result.error)
+        self.assertEqual([item.mediaid for item in result.stories], ["41"])
+        self.assertEqual([item.highlight_id for item in result.highlights], ["7"])
+
 
 @unittest.skipUnless(HAS_CURL_CFFI, "curl_cffi not installed")
 class TestInstagramServiceGetHighlight(unittest.IsolatedAsyncioTestCase):
@@ -218,6 +304,7 @@ class TestInstagramServiceGetHighlight(unittest.IsolatedAsyncioTestCase):
 
         page = Response()
         page.status_code = 200
+        page.url = "https://www.instagram.com/stories/highlights/7/"
         page.content = b'["LSD",[],{"token":"lsd-test"}]'
         response = Response()
         response.status_code = 200
@@ -229,15 +316,23 @@ class TestInstagramServiceGetHighlight(unittest.IsolatedAsyncioTestCase):
         session = AsyncMock()
         session.__aenter__.return_value = session
         session.cookies = {}
-        session.get.return_value = page
+        consent = Response()
+        consent.status_code = 302
+        consent.headers["Location"] = "https://www.instagram.com/consent/?next=opaque"
+        session.get.side_effect = [consent, page, page]
         session.post.return_value = response
 
         with (
             patch.object(InstagramService, "_init_pool"),
+            patch.object(InstagramService, "_dead_sessions", set()),
             patch.object(
                 InstagramService,
                 "_get_available_session",
-                return_value=(0, {"sessionid": "test"}),
+                side_effect=[
+                    (0, {"sessionid": "needs-consent"}),
+                    (1, {"sessionid": "valid"}),
+                    (1, {"sessionid": "valid"}),
+                ],
             ),
             patch("app.services.instagram.AsyncSession", return_value=session),
         ):

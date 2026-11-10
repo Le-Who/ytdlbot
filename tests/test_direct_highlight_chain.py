@@ -9,9 +9,47 @@ from test_ig_callback_chains import (
     ig_chain as ig_chain,  # noqa: PLC0414 - shared fixture
 )
 
-from app.bot import group_logic, ig_callbacks, messages
+from app.bot import commands, group_logic, ig_callbacks, messages
 from app.core import state
 from app.services.media.models import ClipInterval
+
+
+@pytest.mark.parametrize("kind", ["audio", "video"])
+async def test_command_on_shared_highlight_keeps_format_and_selection(
+    ig_chain, monkeypatch, kind
+):
+    env = ig_chain
+    status = SimpleNamespace(message_id=100, edit_text=AsyncMock(), delete=AsyncMock())
+    reply = SimpleNamespace(
+        text="https://www.instagram.com/s/aGlnaGxpZ2h0Ojc=?story_media_id=41_123"
+    )
+    message = SimpleNamespace(
+        text="/mp3" if kind == "audio" else "/mp4",
+        reply_to_message=reply,
+        reply_text=AsyncMock(return_value=status),
+    )
+    update = SimpleNamespace(
+        message=message,
+        effective_user=SimpleNamespace(id=1),
+        effective_chat=SimpleNamespace(id=42),
+    )
+    monkeypatch.setattr(
+        state,
+        "limiter",
+        SimpleNamespace(
+            allow_user=AsyncMock(return_value=True),
+            allow_chat=AsyncMock(return_value=True),
+        ),
+    )
+    context = SimpleNamespace(bot=SimpleNamespace(send_chat_action=AsyncMock()))
+    handler = commands.cmd_mp3 if kind == "audio" else commands.cmd_mp4
+    await handler(update, context)
+
+    assert env.bot.sends == [(42, [(kind, b"asset:41")])]
+    request, candidate = env.transport.calls[0]
+    assert request.kind.value == kind
+    assert request.auth_scope == candidate.auth_scope != "public"
+    assert candidate.mux_mode == ("extract-mp3" if kind == "audio" else None)
 
 
 @pytest.mark.parametrize("caller_scope", ["private", "group"])

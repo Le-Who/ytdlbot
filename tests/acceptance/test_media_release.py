@@ -65,6 +65,12 @@ OFFLINE_ACCEPTANCE_NODES = (
     "tests/deploy/test_release_scripts.py::test_interrupted_activation_runs_rollback",
     "tests/deploy/test_release_scripts.py::test_same_sha_promotion_reuses_only_an_identical_immutable_release",
     "tests/test_pipeline_entrypoints.py::test_callback_codec_emits_v2_and_accepts_previous_shape",
+    "tests/test_pipeline_entrypoints.py::test_private_and_group_messages_invoke_the_common_pipeline",
+    "tests/test_core_utils_extract.py",
+    "tests/test_direct_highlight_chain.py",
+    "tests/test_instagram_service.py::TestInstagramServiceGetProfile::test_profile_web_requests_return_active_stories_and_highlights",
+    "tests/test_instagram_service.py::TestInstagramServiceGetHighlight::test_resolves_highlight_through_authenticated_web_api",
+    "tests/media/providers/test_http_providers.py::test_fxtwitter_selects_numbered_video_in_original_mixed_order",
 )
 
 REQUIRED_OFFLINE_ACCEPTANCE_NODES = {

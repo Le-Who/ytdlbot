@@ -21,6 +21,7 @@ from telegram.ext import ContextTypes
 
 from app.constants import AUDIO_FORMAT_ID, SUPPORTED_PLATFORMS
 from app.core.config import MAX_DL_MB, MAX_TG_UPLOAD_MB
+from app.core.process import process_owner_scope
 from app.core.texts import Texts
 from app.core.user_prefs import (
     VALID_FORMATS,
@@ -30,6 +31,8 @@ from app.core.user_prefs import (
     set_prefs,
 )
 from app.core.utils import extract_url_from_update
+from app.services.instagram import parse_instagram_url
+from app.services.media.models import MediaKind
 
 logger = logging.getLogger("app.bot.commands")
 
@@ -107,6 +110,31 @@ async def _fast_download(
     status_msg = await msg.reply_text(Texts.CMD_FAST_DL_START)
 
     token = uuid.uuid4().hex
+
+    url_type, target, item_id = parse_instagram_url(url)
+    if state.media_pipeline is not None and url_type in {"stories", "highlight"}:
+        if not item_id:
+            await status_msg.edit_text(
+                "Для конвертации отправьте ссылку на конкретную историю Instagram."
+            )
+            return
+        from app.bot.messages import _handle_instagram
+
+        with process_owner_scope(token):
+            await _handle_instagram(
+                update,
+                context,
+                url,
+                token,
+                section,
+                url_type,
+                target,
+                item_id,
+                status_msg=status_msg,
+                caller_scope="command",
+                output_kind=MediaKind.AUDIO if is_audio else MediaKind.VIDEO,
+            )
+        return
 
     from app.core.models import DownloadContext
     from app.services.orchestrator import DownloadOrchestrator

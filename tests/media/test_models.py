@@ -163,6 +163,9 @@ def test_deadline_does_not_change_delivery_equivalence():
         "https://youtube.com:invalid/watch?v=abc123",
         "not a url",
         "https://youtube.com/watch",
+        "https://youtube.com/embed/videoseries?list=PL123",
+        "https://youtube.com/embed/live_stream?channel=UC123",
+        "https://youtube.com/live/invalid",
     ],
 )
 def test_unsupported_or_malformed_urls_raise_typed_error(url: str):

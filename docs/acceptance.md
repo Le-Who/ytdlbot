@@ -38,6 +38,7 @@ copying its assertions:
 | Deploy rollback | readiness failure and interrupted activation restore the captured release state |
 | Immutable retry | an interrupted same-SHA promotion is reusable only when every allowlisted payload byte matches |
 | Callback compatibility | v2 is emitted while the previous callback shape still decodes for the existing link-cache TTL |
+| Link routing and item selection | visible and hidden Telegram links reach their intended handler, YouTube video URL aliases share one request, and numbered Instagram and X links preserve item and output selection |
 
 Additional lifecycle regressions live in
 `tests/test_download_stream_lifecycle.py`, `tests/test_readiness_lifecycle.py`,

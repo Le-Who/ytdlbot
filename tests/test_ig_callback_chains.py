@@ -106,6 +106,7 @@ class _Bot:
             SimpleNamespace(
                 message_id=100 + index,
                 video=SimpleNamespace(file_id=f"video-{index}"),
+                audio=SimpleNamespace(file_id=f"audio-{index}"),
                 photo=[SimpleNamespace(file_id=f"photo-{index}")],
             )
             for index, _ in enumerate(assets)
@@ -116,6 +117,9 @@ class _Bot:
 
     async def send_photo(self, *, chat_id, photo, **options):
         return self._send(chat_id, [("photo", photo)])[0]
+
+    async def send_audio(self, *, chat_id, audio, **options):
+        return self._send(chat_id, [("audio", audio)])[0]
 
     async def send_media_group(self, *, chat_id, media, **options):
         messages = self._send(chat_id, [(item.type, item.media) for item in media])

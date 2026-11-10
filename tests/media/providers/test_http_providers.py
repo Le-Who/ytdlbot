@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 from app.services.media import MediaKind, MediaRequest, QualityPolicy
+from app.services.media.pipeline import build_media_request
 from app.services.media.providers.cobalt import CobaltProvider
 from app.services.media.providers.fxtwitter import FxTwitterProvider
 from app.services.media.providers.http import (
@@ -26,6 +27,7 @@ from app.services.media.providers.snapsave import (
 )
 from app.services.media.providers.ssstik import SSSTikProvider
 from app.services.media.providers.tikwm import TikWMProvider
+from app.services.media.providers.ytdlp import YtDlpProvider
 from app.services.media.race import RaceConfig, race_candidates
 from app.services.media.registry import FailureKind, ProviderError, ProviderRoute
 from app.services.media.transport import (
@@ -715,6 +717,71 @@ async def test_fxtwitter_uses_v2_status_and_preserves_mixed_attachment_order():
     assert candidate.items[-1].url == "https://video.twimg.com/third-720.mp4"
     assert candidate.items[-1].width == 1280
     assert candidate.complete
+
+
+@pytest.mark.asyncio
+async def test_fxtwitter_selects_numbered_video_in_original_mixed_order():
+    transport = RecordingTransport(
+        response(payload=fixture_json("fxtwitter-status.json")),
+        ok_probe(),
+        ok_probe(),
+        ok_probe(),
+    )
+    provider = FxTwitterProvider(transport=transport, min_interval=0)
+    selected = build_media_request("https://x.com/user/status/123456789/video/3")
+
+    (candidate,) = await provider.resolve(selected)
+
+    assert candidate.kind is MediaKind.VIDEO
+    assert [item.url for item in candidate.items] == [
+        "https://video.twimg.com/third-720.mp4"
+    ]
+    assert len(transport.requests) == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("number", "ordered"), [(0, True), (1, True), (2, True), (3, False), (4, True)]
+)
+async def test_fxtwitter_rejects_unavailable_numbered_video(number, ordered):
+    payload = fixture_json("fxtwitter-status.json")
+    if not ordered:
+        items = payload["status"]["media"]["all"]
+        payload["status"]["media"] = {"photos": items[:1], "videos": items[1:]}
+    transport = RecordingTransport(response(payload=payload))
+    provider = FxTwitterProvider(transport=transport, min_interval=0)
+    selected = build_media_request(
+        f"https://x.com/user/status/123456789/video/{number}"
+    )
+
+    with pytest.raises(ProviderError):
+        await provider.resolve(selected)
+
+    assert len(transport.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_numbered_x_video_uses_only_providers_that_respect_its_index():
+    transport = RecordingTransport()
+    endpoint = ProviderEndpoint("https://cobalt.example", None, frozenset({"x"}), True)
+    cobalt = CobaltProvider([endpoint], transport=transport)
+    ytdlp = YtDlpProvider()
+    selected = build_media_request("https://x.com/user/status/123456789/video/3")
+    zero = build_media_request("https://x.com/user/status/123456789/video/0")
+
+    assert not cobalt.supports(selected)
+    assert await cobalt.resolve(selected) == []
+    assert transport.requests == []
+    assert ytdlp.supports(selected)
+    assert not ytdlp.supports(zero)
+
+
+def test_numbered_x_video_does_not_reuse_whole_post_cache_entry():
+    request = build_media_request("https://x.com/user/status/123456789/video/3")
+
+    assert request.cache_key != (
+        "media:v1:c9d7558fb9af5345bb3f8c983f44cb5c27d39bf048ba16450c8931cb530e83c9"
+    )
 
 
 @pytest.mark.asyncio

@@ -223,10 +223,11 @@ async def on_retry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if (
         saved.request.platform == "instagram"
         and saved.request.auth_scope == "public"
-        and saved.request.caller_scope in {"private", "group"}
-        and parse_instagram_url(saved.request.canonical_url)[0] == "highlight"
+        and saved.request.caller_scope in {"private", "group", "command"}
+        and parse_instagram_url(saved.request.canonical_url)[0]
+        in {"highlight", "stories"}
     ):
-        await query.answer("Отправьте ссылку на хайлайт ещё раз.", show_alert=True)
+        await query.answer("Отправьте ссылку или команду ещё раз.", show_alert=True)
         return
     # A concurrent cache GET may return an old snapshot after another retry
     # has completed. Check again without yielding before claiming the token.

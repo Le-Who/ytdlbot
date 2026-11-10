@@ -32,7 +32,7 @@ from app.services.instagram import (
     InstagramService,
     parse_instagram_url,
 )
-from app.services.media.models import MediaItem
+from app.services.media.models import MediaItem, MediaKind, UnsupportedMediaUrlError
 from app.services.media.pipeline import encode_callback_data
 from app.services.tikwm import TikWMResult, TikWMService
 from app.services.ytdlp.exceptions import (
@@ -86,15 +86,19 @@ async def _deliver_private_pipeline(
     from app.services.media.pipeline import MediaPipelineError, build_media_request
 
     status = await msg.reply_text(Texts.SEARCHING)
-    request = build_media_request(
-        url,
-        kind=kind,
-        quality=preferred_quality,
-        audio_format=audio_format,
-        clip=section,
-        caller_scope="private",
-        exact=exact,
-    )
+    try:
+        request = build_media_request(
+            url,
+            kind=kind,
+            quality=preferred_quality,
+            audio_format=audio_format,
+            clip=section,
+            caller_scope="private",
+            exact=exact,
+        )
+    except UnsupportedMediaUrlError:
+        await status.edit_text(Texts.URL_NOT_SUPPORTED)
+        return
 
     async def retry_markup():
         from app.bot.retry import save_retry_request
@@ -732,6 +736,7 @@ async def _handle_instagram(
     *,
     status_msg: Message | None = None,
     caller_scope: str = "private",
+    output_kind: MediaKind | None = None,
 ) -> None:
     """Handle Instagram URLs with rich selection UX."""
     msg = update.message
@@ -792,6 +797,9 @@ async def _handle_instagram(
         if not story:
             await status_msg.edit_text(missing)
             return
+        if output_kind is not None and not story.is_video:
+            await status_msg.edit_text("Для этой команды нужна история с видео.")
+            return
 
         if state.media_pipeline is not None:
             from app.bot.ig_callbacks import _deliver_authorized_stories
@@ -804,6 +812,7 @@ async def _handle_instagram(
                 caller_scope=caller_scope,
                 clip=section,
                 canonical_url=url if url_type == "stories" else None,
+                extract_audio=output_kind is MediaKind.AUDIO,
             )
             if pipeline_success:
                 try:

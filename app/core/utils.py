@@ -21,7 +21,7 @@ def is_supported_url(text: str) -> bool:
     try:
         parsed = urlsplit(text)
         domain = parsed.hostname
-        if not domain:
+        if parsed.scheme not in {"http", "https"} or not domain:
             return False
         return domain in SUPPORTED_PLATFORMS or domain.endswith(
             SUPPORTED_PLATFORMS_SUFFIXES
@@ -31,11 +31,11 @@ def is_supported_url(text: str) -> bool:
 
 
 def extract_supported_url(text: str) -> str | None:
-    match = URL_RE.search(text)
-    if not match:
-        return None
-    url = match.group(0).rstrip(".,!:;)")
-    return url if is_supported_url(url) else None
+    for match in URL_RE.finditer(text):
+        url = match.group(0).rstrip(".,!:;)")
+        if is_supported_url(url):
+            return url
+    return None
 
 
 SECTION_RE = re.compile(
@@ -46,42 +46,41 @@ SECTION_RE = re.compile(
 def extract_url_and_section(text: str) -> tuple[str | None, str | None]:
     """Extracts URL and optional timestamp section (*start-end) for slicing."""
     url = extract_supported_url(text)
-    if not url:
-        return None, None
-    m = SECTION_RE.search(text)
-    if m:
-        start, end = m.groups()
-        return url, f"*{start}-{end}"
-    return url, None
+    return url, _extract_section(text) if url else None
+
+
+def _extract_section(text: str) -> str | None:
+    match = SECTION_RE.search(text)
+    if match:
+        start, end = match.groups()
+        return f"*{start}-{end}"
+    return None
 
 
 def extract_url_from_update(message: object) -> tuple[str | None, str | None]:
-    """Extract a supported URL from a message or its reply_to_message.
+    """Find a visible or hidden link in the message before checking its reply.
 
-    Priority order:
-      1. message.text (or message.caption)
-      2. message.reply_to_message.text
-      3. message.reply_to_message.caption
-
-    Returns (url, section) exactly as extract_url_and_section() does.
-    Accepts any object with .text / .caption / .reply_to_message attributes
-    so it can be used with both PTB Message objects and simple test stubs.
+    Within each text or caption, visible URLs take priority over text_link
+    entities. The clip comes from the text or caption that contains the link.
     """
-    for attr in ("text", "caption"):
-        raw = getattr(message, attr, None)
-        if isinstance(raw, str) and raw:
-            url, section = extract_url_and_section(raw.strip())
+    replied = getattr(message, "reply_to_message", None)
+    for source in (message, replied):
+        for content_attr, entities_attr in (
+            ("text", "entities"),
+            ("caption", "caption_entities"),
+        ):
+            raw = getattr(source, content_attr, None)
+            if not isinstance(raw, str) or not raw:
+                continue
+            url, section = extract_url_and_section(raw)
             if url:
                 return url, section
-
-    replied = getattr(message, "reply_to_message", None)
-    if replied is not None:
-        for attr in ("text", "caption"):
-            raw = getattr(replied, attr, None)
-            if isinstance(raw, str) and raw:
-                url, section = extract_url_and_section(raw.strip())
-                if url:
-                    return url, section
+            for entity in getattr(source, entities_attr, None) or ():
+                if getattr(entity, "type", None) != "text_link":
+                    continue
+                url = getattr(entity, "url", None)
+                if isinstance(url, str) and is_supported_url(url):
+                    return url, _extract_section(raw)
 
     return None, None
 

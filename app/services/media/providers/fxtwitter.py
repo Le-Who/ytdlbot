@@ -77,9 +77,24 @@ class FxTwitterProvider:
         if not isinstance(status, dict):
             raise ProviderError(FailureKind.PERMANENT, "FxTwitter status is missing")
         media = status.get("media")
-        raw_items, order_complete = (
-            _ordered_media(media) if isinstance(media, dict) else ([], True)
-        )
+        number = request.x_video_number
+        if number is not None:
+            all_items = media.get("all") if isinstance(media, dict) else None
+            if not isinstance(all_items, list) or not 1 <= number <= len(all_items):
+                raise ProviderError(
+                    FailureKind.PERMANENT, "FxTwitter numbered attachment unavailable"
+                )
+            selected = all_items[number - 1]
+            if not isinstance(selected, dict) or selected.get("type") != "video":
+                raise ProviderError(
+                    FailureKind.PERMANENT,
+                    "FxTwitter numbered attachment is not a video",
+                )
+            raw_items, order_complete = [selected], True
+        else:
+            raw_items, order_complete = (
+                _ordered_media(media) if isinstance(media, dict) else ([], True)
+            )
         if not raw_items:
             quote_status = status.get("quote")
             quoted_media = (

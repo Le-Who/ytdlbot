@@ -38,7 +38,9 @@ class CobaltProvider:
         self._wall_clock = wall_clock
 
     def supports(self, request: MediaRequest) -> bool:
-        return any(endpoint.supports(request.platform) for endpoint in self.endpoints)
+        return request.x_video_number is None and any(
+            endpoint.supports(request.platform) for endpoint in self.endpoints
+        )
 
     async def resolve(self, request: MediaRequest) -> list[MediaCandidate]:
         return await self.resolve_with(self._transport, request)
@@ -46,6 +48,8 @@ class CobaltProvider:
     async def resolve_with(
         self, transport: HttpTransport, request: MediaRequest
     ) -> list[MediaCandidate]:
+        if request.x_video_number is not None:
+            return []
         last_error: ProviderError | None = None
         attempted = False
         for endpoint in self.endpoints:

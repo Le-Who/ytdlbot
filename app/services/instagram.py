@@ -12,6 +12,8 @@ import os
 import pickle
 import re
 import uuid
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, ClassVar, Literal
@@ -153,17 +155,11 @@ def _parse_reel_items(items: list[dict[str, Any]]) -> list[IGStoryItem]:
 
 # ── URL Parsing ──────────────────────────────────────────────────────────────
 
-_IG_PROFILE_RE = re.compile(
-    r"(?:instagram\.com|instagr\.am)/(?:@)?([A-Za-z0-9_.]+)/?(?:\?.*)?$"
-)
-_IG_STORIES_RE = re.compile(
-    r"(?:instagram\.com|instagr\.am)/stories/([A-Za-z0-9_.]+)(?:/(\d+))?/?(?:\?.*)?$"
-)
+_IG_PROFILE_RE = re.compile(r"/(?:@)?([A-Za-z0-9_.]+)/?")
+_IG_STORIES_RE = re.compile(r"/stories/([A-Za-z0-9_.]+)(?:/([0-9]+))?/?")
 _IG_HIGHLIGHT_RE = re.compile(r"/stories/highlights/([0-9]+)/?")
 _IG_HIGHLIGHT_SHARE_RE = re.compile(r"/s/([A-Za-z0-9_+\-]+={0,2})/?")
-_IG_POST_RE = re.compile(
-    r"(?:instagram\.com|instagr\.am)/(?:p|reel|reels)/([A-Za-z0-9_-]+)"
-)
+_IG_POST_RE = re.compile(r"/(?:p|reel|reels)/([A-Za-z0-9_-]+)/?")
 
 
 def parse_instagram_url(url: str) -> tuple[str, str | None, str | None]:
@@ -202,15 +198,15 @@ def parse_instagram_url(url: str) -> tuple[str, str | None, str | None]:
         item = re.fullmatch(r"([0-9]+)(?:_[0-9]+)?", selector)
         return "highlight", highlight_id, item[1] if item else None
 
-    m = _IG_STORIES_RE.search(url)
+    m = _IG_STORIES_RE.fullmatch(path)
     if m:
         return "stories", m.group(1), m.group(2)
 
-    m = _IG_POST_RE.search(url)
+    m = _IG_POST_RE.fullmatch(path)
     if m:
         return "post", m.group(1), None
 
-    m = _IG_PROFILE_RE.search(url)
+    m = _IG_PROFILE_RE.fullmatch(path)
     if m:
         username = m.group(1)
         if username in (
@@ -242,8 +238,8 @@ _IG_SHORTCODE_ALPHABET = (
 
 def _extract_shortcode(url: str) -> str | None:
     """Extract the shortcode from an Instagram /p/, /reel/, or /reels/ URL."""
-    m = _IG_POST_RE.search(url)
-    return m.group(1) if m else None
+    url_type, shortcode, _ = parse_instagram_url(url)
+    return shortcode if url_type == "post" else None
 
 
 def _shortcode_to_media_pk(shortcode: str) -> str:
@@ -252,6 +248,10 @@ def _shortcode_to_media_pk(shortcode: str) -> str:
     for char in shortcode:
         media_pk = media_pk * 64 + _IG_SHORTCODE_ALPHABET.index(char)
     return str(media_pk)
+
+
+class _InstagramSessionUnavailable(RuntimeError):
+    pass
 
 
 # ── Core Service ─────────────────────────────────────────────────────────────
@@ -383,178 +383,92 @@ class InstagramService:
         }
 
     @classmethod
-    async def get_profile_media(cls, username: str) -> IGProfileMedia:
-        """Fetch basic profile + highlights + stories anonymously."""
-        cls._init_pool()
-        result = IGProfileMedia(username=username)
-
-        try:
-            uid = None
-
-            # 1. Fetch profile ANONYMOUSLY to avoid session flagging and HTML challenge pages
-            async with AsyncSession(impersonate=cls.IMPERSONATE) as session:
-                doc = await session.get(
-                    f"https://www.instagram.com/api/v1/users/web_profile_info/?username={username}",
-                    headers={
-                        "X-IG-App-ID": cls.IG_APP_ID,
-                        "X-Requested-With": "XMLHttpRequest",
-                    },
+    @asynccontextmanager
+    async def _web_page(
+        cls, url: str, *, require_session: bool = True
+    ) -> AsyncIterator[tuple[AsyncSession, Response, bool]]:
+        for _ in range(2):
+            index, cookies = await cls._get_available_session()
+            if index == -2:
+                raise _InstagramSessionUnavailable(
+                    "Сессии Instagram временно недоступны."
                 )
-                if doc.status_code == 404:
-                    result.error = f"⚠️ Профиль @{username} не найден."
-                    return result
-
-                if doc.status_code == 200:
-                    try:
-                        data = doc.json()
-                        user_data = data.get("data", {}).get("user", {})
-                        if user_data:
-                            uid = str(user_data["id"])
-                            # Parse highlights if available
-                            if user_data.get("highlight_reel_count", 0) > 0:
-                                highlights_edges = user_data.get(
-                                    "edge_highlight_reels", {}
-                                ).get("edges", [])
-                                for edge in highlights_edges:
-                                    node = edge["node"]
-                                    result.highlights.append(
-                                        IGHighlight(
-                                            highlight_id=node["id"],
-                                            title=node["title"],
-                                            cover_url=node[
-                                                "cover_media_cropped_thumbnail"
-                                            ]["url"],
-                                            item_count=1,  # Approximate
-                                        )
-                                    )
-                    except (ValueError, TypeError, KeyError, AttributeError) as e:
+            if require_session and not cookies:
+                raise _InstagramSessionUnavailable(
+                    "Для загрузки нужна сессия Instagram."
+                )
+            async with AsyncSession(
+                impersonate=cls.IMPERSONATE, cookies=cookies, timeout=12
+            ) as session:
+                page = await session.get(url, allow_redirects=False)
+                if index is not None and index >= 0 and 300 <= page.status_code < 400:
+                    path = urlsplit(page.headers.get("Location", "")).path
+                    if path.startswith(
+                        ("/consent/", "/accounts/login/", "/challenge/", "/checkpoint/")
+                    ):
+                        cls._dead_sessions.add(index)
                         logger.warning(
-                            "[INSTAGRAM] Failed to parse web_profile_info for %s: %s",
-                            username,
-                            type(e).__name__,
+                            "[INSTAGRAM] Web session requires reauthentication"
                         )
+                        continue
+                yield session, page, bool(cookies)
+                return
+        raise _InstagramSessionUnavailable("Сессии Instagram требуют повторного входа.")
 
-            # 2. Fallback to Authenticated Mobile API if Anonymous Web API was blocked (401/302/JSON parse error)
-            if not uid and cls._ig_cookie_pool:
-                logger.info(
-                    "[INSTAGRAM] Anonymous Web API blocked/failed (status %s). Falling back to Mobile API for %s",
-                    doc.status_code,
-                    username,
-                )
-
-                sess_idx, cookies_to_use = await cls._get_available_session()
-                if not cookies_to_use:
-                    result.error = "⏳ Инстаграм на паузе. Лимит профилей исчерпан для предотвращения бана."
+    @classmethod
+    async def get_profile_media(cls, username: str) -> IGProfileMedia:
+        """Fetch the profile's current stories and highlights with a web session."""
+        result = IGProfileMedia(username=username)
+        try:
+            if not re.fullmatch(r"[A-Za-z0-9_.]+", username):
+                raise ValueError("invalid Instagram username")
+            async with cls._web_page(
+                f"https://www.instagram.com/{username}/", require_session=False
+            ) as (session, page, has_session):
+                if page.status_code == 404:
+                    result.error = f"Профиль @{username} не найден."
                     return result
-
-                async with AsyncSession(
-                    impersonate=cls.IMPERSONATE, cookies=cookies_to_use
-                ) as auth_session:
-                    # Mobile fetch 1: UID
-                    mobile_doc = await auth_session.get(
-                        f"https://i.instagram.com/api/v1/users/{username}/usernameinfo/",
-                        headers=cls._auth_headers(cookies_to_use),
+                page.raise_for_status()
+                profile_id = re.search(r'"profile_id":"([0-9]+)"', page.text)
+                if not profile_id:
+                    raise ValueError("Instagram profile ID unavailable")
+                if not has_session:
+                    result.error = (
+                        "Для загрузки историй и хайлайтов нужна сессия Instagram."
                     )
-                    # Check session health on non-200
-                    if mobile_doc.status_code != 200 and sess_idx is not None:
-                        try:
-                            body = mobile_doc.text[:500] if mobile_doc.text else ""
-                        # Reading a failed HTTP adapter's body is diagnostic
-                        # only; session health can still use its status code.
-                        except Exception:  # noqa: BLE001
-                            body = ""
-                        cls._check_response_health(
-                            mobile_doc.status_code, body, sess_idx
-                        )
-                    if mobile_doc.status_code == 200:
-                        try:
-                            m_data = mobile_doc.json()
-                            if "user" in m_data and "pk" in m_data["user"]:
-                                uid = str(m_data["user"]["pk"])
-                        except (ValueError, TypeError, KeyError, AttributeError) as e:
-                            logger.warning(
-                                "[INSTAGRAM] Failed to parse usernameinfo for %s: %s",
-                                username,
-                                e,
-                            )
-
-                    if uid:
-                        tray_doc = await auth_session.get(
-                            f"https://i.instagram.com/api/v1/highlights/{uid}/highlights_tray/",
-                            headers=cls._auth_headers(cookies_to_use),
-                        )
-                        if tray_doc.status_code == 200:
-                            try:
-                                tray_data = tray_doc.json()
-                                for edge in tray_data.get("tray", []):
-                                    raw_id = str(edge.get("id", ""))
-                                    hid = (
-                                        raw_id.replace("highlight:", "")
-                                        if "highlight:" in raw_id
-                                        else raw_id
-                                    )
-
-                                    title = edge.get("title", "")
-                                    cover_url = ""
-
-                                    cover_media = edge.get("cover_media", {})
-                                    if isinstance(cover_media, dict):
-                                        cropped = cover_media.get(
-                                            "cropped_image_version", {}
-                                        )
-                                        if isinstance(cropped, dict):
-                                            cover_url = cropped.get("url", "")
-
-                                    if not cover_url:
-                                        # Default empty fallback to prevent pydantic/dataclass constraint errors
-                                        cover_url = "https://scontent.cdninstagram.com/v/t51.2885-15/e35/c0.0.1080.1080a/s150x150/1_1_2.jpg"
-
-                                    if hid:
-                                        result.highlights.append(
-                                            IGHighlight(
-                                                highlight_id=hid,
-                                                title=title,
-                                                cover_url=cover_url,
-                                                item_count=edge.get("media_count", 1),
-                                            )
-                                        )
-                            except (
-                                ValueError,
-                                TypeError,
-                                KeyError,
-                                AttributeError,
-                            ) as e:
-                                logger.warning(
-                                    "[INSTAGRAM] Failed to parse highlights_tray for %s: %s",
-                                    username,
-                                    e,
-                                )
-
-            if not uid:
-                logger.warning(
-                    "[INSTAGRAM] Exhausted all fetch strategies for %s", username
+                    return result
+                uid = profile_id[1]
+                result.stories = await cls._fetch_web_reel(session, page, uid)
+                highlights = await cls._web_graphql(
+                    session,
+                    page,
+                    "PolarisProfileStoryHighlightsTrayContentQuery",
+                    "26970053832668570",
+                    {"user_id": uid},
                 )
-                result.error = f"⚠️ Профиль @{username} недоступен (IP Block / Скрыт)."
-                return result
-
-            # 3. Fetch stories AUTHENTICATED (because anonymous request will always fail)
-            if cls._ig_cookie_pool:
-                sess_idx, cookies_to_use = await cls._get_available_session()
-                if cookies_to_use:
-                    async with AsyncSession(
-                        impersonate=cls.IMPERSONATE, cookies=cookies_to_use
-                    ) as auth_session:
-                        stories = await cls._fetch_reels_media(auth_session, [uid])
-                        result.stories = stories.get(uid, [])
-
-            return result
-
-        # Public profile resolution crosses multiple HTTP/auth adapters and
-        # translates their failures into the profile result's explicit error.
-        except Exception as e:  # noqa: BLE001
-            logger.error("[INSTAGRAM] Profile fetch error: %s", e)
-            result.error = f"⚠️ Ошибка загрузки профиля: {str(e)[:100]}"
-            return result
+                for edge in (highlights["highlights"] or {}).get("edges", ()):
+                    reel = edge["node"]
+                    cover = (reel.get("cover_media") or {}).get(
+                        "cropped_image_version"
+                    ) or {}
+                    result.highlights.append(
+                        IGHighlight(
+                            highlight_id=str(reel["id"]).removeprefix("highlight:"),
+                            title=reel["title"],
+                            cover_url=cover.get("url", ""),
+                            item_count=1,
+                        )
+                    )
+        except _InstagramSessionUnavailable as error:
+            result.error = str(error)
+        # Keep partial results when the profile has stories but the tray is unavailable.
+        except Exception as error:  # noqa: BLE001
+            logger.warning(
+                "[INSTAGRAM] Profile lookup failed: %s", type(error).__name__
+            )
+            if not result.stories and not result.highlights:
+                result.error = "Ошибка загрузки профиля Instagram."
+        return result
 
     @classmethod
     async def get_highlight_items(
@@ -562,22 +476,16 @@ class InstagramService:
     ) -> tuple[list[IGStoryItem], str | None]:
         """Resolve a highlight with a configured Instagram session."""
         try:
-            sess_idx, cookies_to_use = await cls._get_available_session()
-            if sess_idx == -2:
-                return (
-                    [],
-                    "⏳ Инстаграм на паузе. Лимит скачиваний хайлайтов временно исчерпан.",
-                )
-            if not cookies_to_use:
-                return (
-                    [],
-                    "⚠️ Скачивание хайлайтов требует настройки пула аккаунтов IG_SESSIONS_B64.",
-                )
-
-            async with AsyncSession(
-                impersonate=cls.IMPERSONATE, cookies=cookies_to_use, timeout=12
-            ) as session:
-                return await cls._fetch_web_highlight(session, highlight_id), None
+            if not re.fullmatch(r"[0-9]+", highlight_id):
+                raise ValueError("invalid highlight ID")
+            async with cls._web_page(
+                f"https://www.instagram.com/stories/highlights/{highlight_id}/"
+            ) as (session, page, _):
+                return await cls._fetch_web_reel(
+                    session, page, f"highlight:{highlight_id}"
+                ), None
+        except _InstagramSessionUnavailable as error:
+            return [], str(error)
         except HTTPError as error:
             status = error.response.status_code if error.response is not None else 0
             logger.warning("[INSTAGRAM] Highlight web request failed (HTTP %d)", status)
@@ -592,22 +500,44 @@ class InstagramService:
             return [], "Ошибка загрузки хайлайта из Instagram."
 
     @classmethod
-    async def _fetch_web_highlight(
-        cls, session: AsyncSession, highlight_id: str
+    async def _fetch_web_reel(
+        cls, session: AsyncSession, page: Response, reel_id: str
     ) -> list[IGStoryItem]:
-        if not re.fullmatch(r"[0-9]+", highlight_id):
-            raise ValueError("invalid highlight ID")
-        origin = "https://www.instagram.com"
-        url = f"{origin}/stories/highlights/{highlight_id}/"
-        page = await session.get(url, allow_redirects=False)
+        data = await cls._web_graphql(
+            session,
+            page,
+            "PolarisStoriesV3HighlightsPageQuery",
+            "28325328583775973",
+            {
+                "initial_reel_id": reel_id,
+                "reel_ids": [reel_id],
+                "first": 3,
+                "last": 2,
+                "__relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider": True,
+            },
+        )
+        connection = data["xdt_api__v1__feed__reels_media__connection"] or {}
+        for edge in connection.get("edges", ()):
+            reel = edge["node"]
+            if reel["id"] == reel_id:
+                return _parse_reel_items(reel["items"])
+        return []
+
+    @classmethod
+    async def _web_graphql(
+        cls,
+        session: AsyncSession,
+        page: Response,
+        operation: str,
+        doc_id: str,
+        variables: dict[str, Any],
+    ) -> dict[str, Any]:
         page.raise_for_status()
         lsd = re.search(r'"LSD",\[\],\{"token":"([^"]+)"', page.text)
         if not lsd:
-            raise ValueError("highlight page did not supply an LSD token")
+            raise ValueError("Instagram page did not supply an LSD token")
         dtsg = re.search(r'"DTSGInitialData",\[\],\{"token":"([^"]+)"', page.text)
-        reel_id = f"highlight:{highlight_id}"
-        operation = "PolarisStoriesV3HighlightsPageQuery"
-        # Instagram's web query returns highlights the mobile endpoint omits.
+        origin = "https://www.instagram.com"
         response = await session.post(
             f"{origin}/graphql/query",
             headers={
@@ -617,69 +547,22 @@ class InstagramService:
                 "X-FB-Friendly-Name": operation,
                 "X-FB-LSD": lsd[1],
                 "Origin": origin,
-                "Referer": url,
+                "Referer": page.url,
             },
             data={
-                "doc_id": "28325328583775973",
+                "doc_id": doc_id,
                 "fb_api_req_friendly_name": operation,
                 "lsd": lsd[1],
                 "fb_dtsg": dtsg[1] if dtsg else "",
-                "variables": json.dumps(
-                    {
-                        "initial_reel_id": reel_id,
-                        "reel_ids": [reel_id],
-                        "first": 3,
-                        "last": 2,
-                        "__relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider": True,
-                    }
-                ),
+                "variables": json.dumps(variables),
             },
             allow_redirects=False,
         )
         response.raise_for_status()
-        connection = response.json()["data"][
-            "xdt_api__v1__feed__reels_media__connection"
-        ]
-        for edge in connection["edges"]:
-            reel = edge["node"]
-            if reel["id"] == reel_id:
-                return _parse_reel_items(reel["items"])
-        return []
-
-    @classmethod
-    async def _fetch_reels_media(
-        cls, session: AsyncSession, ids: list[str]
-    ) -> dict[str, list[IGStoryItem]]:
-        """Hits the iPhone reels_media endpoint using curl_cffi."""
-        try:
-            ids_param = "&".join(f"reel_ids={x}" for x in ids)
-            resp = await session.get(
-                f"https://i.instagram.com/api/v1/feed/reels_media/?{ids_param}",
-                headers={
-                    "X-IG-App-ID": cls.IG_APP_ID,
-                    "User-Agent": cls.IG_USER_AGENT,
-                    "X-CSRFToken": (
-                        session.cookies.get("csrftoken", "")
-                        if hasattr(session, "cookies") and session.cookies
-                        else ""
-                    ),
-                },
-            )
-            if resp.status_code != 200:
-                logger.warning(
-                    "[INSTAGRAM] reels_media failed with %s", resp.status_code
-                )
-                return {}
-
-            return {
-                reel_id: _parse_reel_items(reel_data.get("items", []))
-                for reel_id, reel_data in resp.json().get("reels", {}).items()
-            }
-        # HTTP, session cookies and untrusted reel metadata share this provider
-        # boundary; the caller receives an empty collection after a logged failure.
-        except Exception as e:  # noqa: BLE001
-            logger.error("[INSTAGRAM] _fetch_reels_media error: %s", e)
-            return {}
+        data = response.json().get("data")
+        if not isinstance(data, dict):
+            raise TypeError("Instagram GraphQL response has no data")
+        return data
 
     @classmethod
     async def download_story_item(

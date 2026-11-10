@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Self
@@ -12,6 +13,7 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 YOUTUBE_SHORT_DEFAULT_VARIANT = "youtube-short-default"
 YOUTUBE_COMMAND_DEFAULT_VARIANT = "youtube-command-default"
+_X_NUMBERED_VIDEO = re.compile(r"^/(?:i/web|[^/]+)/status/[0-9]+/video/([0-9]+)(?:/|$)")
 
 
 class MediaKind(StrEnum):
@@ -136,6 +138,13 @@ class MediaRequest:
     @property
     def cache_key(self) -> str:
         return request_cache_key(self)
+
+    @property
+    def x_video_number(self) -> int | None:
+        if self.platform not in {"x", "twitter"}:
+            return None
+        match = _X_NUMBERED_VIDEO.search(urlsplit(self.canonical_url).path)
+        return int(match[1]) if match else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -294,6 +303,9 @@ def request_cache_key(request: MediaRequest) -> str:
     ):
         # Old resolved plans and Telegram file IDs may contain an automatic dub.
         payload["audio_track_policy"] = "youtube-original-v1"
+    if request.x_video_number is not None:
+        # Older entries can contain the entire post's attachments.
+        payload["x_video_selection_policy"] = "ordered-attachment-v1"
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=list)
     return f"media:v1:{hashlib.sha256(encoded.encode()).hexdigest()}"
 
@@ -319,6 +331,10 @@ def _parse_media_url(url: str) -> tuple[str, str, str, ClipInterval]:
             media_id = _first_query_value(query, "v")
         elif len(path_parts) >= 2 and path_parts[0] == "shorts":
             media_id = path_parts[1]
+        elif len(path_parts) == 2 and path_parts[0] in {"live", "embed"}:
+            video_id = path_parts[1]
+            if len(video_id) == 11 and video_id not in {"live_stream", "videoseries"}:
+                media_id = video_id
     elif host == "youtu.be" and path_parts:
         media_id = path_parts[0]
 

@@ -16,7 +16,11 @@ from app.core.process import process_owner_scope
 from app.core.texts import Texts
 from app.core.utils import extract_url_from_update
 from app.services.downloader import MediaSender
-from app.services.media.models import DeliveryTarget, MediaItem
+from app.services.media.models import (
+    DeliveryTarget,
+    MediaItem,
+    UnsupportedMediaUrlError,
+)
 from app.services.media.pipeline import (
     CallbackDataError,
     MediaPipelineError,
@@ -88,13 +92,17 @@ async def handle_group_message(
         from app.services.media.models import DeliveryTarget
         from app.services.media.pipeline import MediaPipelineError, build_media_request
 
-        request = build_media_request(
-            url,
-            kind="auto",
-            clip=section,
-            caller_scope="group",
-            exact=False,
-        )
+        try:
+            request = build_media_request(
+                url,
+                kind="auto",
+                clip=section,
+                caller_scope="group",
+                exact=False,
+            )
+        except UnsupportedMediaUrlError:
+            await status_msg.edit_text(Texts.URL_NOT_SUPPORTED)
+            return
 
         async def retry_markup():
             from app.bot.retry import save_retry_request

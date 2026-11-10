@@ -769,8 +769,7 @@ async def _handle_instagram(
             await status_msg.edit_text(Texts.IG_DOWNLOAD_ERROR)
         return
 
-    # ── Direct story link with specific item_id ──────────────────
-    if url_type == "stories" and target and item_id:
+    if url_type in {"stories", "highlight"} and target and item_id:
         if status_msg is None:
             status_msg = await msg.reply_text(
                 Texts.IG_DOWNLOADING.format(type="историю")
@@ -778,14 +777,20 @@ async def _handle_instagram(
         else:
             await status_msg.edit_text(Texts.IG_DOWNLOADING.format(type="историю"))
 
-        profile_media = await InstagramService.get_profile_media(target)
-        if profile_media.error:
-            await status_msg.edit_text(profile_media.error)
+        if url_type == "highlight":
+            items, error = await InstagramService.get_highlight_items(target)
+            missing = "Элемент хайлайта не найден или недоступен."
+        else:
+            profile_media = await InstagramService.get_profile_media(target)
+            items, error = profile_media.stories, profile_media.error
+            missing = "⚠️ История не найдена или уже истекла."
+        if error:
+            await status_msg.edit_text(error)
             return
 
-        story = next((s for s in profile_media.stories if s.mediaid == item_id), None)
+        story = next((s for s in items if s.mediaid.split("_", 1)[0] == item_id), None)
         if not story:
-            await status_msg.edit_text("⚠️ История не найдена или уже истекла.")
+            await status_msg.edit_text(missing)
             return
 
         if state.media_pipeline is not None:
@@ -798,7 +803,7 @@ async def _handle_instagram(
                 auth_scope=parse_token,
                 caller_scope=caller_scope,
                 clip=section,
-                canonical_url=url,
+                canonical_url=url if url_type == "stories" else None,
             )
             if pipeline_success:
                 try:
@@ -823,8 +828,14 @@ async def _handle_instagram(
             file_path,
             is_audio=False,
             is_gif=False,
-            caption=f"📷 @{target} • {story.label}",
-            operation_key=f"instagram:{url}:story:{story.mediaid}",
+            caption=story.label
+            if url_type == "highlight"
+            else f"📷 @{target} • {story.label}",
+            operation_key=(
+                f"instagram:highlight:{target}:{story.mediaid}"
+                if url_type == "highlight"
+                else f"instagram:{url}:story:{story.mediaid}"
+            ),
         )
         if receipt:
             try:
@@ -838,7 +849,10 @@ async def _handle_instagram(
 
     # ── Direct highlight link ─────────────────────────────────────
     if url_type == "highlight" and target:
-        status_msg = await msg.reply_text("⏳ Загружаю хайлайт…")
+        if status_msg is None:
+            status_msg = await msg.reply_text("⏳ Загружаю хайлайт…")
+        else:
+            await status_msg.edit_text("⏳ Загружаю хайлайт…")
         items, error = await InstagramService.get_highlight_items(target)
         if error or not items:
             await status_msg.edit_text(error or "⚠️ Хайлайт пуст или не найден.")

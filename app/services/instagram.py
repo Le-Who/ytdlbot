@@ -1,12 +1,12 @@
 """
 Instagram Service — Stories & Highlights with Rich Selection UX
 
-Implemented via Tier 1 Anonymous Mobile API Forgery (GraphQL Bypass).
-Uses `curl_cffi` to bypass datacenter TLS fingerprints.
+Uses curl_cffi for Instagram's web and mobile APIs.
 """
 
 import asyncio
 import base64
+import json
 import logging
 import os
 import pickle
@@ -14,9 +14,11 @@ import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import ClassVar, Literal
+from typing import Any, ClassVar, Literal
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from curl_cffi.requests import AsyncSession, Response
+from curl_cffi.requests.exceptions import HTTPError
 
 from app.core import state
 from app.core.asyncio_utils import await_owned
@@ -124,6 +126,31 @@ class IGProfileMedia:
     error: str | None = None
 
 
+def _parse_reel_items(items: list[dict[str, Any]]) -> list[IGStoryItem]:
+    parsed = []
+    for item in items:
+        is_video = item.get("media_type") == 2
+        images = (item.get("image_versions2") or {}).get("candidates") or []
+        videos = item.get("video_versions") or []
+        sources = videos if is_video else images
+        if not sources:
+            continue
+        url = sources[0]["url"]
+        duration = float(item.get("video_duration") or 0.0)
+        parsed.append(
+            IGStoryItem(
+                mediaid=str(item.get("pk") or item.get("id")),
+                is_video=is_video,
+                url=url,
+                thumbnail_url=images[0]["url"] if images else url,
+                timestamp=datetime.fromtimestamp(item.get("taken_at") or 0, tz=UTC),
+                duration=duration if duration > 0 else None,
+                typename="GraphStoryVideo" if is_video else "GraphStoryImage",
+            )
+        )
+    return parsed
+
+
 # ── URL Parsing ──────────────────────────────────────────────────────────────
 
 _IG_PROFILE_RE = re.compile(
@@ -132,22 +159,48 @@ _IG_PROFILE_RE = re.compile(
 _IG_STORIES_RE = re.compile(
     r"(?:instagram\.com|instagr\.am)/stories/([A-Za-z0-9_.]+)(?:/(\d+))?/?(?:\?.*)?$"
 )
-_IG_HIGHLIGHT_RE = re.compile(
-    r"(?:instagram\.com|instagr\.am)/stories/highlights/(\d+)"
-)
+_IG_HIGHLIGHT_RE = re.compile(r"/stories/highlights/([0-9]+)/?")
+_IG_HIGHLIGHT_SHARE_RE = re.compile(r"/s/([A-Za-z0-9_+\-]+={0,2})/?")
 _IG_POST_RE = re.compile(
     r"(?:instagram\.com|instagr\.am)/(?:p|reel|reels)/([A-Za-z0-9_-]+)"
 )
 
 
 def parse_instagram_url(url: str) -> tuple[str, str | None, str | None]:
-    url_lower = url.lower()
-    if "instagram.com" not in url_lower and "instagr.am" not in url_lower:
+    try:
+        parsed = urlsplit(url)
+        host = parsed.hostname or ""
+    except ValueError:
+        return "unknown", None, None
+    if host not in {"instagram.com", "instagr.am"} and not host.endswith(
+        (".instagram.com", ".instagr.am")
+    ):
         return "unknown", None, None
 
-    m = _IG_HIGHLIGHT_RE.search(url)
-    if m:
-        return "highlight", m.group(1), None
+    path = unquote(parsed.path)
+    highlight = _IG_HIGHLIGHT_RE.fullmatch(path)
+    share = _IG_HIGHLIGHT_SHARE_RE.fullmatch(path)
+    if share:
+        token = share[1]
+        try:
+            decoded = base64.b64decode(
+                token + "=" * (-len(token) % 4), altchars=b"-_", validate=True
+            )
+        except ValueError:
+            return "unknown", None, None
+        encoded_highlight = re.fullmatch(rb"highlight:([0-9]+)", decoded)
+        if not encoded_highlight:
+            return "unknown", None, None
+        highlight_id = encoded_highlight[1].decode("ascii")
+    elif highlight:
+        highlight_id = highlight[1]
+    else:
+        highlight_id = None
+
+    if highlight_id:
+        selector = parse_qs(parsed.query).get("story_media_id", [""])[0]
+        item = re.fullmatch(r"([0-9]+)(?:_[0-9]+)?", selector)
+        return "highlight", highlight_id, item[1] if item else None
 
     m = _IG_STORIES_RE.search(url)
     if m:
@@ -162,6 +215,7 @@ def parse_instagram_url(url: str) -> tuple[str, str | None, str | None]:
         username = m.group(1)
         if username in (
             "stories",
+            "s",
             "p",
             "reel",
             "reels",
@@ -204,7 +258,7 @@ def _shortcode_to_media_pk(shortcode: str) -> str:
 
 
 class InstagramService:
-    """Fetches Instagram media using anonymous mobile endpoint forgery via curl_cffi."""
+    """Fetches Instagram media with curl_cffi and configured sessions."""
 
     IG_APP_ID = "936619743392459"
     IMPERSONATE: Literal["chrome110"] = "chrome110"
@@ -506,8 +560,7 @@ class InstagramService:
     async def get_highlight_items(
         cls, highlight_id: str
     ) -> tuple[list[IGStoryItem], str | None]:
-        """Fetch items in a specific highlight securely, authenticating if possible."""
-        cls._init_pool()
+        """Resolve a highlight with a configured Instagram session."""
         try:
             sess_idx, cookies_to_use = await cls._get_available_session()
             if sess_idx == -2:
@@ -522,16 +575,76 @@ class InstagramService:
                 )
 
             async with AsyncSession(
-                impersonate=cls.IMPERSONATE, cookies=cookies_to_use
+                impersonate=cls.IMPERSONATE, cookies=cookies_to_use, timeout=12
             ) as session:
-                hid = f"highlight:{highlight_id}"
-                items = await cls._fetch_reels_media(session, [hid])
-                return items.get(hid, []), None
-        # Public highlight resolution translates external session/reel adapter
-        # failures into the established empty-items plus error result.
-        except Exception as e:  # noqa: BLE001
-            logger.error("[INSTAGRAM] Highlight items error: %s", e)
-            return [], f"⚠️ Ошибка загрузки хайлайта: {str(e)[:100]}"
+                return await cls._fetch_web_highlight(session, highlight_id), None
+        except HTTPError as error:
+            status = error.response.status_code if error.response is not None else 0
+            logger.warning("[INSTAGRAM] Highlight web request failed (HTTP %d)", status)
+            if status == 429:
+                return [], "Instagram временно ограничил загрузку хайлайтов (HTTP 429)."
+            return [], "Ошибка загрузки хайлайта из Instagram."
+        # Keep upstream responses and session details out of the error and logs.
+        except Exception as error:  # noqa: BLE001
+            logger.warning(
+                "[INSTAGRAM] Highlight items error: %s", type(error).__name__
+            )
+            return [], "Ошибка загрузки хайлайта из Instagram."
+
+    @classmethod
+    async def _fetch_web_highlight(
+        cls, session: AsyncSession, highlight_id: str
+    ) -> list[IGStoryItem]:
+        if not re.fullmatch(r"[0-9]+", highlight_id):
+            raise ValueError("invalid highlight ID")
+        origin = "https://www.instagram.com"
+        url = f"{origin}/stories/highlights/{highlight_id}/"
+        page = await session.get(url, allow_redirects=False)
+        page.raise_for_status()
+        lsd = re.search(r'"LSD",\[\],\{"token":"([^"]+)"', page.text)
+        if not lsd:
+            raise ValueError("highlight page did not supply an LSD token")
+        dtsg = re.search(r'"DTSGInitialData",\[\],\{"token":"([^"]+)"', page.text)
+        reel_id = f"highlight:{highlight_id}"
+        operation = "PolarisStoriesV3HighlightsPageQuery"
+        # Instagram's web query returns highlights the mobile endpoint omits.
+        response = await session.post(
+            f"{origin}/graphql/query",
+            headers={
+                "X-IG-App-ID": cls.IG_APP_ID,
+                "User-Agent": cls.IG_USER_AGENT,
+                "X-CSRFToken": session.cookies.get("csrftoken", ""),
+                "X-FB-Friendly-Name": operation,
+                "X-FB-LSD": lsd[1],
+                "Origin": origin,
+                "Referer": url,
+            },
+            data={
+                "doc_id": "28325328583775973",
+                "fb_api_req_friendly_name": operation,
+                "lsd": lsd[1],
+                "fb_dtsg": dtsg[1] if dtsg else "",
+                "variables": json.dumps(
+                    {
+                        "initial_reel_id": reel_id,
+                        "reel_ids": [reel_id],
+                        "first": 3,
+                        "last": 2,
+                        "__relay_internal__pv__PolarisCommunityNoteStoriesLabelEnabledrelayprovider": True,
+                    }
+                ),
+            },
+            allow_redirects=False,
+        )
+        response.raise_for_status()
+        connection = response.json()["data"][
+            "xdt_api__v1__feed__reels_media__connection"
+        ]
+        for edge in connection["edges"]:
+            reel = edge["node"]
+            if reel["id"] == reel_id:
+                return _parse_reel_items(reel["items"])
+        return []
 
     @classmethod
     async def _fetch_reels_media(
@@ -558,54 +671,10 @@ class InstagramService:
                 )
                 return {}
 
-            reels = resp.json().get("reels", {})
-            out = {}
-            for reel_id, reel_data in reels.items():
-                items_data = reel_data.get("items", [])
-                parsed: list[IGStoryItem] = []
-                for item in items_data:
-                    is_video = item.get("media_type") == 2
-                    duration = float(item.get("video_duration", 0.0))
-                    timestamp_val = item.get("taken_at", 0)
-                    dt = datetime.fromtimestamp(timestamp_val, tz=UTC)
-
-                    url = ""
-                    thumb = ""
-                    if is_video and "video_versions" in item and item["video_versions"]:
-                        url = item["video_versions"][0]["url"]
-                    elif (
-                        "image_versions2" in item
-                        and "candidates" in item["image_versions2"]
-                        and item["image_versions2"]["candidates"]
-                    ):
-                        url = item["image_versions2"]["candidates"][0]["url"]
-                    else:
-                        continue
-
-                    if (
-                        "image_versions2" in item
-                        and "candidates" in item["image_versions2"]
-                        and item["image_versions2"]["candidates"]
-                    ):
-                        thumb = item["image_versions2"]["candidates"][0]["url"]
-                    else:
-                        thumb = url
-
-                    parsed.append(
-                        IGStoryItem(
-                            mediaid=str(item.get("pk", item.get("id"))),
-                            is_video=is_video,
-                            url=url,
-                            thumbnail_url=thumb,
-                            timestamp=dt,
-                            duration=duration if duration > 0 else None,
-                            typename=(
-                                "GraphStoryVideo" if is_video else "GraphStoryImage"
-                            ),
-                        )
-                    )
-                out[reel_id] = parsed
-            return out
+            return {
+                reel_id: _parse_reel_items(reel_data.get("items", []))
+                for reel_id, reel_data in resp.json().get("reels", {}).items()
+            }
         # HTTP, session cookies and untrusted reel metadata share this provider
         # boundary; the caller receives an empty collection after a logged failure.
         except Exception as e:  # noqa: BLE001

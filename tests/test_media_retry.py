@@ -112,6 +112,24 @@ def query_for(env, data, *, user_id=7, chat_id=9, message_id=100):
     )
 
 
+async def test_old_public_highlight_retry_asks_for_the_link_again(retry_env):
+    from app.bot.retry import on_retry, save_retry_request
+
+    env = retry_env
+    request = build_media_request(
+        "https://www.instagram.com/s/aGlnaGxpZ2h0Ojc=?story_media_id=41_123",
+        caller_scope="private",
+    )
+    markup = await save_retry_request(
+        request, user_id=7, chat_id=9, message_id=100, caption="Instagram"
+    )
+    query = query_for(env, markup.inline_keyboard[0][0].callback_data)
+    await on_retry(SimpleNamespace(callback_query=query), env.context)
+
+    assert not env.pipeline.requests
+    assert "Отправьте ссылку" in query.answer.await_args.args[0]
+
+
 async def invoke_entrypoint(entrypoint, env, monkeypatch):
     from app.bot import callbacks, commands, group_logic, messages
 

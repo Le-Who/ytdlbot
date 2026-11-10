@@ -102,6 +102,10 @@ current configuration allows the route. Neither means production-IP verified.
 Personal cookies are not part of the ordinary public-provider race. Configured
 authorized Instagram/session or legacy cookie paths remain separate scopes and
 must not populate public cache entries.
+Instagram highlight links in `/stories/highlights/<id>/` and `/s/<token>` form
+resolve through Instagram's web API with the configured `IG_SESSIONS_B64` pool.
+A link with `story_media_id` downloads only that item. A highlight link without
+an item selector opens the existing selection menu.
 
 The default pipeline has no implemented independent YouTube provider. The
 `independent-youtube` entry is a routing slot, not a working external fallback.

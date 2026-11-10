@@ -15,6 +15,23 @@ except ImportError:
 class TestInstagramUrlParsing(unittest.TestCase):
     """Test parse_instagram_url for various Instagram URL formats."""
 
+    def test_highlight_share_without_item_opens_highlight(self):
+        from app.services.instagram import parse_instagram_url
+
+        self.assertEqual(
+            parse_instagram_url("https://www.instagram.com/s/aGlnaGxpZ2h0Ojc/"),
+            ("highlight", "7", None),
+        )
+
+    def test_highlight_share_requires_an_instagram_host_and_numeric_highlight(self):
+        from app.services.instagram import parse_instagram_url
+
+        for url in (
+            "https://instagram.com.example/s/aGlnaGxpZ2h0Ojc=",
+            "https://www.instagram.com/s/aGlnaGxpZ2h0Ong=",
+        ):
+            self.assertEqual(parse_instagram_url(url), ("unknown", None, None))
+
     def test_profile_url(self):
         from app.services.instagram import parse_instagram_url
 
@@ -190,6 +207,52 @@ class TestInstagramServiceGetProfile(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result.error)
         assert result.error is not None
         self.assertIn("не найден", result.error)
+
+
+@unittest.skipUnless(HAS_CURL_CFFI, "curl_cffi not installed")
+class TestInstagramServiceGetHighlight(unittest.IsolatedAsyncioTestCase):
+    async def test_resolves_highlight_through_authenticated_web_api(self):
+        from curl_cffi.requests import Response
+
+        from app.services.instagram import InstagramService
+
+        page = Response()
+        page.status_code = 200
+        page.content = b'["LSD",[],{"token":"lsd-test"}]'
+        response = Response()
+        response.status_code = 200
+        response.content = b"""{"data":{"xdt_api__v1__feed__reels_media__connection":{"edges":[
+          {"node":{"id":"highlight:7","items":[{"pk":"41","media_type":2,
+          "video_versions":[{"url":"https://cdn.example/41.mp4"}],
+          "video_duration":20,"taken_at":1794283200}]}}
+        ]}}}"""
+        session = AsyncMock()
+        session.__aenter__.return_value = session
+        session.cookies = {}
+        session.get.return_value = page
+        session.post.return_value = response
+
+        with (
+            patch.object(InstagramService, "_init_pool"),
+            patch.object(
+                InstagramService,
+                "_get_available_session",
+                return_value=(0, {"sessionid": "test"}),
+            ),
+            patch("app.services.instagram.AsyncSession", return_value=session),
+        ):
+            items, error = await InstagramService.get_highlight_items("7")
+            self.assertIsNone(error)
+            self.assertEqual(
+                [(i.mediaid, i.url) for i in items],
+                [("41", "https://cdn.example/41.mp4")],
+            )
+
+            response.status_code = 429
+            response.ok = False
+            items, error = await InstagramService.get_highlight_items("7")
+            self.assertEqual(items, [])
+            self.assertIn("429", error or "")
 
 
 @unittest.skipUnless(HAS_CURL_CFFI, "curl_cffi not installed")

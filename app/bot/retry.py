@@ -25,6 +25,7 @@ from app.core.job_store import (
 from app.core.models import DownloadContext
 from app.core.process import process_owner_scope
 from app.core.texts import Texts
+from app.services.instagram import parse_instagram_url
 from app.services.media.models import (
     DeliveryReceipt,
     DeliveryStatus,
@@ -218,6 +219,14 @@ async def on_retry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         status.message_id,
     ):
         await query.answer(Texts.RETRY_NOT_OWNER, show_alert=True)
+        return
+    if (
+        saved.request.platform == "instagram"
+        and saved.request.auth_scope == "public"
+        and saved.request.caller_scope in {"private", "group"}
+        and parse_instagram_url(saved.request.canonical_url)[0] == "highlight"
+    ):
+        await query.answer("Отправьте ссылку на хайлайт ещё раз.", show_alert=True)
         return
     # A concurrent cache GET may return an old snapshot after another retry
     # has completed. Check again without yielding before claiming the token.

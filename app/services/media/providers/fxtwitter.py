@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from collections.abc import Awaitable, Callable
 from urllib.parse import quote
@@ -188,8 +189,9 @@ def _media_item(
     url = selected.get("url")
     if not isinstance(url, str) or not url:
         raise ProviderError(FailureKind.INTERNAL, "FxTwitter media omitted URL")
-    width = _integer(selected.get("width")) or _integer(raw.get("width"))
-    height = _integer(selected.get("height")) or _integer(raw.get("height"))
+    width, height = _format_dimensions(selected)
+    width = width or _integer(raw.get("width"))
+    height = height or _integer(raw.get("height"))
     container = _container(selected.get("container") or raw.get("format"), url)
     size = _integer(selected.get("size")) or _integer(raw.get("filesize"))
     duration = _number(raw.get("duration"))
@@ -216,10 +218,22 @@ def _media_item(
 
 
 def _format_rank(raw: dict[str, object]) -> tuple[int, int, int]:
-    width = _integer(raw.get("width")) or 0
-    height = _integer(raw.get("height")) or 0
+    width, height = _format_dimensions(raw)
+    width, height = width or 0, height or 0
     bitrate = _integer(raw.get("bitrate")) or 0
     return min(width, height), width * height, bitrate
+
+
+def _format_dimensions(raw: dict[str, object]) -> tuple[int | None, int | None]:
+    # FxTwitter's attachment dimensions can describe the original upload.
+    match = re.match(
+        r"https?://video\.twimg\.com/[^?#]*/vid/(?:[^/?#]+/)?"
+        r"([1-9][0-9]*)x([1-9][0-9]*)/",
+        str(raw.get("url") or ""),
+    )
+    if match:
+        return int(match[1]), int(match[2])
+    return _integer(raw.get("width")), _integer(raw.get("height"))
 
 
 def _kind(value: object) -> MediaKind:

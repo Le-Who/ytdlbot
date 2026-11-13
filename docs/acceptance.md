@@ -99,6 +99,13 @@ and `tests/media/test_transport.py` exercise same-request recovery after
 connection/probe failure, bounded retries and `Retry-After`, fresh-route
 priority, cancellation during backoff, local-extractor time sharing, and
 gallery-dl empty-result fallback without poisoning shared route health.
+The HTTP provider suite also checks FxTwitter variant dimensions and ranking
+when format entries omit width, height, or bitrate. The sanitized
+`fxtwitter-variant-dimensions.json` fixture preserves the response shape observed
+for the reported post on November 13, 2026: a 2160 x 3840 original with a
+720 x 1280 MP4 variant. Identifiers and CDN filenames are synthetic, and query
+strings are removed. These offline checks preserve exact quality rejection and
+do not establish production-IP reachability or Telegram delivery.
 The proxy-route suite also verifies YouTube direct fallback after both configured
 SOCKS routes refuse connections, direct source affinity, and a full extraction
 budget for the fallback within the overall race timeout.

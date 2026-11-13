@@ -72,6 +72,9 @@ cookies, a proxy, payment, or manual CAPTCHA. See
   require the expected audio stream.
 - X links ending in `/video/<number>` select that attachment in the original post
   order. FxTwitter uses its ordered attachment list, with yt-dlp as fallback.
+  FxTwitter video ranking, quality checks, and final validation use the selected
+  CDN variant's dimensions when encoded in its URL; the attachment dimensions
+  can describe a larger original upload.
 - TikTok keeps a lightweight reserve resolver running while a selected yt-dlp
   source downloads, so a failed transfer can use the ready fallback. A successful
   native download is not held up by that reserve lookup.

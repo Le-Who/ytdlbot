@@ -1,0 +1,42 @@
+{
+  "code": 200,
+  "status": {
+    "id": "123456789",
+    "media": {
+      "all": [
+        {
+          "type": "video",
+          "url": "https://video.twimg.com/amplify_video/123/vid/avc1/720x1280/high.mp4",
+          "duration": 25.17,
+          "width": 2160,
+          "height": 3840,
+          "format": "video/mp4",
+          "formats": [
+            {
+              "url": "https://video.twimg.com/amplify_video/123/pl/playlist.m3u8",
+              "container": "m3u8"
+            },
+            {
+              "url": "https://video.twimg.com/amplify_video/123/vid/avc1/320x568/low.mp4",
+              "bitrate": 632000,
+              "container": "mp4",
+              "codec": "h264"
+            },
+            {
+              "url": "https://video.twimg.com/amplify_video/123/vid/avc1/480x852/medium.mp4",
+              "bitrate": 950000,
+              "container": "mp4",
+              "codec": "h264"
+            },
+            {
+              "url": "https://video.twimg.com/amplify_video/123/vid/avc1/720x1280/high.mp4",
+              "bitrate": 2176000,
+              "container": "mp4",
+              "codec": "h264"
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

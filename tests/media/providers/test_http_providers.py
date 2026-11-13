@@ -785,6 +785,63 @@ def test_numbered_x_video_does_not_reuse_whole_post_cache_entry():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("quality", [None, 720, 1080])
+async def test_fxtwitter_uses_downloaded_variant_dimensions_for_quality(quality):
+    payload = fixture_json("fxtwitter-variant-dimensions.json")
+    transport = RecordingTransport(response(payload=payload), ok_probe())
+    media_request = build_media_request(
+        "https://x.com/user/status/123456789/video/1", quality=quality
+    )
+
+    (candidate,) = await FxTwitterProvider(transport=transport, min_interval=0).resolve(
+        media_request
+    )
+
+    assert candidate.url.endswith("/720x1280/high.mp4")
+    assert (candidate.width, candidate.height) == (720, 1280)
+    assert (candidate.items[0].width, candidate.items[0].height) == (720, 1280)
+    assert candidate.metadata_complete
+    assert candidate.quality_limited is (quality == 1080)
+    assert validate_candidate(media_request, candidate).usable is (quality != 1080)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("formats_present", [False, True])
+@pytest.mark.parametrize("codec_path", ["", "avc1/"])
+async def test_fxtwitter_variant_resolution_does_not_depend_on_bitrate(
+    formats_present, codec_path
+):
+    payload = fixture_json("fxtwitter-variant-dimensions.json")
+    video = payload["status"]["media"]["all"][0]
+    video["width"], video["height"] = 3840, 2160
+    url = (
+        f"https://video.twimg.com/ext_tw_video/123/pu/vid/{codec_path}1280x720/high.mp4"
+    )
+    video["url"] = url
+    if formats_present:
+        video["formats"] = [
+            {"url": url, "container": "mp4"},
+            {
+                "url": f"https://video.twimg.com/ext_tw_video/123/pu/vid/{codec_path}640x360/low.mp4",
+                "container": "mp4",
+                "bitrate": 2176000,
+            },
+        ]
+    else:
+        del video["formats"]
+    transport = RecordingTransport(response(payload=payload), ok_probe())
+    media_request = build_media_request("https://x.com/user/status/123456789")
+
+    (candidate,) = await FxTwitterProvider(transport=transport, min_interval=0).resolve(
+        media_request
+    )
+
+    assert candidate.url == url
+    assert (candidate.width, candidate.height) == (1280, 720)
+    assert (candidate.items[0].width, candidate.items[0].height) == (1280, 720)
+
+
+@pytest.mark.asyncio
 async def test_fxtwitter_records_lower_quality_instead_of_claiming_equivalence():
     """Catches a 720p-only status silently satisfying an exact 1080 request."""
     payload = fixture_json("fxtwitter-status.json")

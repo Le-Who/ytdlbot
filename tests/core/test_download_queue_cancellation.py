@@ -177,3 +177,124 @@ async def test_cancelled_release_preserves_capacity_and_fifo_progress():
         for task in (first, second):
             task.cancel()
         await asyncio.gather(first, second, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_queue_deadline_includes_a_stalled_position_update():
+    queue = DownloadQueue(asyncio.BoundedSemaphore(1), timeout_seconds=0.02)
+    active = await queue.acquire(_noop_ui)
+    position_started = asyncio.Event()
+
+    async def stalled_ui(text, markup):
+        position_started.set()
+        await asyncio.Event().wait()
+
+    async def waiting():
+        return await queue.acquire(stalled_ui)
+
+    pending = asyncio.create_task(waiting())
+    await position_started.wait()
+    try:
+        with pytest.raises(QueueUnavailable):
+            await asyncio.wait_for(asyncio.shield(pending), timeout=1)
+        await active.release()
+        async with asyncio.timeout(1):
+            async with queue.acquire(_noop_ui):
+                pass
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_reposition_notifications_settle_before_download_starts():
+    queue = DownloadQueue(asyncio.BoundedSemaphore(1), timeout_seconds=1)
+    active = await queue.acquire(_noop_ui)
+    first = asyncio.ensure_future(queue.acquire(_noop_ui))
+    await _wait_for_depth(queue, 1)
+    repositioning = asyncio.Event()
+    allow_update = asyncio.Event()
+    update_stopped = asyncio.Event()
+    events = []
+    calls = 0
+
+    async def delayed_position(_text, _markup):
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            repositioning.set()
+            try:
+                await allow_update.wait()
+                events.append("queue caption")
+            finally:
+                update_stopped.set()
+
+    second = asyncio.ensure_future(queue.acquire(delayed_position))
+    try:
+        await _wait_for_depth(queue, 2)
+        async with asyncio.timeout(1):
+            while calls == 0:
+                await asyncio.sleep(0)
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+        await repositioning.wait()
+        await active.release()
+        lease = await asyncio.wait_for(second, timeout=1)
+        assert update_stopped.is_set()
+        events.append("download started")
+        allow_update.set()
+        await asyncio.sleep(0)
+        assert events == ["download started"]
+        await lease.release()
+    finally:
+        allow_update.set()
+        first.cancel()
+        second.cancel()
+        await asyncio.gather(first, second, return_exceptions=True)
+        await active.release()
+
+
+@pytest.mark.asyncio
+async def test_one_lease_cannot_enter_two_pending_acquisitions():
+    queue = DownloadQueue(asyncio.BoundedSemaphore(1), timeout_seconds=1)
+    active = await queue.acquire(_noop_ui)
+    shared = queue.acquire(_noop_ui)
+    pending = asyncio.ensure_future(shared)
+    await _wait_for_depth(queue, 1)
+    try:
+        with pytest.raises(RuntimeError, match="already being acquired"):
+            await asyncio.wait_for(asyncio.ensure_future(shared), 0.1)
+        await active.release()
+        acquired = await asyncio.wait_for(pending, 1)
+        await acquired.release()
+        async with asyncio.timeout(1):
+            async with queue.acquire(_noop_ui):
+                pass
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await active.release()
+        await shared.release()
+
+
+@pytest.mark.asyncio
+async def test_legacy_enqueue_cannot_overwrite_a_tasks_owned_lease():
+    queue = DownloadQueue(asyncio.BoundedSemaphore(2), timeout_seconds=1)
+    assert await queue.enqueue(_noop_ui)
+    try:
+        with pytest.raises(RuntimeError, match="already holds"):
+            await queue.enqueue(_noop_ui)
+    finally:
+        queue.release()
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+    first = await queue.acquire(_noop_ui)
+    second = None
+    try:
+        second = await asyncio.wait_for(
+            asyncio.ensure_future(queue.acquire(_noop_ui)), 1
+        )
+    finally:
+        await first.release()
+        if second is not None:
+            await second.release()

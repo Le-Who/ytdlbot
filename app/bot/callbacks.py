@@ -18,7 +18,9 @@ from telegram import (
 from telegram.error import BadRequest, NetworkError
 from telegram.ext import ContextTypes
 
+from app.bot.callback_work import exclusive_media_callback
 from app.bot.keyboards import build_format_keyboard
+from app.bot.menus import load_menu, save_menu
 from app.bot.retry import on_retry
 from app.constants import (
     AUDIO_FORMAT_ID,
@@ -167,8 +169,23 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     assert q is not None
     await q.answer()
 
-    data = context.user_data
-    assert data is not None
+    parts: tuple[str, ...] = ()
+    callback_data = getattr(q, "data", None)
+    if isinstance(callback_data, str):
+        try:
+            _, parts = decode_callback_payload(
+                callback_data, allowed_actions=("back",), max_parts=1
+            )
+        except CallbackDataError:
+            return
+    message = getattr(q, "message", None)
+    if parts and not isinstance(message, Message):
+        await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
+        return
+    data = await load_menu(parts[0], q) if parts else context.user_data
+    if data is None:
+        await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
+        return
     page_url = data.get("page_url")
     if not page_url:
         await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
@@ -205,10 +222,26 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         is_slideshow = cached.is_slideshow
         thumbnail_url = cached.thumbnail_url
 
+    all_formats = list(formats) + ([special_format] if special_format else [])
+    data.update(
+        title=title,
+        is_slideshow=is_slideshow,
+        info_json_path=cached.info_json_path if cached else result.info_json_path,
+        thumbnail_url=thumbnail_url,
+        format_map={item.format_id: item.height for item in all_formats},
+        size_map={item.format_id: item.filesize for item in all_formats},
+        youtube_fallback=cached.youtube_fallback if cached else result.youtube_fallback,
+    )
+    menu_token = None
     if is_slideshow:
         from app.bot.keyboards import build_slideshow_keyboard
 
-        reply_markup = build_slideshow_keyboard()
+        if parts:
+            assert isinstance(message, Message)
+            menu_token = await save_menu(
+                data, user_id=q.from_user.id, chat_id=message.chat_id
+            )
+        reply_markup = build_slideshow_keyboard(menu_token=menu_token)
         await q.edit_message_text(
             Texts.SLIDESHOW_DETECTED.format(title=html.escape(title)),
             reply_markup=reply_markup,
@@ -220,8 +253,17 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if special_format:
             fmt_index_map[str(len(indexed_formats))] = special_format.format_id
         data["fmt_index_map"] = fmt_index_map
+        if parts:
+            assert isinstance(message, Message)
+            menu_token = await save_menu(
+                data, user_id=q.from_user.id, chat_id=message.chat_id
+            )
 
-        reply_markup = build_format_keyboard(formats, special_format)
+        reply_markup = (
+            build_format_keyboard(formats, special_format, menu_token=menu_token)
+            if menu_token
+            else build_format_keyboard(formats, special_format)
+        )
         caption = f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}"
 
         if thumbnail_url:
@@ -266,20 +308,30 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         _, parts = decode_callback_payload(
-            q.data, allowed_actions=("pick",), max_parts=1
+            q.data, allowed_actions=("pick",), max_parts=2
         )
-        (pick_key,) = parts
+        pick_key = parts[-1]
     except (CallbackDataError, ValueError, AttributeError) as e:
         logger.error("Invalid callback data in on_pick", extra={"error": str(e)})
         return
 
-    data = context.user_data
-    assert data is not None
+    menu_token = parts[0] if len(parts) == 2 else None
+    data = await load_menu(menu_token, q) if menu_token else context.user_data
+    if data is None:
+        await _edit_or_reply(q, Texts.DATA_EXPIRED_RESEND)
+        return
     if not data.get("page_url"):
         await _edit_or_reply(q, Texts.DATA_EXPIRED_RESEND)
         return
 
     fmt_index_map = data.get("fmt_index_map", {})
+    if (
+        menu_token
+        and pick_key not in fmt_index_map
+        and not (data.get("is_slideshow") and pick_key == AUDIO_FORMAT_ID)
+    ):
+        await _edit_or_reply(q, Texts.DATA_EXPIRED_RESEND)
+        return
     format_id = fmt_index_map.get(pick_key, pick_key)
 
     token = uuid.uuid4().hex
@@ -295,6 +347,8 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             section=data.get("section"),
         ),
     )
+    if menu_token:
+        await state.link_cache.set(f"menu-link:{token}", menu_token)
 
     dl_link = f"{BASE_URL}/dl/{token}"
 
@@ -312,7 +366,10 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     kb.append(
         [
             InlineKeyboardButton(
-                Texts.BTN_BACK, callback_data=encode_callback_data("back")
+                Texts.BTN_BACK,
+                callback_data=encode_callback_data(
+                    "back", *([menu_token] if menu_token else [])
+                ),
             )
         ]
     )
@@ -367,6 +424,7 @@ async def on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.error("Invalid callback data in on_cancel", extra={"error": str(e)})
 
 
+@exclusive_media_callback
 async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     q = update.callback_query
     assert q is not None and q.from_user is not None and isinstance(q.message, Message)
@@ -404,12 +462,16 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     dl_link = f"{BASE_URL}/dl/{token}"
+    menu_token = await state.link_cache.get(f"menu-link:{token}")
     kb_error = InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(Texts.BTN_DOWNLOAD_LINK, url=dl_link)],
             [
                 InlineKeyboardButton(
-                    Texts.BTN_BACK, callback_data=encode_callback_data("back")
+                    Texts.BTN_BACK,
+                    callback_data=encode_callback_data(
+                        "back", *([menu_token] if menu_token else [])
+                    ),
                 )
             ],
         ]
@@ -418,8 +480,8 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if isinstance(payload, dict):
         payload = DownloadContext(**payload)
 
-    data = context.user_data
-    assert data is not None
+    data = await load_menu(menu_token, q) if menu_token else context.user_data
+    data = data or {}
     fmt_size = data.get("size_map", {}).get(payload.format_id)
 
     async def update_progress_ui(text: str, markup: object | None = None) -> None:
@@ -561,6 +623,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             safe_remove(owned_path)
 
 
+@exclusive_media_callback
 async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handles slideshow button presses (photos or video)."""
     q = update.callback_query
@@ -630,12 +693,13 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         page_url = payload.page_url
     else:
-        try:
-            (mode,) = parts
-        except ValueError:
+        if len(parts) not in {1, 2}:
             return
-        data = context.user_data
-        assert data is not None
+        mode = parts[-1]
+        data = await load_menu(parts[0], q) if len(parts) == 2 else context.user_data
+        if data is None:
+            await _edit_or_reply(q, Texts.DATA_EXPIRED_RESEND)
+            return
         process_token = data.get("parse_token")
         page_url = data.get("page_url")
         if not page_url:

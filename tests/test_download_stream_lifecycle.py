@@ -1,6 +1,7 @@
 """HTTP download failures must terminate their owned files and background work."""
 
 import asyncio
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -99,6 +100,88 @@ async def test_http_response_failure_releases_materialization(
         await response.body_iterator.aclose()
         for manager in managers:
             await manager.__aexit__(None, None, None)
+
+
+async def test_http_cancellation_joins_disk_read_before_closing_source_or_media_lease(
+    admitted_download, tmp_path: Path, monkeypatch
+):
+    _, request = admitted_download
+    path = tmp_path / "owned.mp4"
+    path.write_bytes(b"media")
+    read_started = threading.Event()
+    allow_read = threading.Event()
+    read_finished = threading.Event()
+    lease_exited = asyncio.Event()
+    real_open = Path.open
+    sources = []
+
+    class Source:
+        def __init__(self, handle):
+            self.handle = handle
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            self.handle.close()
+
+        def read(self, count):
+            read_started.set()
+            try:
+                assert allow_read.wait(2), "test did not release disk worker"
+                return self.handle.read(count)
+            finally:
+                read_finished.set()
+
+    def open_source(open_path, *args, **kwargs):
+        handle = real_open(open_path, *args, **kwargs)
+        if open_path == path:
+            source = Source(handle)
+            sources.append(source)
+            return source
+        return handle
+
+    @asynccontextmanager
+    async def materialize(media_request):
+        try:
+            yield SimpleNamespace(paths=(path,), size_bytes=5, renew_lease=lambda: None)
+        finally:
+            path.unlink()
+            lease_exited.set()
+
+    manager = materialize(None)
+    monkeypatch.setattr(Path, "open", open_source)
+    monkeypatch.setattr(
+        routes.state,
+        "media_pipeline",
+        SimpleNamespace(open_materialized=lambda request: manager),
+    )
+    response = await routes.download("token", request)
+    task = asyncio.create_task(
+        response(
+            {"type": "http", "asgi": {"spec_version": "2.4"}}, AsyncMock(), AsyncMock()
+        )
+    )
+    try:
+        assert await asyncio.to_thread(read_started.wait, 1)
+        for _ in range(2):
+            task.cancel()
+            await asyncio.wait((task,), timeout=0.02)
+            assert not sources[0].handle.closed, "disk worker lost its open source"
+            assert path.exists() and not lease_exited.is_set()
+            assert not task.done(), "HTTP cancellation detached the disk worker"
+        allow_read.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert read_finished.is_set()
+        assert sources[0].handle.closed
+        assert not path.exists() and lease_exited.is_set()
+    finally:
+        allow_read.set()
+        await asyncio.gather(task, return_exceptions=True)
+        await asyncio.to_thread(read_finished.wait, 1)
+        await response.body_iterator.aclose()
+        await manager.__aexit__(None, None, None)
 
 
 class _Process:

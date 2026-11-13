@@ -599,3 +599,132 @@ async def test_cancel_owner_wins_a_process_start_race(tmp_path: Path):
         await asyncio.wait_for(task, timeout=2)
     assert supervisor.processes_for("req-race") == ()
     assert not partial.exists()
+
+
+@pytest.mark.asyncio
+async def test_cancel_between_workload_grant_and_owner_registration_returns_slot(
+    monkeypatch,
+):
+    supervisor = ProcessSupervisor(max_processes=1)
+    granted = asyncio.Event()
+    acquire = supervisor._workload_slots.acquire
+
+    async def grant_before_registration():
+        result = await acquire()
+        await supervisor._lock.acquire()
+        granted.set()
+        return result
+
+    monkeypatch.setattr(
+        supervisor._workload_slots, "acquire", grant_before_registration
+    )
+    pending = asyncio.create_task(supervisor.run([sys.executable, "-c", "pass"]))
+    await granted.wait()
+    pending.cancel()
+    try:
+        with pytest.raises(asyncio.CancelledError):
+            await pending
+    finally:
+        supervisor._lock.release()
+        monkeypatch.setattr(supervisor._workload_slots, "acquire", acquire)
+
+    result = await asyncio.wait_for(
+        supervisor.run([sys.executable, "-c", "print('reusable')"]), timeout=5
+    )
+    assert result.stdout.strip() == b"reusable"
+
+
+@pytest.mark.asyncio
+async def test_concurrent_finish_waits_for_tree_cleanup_before_returning(monkeypatch):
+    supervisor = ProcessSupervisor(max_processes=1)
+    await supervisor._acquire_owner_slot("finishing")
+    await supervisor._process_slots.acquire()
+    handle = ProcessHandle(proc=Mock(), owner="finishing", process_group_id=1)
+    supervisor._by_owner[handle.owner] = {handle}
+    closing = asyncio.Event()
+    closed = asyncio.Event()
+
+    async def close_tree():
+        closing.set()
+        await closed.wait()
+
+    monkeypatch.setattr(handle, "close_tree", close_tree)
+    first = asyncio.create_task(supervisor._finish(handle))
+    await closing.wait()
+    second = asyncio.create_task(supervisor._finish(handle))
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    try:
+        assert not second.done(), "a second finish returned before process-tree cleanup"
+        first.cancel()
+        await asyncio.sleep(0)
+        assert not first.done(), "cancellation abandoned resource teardown"
+    finally:
+        closed.set()
+        await asyncio.gather(first, second, return_exceptions=True)
+
+    assert supervisor.processes_for("finishing") == ()
+    result = await asyncio.wait_for(
+        supervisor.run([sys.executable, "-c", "print('reusable')"]), timeout=5
+    )
+    assert result.stdout.strip() == b"reusable"
+
+
+@pytest.mark.asyncio
+async def test_cancellation_during_process_creation_joins_and_kills_late_child(
+    tmp_path,
+    monkeypatch,
+):
+    supervisor = ProcessSupervisor(max_processes=1)
+    spawning = asyncio.Event()
+    allow_spawn = asyncio.Event()
+    create_process = asyncio.create_subprocess_exec
+    spawned = []
+    partial = tmp_path / "late-child.part"
+    output = tmp_path / "output.mp4"
+    output_fragment = tmp_path / "output.f137.mp4.part"
+
+    async def delayed_spawn(*args, **kwargs):
+        spawning.set()
+        await allow_spawn.wait()
+        proc = await create_process(*args, **kwargs)
+        spawned.append(proc)
+        partial.write_bytes(b"partial")
+        output_fragment.write_bytes(b"fragment")
+        return proc
+
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", delayed_spawn)
+    task = asyncio.create_task(
+        supervisor.run(
+            [
+                sys.executable,
+                "-c",
+                "import time; time.sleep(60)",
+                "--output",
+                str(output),
+            ],
+            owner="late-child",
+            cleanup_paths=(partial,),
+        )
+    )
+    await spawning.wait()
+    task.cancel()
+    await asyncio.sleep(0)
+    task.cancel()
+    await asyncio.sleep(0)
+    try:
+        assert not task.done(), "cancelled launch abandoned an in-progress OS spawn"
+    finally:
+        allow_spawn.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+    assert len(spawned) == 1
+    assert spawned[0].returncode is not None
+    assert not partial.exists()
+    assert not output_fragment.exists()
+    assert supervisor.processes_for("late-child") == ()
+    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
+    result = await asyncio.wait_for(
+        supervisor.run([sys.executable, "-c", "print('reusable')"]), timeout=5
+    )
+    assert result.stdout.strip() == b"reusable"

@@ -18,6 +18,7 @@ from telegram.ext import ContextTypes
 from app.bot.commands import _MP4_FORMAT as _fmt_pref
 from app.bot.commands import _fast_download, cmd_mp3
 from app.bot.keyboards import build_format_keyboard, build_slideshow_keyboard
+from app.bot.menus import save_menu
 from app.core import state
 from app.core.config import ENABLE_COBALT_TIKTOK, MAX_TG_UPLOAD_MB
 from app.core.job_store import mark_current_job_failed
@@ -499,8 +500,7 @@ async def _complete_message_parse(
                     state.inflight_parsing.pop(text, None)
 
     # Store common data
-    data = context.user_data
-    assert data is not None
+    data: dict = {}
     data["page_url"] = text
     data["title"] = title
     data["is_slideshow"] = is_slideshow
@@ -508,6 +508,10 @@ async def _complete_message_parse(
     data["thumbnail_url"] = thumbnail_url
     data["section"] = section
     data["parse_token"] = parse_token
+    # Slideshow audio remains a valid explicit choice even without video formats.
+    data["format_map"] = {}
+    data["size_map"] = {}
+    data["fmt_index_map"] = {}
 
     if is_slideshow:
         # Save specific api state for the slideshow
@@ -544,7 +548,8 @@ async def _complete_message_parse(
                 ]
             )
         else:
-            reply_markup = build_slideshow_keyboard()
+            menu_token = await save_menu(data, user_id=user.id, chat_id=chat.id)
+            reply_markup = build_slideshow_keyboard(menu_token=menu_token)
 
         try:
             await status_msg.edit_text(
@@ -689,7 +694,10 @@ async def _complete_message_parse(
             }
         )
 
-        reply_markup = build_format_keyboard(formats, special_format)
+        menu_token = await save_menu(data, user_id=user.id, chat_id=chat.id)
+        reply_markup = build_format_keyboard(
+            formats, special_format, menu_token=menu_token
+        )
         caption = f"📹 <b>{html.escape(title)}</b>\n⏱ {duration}"
 
         if thumbnail_url:
@@ -719,6 +727,9 @@ async def _complete_message_parse(
                 reply_markup=reply_markup,
                 parse_mode="HTML",
             )
+
+    assert context.user_data is not None
+    context.user_data.update(data)
 
 
 # ── Instagram Handler ────────────────────────────────────────────────────────

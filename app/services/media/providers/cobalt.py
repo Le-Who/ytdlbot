@@ -13,6 +13,7 @@ from .http import (
     OriginPacer,
     OriginPacing,
     ProviderEndpoint,
+    combine_probe_failures,
     endpoint_headers,
     probe_candidate,
     request_json,
@@ -50,7 +51,7 @@ class CobaltProvider:
     ) -> list[MediaCandidate]:
         if request.x_video_number is not None:
             return []
-        last_error: ProviderError | None = None
+        failure: ProviderError | None = None
         attempted = False
         for endpoint in self.endpoints:
             if not endpoint.supports(request.platform):
@@ -59,9 +60,11 @@ class CobaltProvider:
             try:
                 return await self._resolve_endpoint(transport, endpoint, request)
             except ProviderError as error:
-                last_error = error
-        if last_error is not None:
-            raise last_error
+                failure = (
+                    error if failure is None else combine_probe_failures(failure, error)
+                )
+        if failure is not None:
+            raise failure
         if attempted:
             raise ProviderError(FailureKind.PERMANENT, "Cobalt returned no candidate")
         return []

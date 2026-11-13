@@ -189,6 +189,16 @@ Delivery receipts are durable per logical item:
 - `uncertain`: Telegram may have accepted the send, so automatic replay is
   forbidden to avoid duplicates.
 
+An in-progress reservation is stored as unfinalized `uncertain` and is already
+non-replayable. A second send or replacement worker cannot reserve it again;
+only a known `failed` item can reopen an existing reservation. This rule uses
+the existing receipt schema and does not require a database migration.
+
+Lifespan exit retains ownership of runtime cleanup even if its caller is
+cancelled repeatedly. Cancellation is restored after shutdown has settled,
+including Telegram, store, and Redis cleanup; a deferred live worker still
+retains its existing ownership guard.
+
 Retained webhook payloads are bounded and periodically purged. Temporary media is
 resumed only when its lease, integrity, and source validity still pass checks.
 

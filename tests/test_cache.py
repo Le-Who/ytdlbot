@@ -76,6 +76,36 @@ class TestFileTTLCache(unittest.TestCase):
         cache.pop("b")
         cache.clear()
 
+    def test_replacing_cached_file_releases_only_the_previous_file(self):
+        evicted = []
+        cache = FileTTLCache(maxsize=2, ttl=60, on_eviction=evicted.append)
+        cache["source"] = "old.mp4"
+        cache["source"] = "new.mp4"
+        self.assertEqual(evicted, ["old.mp4"])
+        self.assertEqual(cache["source"], "new.mp4")
+        cache["source"] = "new.mp4"
+        self.assertEqual(evicted, ["old.mp4"])
+
+    def test_deleting_a_shared_source_releases_it_after_last_cache_owner(self):
+        evicted = []
+        cache = FileTTLCache(maxsize=2, ttl=60, on_eviction=evicted.append)
+        cache["first"] = "shared.mp4"
+        cache["second"] = "shared.mp4"
+        del cache["first"]
+        self.assertEqual(evicted, [])
+        del cache["second"]
+        self.assertEqual(evicted, ["shared.mp4"])
+
+    def test_inserting_alias_at_capacity_transfers_file_ownership(self):
+        evicted = []
+        cache = FileTTLCache(maxsize=1, ttl=60, on_eviction=evicted.append)
+        cache["first"] = "shared.mp4"
+        cache["second"] = "shared.mp4"
+        self.assertEqual(evicted, [])
+        self.assertEqual(cache["second"], "shared.mp4")
+        cache.clear()
+        self.assertEqual(evicted, ["shared.mp4"])
+
 
 if __name__ == "__main__":
     unittest.main()

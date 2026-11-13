@@ -354,13 +354,16 @@ async def probe_candidate(
 
 
 def combine_probe_failures(first: ProviderError, other: ProviderError) -> ProviderError:
-    """Keep any retryable alternative and the longest valid server retry delay."""
-    representative = (
-        other
-        if first.kind is not FailureKind.TRANSIENT
-        and other.kind is FailureKind.TRANSIENT
-        else first
-    )
+    """Retain viable alternatives before disabling their shared provider."""
+
+    def priority(error: ProviderError) -> int:
+        if error.kind is FailureKind.TRANSIENT:
+            return 0
+        if error.kind in {FailureKind.AUTH, FailureKind.CONFIG}:
+            return 2
+        return 1
+
+    representative = min((first, other), key=priority)
     delay = max(
         (
             max(0.0, error.retry_after)
@@ -371,7 +374,12 @@ def combine_probe_failures(first: ProviderError, other: ProviderError) -> Provid
     )
     if representative.retry_after == delay:
         return representative
-    return ProviderError(representative.kind, str(representative), retry_after=delay)
+    return ProviderError(
+        representative.kind,
+        str(representative),
+        retry_after=delay,
+        affects_route_health=representative.affects_route_health,
+    )
 
 
 def ensure_not_expired(

@@ -5,8 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Generator
+from enum import Enum, auto
 from typing import Self
 
+from app.core.asyncio_utils import await_owned
 from app.core.texts import Texts
 
 logger = logging.getLogger("app.core.download_queue")
@@ -22,8 +24,15 @@ class QueueUnavailable(RuntimeError):
     """Raised when an ``acquire`` lease cannot be granted."""
 
 
+class _LeaseState(Enum):
+    NEW = auto()
+    ACQUIRING = auto()
+    ACQUIRED = auto()
+    RELEASED = auto()
+
+
 class _Waiter:
-    __slots__ = ("future", "position", "state", "update_ui")
+    __slots__ = ("changed", "future", "notifier", "position", "state", "update_ui")
 
     def __init__(
         self,
@@ -33,6 +42,8 @@ class _Waiter:
         self.update_ui = update_ui
         self.position = 0
         self.state = "waiting"
+        self.changed = asyncio.Event()
+        self.notifier: asyncio.Task[None] | None = None
 
 
 class DownloadLease:
@@ -51,23 +62,30 @@ class DownloadLease:
         self._queue = queue
         self._update_ui = update_ui
         self._kb_error = kb_error
-        self._acquired = False
-        self._released = False
+        self._state = _LeaseState.NEW
         self._release_task: asyncio.Task[None] | None = None
 
     def __await__(self) -> Generator[object, None, DownloadLease]:
         return self._enter().__await__()
 
     async def _enter(self) -> Self:
-        if self._released:
+        if self._state is _LeaseState.RELEASED:
             raise RuntimeError("download lease has already been released")
-        if not self._acquired:
-            acquired = await self._queue._acquire(
-                self._update_ui, kb_error=self._kb_error
-            )
+        if self._state is _LeaseState.ACQUIRING:
+            raise RuntimeError("download lease is already being acquired")
+        if self._state is _LeaseState.NEW:
+            self._state = _LeaseState.ACQUIRING
+            try:
+                acquired = await self._queue._acquire(
+                    self._update_ui, kb_error=self._kb_error
+                )
+            except BaseException:
+                self._state = _LeaseState.NEW
+                raise
             if not acquired:
+                self._state = _LeaseState.NEW
                 raise QueueUnavailable("download queue did not grant a slot")
-            self._acquired = True
+            self._state = _LeaseState.ACQUIRED
         return self
 
     async def __aenter__(self) -> Self:
@@ -78,10 +96,12 @@ class DownloadLease:
 
     async def release(self) -> None:
         """Return this lease once; repeated and concurrent calls are harmless."""
-        if not self._acquired:
+        if self._state is _LeaseState.ACQUIRING:
+            raise RuntimeError("download lease acquisition is still pending")
+        if self._state is _LeaseState.NEW:
             return
         if self._release_task is None:
-            self._released = True
+            self._state = _LeaseState.RELEASED
             self._release_task = asyncio.create_task(self._queue._release_slot())
         # Release belongs to the lease, not to any one caller. Cancellation of
         # a caller cannot abandon the slot while the queue lock is contended.
@@ -124,6 +144,8 @@ class DownloadQueue:
         task = asyncio.current_task()
         if task is None:
             raise RuntimeError("DownloadQueue.enqueue requires an asyncio task")
+        if task in self._legacy_leases:
+            raise RuntimeError("task already holds a download queue lease")
         lease = self.acquire(update_ui, kb_error=kb_error)
         try:
             await lease
@@ -150,7 +172,7 @@ class DownloadQueue:
         import app.core.state as _state
 
         if _state.disk_critical:
-            await update_ui(Texts.MAINTENANCE_MODE, kb_error)
+            await self._notify_ui(update_ui, Texts.MAINTENANCE_MODE, kb_error)
             return False
 
         async with self._lock:
@@ -159,29 +181,47 @@ class DownloadQueue:
             if not self._sem.locked():
                 await self._sem.acquire()
                 return True
-            if len(self._waiters) >= self._max_queue:
-                await update_ui(Texts.QUEUE_FULL, kb_error)
-                return False
-            waiter = _Waiter(update_ui)
-            self._waiters.append(waiter)
-            waiter.position = len(self._waiters)
+            full = len(self._waiters) >= self._max_queue
+            if not full:
+                waiter = _Waiter(update_ui)
+                self._waiters.append(waiter)
+                waiter.position = len(self._waiters)
 
+        if full:
+            await self._notify_ui(update_ui, Texts.QUEUE_FULL, kb_error)
+            return False
+
+        waiter.notifier = asyncio.create_task(self._notify_waiter(waiter))
         try:
-            await self._send_position(waiter)
-            await asyncio.wait_for(
-                asyncio.shield(waiter.future), timeout=float(self._timeout)
-            )
+            async with asyncio.timeout(float(self._timeout)):
+                await asyncio.shield(waiter.future)
+            await await_owned(self._settle_notifier(waiter))
             return True
         except TimeoutError:
-            await self._withdraw(waiter)
-            await update_ui(Texts.QUEUE_TIMEOUT, kb_error)
+            await await_owned(self._withdraw_and_settle(waiter))
+            await self._notify_ui(update_ui, Texts.QUEUE_TIMEOUT, kb_error)
             logger.warning("Queue waiter timed out after %ds", self._timeout)
             return False
         except BaseException:
             # If release granted the slot at the same instant cancellation won,
             # atomically forward that grant instead of losing capacity.
-            await asyncio.shield(self._withdraw(waiter))
+            await await_owned(self._withdraw_and_settle(waiter))
             raise
+
+    async def _withdraw_and_settle(self, waiter: _Waiter) -> None:
+        await self._withdraw(waiter)
+        await self._settle_notifier(waiter)
+
+    async def _settle_notifier(self, waiter: _Waiter) -> None:
+        if waiter.notifier is not None:
+            waiter.notifier.cancel()
+            await asyncio.gather(waiter.notifier, return_exceptions=True)
+
+    async def _notify_waiter(self, waiter: _Waiter) -> None:
+        while waiter.state == "waiting":
+            waiter.changed.clear()
+            await self._send_position(waiter)
+            await waiter.changed.wait()
 
     async def _withdraw(self, waiter: _Waiter) -> None:
         async with self._lock:
@@ -215,7 +255,7 @@ class DownloadQueue:
     def _reposition_locked(self) -> None:
         for index, waiter in enumerate(self._waiters, start=1):
             waiter.position = index
-            asyncio.get_running_loop().create_task(self._send_position(waiter))
+            waiter.changed.set()
 
     async def _send_position(self, waiter: _Waiter) -> None:
         text = Texts.QUEUE_POSITION.format(
@@ -223,8 +263,17 @@ class DownloadQueue:
             total=len(self._waiters),
             eta=_fmt_eta(waiter.position * self._avg_duration),
         )
+        await self._notify_ui(waiter.update_ui, text, None)
+
+    async def _notify_ui(
+        self,
+        update_ui: Callable[[str, object | None], Awaitable[None]],
+        text: str,
+        markup: object | None,
+    ) -> None:
         try:
-            await waiter.update_ui(text, None)
+            async with asyncio.timeout(min(5.0, float(self._timeout))):
+                await update_ui(text, markup)
         # Caller-supplied UI callbacks are optional; queue ownership must survive
         # any callback failure while cancellation continues to propagate.
         except Exception as exc:  # noqa: BLE001

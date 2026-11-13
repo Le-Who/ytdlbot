@@ -237,6 +237,36 @@ async def test_stale_owner_cannot_checkpoint_or_complete_after_lease_takeover(tm
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("takeover", [False, True])
+async def test_unresolved_send_reservation_cannot_be_reopened(tmp_path, takeover):
+    now = [100.0]
+    store = JobStore(tmp_path / "jobs.sqlite3", clock=lambda: now[0])
+    await store.accept_update(update_payload(303))
+    assert await store.claim_next("worker-a", lease_seconds=1) is not None
+    assert await store.begin_delivery_attempts("303", ("item",), owner_id="worker-a")
+    owner = "worker-a"
+    if takeover:
+        now[0] += 2
+        owner = "worker-b"
+        assert await store.claim_next(owner) is not None
+
+    assert not await store.begin_delivery_attempts("303", ("item",), owner_id=owner)
+    assert not await store.begin_delivery_attempts(
+        "303", ("new-item", "item"), owner_id=owner
+    )
+    assert await store.delivery_outcome("303", item_key="new-item") is None
+    assert (
+        await store.delivery_outcome("303", item_key="item")
+        is DeliveryOutcome.UNCERTAIN
+    )
+    assert (
+        await store.finalize_delivery_attempt(
+            "303", "item", DeliveryOutcome.SUCCESS, owner_id=owner
+        )
+    ) is (not takeover)
+
+
+@pytest.mark.asyncio
 async def test_checkpointed_job_is_recovered_after_worker_restart(tmp_path):
     path = tmp_path / "jobs.sqlite3"
     first = JobStore(path)

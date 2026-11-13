@@ -13,23 +13,32 @@ from app.services.media.pipeline import encode_callback_data
 
 
 def build_format_keyboard(
-    formats: list[Any], special_format: Any, special_index: int | None = None
+    formats: list[Any],
+    special_format: Any,
+    special_index: int | None = None,
+    *,
+    menu_token: str | None = None,
 ) -> InlineKeyboardMarkup:
     """Helper to build format selection buttons in 2 columns."""
     buttons = []
+
+    def pick(index: int) -> str:
+        parts = (menu_token, str(index)) if menu_token else (str(index),)
+        return encode_callback_data("pick", *parts)
+
     formats_slice = formats[:8]
     for i in range(0, len(formats_slice), 2):
         row = [
             InlineKeyboardButton(
                 format_label(formats_slice[i]),
-                callback_data=encode_callback_data("pick", str(i)),
+                callback_data=pick(i),
             )
         ]
         if i + 1 < len(formats_slice):
             row.append(
                 InlineKeyboardButton(
                     format_label(formats_slice[i + 1]),
-                    callback_data=encode_callback_data("pick", str(i + 1)),
+                    callback_data=pick(i + 1),
                 )
             )
         buttons.append(row)
@@ -40,14 +49,16 @@ def build_format_keyboard(
             [
                 InlineKeyboardButton(
                     format_label(special_format),
-                    callback_data=encode_callback_data("pick", str(idx)),
+                    callback_data=pick(idx),
                 )
             ]
         )
     return InlineKeyboardMarkup(buttons)
 
 
-def build_slideshow_keyboard(token: str | None = None) -> InlineKeyboardMarkup:
+def build_slideshow_keyboard(
+    token: str | None = None, *, menu_token: str | None = None
+) -> InlineKeyboardMarkup:
     """Build keyboard for TikTok slideshow (image carousel) posts."""
     if token is not None:
         return InlineKeyboardMarkup(
@@ -66,28 +77,29 @@ def build_slideshow_keyboard(token: str | None = None) -> InlineKeyboardMarkup:
                 ],
             ]
         )
+
+    def choice(action: str, value: str) -> str:
+        parts = (menu_token, value) if menu_token else (value,)
+        return encode_callback_data(action, *parts)
+
     return InlineKeyboardMarkup(
         [
             [
                 InlineKeyboardButton(
                     Texts.BTN_SLIDESHOW_PHOTOS,
-                    callback_data=encode_callback_data(
-                        "slideshow", SLIDESHOW_PHOTO_FORMAT_ID
-                    ),
+                    callback_data=choice("slideshow", SLIDESHOW_PHOTO_FORMAT_ID),
                 )
             ],
             [
                 InlineKeyboardButton(
                     Texts.BTN_SLIDESHOW_VIDEO,
-                    callback_data=encode_callback_data(
-                        "slideshow", SLIDESHOW_VIDEO_FORMAT_ID
-                    ),
+                    callback_data=choice("slideshow", SLIDESHOW_VIDEO_FORMAT_ID),
                 )
             ],
             [
                 InlineKeyboardButton(
                     "🎵 Audio",
-                    callback_data=encode_callback_data("pick", AUDIO_FORMAT_ID),
+                    callback_data=choice("pick", AUDIO_FORMAT_ID),
                 )
             ],
         ]

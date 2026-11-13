@@ -8,6 +8,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ChatAction
 from telegram.ext import ContextTypes
 
+from app.bot.callback_work import exclusive_media_callback
 from app.core import state
 from app.core.config import MAX_TG_UPLOAD_MB
 from app.core.job_store import mark_current_job_failed
@@ -498,6 +499,7 @@ async def handle_group_message(
     # File remains in state.file_cache (TTLCache) for GIF conversion reuse
 
 
+@exclusive_media_callback
 async def on_group_slideshow(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:

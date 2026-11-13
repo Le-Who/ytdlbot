@@ -57,6 +57,15 @@ class _Circuit:
     open_until: float | None = None
     probe_inflight: bool = False
     disabled: bool = False
+    generation: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class CircuitPermit:
+    """Bind a resolve outcome to the circuit state that admitted it."""
+
+    circuit: _Circuit
+    generation: int
 
 
 class CircuitBreaker:
@@ -77,33 +86,54 @@ class CircuitBreaker:
             and (state.open_until is None or self._clock() >= state.open_until)
         )
 
-    def try_acquire(self, provider: str, platform: str) -> bool:
+    def try_acquire(self, provider: str, platform: str) -> CircuitPermit | None:
         if not self.is_available(provider, platform):
-            return False
+            return None
         state = self._state(provider, platform)
         if state.open_until is not None:
+            state.generation += 1
             state.probe_inflight = True
-        return True
+        return CircuitPermit(state, state.generation)
 
-    def release(self, provider: str, platform: str) -> None:
+    def release(
+        self, provider: str, platform: str, *, permit: CircuitPermit | None = None
+    ) -> None:
         """Release a cancelled probe without declaring the route healthy."""
-        self._state(provider, platform).probe_inflight = False
-
-    def record_success(self, provider: str, platform: str) -> None:
         state = self._state(provider, platform)
+        if not self._owns(state, permit):
+            return
+        if state.probe_inflight:
+            state.probe_inflight = False
+            state.generation += 1
+
+    def record_success(
+        self, provider: str, platform: str, *, permit: CircuitPermit | None = None
+    ) -> None:
+        state = self._state(provider, platform)
+        if not self._owns(state, permit):
+            return
         if state.probe_inflight:
             state.open_until = None
             state.probe_inflight = False
             state.failures.clear()
+            state.generation += 1
 
     def record_failure(
-        self, provider: str, platform: str, error: ProviderError
+        self,
+        provider: str,
+        platform: str,
+        error: ProviderError,
+        *,
+        permit: CircuitPermit | None = None,
     ) -> None:
         state = self._state(provider, platform)
+        if not self._owns(state, permit):
+            return
         was_probe = state.probe_inflight
         state.probe_inflight = False
         if error.kind in (FailureKind.AUTH, FailureKind.CONFIG):
             state.disabled = True
+            state.generation += 1
         elif error.kind is FailureKind.TRANSIENT:
             now = self._clock()
             while state.failures and state.failures[0] < now - 60:
@@ -111,11 +141,22 @@ class CircuitBreaker:
             state.failures.append(now)
             if was_probe or len(state.failures) >= 3:
                 state.open_until = now + 300
+                state.generation += 1
+        elif was_probe:
+            state.generation += 1
+
+    @staticmethod
+    def _owns(state: _Circuit, permit: CircuitPermit | None) -> bool:
+        return permit is None or (
+            permit.circuit is state and permit.generation == state.generation
+        )
 
     def reset_configuration(self) -> None:
         """A registry revision permits routes disabled by auth/config to retry."""
         for state in self._circuits.values():
             state.disabled = False
+            state.probe_inflight = False
+            state.generation += 1
 
 
 @dataclass(frozen=True, slots=True)

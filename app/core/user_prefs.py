@@ -17,8 +17,10 @@ Usage:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
+from weakref import WeakValueDictionary
 
 from app.core import state
 
@@ -35,6 +37,15 @@ VALID_QUALITIES: dict[str, int | None] = {
 }
 
 _TTL_SECONDS = 90 * 86400  # 90 days
+_user_locks: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
+
+
+def _user_lock(user_id: int) -> asyncio.Lock:
+    lock = _user_locks.get(user_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _user_locks[user_id] = lock
+    return lock
 
 
 def _key(user_id: int) -> str:
@@ -48,7 +59,7 @@ async def get_prefs(user_id: int) -> dict[str, Any]:
     if raw is None:
         return {}
     if isinstance(raw, dict):
-        return raw
+        return dict(raw)
     # Unexpected type — return empty to be safe
     logger.warning("Unexpected prefs type for user %s: %s", user_id, type(raw))
     return {}
@@ -57,12 +68,14 @@ async def get_prefs(user_id: int) -> dict[str, Any]:
 async def set_prefs(user_id: int, **kwargs: Any) -> None:
     """Merge *kwargs* into the stored preference dict and persist."""
 
-    existing = await get_prefs(user_id)
-    existing.update(kwargs)
-    await state.prefs_cache.set(_key(user_id), existing, ttl=_TTL_SECONDS)
+    async with _user_lock(user_id):
+        existing = await get_prefs(user_id)
+        existing.update(kwargs)
+        await state.prefs_cache.set(_key(user_id), existing, ttl=_TTL_SECONDS)
 
 
 async def clear_prefs(user_id: int) -> None:
     """Delete all stored preferences for *user_id*."""
 
-    await state.prefs_cache.delete(_key(user_id))
+    async with _user_lock(user_id):
+        await state.prefs_cache.delete(_key(user_id))

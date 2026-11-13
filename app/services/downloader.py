@@ -20,6 +20,7 @@ from collections.abc import Awaitable, Callable
 
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from app.core import state
+from app.core.asyncio_utils import await_owned
 from app.core.config import (
     DL_TIMEOUT_TELEGRAM,
     MAX_TG_UPLOAD_MB,
@@ -131,6 +132,7 @@ class VideoDownloader:
         )
 
         _dl_start = time.time()
+        progress_tasks: set[asyncio.Task[None]] = set()
         try:
             _metrics().downloads_total.inc(platform="telegram")
             _metrics().active_downloads.inc()
@@ -156,7 +158,9 @@ class VideoDownloader:
 
             def on_stderr(line: bytes) -> None:
                 if progress_callback:
-                    asyncio.create_task(_handle_progress(line))
+                    task = asyncio.create_task(_handle_progress(line))
+                    progress_tasks.add(task)
+                    task.add_done_callback(progress_tasks.discard)
 
             async with run_subprocess(
                 cmd,
@@ -299,7 +303,14 @@ class VideoDownloader:
             return None, "⚠️ Внутренняя ошибка при загрузке."
 
         finally:
-            _metrics().active_downloads.dec()
+            try:
+                for task in progress_tasks:
+                    task.cancel()
+                await await_owned(
+                    asyncio.gather(*progress_tasks, return_exceptions=True)
+                )
+            finally:
+                _metrics().active_downloads.dec()
 
 
 class MediaSender:

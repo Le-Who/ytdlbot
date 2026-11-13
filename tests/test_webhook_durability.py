@@ -621,6 +621,66 @@ def video_asset(path: Path, *, media_id: str = "video-1") -> DeliveryAsset:
 
 
 @pytest.mark.asyncio
+async def test_concurrent_delivery_checks_cannot_reserve_and_send_the_same_item_twice(
+    tmp_path,
+):
+    checks = 0
+    both_checked = asyncio.Event()
+    finish_send = asyncio.Event()
+    entered_send = asyncio.Event()
+
+    class GatedStore(JobStore):
+        async def delivery_outcome(self, *args, **kwargs):
+            nonlocal checks
+            outcome = await super().delivery_outcome(*args, **kwargs)
+            checks += 1
+            if checks == 2:
+                both_checked.set()
+            await both_checked.wait()
+            return outcome
+
+    class GatedBot(RecordingBot):
+        async def send_video(self, **kwargs):
+            self.calls += 1
+            entered_send.set()
+            await finish_send.wait()
+            video = SimpleNamespace(file_id="file-1", file_unique_id="unique-1")
+            return SimpleNamespace(message_id=91, video=video)
+
+    store = GatedStore(tmp_path / "jobs.sqlite3")
+    await store.accept_update({"update_id": 899})
+    assert await store.claim_next("owner") is not None
+    path = tmp_path / "video.mp4"
+    path.write_bytes(b"video")
+    bot = GatedBot()
+    delivery = TelegramDelivery(bot, media_dir=tmp_path, local_mode=True)
+    with delivery_job_context(store, "899", owner_id="owner"):
+        attempts = [
+            asyncio.create_task(
+                delivery.deliver(video_asset(path), DeliveryTarget("42"))
+            )
+            for _ in range(2)
+        ]
+        try:
+            await asyncio.wait_for(entered_send.wait(), 1)
+            # Both preflight reads completed before either reservation; let the
+            # second reservation settle while the first send is still in flight.
+            async with asyncio.timeout(1):
+                while not any(task.done() for task in attempts) and bot.calls < 2:
+                    await asyncio.sleep(0)
+        finally:
+            finish_send.set()
+            results = await asyncio.gather(*attempts, return_exceptions=True)
+
+    assert bot.calls == 1
+    assert sum(isinstance(result, RuntimeError) for result in results) == 1
+    assert (
+        await store.delivery_outcome("899", item_key="42:0:video-1")
+        is DeliveryOutcome.SUCCESS
+    )
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("error", "expected_status", "expected_outcome"),
     [

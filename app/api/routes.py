@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from app.constants import AUDIO_FORMAT_ID, CHUNK_SIZE, GIF_FORMAT_ID
 from app.core import config, state
+from app.core.asyncio_utils import await_owned
 from app.core.config import DL_TIMEOUT_HTTP, MAX_DL_MB, TELEGRAM_SECRET_TOKEN
 from app.core.job_store import JobStore
 from app.core.logging import set_correlation_id
@@ -315,7 +316,9 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
                 with media_path.open("rb") as source:
                     while True:
                         _raise_lease_renewal_failure(renewal)
-                        chunk = await asyncio.to_thread(source.read, CHUNK_SIZE)
+                        chunk = await await_owned(
+                            asyncio.to_thread(source.read, CHUNK_SIZE)
+                        )
                         _raise_lease_renewal_failure(renewal)
                         if not chunk:
                             break

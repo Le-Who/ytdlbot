@@ -10,6 +10,7 @@ from telegram.constants import ChatAction
 
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from app.core import config, state
+from app.core.asyncio_utils import await_owned
 from app.core.config import MAX_TG_UPLOAD_MB
 from app.core.job_store import mark_current_job_failed
 from app.core.models import DownloadContext
@@ -576,6 +577,7 @@ class DownloadOrchestrator:
                             file_size / 1e6,
                         )
                         parts = await split_video_stream_copy(file_path)
+                        _cleanup_extras.extend(parts or ())
 
                         if parts and len(parts) > 1:
                             # ── Send split parts as sequential messages ────────
@@ -615,7 +617,6 @@ class DownloadOrchestrator:
                                         f"part:{idx}"
                                     ),
                                 )
-                                _cleanup_extras.append(part_path)
                                 if not ok:
                                     all_ok = False
                                     logger.warning(
@@ -691,5 +692,8 @@ class DownloadOrchestrator:
             _queue.release()
 
             # Cleanup thumbnail and any split segments created during this pipeline
-            for extra in _cleanup_extras:
-                await asyncio.to_thread(safe_remove, extra)
+            async def cleanup_extras() -> None:
+                for extra in _cleanup_extras:
+                    await asyncio.to_thread(safe_remove, extra)
+
+            await await_owned(cleanup_extras())

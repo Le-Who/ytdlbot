@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.core import state
+from app.core.asyncio_utils import await_owned
 
 logger = logging.getLogger("app.core.process")
 
@@ -238,11 +239,16 @@ class ProcessHandle:
     finished: bool = False
     _tree_closed: bool = False
     _teardown_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _cancel_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    _finish_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
     async def cancel(self) -> None:
+        if self._cancel_task is None:
+            self._cancel_task = asyncio.create_task(self._cancel())
+        await await_owned(self._cancel_task)
+
+    async def _cancel(self) -> None:
         async with self._teardown_lock:
-            if self.cancel_requested:
-                return
             self.cancel_requested = True
             await self._terminate_group()
             if sys.platform != "win32":
@@ -439,6 +445,8 @@ class ProcessSupervisor:
         stderr_pipe: bool,
         owner_generation: int | None = None,
     ) -> ProcessHandle:
+        owned_paths = tuple(Path(path) for path in cleanup_paths)
+        owned_stems = self._owned_output_paths(command)
         owner_key = self._owner(owner)
         generation = (
             self._owner_generation.get(owner_key, 0)
@@ -469,21 +477,27 @@ class ProcessSupervisor:
                 )
             else:
                 kwargs["start_new_session"] = True
-            proc = await asyncio.create_subprocess_exec(
-                *command,
-                stdin=stdin,
-                stdout=(
-                    asyncio.subprocess.PIPE
-                    if stdout_pipe
-                    else asyncio.subprocess.DEVNULL
-                ),
-                stderr=(
-                    asyncio.subprocess.PIPE
-                    if stderr_pipe
-                    else asyncio.subprocess.DEVNULL
-                ),
-                **kwargs,  # type: ignore[arg-type]
-            )
+
+            async def launch_process() -> None:
+                nonlocal proc
+                proc = await asyncio.create_subprocess_exec(
+                    *command,
+                    stdin=stdin,
+                    stdout=(
+                        asyncio.subprocess.PIPE
+                        if stdout_pipe
+                        else asyncio.subprocess.DEVNULL
+                    ),
+                    stderr=(
+                        asyncio.subprocess.PIPE
+                        if stderr_pipe
+                        else asyncio.subprocess.DEVNULL
+                    ),
+                    **kwargs,  # type: ignore[arg-type]
+                )
+
+            await await_owned(launch_process())
+            assert proc is not None
             if windows_job is not None:
                 _assign_windows_job_and_resume(windows_job, proc)
                 windows_job_ready = True
@@ -491,8 +505,8 @@ class ProcessSupervisor:
                 proc=proc,
                 owner=owner_key,
                 process_group_id=proc.pid,
-                cleanup_paths=tuple(Path(path) for path in cleanup_paths),
-                cleanup_stems=self._owned_output_paths(command),
+                cleanup_paths=owned_paths,
+                cleanup_stems=owned_stems,
                 windows_job=windows_job if windows_job_ready else None,
             )
             async with state.active_processes_lock:
@@ -508,27 +522,53 @@ class ProcessSupervisor:
                 )
             return handle
         except BaseException:
-            if handle is not None:
-                await asyncio.shield(handle.cancel())
-                await asyncio.shield(self._finish(handle))
-            else:
-                if proc is not None:
-                    temporary = ProcessHandle(
-                        proc=proc,
-                        owner=owner_key,
-                        process_group_id=proc.pid,
-                        windows_job=windows_job if windows_job_ready else None,
-                    )
-                    await asyncio.shield(temporary.cancel())
-                    await asyncio.shield(temporary.close_tree())
-                    if windows_job_ready:
-                        windows_job = None
-                if windows_job is not None:
-                    _close_windows_job(windows_job)
-                if process_slot_acquired:
-                    self._process_slots.release()
-                await asyncio.shield(self._release_owner_slot(owner_key))
+            await await_owned(
+                self._cleanup_start(
+                    owner_key,
+                    handle,
+                    proc,
+                    windows_job,
+                    windows_job_ready,
+                    process_slot_acquired,
+                    owned_paths,
+                    owned_stems,
+                )
+            )
             raise
+
+    async def _cleanup_start(
+        self,
+        owner: Hashable,
+        handle: ProcessHandle | None,
+        proc: asyncio.subprocess.Process | None,
+        windows_job: int | None,
+        windows_job_ready: bool,
+        process_slot_acquired: bool,
+        cleanup_paths: tuple[Path, ...],
+        cleanup_stems: tuple[Path, ...],
+    ) -> None:
+        if handle is not None:
+            await handle.cancel()
+            await self._finish(handle)
+        else:
+            if proc is not None:
+                temporary = ProcessHandle(
+                    proc=proc,
+                    owner=owner,
+                    process_group_id=proc.pid,
+                    cleanup_paths=cleanup_paths,
+                    cleanup_stems=cleanup_stems,
+                    windows_job=windows_job if windows_job_ready else None,
+                )
+                await temporary.cancel()
+                await temporary.close_tree()
+                if windows_job_ready:
+                    windows_job = None
+            if windows_job is not None:
+                _close_windows_job(windows_job)
+            if process_slot_acquired:
+                self._process_slots.release()
+            await self._release_owner_slot(owner)
 
     async def _acquire_owner_slot(self, owner: Hashable) -> None:
         """Acquire one bounded work lease, shared by nested owner processes."""
@@ -538,12 +578,16 @@ class ProcessSupervisor:
                 return
 
         await self._workload_slots.acquire()
-        async with self._lock:
-            if owner in self._owner_slot_refs:
-                self._owner_slot_refs[owner] += 1
-                self._workload_slots.release()
-            else:
-                self._owner_slot_refs[owner] = 1
+        try:
+            async with self._lock:
+                if owner in self._owner_slot_refs:
+                    self._owner_slot_refs[owner] += 1
+                    self._workload_slots.release()
+                else:
+                    self._owner_slot_refs[owner] = 1
+        except BaseException:
+            self._workload_slots.release()
+            raise
 
     async def _release_owner_slot(self, owner: Hashable) -> None:
         release_slot = False
@@ -558,22 +602,23 @@ class ProcessSupervisor:
             self._workload_slots.release()
 
     async def _finish(self, handle: ProcessHandle) -> None:
-        first_finish = False
+        if handle._finish_task is None:
+            handle._finish_task = asyncio.create_task(self._finish_handle(handle))
+        await await_owned(handle._finish_task)
+
+    async def _finish_handle(self, handle: ProcessHandle) -> None:
+        await handle.close_tree()
         async with self._lock:
-            if not handle.finished:
-                first_finish = True
-                handle.finished = True
-                owned = self._by_owner.get(handle.owner)
-                if owned is not None:
-                    owned.discard(handle)
-                    if not owned:
-                        self._by_owner.pop(handle.owner, None)
+            owned = self._by_owner.get(handle.owner)
+            if owned is not None:
+                owned.discard(handle)
+                if not owned:
+                    self._by_owner.pop(handle.owner, None)
         async with state.active_processes_lock:
             state.active_processes.discard(handle.proc)
-        if first_finish:
-            await asyncio.shield(handle.close_tree())
-            self._process_slots.release()
-            await self._release_owner_slot(handle.owner)
+        self._process_slots.release()
+        await self._release_owner_slot(handle.owner)
+        handle.finished = True
 
     def run(
         self,
@@ -632,10 +677,10 @@ class ProcessSupervisor:
                 handle.proc.returncode or 0, stdout or b"", stderr or b""
             )
         except BaseException:
-            await asyncio.shield(handle.cancel())
+            await handle.cancel()
             raise
         finally:
-            await asyncio.shield(self._finish(handle))
+            await self._finish(handle)
 
     @asynccontextmanager
     async def open(
@@ -683,14 +728,21 @@ class ProcessSupervisor:
                 async with asyncio.timeout(timeout):
                     yield handle
         finally:
+            await await_owned(self._close_stream(handle))
+
+    async def _close_stream(self, handle: ProcessHandle) -> None:
+        try:
             if handle.proc.returncode is None:
-                await asyncio.shield(handle.cancel())
+                await handle.cancel()
             if handle.stderr_task is not None:
                 try:
                     await asyncio.wait_for(asyncio.shield(handle.stderr_task), 0.2)
                 except TimeoutError:
                     handle.stderr_task.cancel()
-            await asyncio.shield(self._finish(handle))
+                finally:
+                    await asyncio.gather(handle.stderr_task, return_exceptions=True)
+        finally:
+            await self._finish(handle)
 
     async def cancel_owner(self, owner: Hashable) -> None:
         current_task = asyncio.current_task()

@@ -43,6 +43,50 @@ from app.services.pinterest import PinterestProvider
 FIXTURES = Path(__file__).parents[2] / "fixtures" / "providers"
 
 
+@pytest.mark.parametrize("statuses", [(429, 403), (403, 429), (503, 404)])
+async def test_cobalt_retryable_origin_survives_other_origin_failure(statuses):
+    provider = CobaltProvider(
+        [
+            ProviderEndpoint(origin, "key", frozenset({"tiktok"}), True)
+            for origin in ("https://first.example", "https://second.example")
+        ],
+        transport=RecordingTransport(
+            *(
+                response(status=status, headers={"Retry-After": "7"})
+                for status in statuses
+            )
+        ),
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        await provider.resolve(
+            request("tiktok", "https://www.tiktok.com/@u/video/1", "1")
+        )
+
+    assert raised.value.kind is FailureKind.TRANSIENT
+    assert raised.value.retry_after == 7
+
+
+@pytest.mark.parametrize("statuses", [(403, 404), (404, 403)])
+async def test_cobalt_item_failure_does_not_disable_other_authenticated_origin(
+    statuses,
+):
+    provider = CobaltProvider(
+        [
+            ProviderEndpoint(origin, "key", frozenset({"tiktok"}), True)
+            for origin in ("https://first.example", "https://second.example")
+        ],
+        transport=RecordingTransport(*(response(status=status) for status in statuses)),
+    )
+
+    with pytest.raises(ProviderError) as raised:
+        await provider.resolve(
+            request("tiktok", "https://www.tiktok.com/@u/video/1", "1")
+        )
+
+    assert raised.value.kind is FailureKind.PERMANENT
+
+
 @pytest.mark.parametrize("value", ["nan", "inf", "-inf", "1e999"])
 def test_retry_after_rejects_nonfinite_delay(value):
     assert parse_retry_after({"Retry-After": value}) is None

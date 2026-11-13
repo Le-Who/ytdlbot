@@ -22,6 +22,7 @@ from app.api.routes import configure_job_store
 from app.api.routes import router as api_router
 from app.bot import callbacks, commands, messages
 from app.core import config, state
+from app.core.asyncio_utils import await_owned
 from app.core.drain import DrainController, DurableUpdateWorker
 from app.core.job_store import JobStore, mark_current_job_failed
 from app.core.logging import set_correlation_id, setup_logging
@@ -348,7 +349,7 @@ async def _lifespan_runtime(
     )
 
     bot_app.add_handler(
-        CallbackQueryHandler(callbacks.on_back, pattern=r"^(?:m2\|)?back$")
+        CallbackQueryHandler(callbacks.on_back, pattern=r"^(?:m2\|)?back(?:\||$)")
     )
     bot_app.add_handler(
         CallbackQueryHandler(callbacks.on_pick, pattern=r"^(?:m2\|)?pick\|")
@@ -480,18 +481,22 @@ async def _lifespan_runtime(
         yield
     finally:
         logger.info("Shutting down...")
-        await shutdown_runtime(
-            drain_controller=drain_controller,
-            durable_worker=durable_worker,
-            stop_event=stop_event,
-            background_tasks=background_tasks,
-            bot_app=bot_app,
-            webhook_enabled=bool(config.WEBHOOK_URL),
-            job_store=job_store,
-            redis_client=state.redis_client,
-            drain_timeout_seconds=drain_timeout_seconds,
-        )
-        owner.shutdown_returned = True
+
+        async def close_owned_runtime() -> None:
+            await shutdown_runtime(
+                drain_controller=drain_controller,
+                durable_worker=durable_worker,
+                stop_event=stop_event,
+                background_tasks=background_tasks,
+                bot_app=bot_app,
+                webhook_enabled=bool(config.WEBHOOK_URL),
+                job_store=job_store,
+                redis_client=state.redis_client,
+                drain_timeout_seconds=drain_timeout_seconds,
+            )
+            owner.shutdown_returned = True
+
+        await await_owned(close_owned_runtime())
 
 
 api = FastAPI(lifespan=lifespan)

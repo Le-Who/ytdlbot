@@ -844,16 +844,15 @@ class JobStore:
             for item_key in item_keys:
                 existing = connection.execute(
                     """
-                    SELECT outcome, finalized FROM deliveries
+                    SELECT outcome FROM deliveries
                     WHERE job_id = ? AND item_key = ?
                     """,
                     (job_id, item_key),
                 ).fetchone()
-                if (
-                    existing is not None
-                    and int(existing["finalized"]) == 1
-                    and existing["outcome"] in {"success", "uncertain"}
-                ):
+                if existing is not None and existing["outcome"] in {
+                    "success",
+                    "uncertain",
+                }:
                     return False
             for item_key in item_keys:
                 cursor = connection.execute(
@@ -867,7 +866,6 @@ class JobStore:
                         updated_at = excluded.updated_at,
                         finalized = 0, owner_id = excluded.owner_id
                     WHERE deliveries.outcome = 'failed'
-                       OR deliveries.finalized = 0
                     """,
                     (job_id, item_key, now, owner_id),
                 )

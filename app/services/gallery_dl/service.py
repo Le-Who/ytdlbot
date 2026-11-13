@@ -5,12 +5,15 @@ gallery-dl is used via subprocess since it has no stable Python API.
 Supports both slideshow (image) and video downloads.
 """
 
+import asyncio
 import json
 import logging
 import os
+import shutil
 import uuid
 from dataclasses import dataclass, field
 
+from app.core.asyncio_utils import await_owned
 from app.core.config import TEMP_DIR
 from app.core.process import process_supervisor
 
@@ -66,6 +69,7 @@ class GalleryDlService:
 
         cmd.extend(["--", url])
 
+        transferred = False
         try:
             result = await process_supervisor.run(
                 cmd,
@@ -81,6 +85,10 @@ class GalleryDlService:
                     return None, "⚠️ Требуется авторизация (Sign-in required)."
                 return None, "⚠️ Ошибка загрузки слайдшоу."
 
+            slideshow, error = GalleryDlService._collect_files(output_dir)
+            transferred = slideshow is not None
+            return slideshow, error
+
         except FileNotFoundError:
             logger.error("[GALLERY-DL] gallery-dl not found in PATH")
             return None, "⚠️ gallery-dl не установлен."
@@ -91,8 +99,9 @@ class GalleryDlService:
             logger.exception("gallery-dl unexpected error", extra={"error": str(e)})
             return None, "⚠️ Внутренняя ошибка при загрузке."
 
-        # Collect downloaded files
-        return GalleryDlService._collect_files(output_dir)
+        finally:
+            if not transferred:
+                await await_owned(asyncio.to_thread(shutil.rmtree, output_dir, True))
 
     @staticmethod
     async def download_video(
@@ -129,6 +138,7 @@ class GalleryDlService:
 
         logger.info("Attempting TikTok video download", extra={"url": url})
 
+        transferred = False
         try:
             result = await process_supervisor.run(
                 cmd,
@@ -140,6 +150,24 @@ class GalleryDlService:
                 stderr = result.stderr.decode("utf-8", errors="ignore").strip()
                 logger.error("Video download failed", extra={"stderr": stderr})
                 return None, f"gallery-dl error: {stderr[:200]}"
+
+            video_extensions = {".mp4", ".webm", ".mkv", ".mov"}
+            for root, _dirs, files in os.walk(output_dir):
+                for fname in files:
+                    ext = os.path.splitext(fname)[1].lower()
+                    if ext in video_extensions:
+                        video_path = os.path.join(root, fname)
+                        size_mb = os.path.getsize(video_path) / (1024 * 1024)
+                        logger.info(
+                            "[GALLERY-DL] Video downloaded: %s (%.1f MB)",
+                            video_path,
+                            size_mb,
+                        )
+                        transferred = True
+                        return video_path, None
+
+            logger.warning("No video file found", extra={"dir": output_dir})
+            return None, "No video file found"
 
         except FileNotFoundError:
             logger.error("[GALLERY-DL] gallery-dl not found in PATH")
@@ -154,24 +182,9 @@ class GalleryDlService:
             )
             return None, str(e)
 
-        # Find the video file
-        video_extensions = {".mp4", ".webm", ".mkv", ".mov"}
-        for root, _dirs, files in os.walk(output_dir):
-            for fname in files:
-                ext = os.path.splitext(fname)[1].lower()
-                if ext in video_extensions:
-                    video_path = os.path.join(root, fname)
-                    size_mb = os.path.getsize(video_path) / (1024 * 1024)
-                    logger.info(
-                        "[GALLERY-DL] Video downloaded: %s (%.1f MB)",
-                        video_path,
-                        size_mb,
-                    )
-                    return video_path, None
-
-        # No video found — might be a slideshow or failed extraction
-        logger.warning("No video file found", extra={"dir": output_dir})
-        return None, "No video file found"
+        finally:
+            if not transferred:
+                await await_owned(asyncio.to_thread(shutil.rmtree, output_dir, True))
 
     @staticmethod
     def _collect_files(

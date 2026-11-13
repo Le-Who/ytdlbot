@@ -64,6 +64,37 @@ Additional lifecycle regressions live in
   selected media is sent. Partial success/uncertainty prevents replay within
   the same durable job.
 
+The [November 13 state-machine audit](testing/2026-11-13-state-machines.md)
+records the lifecycle inventory, reproduced transition failures, and regression
+commands. Its additional offline contracts are:
+
+- An unresolved delivery reservation is already uncertain, including before its
+  final receipt is written. Concurrent sends and a replacement worker cannot
+  reopen it. Known failed attempts remain eligible for retry.
+- New picker, back, and slideshow controls resolve an expiring request snapshot
+  bound to the originating user and chat. Opening a later request cannot change
+  an earlier menu. Existing callback shapes remain readable during their TTL.
+  Overlapping presses of one media request share one active operation; later
+  deliberate reuse remains allowed. Preference updates and reset serialize per
+  user within the supported single-process profile.
+- Circuit outcomes carry the generation that admitted their attempt. A late
+  success, failure, or cancellation cannot mutate a newer half-open probe.
+  Cobalt origin failures retain retryable alternatives and their longest valid
+  server delay rather than disabling the provider from the final origin alone.
+- Lifespan shutdown, process spawning/teardown, heartbeat cleanup, and disk reads
+  retain their owners through repeated cancellation. Process slots and media
+  files are released after owned work settles.
+- Each queued waiter owns one position notifier. Grant or withdrawal cancels and
+  joins it before returning, so queue captions cannot overwrite download
+  progress. Optional UI calls are bounded by the smaller of five seconds and
+  the queue timeout, and execute outside the queue lock.
+  A lease rejects concurrent acquisition, and legacy enqueue cannot replace a
+  task's existing slot owner.
+- File-cache replacement, deletion, expiry, and eviction clean up a source only
+  after its last cache entry disappears. Alias insertion transfers ownership
+  before eviction callbacks run. Legacy progress tasks, split parts, and
+  unpublished gallery-dl directories also retain an explicit cleanup owner.
+
 The legacy-cleanup regressions in `tests/test_callback_resource_regressions.py`,
 `tests/test_gif_local_source_binding.py`, `tests/test_gif_callback_chain.py`,
 `tests/test_direct_highlight_chain.py`,

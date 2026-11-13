@@ -147,9 +147,10 @@ async def race_candidates(
         """Run one admitted resolve and return a bounded retry delay, if useful."""
         provider = route.provider.name
         if not finished.done() and clock() < deadline:
-            if not route.is_available(request) or not route.breaker.try_acquire(
-                provider, request.platform
-            ):
+            if not route.is_available(request):
+                return None
+            permit = route.breaker.try_acquire(provider, request.platform)
+            if permit is None:
                 return None
             if attempt_number:
                 metrics.retries.inc(
@@ -171,7 +172,9 @@ async def race_candidates(
                     sleep,
                 )
             except ProviderError as error:
-                route.breaker.record_failure(provider, request.platform, error)
+                route.breaker.record_failure(
+                    provider, request.platform, error, permit=permit
+                )
                 failures.append(
                     ProviderFailure(provider, error.kind, str(error), error.retry_after)
                 )
@@ -195,10 +198,10 @@ async def race_candidates(
                         )
                 return None
             except asyncio.CancelledError:
-                route.breaker.release(provider, request.platform)
+                route.breaker.release(provider, request.platform, permit=permit)
                 raise
             else:
-                route.breaker.record_success(provider, request.platform)
+                route.breaker.record_success(provider, request.platform, permit=permit)
                 usable: list[MediaCandidate] = []
                 for candidate in candidates:
                     validation = validate(request, candidate)

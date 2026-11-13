@@ -602,15 +602,15 @@ class MediaPipeline:
             if delivery_task in done:
                 return delivery_task.result()
             renewal_error = renewal_task.exception()
-            delivery_task.cancel()
-            await asyncio.gather(delivery_task, return_exceptions=True)
             raise MediaDeliveryUncertainError(
                 "media lease renewal failed; Telegram outcome is uncertain"
             ) from renewal_error
         finally:
             renewal_task.cancel()
             delivery_task.cancel()
-            await asyncio.gather(renewal_task, delivery_task, return_exceptions=True)
+            await _await_preserving_cancellation(
+                asyncio.gather(renewal_task, delivery_task, return_exceptions=True)
+            )
 
     @asynccontextmanager
     async def open_materialized(
@@ -1992,8 +1992,8 @@ def _generic_media_id(
 def _validate_callback_parts(values: Sequence[str]) -> None:
     if not values or (values[0] != "back" and len(values) < 2):
         raise CallbackDataError("callback data is incomplete")
-    # Back restores picker state from the conversation; it carries no token.
-    if values[0] == "back" and len(values) != 1:
+    # New back buttons identify a menu; legacy buttons use conversation state.
+    if values[0] == "back" and len(values) not in {1, 2}:
         raise CallbackDataError("callback action or shape is invalid")
     if any(not value or not _CALLBACK_PART.fullmatch(value) for value in values):
         raise CallbackDataError("callback data contains invalid characters")

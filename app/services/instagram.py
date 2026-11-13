@@ -342,7 +342,10 @@ class InstagramService:
                 continue
 
             # Atomic global limit check via RedisTokenBucketLimiter
-            if await state.limiter.allow_ig_fallback(idx):
+            if (
+                await state.limiter.allow_ig_fallback(idx)
+                and idx not in cls._dead_sessions
+            ):
                 return idx, cls._ig_cookie_pool[idx]
 
         return -2, None

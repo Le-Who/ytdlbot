@@ -1563,13 +1563,17 @@ def test_callback_decoder_accepts_payload_free_back_control(payload):
     assert decode_callback_data(payload, expected_action="back", max_parts=0) == ()
 
 
-def test_callback_encoder_rejects_unexpected_back_payload():
-    with pytest.raises(CallbackDataError):
-        encode_callback_data("back", "token")
+def test_callback_encoder_accepts_menu_bound_back_control():
+    assert encode_callback_data("back", "token") == "m2|back|token"
 
 
 @pytest.mark.parametrize("payload", ["back|token", "m2|back|token"])
-def test_callback_decoder_rejects_unexpected_back_payload(payload):
+def test_callback_decoder_accepts_menu_bound_back_control(payload):
+    assert decode_callback_data(payload, expected_action="back") == ("token",)
+
+
+@pytest.mark.parametrize("payload", ["back|token|extra", "m2|back|token|extra"])
+def test_callback_decoder_rejects_extra_back_payload(payload):
     with pytest.raises(CallbackDataError):
         decode_callback_data(payload, expected_action="back")
 

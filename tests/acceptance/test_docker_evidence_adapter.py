@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import importlib.util
 import io
 import json
@@ -333,6 +334,143 @@ def test_candidate_preflight_proves_container_readiness_without_sending(
     assert [call[0] for call in runtime.calls] == ["preflight"]
     assert "submit" not in json.dumps(runtime.calls)
     assert "BOT_TOKEN" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("cleanup_before_deadline", [True, False])
+@pytest.mark.asyncio
+async def test_candidate_cancellation_waits_for_the_owned_job_and_preserves_receipts(
+    adapter_module: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    cleanup_before_deadline: bool,
+) -> None:
+    from app.core.drain import DrainController, DurableUpdateWorker
+    from app.core.job_store import (
+        DeliveryOutcome,
+        EvidenceCancellation,
+        JobStore,
+        begin_current_delivery,
+        evidence_update_id,
+        record_current_delivery,
+    )
+
+    release = "d" * 40
+    correlation = "acceptance:partial-delivery"
+    update_id = evidence_update_id(correlation)
+    store = JobStore(tmp_path / "jobs.sqlite3")
+    controller = DrainController(store)
+    entered = asyncio.Event()
+    cleanup_entered = asyncio.Event()
+    release_cleanup = asyncio.Event()
+    other_processed = asyncio.Event()
+    owned_path = tmp_path / "owned-media.mp4"
+
+    class SubprocessRuntime(FakeRuntime):
+        def container_call(
+            self,
+            action: str,
+            payload: dict[str, Any],
+            *,
+            timeout: float,
+        ) -> dict[str, Any]:
+            assert action == "cancel"
+            helper = adapter_module._CONTAINER_HELPER
+            try:
+                result = subprocess.run(
+                    [sys.executable, "-c", helper, action],
+                    cwd=ROOT,
+                    input=json.dumps(payload),
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    env={
+                        **os.environ,
+                        "YTDLBOT_JOB_DB": os.fspath(store.path),
+                        "APP_RELEASE": release,
+                    },
+                    check=True,
+                )
+            except subprocess.TimeoutExpired as error:
+                raise adapter_module.AdapterTimeout("helper timed out") from error
+            return json.loads(result.stdout)
+
+    runtime = SubprocessRuntime(adapter_module, profile="candidate")
+    adapter = adapter_module.ProductionDockerAdapter(
+        runtime,
+        expected_release=release,
+        expected_image_id="sha256:" + "b" * 64,
+        runtime_profile="candidate",
+    )
+
+    async def process(payload: dict[str, Any]) -> None:
+        if payload["update_id"] != update_id:
+            other_processed.set()
+            return
+        await begin_current_delivery(("sent", "failed", "in-flight"))
+        await record_current_delivery("sent", DeliveryOutcome.SUCCESS, delivery_id="42")
+        await record_current_delivery("failed", DeliveryOutcome.FAILED)
+        owned_path.write_bytes(b"owned")
+        entered.set()
+        try:
+            await asyncio.Future()
+        finally:
+            cleanup_entered.set()
+            await release_cleanup.wait()
+            owned_path.unlink()
+
+    assert await store.accept_evidence_update({"update_id": update_id}, correlation)
+    worker = DurableUpdateWorker(store, controller, process, poll_interval=0.01)
+    await worker.start()
+    cancellation = None
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        await store.accept_update({"update_id": 2})
+        cancellation = asyncio.create_task(
+            asyncio.to_thread(adapter.cancel, correlation)
+        )
+        await asyncio.wait_for(cleanup_entered.wait(), 8)
+        assert not cancellation.done()
+        assert owned_path.exists()
+        assert (
+            await store.evidence_cancellation_status(correlation)
+            is EvidenceCancellation.REQUESTED
+        )
+        assert not await store.begin_delivery_attempts(
+            str(update_id), ("after-cancel",), owner_id=worker.owner_id
+        )
+        if not cleanup_before_deadline:
+            assert await asyncio.wait_for(cancellation, 12) is False
+            assert owned_path.exists()
+            assert not other_processed.is_set()
+        release_cleanup.set()
+        await asyncio.wait_for(other_processed.wait(), 3)
+        assert not owned_path.exists()
+        assert await asyncio.wait_for(cancellation, 12) is cleanup_before_deadline
+        if not cleanup_before_deadline:
+            assert await asyncio.to_thread(adapter.cancel, correlation) is True
+        assert await store.requeue_failed_deliveries() == 0
+        expected = {
+            "sent": DeliveryOutcome.SUCCESS,
+            "failed": DeliveryOutcome.FAILED,
+            "in-flight": DeliveryOutcome.UNCERTAIN,
+        }
+        for item, outcome in expected.items():
+            assert (
+                await store.delivery_outcome(str(update_id), item_key=item) is outcome
+            )
+        assert (
+            await store.delivery_outcome(str(update_id), item_key="after-cancel")
+            is None
+        )
+    finally:
+        release_cleanup.set()
+        await worker.stop()
+        if cancellation is not None:
+            await asyncio.gather(cancellation, return_exceptions=True)
+
+    monkeypatch.setenv("YTDLBOT_JOB_DB", os.fspath(store.path))
+    helper = _helper_functions(adapter_module, "classify_failure", "job_snapshot")
+    assert helper["job_snapshot"](update_id, 0)["state"] == "failed"
 
 
 def _helper_functions(module: Any, *names: str) -> dict[str, Any]:

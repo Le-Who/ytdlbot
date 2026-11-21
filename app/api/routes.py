@@ -16,7 +16,7 @@ from app.constants import AUDIO_FORMAT_ID, CHUNK_SIZE, GIF_FORMAT_ID
 from app.core import config, state
 from app.core.asyncio_utils import await_owned
 from app.core.config import DL_TIMEOUT_HTTP, MAX_DL_MB, TELEGRAM_SECRET_TOKEN
-from app.core.job_store import JobStore
+from app.core.job_store import JobStore, evidence_update_id
 from app.core.logging import set_correlation_id
 from app.core.metrics import metrics
 from app.core.models import DownloadContext
@@ -47,6 +47,10 @@ _local_probe_lock = threading.Lock()
 
 class DurableUpdateStore(Protocol):
     def accept_update(self, payload: Mapping[str, Any]) -> Awaitable[object]: ...
+
+    def accept_evidence_update(
+        self, payload: Mapping[str, Any], correlation_id: str
+    ) -> Awaitable[bool]: ...
 
     def schema_version(self) -> Awaitable[int]: ...
 
@@ -560,7 +564,16 @@ async def telegram_webhook(request: Request) -> dict[str, bool]:
         payload = await request.json()
         if not isinstance(payload, dict):
             raise TypeError("Telegram update must be a JSON object")
-        await store.accept_update(payload)
+        evidence_id = request.headers.get("X-Ytdlbot-Acceptance-ID")
+        if evidence_id is None:
+            await store.accept_update(payload)
+        else:
+            if not _acceptance_update(payload, evidence_id):
+                raise HTTPException(400, "Invalid acceptance update")
+            if not await store.accept_evidence_update(payload, evidence_id):
+                raise HTTPException(409, "Acceptance update was not newly admitted")
+    except HTTPException:
+        raise
     except Exception as error:
         logger.error(
             "Webhook persistence failed",
@@ -572,3 +585,27 @@ async def telegram_webhook(request: Request) -> dict[str, bool]:
             headers={"Retry-After": "1"},
         ) from error
     return {"ok": True}
+
+
+def _acceptance_update(payload: dict[str, Any], correlation_id: str) -> bool:
+    admin_id = config.ADMIN_CHAT_ID
+    message = payload.get("message")
+    if (
+        admin_id is None
+        or set(payload) != {"update_id", "message"}
+        or not isinstance(message, dict)
+    ):
+        return False
+    text = message.get("text")
+    user = message.get("from")
+    return (
+        isinstance(text, str)
+        and text.startswith("/mp4 https://")
+        and message.get("message_id") == evidence_update_id(f"message:{correlation_id}")
+        and message.get("chat") == {"id": admin_id, "type": "private"}
+        and isinstance(user, dict)
+        and user.get("id") == admin_id
+        and user.get("is_bot") is False
+        and message.get("entities")
+        == [{"type": "bot_command", "offset": 0, "length": 4}]
+    )

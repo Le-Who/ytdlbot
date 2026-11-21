@@ -24,6 +24,10 @@ class RetryableDeliveryFailed(RuntimeError):
     pass
 
 
+class EvidenceCancellationRequested(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class DrainResult:
     completed: int
@@ -113,7 +117,8 @@ class DrainController:
             return DrainResult(len(done), 0, 0, False)
 
         for task in pending:
-            task.cancel()
+            if not task.cancelling():
+                task.cancel()
         stopped, still_running = await asyncio.wait(
             pending, timeout=self._cleanup_remaining()
         )
@@ -412,12 +417,19 @@ class DurableUpdateWorker:
         return job
 
     async def _process_job(self, job: JobRecord) -> None:
+        async def process() -> None:
+            if job.evidence_job and await self.store.evidence_cancellation_requested(
+                job.id
+            ):
+                raise EvidenceCancellationRequested
+            await self.process_update(job.payload)
+
         with delivery_job_context(
             self.store, job.id, owner_id=self.owner_id
         ) as execution:
             process_task = await self.drain_controller.start_job(
                 job.id,
-                lambda: self.process_update(job.payload),
+                process,
                 owner_id=self.owner_id,
             )
         if process_task is None:
@@ -427,17 +439,36 @@ class DurableUpdateWorker:
             self._heartbeat(job.id),
             name=f"durable-job-heartbeat-{job.id}",
         )
+        watchers: list[asyncio.Task[None]] = [heartbeat]
+        cancellation_watch = None
+        if job.evidence_job:
+            cancellation_watch = asyncio.create_task(
+                self._watch_evidence_cancellation(job.id),
+                name=f"durable-job-cancellation-{job.id}",
+            )
+            watchers.append(cancellation_watch)
+        cancelled_evidence = False
         try:
             done, _ = await asyncio.wait(
-                (process_task, heartbeat),
+                (process_task, *watchers),
                 return_when=asyncio.FIRST_COMPLETED,
             )
             if heartbeat in done:
                 try:
                     await heartbeat
                 finally:
-                    process_task.cancel()
-                    await asyncio.gather(process_task, return_exceptions=True)
+                    await self._cancel_and_settle(process_task)
+            if cancellation_watch is not None and cancellation_watch in done:
+                try:
+                    await cancellation_watch
+                except Exception as error:
+                    await self._cancel_and_settle(process_task)
+                    raise WorkerLeaseLost(
+                        "durable cancellation check failed"
+                    ) from error
+                if not process_task.done() and not process_task.cancelling():
+                    await self._cancel_and_settle(process_task)
+                    raise EvidenceCancellationRequested
             await process_task
             if self.drain_controller.draining and process_task.cancelling():
                 raise asyncio.CancelledError
@@ -447,15 +478,10 @@ class DurableUpdateWorker:
                 ) from execution.error
             if await self.store.has_failed_deliveries(job.id):
                 raise RetryableDeliveryFailed("delivery has known failed items")
+        except EvidenceCancellationRequested:
+            cancelled_evidence = True
         except asyncio.CancelledError:
-            if not process_task.done():
-                process_task.cancel()
-            settled = asyncio.gather(process_task, return_exceptions=True)
-            while not settled.done():
-                try:
-                    await asyncio.shield(settled)
-                except asyncio.CancelledError:
-                    continue
+            await self._cancel_and_settle(process_task)
             drain_task = self.drain_controller._drain_task
             if drain_task is None or drain_task.done():
                 await self.store.checkpoint(
@@ -489,9 +515,22 @@ class DurableUpdateWorker:
                 raise WorkerLeaseLost("durable job lease was lost before completion")
             self.last_completed_job_id = job.id
         finally:
-            heartbeat.cancel()
-            await asyncio.gather(heartbeat, return_exceptions=True)
+            for watcher in watchers:
+                watcher.cancel()
+            await asyncio.gather(*watchers, return_exceptions=True)
             await self.drain_controller.finish_job(job.id, process_task)
+            if cancelled_evidence:
+                await self.store.confirm_evidence_cancellation(job.id, self.owner_id)
+
+    @staticmethod
+    async def _cancel_and_settle(process_task: asyncio.Task[None]) -> None:
+        if not process_task.done() and not process_task.cancelling():
+            process_task.cancel()
+        await _settle(asyncio.gather(process_task, return_exceptions=True))
+
+    async def _watch_evidence_cancellation(self, job_id: str) -> None:
+        while not await self.store.evidence_cancellation_requested(job_id):
+            await asyncio.sleep(self.poll_interval)
 
     async def _heartbeat(self, job_id: str) -> None:
         interval = max(0.01, self.lease_seconds / 3)

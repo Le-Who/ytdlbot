@@ -205,6 +205,12 @@ retains its existing ownership guard.
 Retained webhook payloads are bounded and periodically purged. Temporary media is
 resumed only when its lease, integrity, and source validity still pass checks.
 
+Retain a timed-out candidate's unresolved evidence reservation across rollback.
+Confirm scoped cancellation before rollback when possible. The previous worker
+can open the same schema and skips confirmed cancellations. It cannot interpret
+pending cancellation requests. See
+[candidate timeout recovery](acceptance.md#controlled-task-14-run).
+
 ## Automated release
 
 The protected deployment workflow is the canonical path. It pins first-party

@@ -15,6 +15,15 @@ Shutdown attempts independent adapter cleanup within the container's remaining
 grace. A deferred lifespan only closes resources it adopted and leaves bindings
 owned by a newer lifespan intact.
 
+Acceptance cancellation uses a side table to bind the correlation at webhook
+admission and record cancellation independently of send receipts. A request
+fences recovery and new delivery reservations for that job. Confirmation comes
+from the pre-claim withdrawal transaction or the same live worker after joining
+the job's cleanup. A confirmed cancellation uses a terminal base job state so
+schema v4 rollback images leave it retired. A pending request still requires
+reconciliation when an older worker takes over. See
+[candidate timeout recovery](../acceptance.md#controlled-task-14-run).
+
 Readiness uses a bounded, authenticated Local Bot API probe and reports a
 sanitized result. Webhook admission also rate-limits the source IP. HTTP media
 providers publish a file path only when the transfer has completed. See

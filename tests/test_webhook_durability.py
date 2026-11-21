@@ -21,9 +21,11 @@ from app.core import drain as drain_module
 from app.core import state
 from app.core.job_store import (
     DeliveryOutcome,
+    EvidenceCancellation,
     JobState,
     JobStore,
     delivery_job_context,
+    evidence_update_id,
 )
 from app.main import lifespan, shutdown_runtime, stop_telegram_ingress
 from app.services.media.delivery import DeliveryAsset, TelegramDelivery
@@ -104,6 +106,70 @@ async def test_webhook_returns_success_only_after_transactional_insert(
     assert response.status_code == 200
     assert persisted is not None
     assert persisted.state is JobState.ACCEPTED
+
+
+@pytest.mark.asyncio
+async def test_acceptance_header_binds_only_new_authenticated_admin_updates(
+    webhook_app, tmp_path, monkeypatch
+):
+    store = JobStore(tmp_path / "jobs.sqlite3")
+    routes.configure_job_store(store)
+    monkeypatch.setattr(routes.config, "ADMIN_CHAT_ID", 42)
+    transport = httpx.ASGITransport(app=webhook_app)
+    correlation = "acceptance:collision"
+    observed = {
+        "update_id": evidence_update_id(correlation),
+        "message": {
+            "message_id": evidence_update_id(f"message:{correlation}"),
+            "date": 1_700_000_000,
+            "chat": {"id": 42, "type": "private"},
+            "from": {"id": 42, "is_bot": False, "first_name": "Media acceptance"},
+            "text": "/mp4 https://youtu.be/example",
+            "entities": [{"type": "bot_command", "offset": 0, "length": 4}],
+        },
+    }
+    evidence_header = {"X-Ytdlbot-Acceptance-ID": correlation}
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post("/webhook", json=observed, headers=evidence_header)
+        assert response.status_code == 401
+        response = await client.post(
+            "/webhook",
+            json={"update_id": observed["update_id"]},
+            headers=AUTH | evidence_header,
+        )
+        assert response.status_code == 400
+        assert await store.get_update(observed["update_id"]) is None
+        response = await client.post(
+            "/webhook", json=observed, headers=AUTH | {"X-Correlation-ID": correlation}
+        )
+        assert response.status_code == 200
+        response = await client.post(
+            "/webhook", json=observed, headers=AUTH | evidence_header
+        )
+        assert response.status_code == 409
+        fresh_id = "acceptance:new"
+        fresh_update = {
+            "update_id": evidence_update_id(fresh_id),
+            "message": {
+                **observed["message"],
+                "message_id": evidence_update_id(f"message:{fresh_id}"),
+            },
+        }
+        fresh_auth = AUTH | {"X-Ytdlbot-Acceptance-ID": fresh_id}
+        response = await client.post("/webhook", json=fresh_update, headers=fresh_auth)
+        assert response.json() == {"ok": True}
+        response = await client.post("/webhook", json=fresh_update, headers=fresh_auth)
+        assert response.status_code == 409
+        assert (
+            await store.request_evidence_cancellation(fresh_id)
+            is EvidenceCancellation.CONFIRMED
+        )
+    assert (
+        await store.request_evidence_cancellation(correlation)
+        is EvidenceCancellation.UNCONFIRMED
+    )
+    ordinary = await store.get_update(observed["update_id"])
+    assert ordinary is not None and ordinary.state is JobState.ACCEPTED
 
 
 @pytest.mark.asyncio

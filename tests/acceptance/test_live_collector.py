@@ -758,6 +758,23 @@ def test_unconfirmed_timeout_stops_window_as_unattributable(
     assert payload["in_flight"]["state"] == "IN_FLIGHT"
 
 
+@pytest.mark.parametrize("response", [{"cancelled": 1}, {"cancelled": True}, None])
+def test_adapter_cancel_requires_confirmed_json_boolean(
+    collector: Any, monkeypatch: pytest.MonkeyPatch, response: dict[str, Any] | None
+) -> None:
+    adapter = collector.JsonCommandAdapter(("stub",))
+
+    def invoke(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        if response is None:
+            raise TimeoutError("cleanup was not confirmed")
+        return response
+
+    monkeypatch.setattr(adapter, "_invoke", invoke)
+    assert adapter.cancel("acceptance:scoped") is (
+        response is not None and response["cancelled"] is True
+    )
+
+
 def test_observation_rejects_ambiguous_process_wide_metric_delta(
     collector: Any,
     tmp_path: Path,

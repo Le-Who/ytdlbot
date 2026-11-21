@@ -223,12 +223,15 @@ class JsonCommandAdapter:
         return cast(dict[str, Any], observation)
 
     def cancel(self, correlation_id: str) -> bool:
-        result = self._invoke(
-            "cancel",
-            {"correlation_id": correlation_id},
-            timeout_seconds=15.0,
-        )
-        return result == {"cancelled": True}
+        try:
+            result = self._invoke(
+                "cancel",
+                {"correlation_id": correlation_id},
+                timeout_seconds=15.0,
+            )
+        except (ObservationError, TimeoutError):
+            return False
+        return set(result) == {"cancelled"} and result["cancelled"] is True
 
 
 def _load_json(path: Path) -> dict[str, Any]:

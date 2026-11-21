@@ -295,8 +295,13 @@ the shared pipeline through `MEDIA_PROXY_URLS` and `MEDIA_PROXY_PLATFORMS`.
 
 The optional [WireGuard example](../docker-compose.wireguard.example.yml) runs a
 SOCKS5 proxy on port 1080. For a separate local or test Compose project, put the
-tunnel configuration at `./wireguard/wg0.conf`. Start the example service with
-`docker compose -f docker-compose.yml -f docker-compose.wireguard.example.yml up -d wireguard-proxy`.
+tunnel configuration at `./wireguard/wg0.conf`. Build and start the service with
+`docker compose -f docker-compose.yml -f docker-compose.wireguard.example.yml up --build -d wireguard-proxy`.
+The build pins the LinuxServer WireGuard image and verifies the Alpine
+MicroSocks `1.0.5-r0` package checksum for either amd64 or arm64. Build-time
+network access is required to fetch those inputs. The container starts WireGuard
+from the mounted configuration and then runs the preinstalled proxy.
+[Image build](../examples/wireguard/Dockerfile)
 Legacy TikTok callers can use `TIKTOK_PROXY=socks5://wireguard-proxy:1080`. For the
 shared pipeline, set `MEDIA_PROXY_URLS=["socks5://wireguard-proxy:1080"]` and use
 `MEDIA_PROXY_PLATFORMS=tiktok` if only TikTok extraction should be eligible to

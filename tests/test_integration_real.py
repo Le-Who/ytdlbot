@@ -24,8 +24,7 @@ SKIP_NO_FFMPEG = pytest.mark.skipif(
     not _has_binary("ffmpeg"), reason="ffmpeg not on PATH"
 )
 
-# Short, public-domain / CC video (Big Buck Bunny 10s clip)
-TEST_VIDEO_URL = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"  # Big Buck Bunny 60s
+TEST_VIDEO_URL = "https://www.youtube.com/watch?v=aqz-KE-bpKQ"
 
 
 @pytest.mark.integration
@@ -95,11 +94,9 @@ class TestFfmpegIntegration(unittest.IsolatedAsyncioTestCase):
         """ffmpeg can strip audio from an MP4 (mute GIF path)."""
         tmpdir = tempfile.mkdtemp(prefix="ytdlbot_test_")
         try:
-            # Create a minimal valid MP4 using ffmpeg
             src = os.path.join(tmpdir, "src.mp4")
             dst = os.path.join(tmpdir, "muted.mp4")
 
-            # Generate 1-second test video with color source
             gen_proc = await asyncio.create_subprocess_exec(
                 "ffmpeg",
                 "-y",
@@ -128,7 +125,6 @@ class TestFfmpegIntegration(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(gen_proc.returncode, 0, "Failed to generate test video")
             self.assertTrue(os.path.exists(src))
 
-            # Mute it (strip audio, copy video)
             mute_proc = await asyncio.create_subprocess_exec(
                 "ffmpeg",
                 "-y",

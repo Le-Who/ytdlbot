@@ -40,7 +40,6 @@ class _ProcessGroup:
 @pytest.fixture
 def posix_boundary(monkeypatch):
     def install(group: _ProcessGroup) -> None:
-        # Replace this module's platform bridge without changing pytest's host OS.
         monkeypatch.setattr(process, "sys", SimpleNamespace(platform="linux"))
         monkeypatch.setattr(process, "os", SimpleNamespace(killpg=group.killpg))
         monkeypatch.setattr(process, "signal", SimpleNamespace(SIGTERM=15, SIGKILL=9))

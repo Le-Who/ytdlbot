@@ -39,14 +39,12 @@ class TestExtractVideoMeta(unittest.IsolatedAsyncioTestCase):
             path = f.name
 
         try:
-            # Mock ffprobe to also return empty (no ffprobe available in test)
             with patch(
                 "app.services.orchestrator.process_supervisor.run",
                 new_callable=AsyncMock,
                 return_value=ProcessResult(0, b"", b""),
             ):
                 meta = await extract_video_meta("/fake/video.mp4", info_json_path=path)
-                # width/height from JSON should still be set
                 self.assertEqual(meta["width"], 1280)
                 self.assertEqual(meta["height"], 720)
                 self.assertIsNone(meta["duration"])
@@ -272,7 +270,6 @@ async def test_legacy_clip_reaches_downloader_and_delivers_clip_bytes(
             video=SimpleNamespace(file_id="clip", file_unique_id="clip-id"),
         )
 
-    # Native APIs have no section argument. They must never deliver a whole file for a clip.
     async def native_whole_video(*args, **kwargs):
         path = tmp_path / "whole.mp4"
         path.write_bytes(b"entire-video")

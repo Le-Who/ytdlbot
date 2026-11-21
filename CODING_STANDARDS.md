@@ -12,9 +12,17 @@ Select checks from [README testing](README.md#testing),
 cancellation paths with behavioral regressions. Report changed behavior, checks
 performed, and every relevant unrun check with its concrete limitation.
 
+Activate the project environment and install both requirement files before
+running pre-commit so mypy can resolve the same installed dependencies as CI.
+
 Isolate test configuration: [configuration](app/core/config.py) loads `.env`,
 while [shared fixtures](tests/conftest.py) set defaults only for absent variables.
 Webhook fixtures expect `TELEGRAM_SECRET_TOKEN=test-secret`.
+
+Use [`/delete-comment`](.agents/skills/delete-comment/SKILL.md) for a scoped
+comment audit. The code-comment check rejects new prose and requires the
+allowlist to shrink when existing prose is removed. Use
+`python scripts/check-code-comments.py --prune` after an audited cleanup.
 
 ## Media contracts
 

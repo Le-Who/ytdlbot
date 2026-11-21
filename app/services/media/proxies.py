@@ -65,7 +65,6 @@ class MediaProxyPool:
                 raise ValueError(
                     "MEDIA_PROXY_URLS must contain valid SOCKS5 URLs with explicit ports"
                 ) from None
-            # Local DNS and CurlOpt.RESOLVE must also apply through the SOCKS route.
             self._urls[f"proxy-{index}"] = urlunsplit(
                 ("socks5", parsed.netloc, "", "", "")
             )
@@ -126,8 +125,6 @@ class MediaProxyPool:
         healthy = tuple(
             key for key in keys if self._failed_until.get((platform, key), 0) <= now
         )
-        # A fully cooled pool still makes one recovery attempt, without repeated
-        # probes of every known bad route on each incoming request.
         return healthy or (
             min(keys, key=lambda key: self._failed_until[(platform, key)]),
         )

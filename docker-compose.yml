@@ -1,7 +1,5 @@
 services:
   bot:
-    # Образ собирается в GitHub Actions и публикуется в GHCR.
-    # На VPS только docker pull — никакой локальной сборки.
     image: "${BOT_IMAGE:?Set BOT_IMAGE to an immutable image@sha256:digest}"
     restart: always
     env_file: .env
@@ -19,7 +17,6 @@ services:
       - POT_PROVIDER_URL=http://bgutil-pot:4416
     labels:
       com.gemaibot.logs: "true"
-    # Хостовый Caddy проксирует vid.tri.mom → 127.0.0.1:8000
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -49,8 +46,6 @@ services:
           memory: 2G
           cpus: "1.4"
 
-  # YouTube POT (Proof-of-Origin Token) server — generates tokens to bypass
-  # "Sign in to confirm you're not a bot" checks. Eliminates need for YouTube cookies.
   bgutil-pot:
     image: brainicism/bgutil-ytdlp-pot-provider:2.0.1@sha256:96d95372bbf04db68e29329ba05a20bd406844fa3c5ac43315fe476870c6084d
     restart: always
@@ -73,7 +68,6 @@ services:
     depends_on:
       volume-init:
         condition: service_completed_successfully
-    # Порт не публикуется наружу — bot обращается по имени сервиса внутри сети
     deploy:
       resources:
         limits:
@@ -86,7 +80,6 @@ services:
     command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru
     volumes:
       - redis-data:/data
-    # Порт не публикуется наружу — используется только внутри compose-сети
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s

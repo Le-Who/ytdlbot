@@ -3,8 +3,6 @@ import re
 from app.constants import GIF_FORMAT_ID
 from app.core.config import CONCURRENT_FRAGMENTS, POT_PROVIDER_URL
 
-# Shared browser User-Agent for all yt-dlp requests.
-# Must match across extraction and download to satisfy VK's anti-bot fingerprinting.
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0.0.0"
@@ -52,10 +50,8 @@ class YtDlpCLIBuilder:
             ]
         )
 
-        # TikTok specific edge case applied generically for strict JSON extraction
         cmd.extend(["--extractor-args", "tiktok:app_info="])
 
-        # Optional configured PO-token service; yt-dlp chooses its supported clients.
         self._append_youtube_bypasses(cmd, url)
 
         self._append_network_opts(
@@ -88,7 +84,6 @@ class YtDlpCLIBuilder:
         """Build args for downloading media"""
         cmd = self._base_args.copy()
 
-        # Format resolution logic
         is_gif_format = format_id == GIF_FORMAT_ID
         is_audio = format_id in ("bestaudio/best", "audio") or audio_format is not None
         if audio_language and not re.fullmatch(r"[\w-]+", audio_language):
@@ -100,8 +95,6 @@ class YtDlpCLIBuilder:
             final_fmt = f"bestaudio{language}/best{language}"
             cmd.extend(["--extract-audio", "--audio-format", audio_format or "mp3"])
         else:
-            # Short display edge, including portrait Shorts. Every alternative
-            # enforces the same exact requested quality and requires audio.
             cap = height or 1080
             floor = f"[width>={cap}][height>={cap}]" if height else ""
             caps = (f"[height<={cap}]{floor}", f"[width<={cap}]{floor}")
@@ -149,7 +142,6 @@ class YtDlpCLIBuilder:
             ]
         )
 
-        # Fragmented MP4 for pipe mode (streaming), faststart for file downloads
         if pipe_mode:
             cmd.extend(
                 [
@@ -165,8 +157,6 @@ class YtDlpCLIBuilder:
                 ]
             )
 
-        # Write thumbnail alongside download for zero-cost Telegram preview injection.
-        # Skipped for: pipe mode (no file path), audio (irrelevant), GIF (no preview needed).
         if not pipe_mode and not is_gif_format and not is_audio:
             cmd.extend(["--write-thumbnail", "--convert-thumbnails", "jpg"])
 
@@ -190,9 +180,6 @@ class YtDlpCLIBuilder:
             user_agent if user_agent is not None else _BROWSER_UA,
         )
 
-        # We use info_json cache for all platforms to avoid redundant extraction.
-        # This is especially critical for VK because extracting the same URL twice
-        # in 10 seconds triggers their anti-bot protection (badbrowser.php redirect).
         if section:
             cmd.extend(["--download-sections", section])
 

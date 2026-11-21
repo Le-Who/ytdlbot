@@ -155,7 +155,6 @@ async def ig_chain(tmp_path, monkeypatch):
     transport = _Transport(tmp_path)
 
     async def validate_fixture(request, materialized):
-        # Synthetic files stand in for the external media/ffprobe boundary.
         assert all(path.is_file() for path in materialized.paths)
 
     pipeline = MediaPipeline(
@@ -222,7 +221,6 @@ async def _open_selection(env, source):
         await _click(
             env, ig_callbacks.on_ig_highlight_items, _button(env, "ig_hl_items")
         )
-        # Highlight selection is another cache boundary, independently of profile cache.
         await env.cache.set("sel_hl_7", _serialized(await env.cache.get("sel_hl_7")))
 
 

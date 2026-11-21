@@ -199,12 +199,7 @@ class TestOnGroupSlideshowExtended(unittest.IsolatedAsyncioTestCase):
 
         await on_group_slideshow(update, context)
 
-        # Should show the original error
         q.edit_message_text.assert_awaited()
-
-
-# TikWM auth fallback test removed — the fallback is only triggered inside
-# on_group_slideshow, already tested above.
 
 
 class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
@@ -217,7 +212,6 @@ class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
 
         from app.services.converter import MediaConverter
 
-        # Create a fake video file
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
             tmp.write(b"fake video")
 
@@ -243,9 +237,7 @@ class TestConverterSubprocess(unittest.IsolatedAsyncioTestCase):
         ):
             mock_state.conversion_sem = mock_sem
             mock_exec.return_value = process_result
-            mock_exists.side_effect = lambda p: (
-                True
-            )  # both video_path and gif_path exist
+            mock_exists.side_effect = lambda p: True
 
             with patch("app.core.metrics.metrics", mock_metrics):
                 result = await MediaConverter.convert_to_gif_ffmpeg(tmp.name)

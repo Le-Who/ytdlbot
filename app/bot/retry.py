@@ -108,15 +108,11 @@ async def _finish_retry(
     *,
     outcome: DeliveryOutcome = DeliveryOutcome.SUCCESS,
 ) -> None:
-    # Completion must survive a transient cache cleanup error in this process.
-    # Durable callbacks also refuse a predecessor already completed in SQLite.
     _finished_retries[token] = True
     if polling_store is not None:
         await polling_store.record_delivery(f"retry:{token}", outcome)
     try:
         await state.link_cache.delete(f"retry:{token}")
-    # Cache backends are extensible; cleanup cannot undo durable/in-process
-    # completion, and the diagnostic deliberately exposes only the error type.
     except Exception as error:  # noqa: BLE001
         logger.warning(
             "retry cache cleanup failed", extra={"error_type": type(error).__name__}
@@ -229,8 +225,6 @@ async def on_retry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ):
         await query.answer("Отправьте ссылку или команду ещё раз.", show_alert=True)
         return
-    # A concurrent cache GET may return an old snapshot after another retry
-    # has completed. Check again without yielding before claiming the token.
     if token in _finished_retries:
         await query.answer(Texts.LINK_EXPIRED, show_alert=True)
         return
@@ -268,8 +262,6 @@ async def on_retry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.answer(Texts.DOWNLOAD_STARTED)
         await status.edit_text(Texts.SEARCHING, reply_markup=None)
         try:
-            # Reserve only once UI setup has succeeded. A failed acknowledgement
-            # or edit cannot have sent media and must leave the button usable.
             if polling_store is not None and not await polling_store.begin_retry_token(
                 token
             ):
@@ -327,7 +319,6 @@ async def on_retry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await _finish_retry(token, polling_store)
         try:
             await status.delete()
-        # The retry is finalized before optional Telegram UI cleanup.
         except Exception:  # noqa: BLE001, S110
             pass
         if saved.source_message_id is not None:
@@ -335,7 +326,6 @@ async def on_retry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 await context.bot.delete_message(
                     chat_id=saved.chat_id, message_id=saved.source_message_id
                 )
-            # Deleting the original UI must not invalidate completed delivery.
             except Exception:  # noqa: BLE001, S110
                 pass
     finally:

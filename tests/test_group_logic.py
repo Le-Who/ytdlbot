@@ -62,7 +62,6 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
 
         self.update.message = None
         await handle_group_message(self.update, self.context)
-        # No reply, no crash
 
     async def test_no_text_returns_silently(self):
         """Message without text → return immediately."""
@@ -185,7 +184,6 @@ class TestHandleGroupMessage(unittest.IsolatedAsyncioTestCase):
 
         await handle_group_message(self.update, self.context)
 
-        # Should show slideshow choice, not download
         args, kwargs = status_msg.edit_text.call_args
         self.assertEqual(args[0], Texts.GROUP_SLIDESHOW_CHOICE)
         self.assertIn("reply_markup", kwargs)

@@ -225,7 +225,6 @@ def _format_rank(raw: dict[str, object]) -> tuple[int, int, int]:
 
 
 def _format_dimensions(raw: dict[str, object]) -> tuple[int | None, int | None]:
-    # FxTwitter's attachment dimensions can describe the original upload.
     match = re.match(
         r"https?://video\.twimg\.com/[^?#]*/vid/(?:[^/?#]+/)?"
         r"([1-9][0-9]*)x([1-9][0-9]*)/",

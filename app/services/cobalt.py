@@ -22,7 +22,7 @@ __all__ = ["CobaltPickerItem", "CobaltResult", "CobaltService"]
 
 logger = logging.getLogger("app.services.cobalt")
 
-TIMEOUT = 15  # seconds
+TIMEOUT = 15
 MAX_RETRIES = 2
 CHUNK_SIZE = 1024 * 1024
 MAX_MEDIA_BYTES = 2_000_000_000
@@ -35,7 +35,7 @@ class CobaltResponseError(ValueError):
 async def _stream_response(response: Response, output_path: str) -> int:
     """Stream one response with the shared decimal media cap."""
     written = 0
-    output = open(output_path, "wb")  # noqa: ASYNC230, SIM115 - close joins owned I/O
+    output = open(output_path, "wb")  # noqa: ASYNC230, SIM115
     try:
         try:
             async for chunk in response.aiter_content(chunk_size=CHUNK_SIZE):
@@ -65,7 +65,7 @@ async def _stream_response(response: Response, output_path: str) -> int:
 class CobaltPickerItem:
     """An individual item in a picker response (e.g., a photo in a slideshow)."""
 
-    type: str  # 'photo', 'video', 'gif'
+    type: str
     url: str
     thumb: str | None = None
 
@@ -74,14 +74,12 @@ class CobaltPickerItem:
 class CobaltResult:
     """Result of a Cobalt API request."""
 
-    status: str  # 'tunnel', 'redirect', 'picker', 'error'
-    url: str | None = None  # Direct video URL
+    status: str
+    url: str | None = None
     filename: str | None = None
-    # For picker (slideshows)
     audio: str | None = None
     audio_filename: str | None = None
     picker: list[CobaltPickerItem] = field(default_factory=list)
-    # Custom error field
     error_message: str | None = None
 
     @property
@@ -155,8 +153,6 @@ class CobaltService:
                             err_code = data.get("error", {}).get(
                                 "code", "unknown_error"
                             )
-                            # A business error belongs to this exact origin. Another
-                            # configured origin may still resolve the same public URL.
                             last_error = f"Cobalt error: {err_code}"
                             break
 
@@ -184,14 +180,9 @@ class CobaltService:
                                 picker=items,
                             )
 
-                        # local-processing is not supported yet (requires ffmpeg glue logic for Cobalt)
-                        return CobaltResult(
-                            status="error",
-                            error_message=f"Unsupported Cobalt status: {status}",
-                        )
+                        last_error = f"Unsupported Cobalt status: {status}"
+                        break
 
-                # Each independently configured HTTP origin is an external
-                # request/decoding boundary; failure advances to the next attempt.
                 except Exception as e:  # noqa: BLE001
                     last_error = str(e)
                     logger.warning(
@@ -230,8 +221,6 @@ class CobaltService:
 
                 await _stream_response(resp, output_path)
             return output_path
-        # Network iteration and file publication share this failure boundary;
-        # callers receive no path until the complete download succeeds.
         except asyncio.CancelledError:
             safe_remove(output_path)
             raise
@@ -258,7 +247,6 @@ class CobaltService:
 
         image_urls = [p.url for p in result.picker if p.type == "photo" and p.url]
 
-        # Download images concurrently
         async def dl_image(idx: int, img_url: str) -> str:
             async with AsyncSession() as session:
                 resp = await session.get(
@@ -279,7 +267,6 @@ class CobaltService:
                         for i, url in enumerate(image_urls)
                     ]
                 image_paths = [task.result() for task in tasks]
-            # Join all image owners before deleting an unpublished directory.
             except Exception as e:  # noqa: BLE001
                 logger.error("[COBALT] Slideshow image download error: %s", e)
                 return None, None
@@ -297,7 +284,6 @@ class CobaltService:
                                 f"media returned HTTP {resp.status_code}"
                             )
                         await _stream_response(resp, audio_path)
-                # Optional audio failure preserves the completed image result.
                 except Exception as e:  # noqa: BLE001
                     logger.error("[COBALT] Slideshow audio download error: %s", e)
                     if audio_path is not None:

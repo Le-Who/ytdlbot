@@ -1496,7 +1496,6 @@ async def test_selected_album_fallback_delivers_only_selected_items_in_order(
         seen.append(tuple(item.media_id for item in candidate.items))
         if candidate.candidate_id == "first":
             raise MaterializationError("first variant expired")
-        # Keep transfer and lease ownership real; only external HTTP is fake.
         media.client.responses.extend(
             FakeResponse(
                 chunks=(b"\xff\xd8\xffphoto",), headers={"content-type": "image/jpeg"}

@@ -38,7 +38,6 @@ class TestVideoDownloader(unittest.IsolatedAsyncioTestCase):
         from app.core import state as s
         from app.services.downloader import VideoDownloader
 
-        # Create a temp file to serve as "cached"
         with tempfile.NamedTemporaryFile(delete=False, suffix=".mp4") as tmp:
             tmp.write(b"cached data")
 
@@ -140,8 +139,6 @@ async def test_token_cancellation_cleans_ytdlp_within_two_seconds(
         )
     )
     try:
-        # Fixture startup has its own watchdog; the two-second cancellation
-        # contract below begins only after the child owns its socket and file.
         async with asyncio.timeout(10):
             while not ready.exists():
                 if task.done():

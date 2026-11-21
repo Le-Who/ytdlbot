@@ -14,7 +14,7 @@ class TestFileTTLCache(unittest.TestCase):
         cache = FileTTLCache(maxsize=2, ttl=60, on_eviction=evicted.append)
         cache["a"] = "val_a"
         cache["b"] = "val_b"
-        cache["c"] = "val_c"  # forces eviction of oldest
+        cache["c"] = "val_c"
 
         self.assertEqual(evicted, ["val_a"])
 
@@ -72,7 +72,7 @@ class TestFileTTLCache(unittest.TestCase):
         cache = FileTTLCache(maxsize=2, ttl=60)
         cache["a"] = "val_a"
         cache["b"] = "val_b"
-        cache["c"] = "val_c"  # evicts oldest, no crash
+        cache["c"] = "val_c"
         cache.pop("b")
         cache.clear()
 

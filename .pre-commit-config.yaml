@@ -1,7 +1,6 @@
 minimum_pre_commit_version: "4.6.2"
 
 repos:
-  # Ruff: lint + format (replaces flake8, isort, black)
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.16.10
     hooks:
@@ -9,12 +8,14 @@ repos:
         args: [--fix, --exit-non-zero-on-fix]
       - id: ruff-format
 
-  # mypy: type checking
-  # Run in the activated project environment: mypy needs the same typed
-  # runtime dependencies as CI, rather than an isolated hook environment.
-  # Tool versions are pinned in requirements-ci.txt.
   - repo: local
     hooks:
+      - id: no-prose-comments
+        name: Check code comments
+        language: system
+        pass_filenames: false
+        always_run: true
+        entry: python scripts/check-code-comments.py
       - id: mypy
         name: mypy (Linux)
         language: system
@@ -28,7 +29,6 @@ repos:
         pass_filenames: false
         entry: python -m mypy app/ --no-incremental --platform win32
 
-  # General file hygiene
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v6.0.0
     hooks:

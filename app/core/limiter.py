@@ -22,7 +22,7 @@ class TokenBucketLimiter(AsyncLimiter):
         self._buckets: dict[str, Bucket] = {}
         self._max_idle_sec = max(300.0, 2 * self.capacity / self.refill_rate)
         self._last_prune = time.monotonic()
-        self._prune_interval = 600.0  # prune at most every 10 min
+        self._prune_interval = 600.0
 
     async def allow(self, key: str, cost: float = 1.0) -> bool:
         now = time.monotonic()
@@ -60,10 +60,6 @@ class TokenBucketLimiter(AsyncLimiter):
 
 
 class RedisTokenBucketLimiter(AsyncLimiter):
-    # Lua script for atomic token bucket evaluation.
-    # Uses a STRING value "tokens:updated_at" instead of a HASH.
-    # This reduces command count from 3 (HGETALL+HMSET+EXPIRE) to 2 (GET+SET EX),
-    # which is critical on Upstash Free (500K commands/month).
     LUA_SCRIPT = """
 local key = KEYS[1]
 local capacity = tonumber(ARGV[1])
@@ -108,7 +104,6 @@ return allowed
         self.redis = redis_client
         self.capacity = burst if burst is not None else capacity
         self.refill_rate = refill_rate
-        # Register script for faster execution (EVALSHA)
         self._script = self.redis.register_script(self.LUA_SCRIPT)
 
     async def allow(self, key: str, cost: float = 1.0) -> bool:
@@ -119,10 +114,7 @@ return allowed
                 args=[self.capacity, self.refill_rate, cost, now],
             )
             return bool(result)
-        # The injected Redis script adapter is a fail-open availability boundary;
-        # rate-limit infrastructure failures must not disable every download.
         except Exception:  # noqa: BLE001
-            # Fallback to allow if redis is down to prevent full outage
             return True
 
 

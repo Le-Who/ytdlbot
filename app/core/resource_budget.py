@@ -191,8 +191,6 @@ class DiskReservation:
                     try:
                         os.replace(new, old)
                     except OSError:
-                        # The destination still has our lease and remains tracked;
-                        # request cleanup can safely remove it after this failure.
                         pass
                     else:
                         renamed = False
@@ -223,8 +221,6 @@ class DiskReservation:
 
     async def release(self) -> None:
         if self._release_task is None:
-            # Claim release before its first await so neither another release
-            # nor a queued ensure can debit/grow this allocation again.
             self._released = True
             self._release_task = asyncio.create_task(self._finish_release())
         await asyncio.shield(self._release_task)
@@ -235,8 +231,6 @@ class DiskReservation:
                 try:
                     self._remove_marker_if_owned(path)
                 except LeaseOwnershipError:
-                    # Another owner/process is changing this marker. Leaving the
-                    # sidecar for expiry is safer than deleting uncertain state.
                     continue
         finally:
             self._paths.clear()

@@ -44,7 +44,6 @@ class TestYtDlpExceptions(unittest.TestCase):
 
     def test_live_stream_mapping(self):
         url = "https://example.com"
-        # Happy path for live stream
         error = map_ytdlp_error("This is a live stream", url)
         self.assertIsInstance(error, LiveStreamError)
         self.assertEqual(str(error), Texts.SVC_LIVE_NOT_SUPPORTED)
@@ -52,7 +51,6 @@ class TestYtDlpExceptions(unittest.TestCase):
         error = map_ytdlp_error("This live event has ended", url)
         self.assertIsInstance(error, LiveStreamError)
 
-        # Should not map if "available" is present (as per code logic)
         error = map_ytdlp_error("This is a live stream but now available as VOD", url)
         self.assertNotIsInstance(error, LiveStreamError)
 

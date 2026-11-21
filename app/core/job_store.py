@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import hashlib
 import json
 import os
+import re
 import sqlite3
 import threading
 import time
@@ -14,7 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 
 class JobState(StrEnum):
@@ -31,6 +33,12 @@ class DeliveryOutcome(StrEnum):
     UNCERTAIN = "uncertain"
 
 
+class EvidenceCancellation(StrEnum):
+    UNCONFIRMED = "unconfirmed"
+    REQUESTED = "requested"
+    CONFIRMED = "confirmed"
+
+
 @dataclass(frozen=True, slots=True)
 class JobRecord:
     id: str
@@ -40,6 +48,7 @@ class JobRecord:
     owner_id: str | None = None
     checkpoint: dict[str, Any] | None = None
     error: str | None = None
+    evidence_job: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -90,6 +99,12 @@ _TELEGRAM_UPDATE_FIELDS = frozenset(
 )
 
 _T = TypeVar("_T")
+_EVIDENCE_ID = re.compile(r"[A-Za-z0-9:_.-]{1,200}")
+
+
+def evidence_update_id(correlation_id: str) -> int:
+    digest = hashlib.sha256(correlation_id.encode("utf-8")).digest()
+    return 1_000_000_000 + int.from_bytes(digest[:4], "big") % 1_000_000_000
 
 
 class JobStore:
@@ -146,6 +161,41 @@ class JobStore:
             self._accept_update_sync,
             minimal,
             self._clock(),
+        )
+
+    async def accept_evidence_update(
+        self, payload: Mapping[str, Any], correlation_id: str
+    ) -> bool:
+        minimal = _minimal_update_payload(payload)
+        if not _EVIDENCE_ID.fullmatch(correlation_id) or (
+            minimal["update_id"] != evidence_update_id(correlation_id)
+        ):
+            return False
+        accepted = await self._run(
+            self._accept_update_sync, minimal, self._clock(), correlation_id
+        )
+        return accepted.inserted
+
+    async def request_evidence_cancellation(
+        self, correlation_id: str
+    ) -> EvidenceCancellation:
+        if not _EVIDENCE_ID.fullmatch(correlation_id):
+            return EvidenceCancellation.UNCONFIRMED
+        return await self._run(
+            self._request_evidence_cancellation_sync, correlation_id, self._clock()
+        )
+
+    async def evidence_cancellation_status(
+        self, correlation_id: str
+    ) -> EvidenceCancellation:
+        return await self._run(self._evidence_cancellation_status_sync, correlation_id)
+
+    async def evidence_cancellation_requested(self, job_id: str) -> bool:
+        return await self._run(self._evidence_cancellation_requested_sync, job_id)
+
+    async def confirm_evidence_cancellation(self, job_id: str, owner_id: str) -> bool:
+        return await self._run(
+            self._confirm_evidence_cancellation_sync, job_id, owner_id, self._clock()
         )
 
     async def get_update(self, update_id: int) -> JobRecord | None:
@@ -434,6 +484,7 @@ class JobStore:
                     if version < 4:
                         self._migrate_to_v4(connection)
                         version = 4
+                    self._ensure_evidence_controls(connection)
                     connection.execute(f"PRAGMA user_version = {version}")
                     connection.commit()
                 except BaseException:
@@ -534,6 +585,21 @@ class JobStore:
             "INSERT OR IGNORE INTO health_probe(singleton, generation) VALUES (1, 0)"
         )
 
+    @staticmethod
+    def _ensure_evidence_controls(connection: sqlite3.Connection) -> None:
+        """Add acceptance-only metadata while preserving schema v4 readers."""
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS evidence_jobs (
+                job_id TEXT PRIMARY KEY REFERENCES jobs(job_id),
+                correlation_id TEXT NOT NULL UNIQUE,
+                cancellation TEXT NOT NULL DEFAULT 'active' CHECK (
+                    cancellation IN ('active', 'requested', 'confirmed')
+                )
+            )
+            """
+        )
+
     def _pragma_int(self, name: str) -> int:
         connection = self._connect()
         try:
@@ -577,6 +643,7 @@ class JobStore:
         self,
         payload: dict[str, Any],
         now: float,
+        evidence_correlation_id: str | None = None,
     ) -> AcceptedUpdate:
         update_id = int(payload["update_id"])
         encoded = _encode_json(payload)
@@ -598,20 +665,68 @@ class JobStore:
                     now,
                 ),
             )
-            row = connection.execute(
-                "SELECT * FROM jobs WHERE update_id = ?",
-                (update_id,),
-            ).fetchone()
-        if row is None:  # pragma: no cover - guarded by the transaction above
+            if cursor.rowcount == 1 and evidence_correlation_id is not None:
+                connection.execute(
+                    "INSERT INTO evidence_jobs(job_id, correlation_id) VALUES (?, ?)",
+                    (str(update_id), evidence_correlation_id),
+                )
+            row = _update_row(connection, update_id)
+        if row is None:  # pragma: no cover
             raise RuntimeError("accepted update was not persisted")
         return AcceptedUpdate(_row_to_job(row), cursor.rowcount == 1)
+
+    def _request_evidence_cancellation_sync(
+        self, correlation_id: str, now: float
+    ) -> EvidenceCancellation:
+        with self._transaction() as connection:
+            row = _evidence_job(connection, correlation_id)
+            if row is None or row["cancellation"] == "confirmed":
+                return _evidence_cancellation_status(row)
+            job_id = str(row["job_id"])
+            if row["state"] == JobState.ACCEPTED:
+                _finish_evidence_job(connection, job_id, now)
+                return EvidenceCancellation.CONFIRMED
+            connection.execute(
+                "UPDATE evidence_jobs SET cancellation = 'requested' WHERE job_id = ?",
+                (job_id,),
+            )
+            if row["state"] == JobState.RUNNING:
+                return EvidenceCancellation.REQUESTED
+            return EvidenceCancellation.UNCONFIRMED
+
+    def _evidence_cancellation_status_sync(
+        self, correlation_id: str
+    ) -> EvidenceCancellation:
+        connection = self._connect()
+        try:
+            return _evidence_cancellation_status(
+                _evidence_job(connection, correlation_id)
+            )
+        finally:
+            connection.close()
+
+    def _evidence_cancellation_requested_sync(self, job_id: str) -> bool:
+        connection = self._connect()
+        try:
+            return _evidence_cancellation_requested(connection, job_id)
+        finally:
+            connection.close()
+
+    def _confirm_evidence_cancellation_sync(
+        self, job_id: str, owner_id: str, now: float
+    ) -> bool:
+        with self._transaction() as connection:
+            if not _owns_live_job(connection, job_id, owner_id, now):
+                return False
+            if not _evidence_cancellation_requested(connection, job_id):
+                return False
+            _finish_evidence_job(connection, job_id, now)
+            return True
 
     def _get_update_sync(self, update_id: int) -> JobRecord | None:
         connection = self._connect()
         try:
-            row = connection.execute(
-                "SELECT * FROM jobs WHERE update_id = ?", (update_id,)
-            ).fetchone()
+            row = _update_row(connection, update_id)
         finally:
             connection.close()
         return _row_to_job(row) if row is not None else None
@@ -704,6 +819,11 @@ class JobStore:
                       AND deliveries.item_key = '__job__'
                       AND deliveries.outcome IN ('success', 'uncertain')
                 )
+                AND NOT EXISTS (
+                    SELECT 1 FROM evidence_jobs
+                    WHERE evidence_jobs.job_id = jobs.job_id
+                      AND evidence_jobs.cancellation != 'active'
+                )
                 ORDER BY jobs.accepted_at, jobs.update_id
                 LIMIT ?
                 """,
@@ -722,8 +842,12 @@ class JobStore:
                 (owner_id, now + lease_seconds, now, *job_ids),
             )
             claimed = connection.execute(
-                f"SELECT * FROM jobs WHERE job_id IN ({placeholders}) "
-                "ORDER BY accepted_at, update_id",
+                f"""
+                SELECT jobs.*, evidence_jobs.job_id IS NOT NULL AS evidence_job
+                FROM jobs LEFT JOIN evidence_jobs ON evidence_jobs.job_id = jobs.job_id
+                WHERE jobs.job_id IN ({placeholders})
+                ORDER BY jobs.accepted_at, jobs.update_id
+                """,
                 job_ids,
             ).fetchall()
         return [_row_to_job(row) for row in claimed]
@@ -827,7 +951,7 @@ class JobStore:
                 "SELECT outcome FROM deliveries WHERE job_id = ? AND item_key = ?",
                 (job_id, item_key),
             ).fetchone()
-        if row is None:  # pragma: no cover - guarded by transaction
+        if row is None:  # pragma: no cover
             raise RuntimeError("delivery outcome was not persisted")
         return DeliveryOutcome(row["outcome"])
 
@@ -840,6 +964,8 @@ class JobStore:
     ) -> bool:
         with self._transaction() as connection:
             if not _owns_live_job(connection, job_id, owner_id, now):
+                return False
+            if _evidence_cancellation_requested(connection, job_id):
                 return False
             for item_key in item_keys:
                 existing = connection.execute(
@@ -953,7 +1079,7 @@ class JobStore:
                 row = connection.execute(
                     "SELECT state, checkpoint FROM jobs WHERE job_id = ?", (job_id,)
                 ).fetchone()
-                if row is None:
+                if row is None or _evidence_cancellation_requested(connection, job_id):
                     return False
                 if (
                     connection.execute(
@@ -979,7 +1105,6 @@ class JobStore:
                     (_encode_json(checkpoint), now, job_id),
                 )
                 return True
-            # The same callback job can resume after a worker restart.
             return True
 
     def _has_failed_deliveries_sync(self, job_id: str) -> bool:
@@ -1000,6 +1125,11 @@ class JobStore:
                 """
                 SELECT job_id FROM jobs
                 WHERE state = 'failed'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM evidence_jobs
+                      WHERE evidence_jobs.job_id = jobs.job_id
+                        AND evidence_jobs.cancellation != 'active'
+                  )
                   AND EXISTS (
                       SELECT 1 FROM deliveries
                       WHERE deliveries.job_id = jobs.job_id
@@ -1091,6 +1221,18 @@ def _minimal_update_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
     return minimal
 
 
+def _update_row(connection: sqlite3.Connection, update_id: int) -> sqlite3.Row | None:
+    row = connection.execute(
+        """
+        SELECT jobs.*, evidence_jobs.job_id IS NOT NULL AS evidence_job
+        FROM jobs LEFT JOIN evidence_jobs ON evidence_jobs.job_id = jobs.job_id
+        WHERE jobs.update_id = ?
+        """,
+        (update_id,),
+    ).fetchone()
+    return cast(sqlite3.Row | None, row)
+
+
 def _row_to_job(row: sqlite3.Row) -> JobRecord:
     checkpoint = json.loads(row["checkpoint"]) if row["checkpoint"] else None
     return JobRecord(
@@ -1101,11 +1243,65 @@ def _row_to_job(row: sqlite3.Row) -> JobRecord:
         owner_id=row["owner_id"],
         checkpoint=checkpoint,
         error=row["error"],
+        evidence_job=bool(row["evidence_job"]),
     )
 
 
 def _encode_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def _evidence_job(
+    connection: sqlite3.Connection, correlation_id: str
+) -> sqlite3.Row | None:
+    row = connection.execute(
+        """
+        SELECT jobs.job_id, jobs.state, evidence_jobs.cancellation
+        FROM evidence_jobs JOIN jobs ON jobs.job_id = evidence_jobs.job_id
+        WHERE evidence_jobs.correlation_id = ?
+        """,
+        (correlation_id,),
+    ).fetchone()
+    return cast(sqlite3.Row | None, row)
+
+
+def _evidence_cancellation_status(row: sqlite3.Row | None) -> EvidenceCancellation:
+    if row is not None:
+        if row["cancellation"] == "confirmed":
+            return EvidenceCancellation.CONFIRMED
+        if row["cancellation"] == "requested" and row["state"] == JobState.RUNNING:
+            return EvidenceCancellation.REQUESTED
+    return EvidenceCancellation.UNCONFIRMED
+
+
+def _evidence_cancellation_requested(
+    connection: sqlite3.Connection, job_id: str
+) -> bool:
+    return (
+        connection.execute(
+            "SELECT 1 FROM evidence_jobs WHERE job_id = ? AND cancellation = 'requested'",
+            (job_id,),
+        ).fetchone()
+        is not None
+    )
+
+
+def _finish_evidence_job(
+    connection: sqlite3.Connection, job_id: str, now: float
+) -> None:
+    connection.execute(
+        """
+        UPDATE jobs
+        SET state = 'completed', owner_id = NULL, claim_expires_at = NULL,
+            error = NULL, updated_at = ?
+        WHERE job_id = ?
+        """,
+        (now, job_id),
+    )
+    connection.execute(
+        "UPDATE evidence_jobs SET cancellation = 'confirmed' WHERE job_id = ?",
+        (job_id,),
+    )
 
 
 def _validate_owner(owner_id: str) -> None:

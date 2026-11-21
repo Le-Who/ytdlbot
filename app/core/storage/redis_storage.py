@@ -9,10 +9,8 @@ from .base import StateStorage
 T = TypeVar("T")
 logger = logging.getLogger("app.storage.redis")
 
-# Magic byte prefixes to distinguish raw vs compressed payloads.
 _RAW_PREFIX = b"\x00"
 _COMPRESSED_PREFIX = b"\x01"
-# Compress only payloads larger than 1 KB (avoids CPU waste on tiny values).
 _COMPRESS_THRESHOLD = 1024
 
 
@@ -26,8 +24,6 @@ class RedisStorage(StateStorage):
         self.redis = redis_client
         self.default_ttl = default_ttl
         self.prefix = f"{prefix}:" if prefix else ""
-
-    # ── helpers ───────────────────────────────────────────────────────
 
     def _key(self, key: str) -> str:
         return f"{self.prefix}{key}"
@@ -53,7 +49,6 @@ class RedisStorage(StateStorage):
         elif data[0:1] == _RAW_PREFIX:
             payload = data[1:]
         else:
-            # Legacy JSON fallback: no magic-byte prefix → old JSON data.
             if type_hint is None or type_hint is Any:
                 return msgspec.json.decode(data)
             return msgspec.json.decode(data, type=type_hint)
@@ -62,16 +57,12 @@ class RedisStorage(StateStorage):
             return msgspec.msgpack.decode(payload)
         return msgspec.msgpack.decode(payload, type=type_hint)
 
-    # ── StateStorage protocol ─────────────────────────────────────────
-
     async def get(self, key: str, type_hint: Any = None) -> Any:
         data = await self.redis.get(self._key(key))
         if not data:
             return None
         try:
             return self._decode(data, type_hint)
-        # The supplied type_hint may run dataclass validators that raise custom
-        # errors; a failed ephemeral-cache decode remains a logged cache miss.
         except Exception as e:  # noqa: BLE001
             logger.error("Redis decode error for key %s: %s", key, str(e))
             return None
@@ -80,8 +71,6 @@ class RedisStorage(StateStorage):
         try:
             data = self._encode(value)
             await self.redis.set(self._key(key), data, ex=ttl or self.default_ttl)
-        # StateStorage is a best-effort ephemeral cache with an injected Redis
-        # adapter and arbitrary serializable values, not the durable job store.
         except Exception as e:  # noqa: BLE001
             logger.error("Redis encode error for key %s: %s", key, str(e))
 
@@ -90,11 +79,8 @@ class RedisStorage(StateStorage):
 
     async def clear(self) -> None:
         if not self.prefix:
-            # An unprefixed storage explicitly owns the whole database.
             await self.redis.flushdb()
             return
-        # Redis glob syntax must treat namespace characters literally. The
-        # second check protects namespace ownership even with a loose scanner.
         pattern = (
             "".join(
                 f"\\{character}" if character in "\\*?[]" else character

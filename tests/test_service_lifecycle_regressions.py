@@ -149,6 +149,110 @@ async def test_orchestrator_cleans_every_split_part_on_send_cancellation(
         await asyncio.gather(task, return_exceptions=True)
 
 
+@pytest.mark.parametrize("failure", ["missing", "inaccessible"])
+async def test_cloud_orchestrator_rejects_uninspectable_video_before_send(
+    tmp_path, monkeypatch, mock_state, failure
+):
+    from app.core.texts import Texts
+    from app.services import orchestrator
+
+    video = tmp_path / "source.mp4"
+    if failure == "inaccessible":
+        video.write_bytes(b"source")
+        real_getsize = orchestrator.os.path.getsize
+
+        def getsize(path):
+            if str(path) == str(video):
+                raise PermissionError("metadata access denied")
+            return real_getsize(path)
+
+        monkeypatch.setattr(orchestrator.os.path, "getsize", getsize)
+
+    queue = SimpleNamespace(enqueue=AsyncMock(return_value=True), release=Mock())
+    send = AsyncMock(return_value=True)
+    split = AsyncMock(return_value=None)
+    failed_job = Mock()
+    update = AsyncMock()
+    monkeypatch.setattr(mock_state, "media_pipeline", None)
+    monkeypatch.setattr(mock_state, "download_queue", queue)
+    monkeypatch.setattr(orchestrator.config, "TELEGRAM_LOCAL_ENDPOINT", "")
+    monkeypatch.setattr(
+        orchestrator, "ensure_telegram_compatible", AsyncMock(return_value=str(video))
+    )
+    monkeypatch.setattr(orchestrator, "split_video_stream_copy", split)
+    monkeypatch.setattr(orchestrator, "mark_current_job_failed", failed_job)
+    monkeypatch.setattr(orchestrator, "extract_video_meta", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        orchestrator.MediaSender,
+        "download_video",
+        AsyncMock(return_value=(str(video), None)),
+    )
+    monkeypatch.setattr(orchestrator.MediaSender, "send_file", send)
+
+    success = await orchestrator.DownloadOrchestrator.process_download(
+        "token",
+        1,
+        SimpleNamespace(send_chat_action=AsyncMock()),
+        DownloadContext("https://example.com/video", "18"),
+        None,
+        update,
+        "back",
+    )
+
+    assert not success
+    send.assert_not_awaited()
+    split.assert_not_awaited()
+    failed_job.assert_called_once()
+    assert isinstance(failed_job.call_args.args[0], OSError)
+    update.assert_awaited_with(Texts.GENERIC_ERROR_SHORT, "back")
+    queue.release.assert_called_once()
+    assert not video.exists()
+
+
+@pytest.mark.parametrize("direct", [False, True])
+async def test_cloud_orchestrator_sends_exact_limit_and_direct_cdn_sources(
+    tmp_path, monkeypatch, mock_state, direct
+):
+    from app.services import orchestrator
+
+    body = b"exact upload limit"
+    video = tmp_path / "source.mp4"
+    video.write_bytes(body)
+    source = "https://cdn.example/media.mp4" if direct else str(video)
+    queue = SimpleNamespace(enqueue=AsyncMock(return_value=True), release=Mock())
+    monkeypatch.setattr(mock_state, "media_pipeline", None)
+    monkeypatch.setattr(mock_state, "download_queue", queue)
+    monkeypatch.setattr(orchestrator.config, "TELEGRAM_LOCAL_ENDPOINT", "")
+    monkeypatch.setattr(orchestrator, "_TG_UPLOAD_LIMIT_BYTES", len(body))
+    ensure = AsyncMock(return_value=source)
+    split = AsyncMock(return_value=None)
+    send = AsyncMock(return_value=True)
+    monkeypatch.setattr(orchestrator, "ensure_telegram_compatible", ensure)
+    monkeypatch.setattr(orchestrator, "split_video_stream_copy", split)
+    monkeypatch.setattr(orchestrator, "extract_video_meta", AsyncMock(return_value={}))
+    monkeypatch.setattr(
+        orchestrator.MediaSender,
+        "download_video",
+        AsyncMock(return_value=(source, None)),
+    )
+    monkeypatch.setattr(orchestrator.MediaSender, "send_file", send)
+
+    assert await orchestrator.DownloadOrchestrator.process_download(
+        "token",
+        1,
+        SimpleNamespace(send_chat_action=AsyncMock()),
+        DownloadContext("https://example.com/video", "18"),
+        None,
+        AsyncMock(),
+        None,
+    )
+    assert send.await_args.args[2] == source
+    split.assert_not_awaited()
+    if direct:
+        ensure.assert_not_awaited()
+    queue.release.assert_called_once()
+
+
 async def test_instagram_session_evicted_during_limiter_wait_is_not_reused(
     monkeypatch, mock_state
 ):

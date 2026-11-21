@@ -122,7 +122,6 @@ async def _send_gif_document_durable(
     except NetworkError:
         await record_current_delivery(item_key, DeliveryOutcome.UNCERTAIN)
         return DeliveryOutcome.UNCERTAIN, None
-    # Bot transport extensions can fail outside Telegram errors; persist the failed receipt.
     except Exception:  # noqa: BLE001
         await record_current_delivery(item_key, DeliveryOutcome.FAILED)
         return DeliveryOutcome.FAILED, None
@@ -152,14 +151,11 @@ async def _edit_or_reply(
             )
         else:
             await q.edit_message_text(text, reply_markup=reply_markup, **kwargs)
-    # Editing optional Telegram UI must fall back even when a transport adapter fails.
     except Exception as e:  # noqa: BLE001
         logger.warning("_edit_or_reply failed (editing caption/text): %s", e)
-        # Ultimate fallback
         try:
             await msg.delete()
             await msg.chat.send_message(text, reply_markup=reply_markup, **kwargs)
-        # The final UI fallback is best effort; delivery callers retain their own result.
         except Exception as e2:  # noqa: BLE001
             logger.error("_edit_or_reply ultimate fallback failed: %s", e2)
 
@@ -205,7 +201,6 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             duration = result.duration_str
             is_slideshow = result.is_slideshow
             thumbnail_url = result.thumbnail_url
-        # Refresh spans provider, cache and Telegram APIs; report failure at this UI boundary.
         except Exception as e:  # noqa: BLE001
             logger.error("Refresh error on back", extra={"error": str(e)})
             await q.edit_message_text(Texts.CACHE_REFRESH_FAIL)
@@ -276,9 +271,7 @@ async def on_back(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     ),
                     reply_markup=reply_markup,
                 )
-            # A failed media edit falls back to the text menu, including transport adapter failures.
             except Exception:  # noqa: BLE001
-                # Fallback: original message might be text-only
                 await q.edit_message_text(
                     caption,
                     reply_markup=reply_markup,
@@ -299,7 +292,6 @@ async def on_pick(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         await q.edit_message_reply_markup(None)
-    # Removing stale buttons is best effort and must not prevent format selection.
     except Exception:  # noqa: BLE001, S110
         pass
 
@@ -433,7 +425,6 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         await q.edit_message_reply_markup(None)
-    # Removing stale buttons is best effort and must not prevent the download.
     except Exception:  # noqa: BLE001, S110
         pass
 
@@ -487,7 +478,6 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     async def update_progress_ui(text: str, markup: object | None = None) -> None:
         try:
             await q.edit_message_text(text, reply_markup=markup, parse_mode="HTML")  # type: ignore
-        # Progress edits are optional; adapter failures must not abort the active download.
         except Exception as e:  # noqa: BLE001
             logger.warning("UI update failed", extra={"error": str(e)})
 
@@ -518,7 +508,6 @@ async def on_send(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if success:
         try:
             await q.delete_message()
-        # Deleting the status message must not overturn a confirmed delivery receipt.
         except Exception:  # noqa: BLE001, S110
             pass
 
@@ -530,7 +519,6 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     try:
         await q.answer(Texts.GIF_CONVERTING)
         await q.edit_message_reply_markup(None)
-    # Callback toast/button feedback is optional; conversion must remain available.
     except Exception as e:  # noqa: BLE001
         logger.warning("Callback answer failed", extra={"error": str(e)})
 
@@ -542,7 +530,6 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     except (CallbackDataError, ValueError):
         return
 
-    # This single-send callback must also honor receipts from earlier releases.
     if not await current_job_can_retry():
         return
     source_key, telegram_source = _gif_source_cache_key(q.message, token)
@@ -550,7 +537,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if debounce_key in state.processing_gifs:
         try:
             await q.message.reply_text(Texts.GIF_ALREADY_IN_PROGRESS, do_quote=True)
-        except Exception:  # noqa: BLE001, S110 - optional progress feedback
+        except Exception:  # noqa: BLE001, S110
             pass
         return
     state.processing_gifs.add(debounce_key)
@@ -564,7 +551,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 video_path = await _recover_telegram_gif_source(
                     context.bot, telegram_source, owned_paths
                 )
-            except Exception as error:  # noqa: BLE001 - optional source recovery
+            except Exception as error:  # noqa: BLE001
                 logger.warning(
                     "Animation source recovery failed",
                     extra={"error_type": type(error).__name__},
@@ -572,7 +559,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if not video_path or not os.path.exists(video_path):
             try:
                 await q.message.reply_text(Texts.GIF_FILE_EXPIRED, do_quote=True)
-            except Exception:  # noqa: BLE001, S110 - optional expiry feedback
+            except Exception:  # noqa: BLE001, S110
                 pass
             return
 
@@ -583,7 +570,7 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         if not gif_path:
             try:
                 await q.message.reply_text(Texts.GIF_CONVERSION_ERROR, do_quote=True)
-            except Exception:  # noqa: BLE001, S110 - optional failure feedback
+            except Exception:  # noqa: BLE001, S110
                 pass
             return
 
@@ -608,14 +595,12 @@ async def on_convert_to_gif(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             and state.local_sent_media_source(receipt.items[0])
             == os.path.realpath(gif_path)
         ):
-            # The native-GIF button needs this exact confirmed animation. Give
-            # its generated file a unique bounded cache owner before relinquishing it.
             state.file_cache[f"animation-source:{uuid.uuid4().hex}"] = gif_path
             owned_paths.remove(gif_path)
         if not receipt:
             try:
                 await q.message.reply_text(Texts.GIF_SEND_ERROR, do_quote=True)
-            except Exception:  # noqa: BLE001, S110 - optional failure feedback
+            except Exception:  # noqa: BLE001, S110
                 pass
     finally:
         state.processing_gifs.discard(debounce_key)
@@ -633,7 +618,6 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     try:
         await q.edit_message_reply_markup(None)
-    # Removing stale buttons is optional; slideshow queue ownership must proceed.
     except Exception:  # noqa: BLE001, S110
         pass
 
@@ -812,7 +796,6 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         try:
             if is_photo_mode:
-                # Send as photo album
                 await _edit_or_reply(q, Texts.SLIDESHOW_SENDING)
 
                 total = len(result.images)
@@ -841,7 +824,6 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 else:
                     await _edit_or_reply(q, Texts.SEND_ERROR)
             else:
-                # Convert to video and send
                 await _edit_or_reply(q, Texts.SLIDESHOW_CONVERTING)
 
                 with process_owner_scope(process_token):
@@ -868,10 +850,8 @@ async def on_slideshow(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 else:
                     await _edit_or_reply(q, Texts.SEND_ERROR)
 
-                # Cleanup video file
                 await asyncio.to_thread(safe_remove, video_path)
         finally:
-            # Always cleanup slideshow download directory
             await asyncio.to_thread(MediaSender.cleanup_slideshow, result)
     finally:
         state.download_queue.release()
@@ -907,10 +887,9 @@ async def on_save_as_gif_file(
     if debounce_key in state.processing_gifs:
         try:
             await q.answer(Texts.GIF_FILE_QUEUE_TOAST, show_alert=False)
-        except Exception:  # noqa: BLE001, S110 - optional progress feedback
+        except Exception:  # noqa: BLE001, S110
             pass
         return
-    # Claim the source before cache/UI/download awaits can interleave another export.
     state.processing_gifs.add(debounce_key)
     owned_paths: list[str] = []
     try:
@@ -919,8 +898,6 @@ async def on_save_as_gif_file(
         )
     finally:
         state.processing_gifs.discard(debounce_key)
-        # These are closed, request-owned files. Synchronous unlink cannot leave
-        # a detached cleanup worker after repeated task cancellation.
         for owned_path in reversed(owned_paths):
             safe_remove(owned_path)
 
@@ -938,19 +915,14 @@ async def _export_native_gif(
     from app.services.converter import MediaConverter
 
     delivery_key = _gif_document_delivery_key(q.message.chat_id, cache_key)
-    # This callback owns one media send. Any prior success/uncertainty remains
-    # authoritative, including old receipt keys after link-cache expiry.
     if not await current_job_can_retry():
         return
 
-    # -- 1. Immediate UX feedback --
     try:
         await q.answer(Texts.GIF_FILE_PREPARING_TOAST, show_alert=False)
-    # The preparation toast is optional; a failed adapter must not block GIF delivery.
     except Exception:  # noqa: BLE001, S110
         pass
 
-    # Spinner: update button label to show work in progress
     try:
         from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
@@ -967,14 +939,11 @@ async def _export_native_gif(
             ]
         )
         await q.message.edit_reply_markup(reply_markup=spinner_kb)
-    # Spinner markup is optional and cannot determine the document delivery outcome.
     except Exception as e:  # noqa: BLE001
         logger.debug("Spinner button update failed: %s", e)
 
-    # Only reuse an export of this exact sent source and request token.
     cached_doc_id = await state.gifdoc_cache.get(cache_key)
     if cached_doc_id and isinstance(cached_doc_id, str):
-        # Storage errors propagate: they do not prove a cached file_id is bad.
         outcome, _ = await _send_gif_document_durable(
             context.bot,
             delivery_key,
@@ -990,7 +959,6 @@ async def _export_native_gif(
         if outcome is DeliveryOutcome.FAILED:
             logger.warning("Cached gif file_id was rejected, regenerating")
         else:
-            # Update the button after confirmed delivery.
             try:
                 done_kb = InlineKeyboardMarkup(
                     [
@@ -1003,35 +971,28 @@ async def _export_native_gif(
                     ]
                 )
                 await q.message.edit_reply_markup(reply_markup=done_kb)
-            # Done-button UI is optional; the durable document receipt already records success.
             except Exception:  # noqa: BLE001, S110
                 pass
             return
 
-    # -- 3. Locate source video --
-    # A token can be shared by several output messages. Use a token-only local
-    # file only when the callback has no concrete Telegram source identity.
     video_path: str | None = (
         state.file_cache.get(token) if telegram_source is None else None
     )
     if video_path and not os.path.exists(video_path):
-        video_path = None  # stale entry — evict implicitly
+        video_path = None
 
     if not video_path:
-        # Recover exactly the media attached to this callback message.
         try:
             if telegram_source is not None:
                 video_path = await _recover_telegram_gif_source(
                     context.bot, telegram_source, owned_paths
                 )
-        # Source recovery spans Telegram download and local I/O; a safe expiry UI follows failure.
         except Exception as e:  # noqa: BLE001
             logger.warning("on_save_as_gif_file: TG re-download failed: %s", e)
 
     if not video_path:
         try:
             await q.message.reply_text(Texts.GIF_FILE_EXPIRED, do_quote=True)
-        # The expired-source notice is optional and may fail after the source is unavailable.
         except Exception:  # noqa: BLE001, S110
             pass
         try:
@@ -1040,12 +1001,10 @@ async def _export_native_gif(
             await q.message.edit_reply_markup(
                 reply_markup=build_sent_gif_keyboard(token)
             )
-        # Restoring buttons on an expired source is optional; it must not mask expiry.
         except Exception:  # noqa: BLE001, S110
             pass
         return
 
-    # -- Check size soft limit (50MB) to protect CPU and mobile clients --
     try:
         val_size = os.path.getsize(video_path)
         if val_size > 50 * 1024 * 1024:
@@ -1056,15 +1015,12 @@ async def _export_native_gif(
     except OSError:
         pass
 
-    # -- Queue toast if semaphore is crowded --
     if state.gif_file_sem.locked():
         try:
             await q.answer(Texts.GIF_FILE_QUEUE_TOAST, show_alert=False)
-        # Queue feedback is optional and must not abort a conversion waiting for capacity.
         except Exception:  # noqa: BLE001, S110
             pass
 
-    # -- 5. Convert using palette-based native GIF export --
     gif_path: str | None
     if video_path.lower().endswith(".gif"):
         logger.info(
@@ -1081,16 +1037,12 @@ async def _export_native_gif(
     if not gif_path:
         try:
             await q.message.reply_text(Texts.GIF_FILE_ERROR, do_quote=True)
-        # Conversion failure is established; sending its Telegram notice is best effort.
         except Exception:  # noqa: BLE001, S110
             pass
         return
 
-    # -- 6. Send as document (reply to animation) --
     durable_send_active = False
     try:
-        # Keep the upload handle owned by this task through send/cancellation;
-        # offloading only open() could leave a late worker holding the source.
         with open(gif_path, "rb") as source:  # noqa: ASYNC230
             doc_input = InputFile(source, filename=f"animation_{token[:8]}.gif")
             durable_send_active = True
@@ -1110,12 +1062,10 @@ async def _export_native_gif(
         if outcome is not DeliveryOutcome.SUCCESS:
             try:
                 await q.message.reply_text(Texts.GIF_FILE_ERROR, do_quote=True)
-            # The durable receipt determines delivery failure; its UI notice is best effort.
             except Exception:  # noqa: BLE001, S110
                 pass
             return
 
-        # Cache the exported file ID only for this exact sent source.
         if sent is not None and sent.document:
             await state.gifdoc_cache.set(cache_key, sent.document.file_id)
             logger.info(
@@ -1123,7 +1073,6 @@ async def _export_native_gif(
                 cache_key,
             )
 
-        # Update the button after confirmed delivery.
         try:
             done_kb = InlineKeyboardMarkup(
                 [
@@ -1136,18 +1085,14 @@ async def _export_native_gif(
                 ]
             )
             await q.message.edit_reply_markup(reply_markup=done_kb)
-        # Done-button UI is optional; the durable receipt and cached file_id are authoritative.
         except Exception:  # noqa: BLE001, S110
             pass
 
     except Exception:
-        # Escapes from the durable helper include receipt-store failures;
-        # the job runner must observe them instead of export-error recovery.
         if durable_send_active:
             raise
         logger.exception("on_save_as_gif_file: send_document failed")
         try:
             await q.message.reply_text(Texts.GIF_FILE_ERROR, do_quote=True)
-        # Document/export failure is already logged; its Telegram notice is best effort.
         except Exception:  # noqa: BLE001, S110
             pass

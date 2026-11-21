@@ -58,6 +58,9 @@ The bot runs as fixed UID/GID `10001:10001`. The `volume-init` service is a
 root-only one-shot initializer; routine deploys must not rerun it or recreate the
 Local Bot API, Redis, or provider services.
 
+Host Caddy forwards the bot's public origin to `127.0.0.1:8000`. Redis and
+Local Bot API use their service names on the Compose network.
+
 ### Bootstrap-only volume migration
 
 Adding the media/state mounts and attaching the shared media path to Local Bot API
@@ -202,6 +205,12 @@ retains its existing ownership guard.
 Retained webhook payloads are bounded and periodically purged. Temporary media is
 resumed only when its lease, integrity, and source validity still pass checks.
 
+Retain a timed-out candidate's unresolved evidence reservation across rollback.
+Confirm scoped cancellation before rollback when possible. The previous worker
+can open the same schema and skips confirmed cancellations. It cannot interpret
+pending cancellation requests. See
+[candidate timeout recovery](acceptance.md#controlled-task-14-run).
+
 ## Automated release
 
 The protected deployment workflow is the canonical path. It pins first-party
@@ -289,6 +298,22 @@ direct or the configured proxy; standard `HTTP_PROXY`, `HTTPS_PROXY`,
 `ALL_PROXY` and `NO_PROXY` variables cannot change that selection. Legacy
 `TIKTOK_PROXY`/`VK_PROXY` settings apply only to legacy service callers; configure
 the shared pipeline through `MEDIA_PROXY_URLS` and `MEDIA_PROXY_PLATFORMS`.
+
+The optional [WireGuard example](../docker-compose.wireguard.example.yml) runs a
+SOCKS5 proxy on port 1080. For a separate local or test Compose project, put the
+tunnel configuration at `./wireguard/wg0.conf`. Build and start the service with
+`docker compose -f docker-compose.yml -f docker-compose.wireguard.example.yml up --build -d wireguard-proxy`.
+The build pins the LinuxServer WireGuard image and verifies the Alpine
+MicroSocks `1.0.5-r0` package checksum for either amd64 or arm64. Build-time
+network access is required to fetch those inputs. The container starts WireGuard
+from the mounted configuration and then runs the preinstalled proxy.
+[Image build](../examples/wireguard/Dockerfile)
+Legacy TikTok callers can use `TIKTOK_PROXY=socks5://wireguard-proxy:1080`. For the
+shared pipeline, set `MEDIA_PROXY_URLS=["socks5://wireguard-proxy:1080"]` and use
+`MEDIA_PROXY_PLATFORMS=tiktok` if only TikTok extraction should be eligible to
+use it. A bot that waits for this service can use a `service_healthy` dependency
+when the tunnel handshake can complete before the bot starts.
+
 A transfer failure cools that platform/route for 60 seconds and the
 single refresh obtains new URLs on the next available route. Proxy extraction
 attempts and YouTube direct fallback attempts are bounded to 20 seconds; other

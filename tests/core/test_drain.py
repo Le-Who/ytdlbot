@@ -9,9 +9,11 @@ from app.core import drain as drain_module
 from app.core.drain import DrainController, DurableUpdateWorker
 from app.core.job_store import (
     DeliveryOutcome,
+    EvidenceCancellation,
     JobState,
     JobStore,
     begin_current_delivery,
+    evidence_update_id,
     mark_current_job_failed,
     record_current_delivery,
 )
@@ -59,6 +61,137 @@ async def test_worker_claims_one_persisted_update_and_marks_it_completed(tmp_pat
 
 
 @pytest.mark.asyncio
+async def test_scoped_cancellation_never_interrupts_an_unrelated_live_job(tmp_path):
+    store = JobStore(tmp_path / "jobs.sqlite3")
+    controller = DrainController(store)
+    correlation = "acceptance:queued"
+    update_id = evidence_update_id(correlation)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    processed: list[int] = []
+
+    async def process(payload: dict[str, object]) -> None:
+        processed.append(int(payload["update_id"]))
+        entered.set()
+        await release.wait()
+
+    await store.accept_update(update_payload(1))
+    assert await store.accept_evidence_update(update_payload(update_id), correlation)
+    worker = DurableUpdateWorker(store, controller, process, poll_interval=0.005)
+    await worker.start()
+    try:
+        await asyncio.wait_for(entered.wait(), 2)
+        assert (
+            await store.request_evidence_cancellation("acceptance:unknown")
+            is EvidenceCancellation.UNCONFIRMED
+        )
+        assert (
+            await store.request_evidence_cancellation(correlation)
+            is EvidenceCancellation.CONFIRMED
+        )
+        unrelated = await store.get_update(1)
+        assert unrelated is not None and unrelated.state is JobState.RUNNING
+        release.set()
+        await wait_until(lambda: worker.last_completed_job_id == "1")
+        assert processed == [1]
+        assert await store.schema_version() == 4
+        assert await store.claim_recoverable_jobs(worker.owner_id) == []
+    finally:
+        release.set()
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_claimed_evidence_checks_cancellation_before_starting_handler(tmp_path):
+    claimed = asyncio.Event()
+    allow_handler = asyncio.Event()
+
+    class PausedClaimStore(JobStore):
+        async def claim_next(self, *args, **kwargs):
+            job = await super().claim_next(*args, **kwargs)
+            if job is not None:
+                claimed.set()
+                await allow_handler.wait()
+            return job
+
+    store = PausedClaimStore(tmp_path / "jobs.sqlite3")
+    correlation = "acceptance:claimed"
+    processed: list[int] = []
+    update_id = evidence_update_id(correlation)
+
+    async def process(payload: dict[str, object]) -> None:
+        processed.append(int(payload["update_id"]))
+
+    assert await store.accept_evidence_update(update_payload(update_id), correlation)
+    worker = DurableUpdateWorker(
+        store, DrainController(store), process, poll_interval=0.005
+    )
+    await worker.start()
+    try:
+        await asyncio.wait_for(claimed.wait(), 2)
+        await store.accept_update(update_payload(1))
+        assert (
+            await store.request_evidence_cancellation(correlation)
+            is EvidenceCancellation.REQUESTED
+        )
+        assert not await store.confirm_evidence_cancellation(str(update_id), "wrong")
+        allow_handler.set()
+        await wait_until(lambda: worker.last_completed_job_id == "1")
+        assert processed == [1]
+        assert (
+            await store.evidence_cancellation_status(correlation)
+            is EvidenceCancellation.CONFIRMED
+        )
+    finally:
+        allow_handler.set()
+        await worker.stop()
+
+
+@pytest.mark.asyncio
+async def test_scoped_cancel_racing_natural_completion_is_unconfirmed(tmp_path):
+    handler_finished = asyncio.Event()
+    complete = asyncio.Event()
+
+    class CompletionStore(JobStore):
+        async def has_failed_deliveries(self, job_id: str) -> bool:
+            handler_finished.set()
+            await complete.wait()
+            return await super().has_failed_deliveries(job_id)
+
+    store = CompletionStore(tmp_path / "jobs.sqlite3")
+    controller = DrainController(store)
+    correlation = "acceptance:completion-race"
+    update_id = evidence_update_id(correlation)
+
+    async def process(payload: dict[str, object]) -> None:
+        await begin_current_delivery(("sent",))
+        await record_current_delivery("sent", DeliveryOutcome.SUCCESS, delivery_id="42")
+
+    assert await store.accept_evidence_update(update_payload(update_id), correlation)
+    worker = DurableUpdateWorker(store, controller, process, poll_interval=0.005)
+    await worker.start()
+    try:
+        await asyncio.wait_for(handler_finished.wait(), 2)
+        assert (
+            await store.request_evidence_cancellation(correlation)
+            is EvidenceCancellation.REQUESTED
+        )
+        complete.set()
+        await wait_until(lambda: worker.last_completed_job_id == str(update_id))
+        assert (
+            await store.evidence_cancellation_status(correlation)
+            is EvidenceCancellation.UNCONFIRMED
+        )
+        assert (
+            await store.delivery_outcome(str(update_id), item_key="sent")
+            is DeliveryOutcome.SUCCESS
+        )
+    finally:
+        complete.set()
+        await worker.stop()
+
+
+@pytest.mark.asyncio
 async def test_drain_accepts_updates_but_starts_no_new_jobs(tmp_path):
     idle = asyncio.Event()
 
@@ -78,8 +211,6 @@ async def test_drain_accepts_updates_but_starts_no_new_jobs(tmp_path):
 
     worker = DurableUpdateWorker(store, controller, process, poll_interval=0.005)
     await worker.start()
-    # This test covers inserts into an already idle, draining worker. Late
-    # claims are covered separately by the gated real SQLite regression.
     await asyncio.wait_for(idle.wait(), 1)
     result = await controller.drain(deadline_seconds=0.1)
     accepted = await store.accept_update(update_payload(702))
@@ -531,8 +662,6 @@ async def test_timed_out_checkpoint_thread_cannot_mutate_replacement_owner(
     tmp_path, monkeypatch
 ):
     """A to_thread commit may outlive cancellation, so owner fencing is required."""
-    # Give the executor time to begin the real transaction boundary. The slow
-    # coroutine test covers a tight drain deadline without executor scheduling.
     monkeypatch.setattr(drain_module, "CLEANUP_TIMEOUT_SECONDS", 0.3)
     checkpoint_started = threading.Event()
     checkpoint_finished = threading.Event()
@@ -676,7 +805,6 @@ async def test_resistant_handler_stays_tracked_and_owned_after_bounded_stop(
         assert "710" in controller._active
         assert (await store.get_update(710)).state is JobState.RUNNING
         assert await store.acquire_worker("replacement") is False
-        # Repeated shutdown calls must not buy another work/cleanup grace.
         async with asyncio.timeout(0.02):
             assert await controller.drain(deadline_seconds=10) == result
             await worker.stop()

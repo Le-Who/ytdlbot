@@ -36,7 +36,6 @@ force-exclude = true
 python_version = "3.12"
 ignore_missing_imports = true
 disable_error_code = ["import-untyped"]
-# Practical-strict: catches real bugs without full annotation burden
 warn_return_any = true
 warn_unused_configs = true
 warn_unused_ignores = true

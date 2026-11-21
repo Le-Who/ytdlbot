@@ -22,6 +22,8 @@ class AsyncMockCache(dict):
 
 
 import asyncio
+import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from telegram import Message
@@ -57,7 +59,6 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
 
     async def test_full_private_message_flow(self):
         """User picks format → link generated → feedback message sent (Strict AAA)."""
-        # --- Arrange ---
         url = "https://youtube.com/watch?v=test123"
         formats = [
             FormatItem(
@@ -109,10 +110,8 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
             "size_map": {"137": 100 * 1024 * 1024, "136": 50 * 1024 * 1024},
         }
 
-        # --- Act ---
         await callbacks.on_pick(update, context)
 
-        # --- Assert ---
         self.assertTrue(len(state.link_cache) > 0)
         token = next(iter(state.link_cache))
         cached = state.link_cache[token]
@@ -224,8 +223,11 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
             patch(
                 "app.services.downloader.MediaSender.send_file", new_callable=AsyncMock
             ) as mock_send,
+            tempfile.TemporaryDirectory() as local_dir,
         ):
-            mock_dl.return_value = ("/tmp/integration_test.mp4", None)
+            path = Path(local_dir) / "integration_test.mp4"
+            path.write_bytes(b"fixture video")
+            mock_dl.return_value = (str(path), None)
             mock_send.return_value = True
 
             await callbacks.on_send(update, context)
@@ -319,7 +321,7 @@ class TestParserIntegration(unittest.TestCase):
             ),
         ]
         result = deduplicate_formats(formats, is_tiktok_url=True)
-        self.assertEqual(len(result), 2)  # 5000 and 10000
+        self.assertEqual(len(result), 2)
 
     def test_non_tiktok_deduplication(self):
         """Non-TikTok formats are deduplicated by height."""
@@ -335,7 +337,7 @@ class TestParserIntegration(unittest.TestCase):
             ),
         ]
         result = deduplicate_formats(formats, is_tiktok_url=False)
-        self.assertEqual(len(result), 2)  # 1080 and 720
+        self.assertEqual(len(result), 2)
 
     def test_special_format_audio(self):
         fmt = get_special_format("https://youtube.com/watch?v=123")

@@ -2,10 +2,11 @@
 """
 YouTube Cookie Exporter for ytdlbot
 ====================================
-Extracts YouTube session cookies from your browser via yt-dlp,
-encodes them as base64, and outputs a ready-to-paste .env line.
+Reads a user-supplied Netscape file or uses the legacy yt-dlp browser mode.
+Filters the records and outputs a base64-encoded .env line.
 
 Usage:
+    python export_cookies.py --input PATH
     python export_cookies.py                    # Chrome default profile
     python export_cookies.py chrome             # Chrome — pick profile interactively
     python export_cookies.py chrome "Profile 3" # Chrome — specific profile
@@ -13,10 +14,11 @@ Usage:
     python export_cookies.py edge               # Edge
 
 Requirements:
-    - Python 3.8+
-    - yt-dlp installed (pip install yt-dlp)
+    - Python 3.10+
+    - yt-dlp installed for browser mode
 """
 
+import argparse
 import base64
 import io
 import json
@@ -26,26 +28,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
-# Force UTF-8 stdout on Windows, line-buffered to prevent garbled output
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-    sys.stdout = io.TextIOWrapper(
-        sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
-    )
-    sys.stderr = io.TextIOWrapper(
-        sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
-    )
-else:
-    # Even if encoding is fine, ensure line buffering
-    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
-
-# ── Config ───────────────────────────────────────────────────────
 SUPPORTED_BROWSERS = ("chrome", "firefox", "edge", "brave", "opera", "vivaldi")
 ENV_VAR_NAME = "YTDLP_COOKIES_B64"
-# Dummy URL — yt-dlp requires at least one URL arg even when only exporting cookies.
 DUMMY_URL = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
 
-# Chrome/Edge/Brave User Data directories per OS
 _CHROMIUM_USER_DATA = {
     "chrome": {
         "Windows": os.path.join(
@@ -91,7 +79,6 @@ def _check_ytdlp() -> list[str]:
     if path:
         return [path]
 
-    # Maybe installed as a Python module
     try:
         subprocess.run(
             [sys.executable, "-m", "yt_dlp", "--version"],
@@ -101,7 +88,6 @@ def _check_ytdlp() -> list[str]:
         )
         return [sys.executable, "-m", "yt_dlp"]
     except (OSError, subprocess.SubprocessError):
-        # Expected launch/exit/timeout failures make the module unavailable.
         print("  [X]  yt-dlp not found!")
     print()
     print("  Install it:")
@@ -138,13 +124,11 @@ def _discover_chromium_profiles(browser: str) -> list[dict]:
         profile_info = prefs.get("profile", {})
         name = profile_info.get("name", entry)
 
-        # Try to find the Google account email
         account_info = prefs.get("account_info", [])
         email = ""
         if account_info and isinstance(account_info, list):
             email = account_info[0].get("email", "")
 
-        # Also check gaia_info_picture_url presence as a sign of logged-in profile
         gaia_name = profile_info.get("gaia_name", "")
 
         profiles.append(
@@ -178,7 +162,6 @@ def _pick_profile_interactive(profiles: list[dict]) -> str | None:
             email_part = ""
         lines.append(f"    {i:>3}.  {label}{email_part}   [{p['dir']}]")
     lines.append("")
-    # Print all at once to prevent interleaving
     sys.stdout.write("\n".join(lines) + "\n")
     sys.stdout.flush()
 
@@ -238,18 +221,16 @@ def _resolve_profile(browser: str, explicit_profile: str | None) -> str | None:
     Returns the profile dir name or None (meaning default / not applicable).
     """
     if browser not in _CHROMIUM_USER_DATA:
-        return None  # Firefox/Opera don't use this mechanism
+        return None
 
     profiles = _discover_chromium_profiles(browser)
 
     if not profiles:
-        return None  # Could not discover profiles — let yt-dlp use default
+        return None
 
-    # If user specified a profile on command line, validate it
     if explicit_profile:
         dirs = [p["dir"] for p in profiles]
         names = [p["name"].lower() for p in profiles]
-        # Match by directory name or display name
         if explicit_profile in dirs:
             return explicit_profile
         if explicit_profile.lower() in names:
@@ -259,11 +240,9 @@ def _resolve_profile(browser: str, explicit_profile: str | None) -> str | None:
         print(f"  Available: {', '.join(p['dir'] for p in profiles)}")
         sys.exit(1)
 
-    # Only 1 profile — use it silently
     if len(profiles) == 1:
         return profiles[0]["dir"]
 
-    # Multiple profiles — interactive selection
     selected = _pick_profile_interactive(profiles)
     if selected is None:
         sys.exit(0)
@@ -326,10 +305,8 @@ def _extract_cookies_to_directory(
     """
     cookie_file = os.path.join(tmp_dir, "cookies.txt")
 
-    # Build the command
     cmd = [ytdlp_path] if isinstance(ytdlp_path, str) else list(ytdlp_path)
 
-    # yt-dlp syntax: --cookies-from-browser BROWSER[:PROFILE]
     browser_arg = browser
     if profile:
         browser_arg = f"{browser}:{profile}"
@@ -380,7 +357,6 @@ def _extract_cookies_to_directory(
             print(f"       Reason: {last_line}")
         print()
 
-        # Specific guidance for Chrome App-Bound Encryption (DPAPI) failure
         if (
             "dpapi" in stderr.lower()
             or "app_bound" in stderr.lower()
@@ -429,7 +405,6 @@ def _filter_youtube_cookies(raw_content: str) -> str:
         cookie_line = stripped.removeprefix("#HttpOnly_")
         if not stripped or cookie_line.startswith("#") or stripped.startswith("//"):
             continue
-        # Netscape format: domain \t flag \t path \t secure \t expiry \t name \t value
         parts = cookie_line.split("\t")
         if (
             len(parts) != 7
@@ -479,35 +454,33 @@ def _copy_to_clipboard(text: str) -> bool:
         return False
 
 
-def main() -> None:
-    _print_banner()
+def _configure_cli_output() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+            except io.UnsupportedOperation:
+                pass
 
-    ytdlp_path = _check_ytdlp()
-    browser, explicit_profile = _pick_browser_and_profile(sys.argv)
 
-    print(f"  Browser: {browser.title()}")
-    print(f"  yt-dlp:  {' '.join(ytdlp_path)}")
-    print()
+def _read_input_file(arguments: list[str]) -> str:
+    parser = argparse.ArgumentParser(
+        usage="%(prog)s --input PATH",
+        description="Encode an existing Netscape cookie file for ytdlbot.",
+        allow_abbrev=False,
+    )
+    parser.add_argument("--input", type=Path, action="append", required=True)
+    paths: list[Path] = parser.parse_args(arguments).input
+    if len(paths) != 1:
+        parser.error("--input accepts exactly one file")
+    try:
+        return paths[0].read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError):
+        parser.error("cannot read --input as a UTF-8 Netscape cookie file")
 
-    # Check if browser is running
-    if _check_browser_running(browser):
-        print(f"  [!!]  {browser.title()} is currently running!")
-        print("        Close it completely (check system tray) and press Enter.")
-        print()
-        try:
-            input("        Press Enter when ready...")
-        except (EOFError, KeyboardInterrupt):
-            print()
-            sys.exit(0)
-        print()
 
-    # Resolve profile (interactive selection for Chromium browsers)
-    profile = _resolve_profile(browser, explicit_profile)
-
-    raw_cookies = _extract_cookies(ytdlp_path, browser, profile)
-    if raw_cookies is None:
-        sys.exit(1)
-
+def _print_export(raw_cookies: str, *, use_clipboard: bool) -> None:
     filtered = _filter_youtube_cookies(raw_cookies)
     if not filtered:
         print("  [X]  No YouTube/Google cookies found.")
@@ -523,8 +496,7 @@ def main() -> None:
 
     env_line = f"{ENV_VAR_NAME}={b64}"
 
-    # Try clipboard
-    copied = _copy_to_clipboard(env_line)
+    copied = use_clipboard and _copy_to_clipboard(env_line)
 
     print("  +--- Ready .env line -------------------------")
     print("  |")
@@ -546,6 +518,44 @@ def main() -> None:
     print("  Then restart the bot:")
     print("      docker compose restart bot")
     print()
+
+
+def main() -> None:
+    _configure_cli_output()
+    arguments = sys.argv[1:]
+    if any(arg == "--input" or arg.startswith("--input=") for arg in arguments):
+        input_text = _read_input_file(arguments)
+        _print_banner()
+        _print_export(input_text, use_clipboard=False)
+        return
+
+    _print_banner()
+
+    ytdlp_path = _check_ytdlp()
+    browser, explicit_profile = _pick_browser_and_profile(sys.argv)
+
+    print(f"  Browser: {browser.title()}")
+    print(f"  yt-dlp:  {' '.join(ytdlp_path)}")
+    print()
+
+    if _check_browser_running(browser):
+        print(f"  [!!]  {browser.title()} is currently running!")
+        print("        Close it completely (check system tray) and press Enter.")
+        print()
+        try:
+            input("        Press Enter when ready...")
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(0)
+        print()
+
+    profile = _resolve_profile(browser, explicit_profile)
+
+    raw_cookies = _extract_cookies(ytdlp_path, browser, profile)
+    if raw_cookies is None:
+        sys.exit(1)
+
+    _print_export(raw_cookies, use_clipboard=True)
 
 
 if __name__ == "__main__":

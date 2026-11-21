@@ -692,7 +692,6 @@ def extraction_commands_with_global_cookies(monkeypatch, tmp_path):
     monkeypatch.setenv(
         "YTDLP_COOKIES_B64", base64.b64encode(cookie_text.encode()).decode()
     )
-    # Exercise the real cookie manager, with its temporary files owned by pytest.
     monkeypatch.setattr("app.services.ytdlp.cookies.tempfile.tempdir", str(tmp_path))
     commands = []
 
@@ -710,7 +709,6 @@ def extraction_commands_with_global_cookies(monkeypatch, tmp_path):
             stderr_data=[],
         )
 
-    # Replace only process I/O: provider, service, cookie lookup and CLI builder are real.
     monkeypatch.setattr("app.core.process.run_subprocess", run_subprocess)
     return commands
 

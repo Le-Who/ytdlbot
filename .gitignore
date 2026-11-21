@@ -1,4 +1,3 @@
-# Python
 __pycache__/
 *.pyc
 *.pyo
@@ -6,34 +5,33 @@ __pycache__/
 dist/
 build/
 
-# Virtual environments
 venv/
 .venv/
 
-# Environment
 .env
 .env.*
 !.env.example
 
-# IDE
 .vscode/
 .idea/
 .cursor/
 *.swp
 *.swo
 
-# Agent / skills
 skills/
 .gemini/
-.agents/
+/.agents/*
+!/.agents/skills/
+/.agents/skills/*
+!/.agents/skills/delete-comment/
+/.agents/skills/delete-comment/*
+!/.agents/skills/delete-comment/SKILL.md
 .Jules/
 
-# OS
 Thumbs.db
 Desktop.ini
 .DS_Store
 
-# Testing / tooling
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
@@ -43,7 +41,6 @@ Desktop.ini
 htmlcov/
 artifacts/
 
-# Temp
 *.tmp
 *.log
 tb.txt

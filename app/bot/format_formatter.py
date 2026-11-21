@@ -13,7 +13,6 @@ def format_label(item: FormatItem) -> str:
     Creates a user-facing label for a format button.
     Includes icons, descriptions, and file sizes.
     """
-    # Special formats
     if item.format_note == "gif":
         return "🎬 Только GIF"
     elif item.format_note == "audio":
@@ -21,7 +20,6 @@ def format_label(item: FormatItem) -> str:
 
     parts = []
 
-    # 1. Icon & Type
     if item.is_tiktok:
         parts.append("🎵 TikTok")
     else:
@@ -36,7 +34,6 @@ def format_label(item: FormatItem) -> str:
         else:
             parts.append("📹 Video")
 
-    # 2. Size / Protocol
     if item.filesize:
         mb = item.filesize / BYTES_IN_MB
         if mb < 1:

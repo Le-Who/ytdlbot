@@ -36,7 +36,6 @@ from app.services.media.models import MediaKind
 
 logger = logging.getLogger("app.bot.commands")
 
-# Best video format for /mp4 — mirrors group_logic.py GROUP_VIDEO_FORMAT
 _sz = f"{MAX_TG_UPLOAD_MB}M"
 _MP4_FORMAT = (
     f"bestvideo[ext=mp4][filesize<{_sz}]+bestaudio[ext=m4a]"
@@ -46,15 +45,9 @@ _MP4_FORMAT = (
 )
 
 
-# ── /start ────────────────────────────────────────────────────────────────────
-
-
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     assert update.message is not None
     await update.message.reply_text(Texts.WELCOME, parse_mode="HTML")
-
-
-# ── /help ─────────────────────────────────────────────────────────────────────
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -65,9 +58,6 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         max_dl_mb=MAX_DL_MB,
     )
     await update.message.reply_text(help_text, parse_mode="HTML")
-
-
-# ── /mp3 and /mp4 fast-path helpers ──────────────────────────────────────────
 
 
 async def _fast_download(
@@ -83,7 +73,6 @@ async def _fast_download(
     chat = update.effective_chat
     assert msg is not None and user is not None and chat is not None
 
-    # Resolve URL from the command text or from a replied-to message
     url, section = extract_url_from_update(msg)
     if not url:
         usage = Texts.CMD_MP3_USAGE if is_audio else Texts.CMD_MP4_USAGE
@@ -103,7 +92,6 @@ async def _fast_download(
             chat_id=chat.id,
             action=ChatAction.UPLOAD_VOICE if is_audio else ChatAction.UPLOAD_VIDEO,
         )
-    # Chat-action feedback is optional; transport adapter failures must not block download.
     except Exception:  # noqa: BLE001, S110
         pass
 
@@ -150,7 +138,6 @@ async def _fast_download(
         if status_msg:
             try:
                 await status_msg.edit_text(text, reply_markup=markup, parse_mode="HTML")  # type: ignore[arg-type]
-            # Progress/status edits are optional and must not abort download or delivery.
             except Exception:  # noqa: BLE001, S110
                 pass
 
@@ -181,7 +168,6 @@ async def _fast_download(
     if success:
         try:
             await status_msg.delete()
-        # Status cleanup is optional; the orchestrator already reported successful delivery.
         except Exception:  # noqa: BLE001, S110
             pass
 
@@ -194,9 +180,6 @@ async def cmd_mp3(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 async def cmd_mp4(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/mp4 <url> — download best video, no format picker."""
     await _fast_download(update, context, format_id=_MP4_FORMAT, is_audio=False)
-
-
-# ── /settings ─────────────────────────────────────────────────────────────────
 
 
 async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -226,9 +209,6 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     )
 
 
-# ── /setformat ────────────────────────────────────────────────────────────────
-
-
 async def cmd_setformat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/setformat video|audio — persist the default download format."""
     msg = update.message
@@ -245,9 +225,6 @@ async def cmd_setformat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await msg.reply_text(Texts.SETTINGS_FMT_SET.format(fmt=value), parse_mode="HTML")
 
 
-# ── /setquality ───────────────────────────────────────────────────────────────
-
-
 async def cmd_setquality(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """/setquality best|1080|720|480|360 — persist the default quality."""
     msg = update.message
@@ -260,7 +237,7 @@ async def cmd_setquality(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     key = args[0].lower()
-    quality_px = VALID_QUALITIES[key]  # int or None
+    quality_px = VALID_QUALITIES[key]
     await set_prefs(user.id, default_quality=quality_px)
 
     label = "наилучшее" if quality_px is None else f"{quality_px}p"

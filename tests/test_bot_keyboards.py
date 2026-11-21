@@ -1,7 +1,6 @@
 import unittest
 from unittest.mock import MagicMock, patch
 
-# Ensure app can be imported
 from app.bot.keyboards import build_format_keyboard
 from app.services.ytdlp.models import FormatItem
 
@@ -25,7 +24,7 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         markup = build_format_keyboard([], audio)
         buttons = markup.inline_keyboard
 
-        self.assertEqual(len(buttons), 1)  # One row (audio)
+        self.assertEqual(len(buttons), 1)
         self.assertEqual(len(buttons[0]), 1)
         self.assertEqual(buttons[0][0].text, "Audio Only")
         self.assertEqual(buttons[0][0].callback_data, "m2|pick|0")
@@ -36,7 +35,7 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         markup = build_format_keyboard(formats, audio)
         buttons = markup.inline_keyboard
 
-        self.assertEqual(len(buttons), 2)  # 1 video row + 1 audio row
+        self.assertEqual(len(buttons), 2)
         self.assertEqual(len(buttons[0]), 1)
         self.assertEqual(len(buttons[1]), 1)
         self.assertEqual(buttons[0][0].text, "720p")
@@ -53,7 +52,6 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         markup = build_format_keyboard(formats, audio)
         buttons = markup.inline_keyboard
 
-        # Row 1: f1, f2 | Row 2: f3, f4 | Row 3: Audio
         self.assertEqual(len(buttons), 3)
         self.assertEqual(len(buttons[0]), 2)
         self.assertEqual(len(buttons[1]), 2)
@@ -69,7 +67,6 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         markup = build_format_keyboard(formats, audio)
         buttons = markup.inline_keyboard
 
-        # Row 1: f1, f2 | Row 2: f3 | Row 3: Audio
         self.assertEqual(len(buttons), 3)
         self.assertEqual(len(buttons[0]), 2)
         self.assertEqual(len(buttons[1]), 1)
@@ -81,16 +78,12 @@ class TestBuildFormatKeyboard(unittest.TestCase):
         markup = build_format_keyboard(formats, audio)
         buttons = markup.inline_keyboard
 
-        # 4 rows of 2 (8 items) + 1 row of audio = 5 rows
         self.assertEqual(len(buttons), 5)
 
-        # Verify 9th item (id_8) was NOT added
         all_data = [btn.callback_data for row in buttons for btn in row]
         self.assertIn("m2|pick|7", all_data)
-        self.assertNotIn(
-            "m2|pick|8", all_data[:-1]
-        )  # Audio append at the very end will be m2|pick|8
-        self.assertEqual(all_data[-1], "m2|pick|8")  # Audio is index 8
+        self.assertNotIn("m2|pick|8", all_data[:-1])
+        self.assertEqual(all_data[-1], "m2|pick|8")
 
     def test_callback_data_structure(self):
         formats = [self._make_format("Label", "MY_FORMAT_ID")]

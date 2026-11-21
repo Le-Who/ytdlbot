@@ -158,7 +158,6 @@ class JsonCommandAdapter:
         except OSError as exc:
             raise ObservationError(f"adapter {action} could not be started") from exc
         if result.returncode != 0:
-            # Adapter output may contain URLs or credentials. Never include it here.
             raise ObservationError(
                 f"adapter {action} failed with exit {result.returncode}"
             )
@@ -224,12 +223,15 @@ class JsonCommandAdapter:
         return cast(dict[str, Any], observation)
 
     def cancel(self, correlation_id: str) -> bool:
-        result = self._invoke(
-            "cancel",
-            {"correlation_id": correlation_id},
-            timeout_seconds=15.0,
-        )
-        return result == {"cancelled": True}
+        try:
+            result = self._invoke(
+                "cancel",
+                {"correlation_id": correlation_id},
+                timeout_seconds=15.0,
+            )
+        except (ObservationError, TimeoutError):
+            return False
+        return set(result) == {"cancelled"} and result["cancelled"] is True
 
 
 def _load_json(path: Path) -> dict[str, Any]:

@@ -267,5 +267,4 @@ async def test_authorized_story_receipt_failure_records_job_error_with_false_res
     assert reservation.released == 1
     assert not materialized_path.exists()
     assert source.read_bytes() == original
-    # False remains the UI contract; the worker must still receive the storage failure.
     assert execution.error is failure

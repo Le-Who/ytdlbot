@@ -8,12 +8,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# Ensure project root is on sys.path (centralised — no need in individual test files)
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from telegram import Message
 
-# Ensure default env vars
 os.environ.setdefault("BOT_TOKEN", "test_token")
 os.environ.setdefault("WEBHOOK_URL", "https://example.com")
 os.environ.setdefault("TELEGRAM_SECRET_TOKEN", "test-secret")
@@ -22,16 +20,12 @@ os.environ.setdefault("MAX_DL_MB", "2000")
 os.environ.setdefault("MAX_TG_UPLOAD_MB", "2000")
 
 
-# ── Shared Fixtures ──────────────────────────────────────────────
-
-
 @pytest.fixture()
 def mock_state():
     """Pre-configure app.core.state with common test mocks."""
     from app.core import state
     from app.core.storage.memory import MemoryStorage
 
-    # We use MemoryStorage implicitly typed as AsyncMockCache
     state.info_cache = MemoryStorage(maxsize=100, ttl=3600)
     state.link_cache = MemoryStorage(maxsize=100, ttl=3600)
     state.cancel_cache = MemoryStorage(maxsize=100, ttl=3600)

@@ -436,7 +436,7 @@ async def test_body_preserving_cross_origin_request_is_refused(tmp_path: Path) -
     media, client = transport(tmp_path, [redirect])
 
     with pytest.raises(CredentialRedirectError):
-        await media._request(  # verifies the private boundary itself
+        await media._request(
             "POST",
             "https://cdn.example/video.mp4",
             headers={"Authorization": "Bearer secret"},
@@ -829,7 +829,6 @@ async def test_adopt_local_cancellation_joins_worker_before_releasing_lease(tmp_
     assert await asyncio.to_thread(move_started.wait, 5)
     try:
         task.cancel()
-        # Queue a marker after cancellation is delivered, without timing assumptions.
         marker = asyncio.Event()
         asyncio.get_running_loop().call_soon(marker.set)
         await marker.wait()
@@ -1094,7 +1093,6 @@ async def test_animation_transform_composes_with_final_duration_validation(
         else:
             await validate_materialized_artifact(media_request, item)
         command = runner.commands[0]
-        # ffmpeg's requested cap may exceed the remaining source duration.
         assert command[command.index("-t") + 1] == ffmpeg_cap
     finally:
         await item.release(delete=True)

@@ -67,8 +67,7 @@ async def _resolve(
             return await route.provider.resolve(request)
         except ProviderError as error:
             return error
-        except Exception as error:  # noqa: BLE001 - isolate unknown adapter bugs as INTERNAL
-            # Adapter bugs are isolated, but never guessed to be auth/transient.
+        except Exception as error:  # noqa: BLE001
             return ProviderError(FailureKind.INTERNAL, str(error))
 
     async def expire_resolve() -> None:
@@ -233,8 +232,6 @@ async def race_candidates(
             if is_heavy:
                 await sleep(max(0, started + config.heavy_delay - clock()))
                 for index, route in enumerate(heavy):
-                    # A slow first extractor must leave a usable window for its
-                    # sequential fallback without extending the request deadline.
                     await attempt_route(
                         route, timeout=(deadline - clock()) / (len(heavy) - index)
                     )

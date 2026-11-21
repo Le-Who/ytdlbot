@@ -23,11 +23,11 @@ class TestSafeRemove(unittest.TestCase):
     @patch("os.unlink", side_effect=OSError("Permission denied"))
     def test_suppresses_os_error(self, mock_unlink, _):
         """OSError during unlink is silently suppressed."""
-        safe_remove("locked.txt")  # Should not raise
+        safe_remove("locked.txt")
 
     def test_empty_string_noop(self):
         """Empty path is a noop (falsy check in code)."""
-        safe_remove("")  # Should not raise
+        safe_remove("")
 
     def test_none_noop(self):
         """None path is a noop."""
@@ -37,7 +37,6 @@ class TestSafeRemove(unittest.TestCase):
 class TestIsSupportedUrl(unittest.TestCase):
     """Test is_supported_url against supported platforms from constants."""
 
-    # ── Positive cases ──
     def test_youtube_full(self):
         self.assertTrue(is_supported_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ"))
 
@@ -74,7 +73,6 @@ class TestIsSupportedUrl(unittest.TestCase):
     def test_twitter_com(self):
         self.assertTrue(is_supported_url("https://twitter.com/user/status/123"))
 
-    # ── Negative cases ──
     def test_unsupported_domain(self):
         self.assertFalse(is_supported_url("https://example.com/video"))
 
@@ -87,7 +85,6 @@ class TestIsSupportedUrl(unittest.TestCase):
     def test_no_scheme(self):
         self.assertFalse(is_supported_url("youtube.com/watch?v=abc"))
 
-    # ── Injection prevention ──
     def test_dash_prefix_rejected(self):
         """URLs starting with '-' are rejected (CLI injection prevention)."""
         self.assertFalse(is_supported_url("-https://youtube.com/watch?v=abc"))

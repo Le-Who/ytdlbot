@@ -37,7 +37,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("app.bot.group_logic")
 
-# Build format string dynamically from config
 _sz = f"{MAX_TG_UPLOAD_MB}M"
 GROUP_VIDEO_FORMAT = (
     f"bestvideo[ext=mp4][filesize<{_sz}]+bestaudio[ext=m4a]"
@@ -58,13 +57,9 @@ async def handle_group_message(
 
     url, section = extract_url_from_update(update.message)
 
-    # In groups, we only react if a URL is found.
-    # We do NOT reply with error if URL is not supported (passive mode).
     if not url:
         return
 
-    # Rate limiting for groups (per chat or per user?)
-    # Let's limit per user to avoid spam.
     user = update.effective_user
     chat = update.effective_chat
     assert user is not None and chat is not None
@@ -73,19 +68,15 @@ async def handle_group_message(
     ) or not await state.limiter.allow_chat(chat.id):
         return
 
-    # Send "Typing..." or "Uploading video..." action
     await context.bot.send_chat_action(chat_id=chat.id, action=ChatAction.UPLOAD_VIDEO)
 
-    # Initial status message
     status_msg = await update.message.reply_text("🔎")
 
-    # Tag user in caption
     if user.username:
         user_tag = f"@{user.username}"
     else:
         user_tag = user.mention_html()
 
-    # ── Instagram Early Intercept ────────────────────────────────────────
     from app.services.instagram import parse_instagram_url
 
     url_type, ig_target, ig_item_id = parse_instagram_url(url)
@@ -185,12 +176,10 @@ async def handle_group_message(
         if receipt.success:
             try:
                 await status_msg.delete()
-            # Status cleanup is optional; the pipeline receipt already confirms delivery.
             except Exception:  # noqa: BLE001, S110
                 pass
             try:
                 await update.message.delete()
-            # Deleting a user message is optional and may fail without group permissions.
             except Exception:  # noqa: BLE001, S110
                 pass
             return
@@ -223,14 +212,12 @@ async def handle_group_message(
             )
         return
 
-    # Generate token for this operation (used for file cache & callbacks)
     token = uuid.uuid4().hex
 
-    # Check if this is a TikTok slideshow
     is_tiktok_url = _is_tiktok(url)
     is_slideshow = False
     tiktok_auth_error = False
-    info_json_path = None  # cached extraction JSON for --load-info-json reuse
+    info_json_path = None
     is_tiktok_api_success = False
     tiktok_api_res: TikWMResult | CobaltResult | None = None
     api_source = None
@@ -246,7 +233,6 @@ async def handle_group_message(
                 tiktok_api_res = tikwm_res
                 api_source = "tikwm"
                 is_slideshow = tikwm_res.is_slideshow
-        # The external TikWM adapter can raise arbitrary client/decoder errors; try fallback.
         except Exception as exc:  # noqa: BLE001
             logger.warning("TikWM failed in group: %s", exc)
 
@@ -260,11 +246,9 @@ async def handle_group_message(
                     tiktok_api_res = cobalt_res
                     api_source = "cobalt"
                     is_slideshow = cobalt_res.is_slideshow
-            # The external Cobalt adapter can raise arbitrary client/decoder errors; try fallback.
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Cobalt failed in group: %s", exc)
 
-        # If TikTok APIs fail, bypass yt-dlp and force a GalleryDL fallback
         if not is_tiktok_api_success:
             from app.services.ytdlp.parsers import classify_tiktok_content
 
@@ -281,25 +265,20 @@ async def handle_group_message(
             is_slideshow = result.is_slideshow
             tiktok_auth_error = result.tiktok_auth_error
             info_json_path = result.info_json_path
-        # Extraction/provider adapter failures must leave the passive group fallback available.
         except Exception as exc:  # noqa: BLE001
             logger.info("yt-dlp list_formats error in group: %s", exc)
             is_slideshow = False
 
-    # Route format processing
     is_pinterest = "pinterest" in url or "pin.it" in url
     if tiktok_auth_error:
-        # We always want GalleryDL now for TikTok since it handles auth restrictions natively
         video_format = "gallerydl_fallback"
     else:
-        # Detect Pinterest to use a simpler format
         if is_pinterest:
             video_format = "pinterest_native"
         else:
             video_format = GROUP_VIDEO_FORMAT
 
     if is_slideshow:
-        # TikTok slideshow — offer format choice (album vs video)
         await state.link_cache.set(
             token,
             DownloadContext(
@@ -334,13 +313,10 @@ async def handle_group_message(
         await status_msg.edit_text(Texts.GROUP_SLIDESHOW_CHOICE, reply_markup=kb)
         return
 
-    # Regular video download flow
-    # Callback to update the status message
     async def update_ui(text, markup=None):
         try:
             if status_msg:
                 await status_msg.edit_text(text, reply_markup=markup)
-        # Progress edits are optional; Telegram adapter failures must not abort the download.
         except Exception:  # noqa: BLE001
             return
 
@@ -372,7 +348,6 @@ async def handle_group_message(
                 file_path = str(file_path_raw) if file_path_raw else None
                 err = "Cobalt API download failed" if not file_path else None
 
-            # Smart BVC2/HEVC Fallback Check
             if isinstance(file_path, str) and not file_path.startswith("http"):
                 from app.services.orchestrator import TG_SAFE_CODECS, extract_video_meta
 
@@ -449,7 +424,6 @@ async def handle_group_message(
         if error or not file_path:
             try:
                 await status_msg.edit_text(error or Texts.GROUP_ERROR)
-            # Download failure is already authoritative; its group UI notice is best effort.
             except Exception:  # noqa: BLE001, S110
                 pass
             return
@@ -462,7 +436,6 @@ async def handle_group_message(
             await context.bot.send_chat_action(
                 chat_id=chat.id, action=ChatAction.UPLOAD_VIDEO
             )
-        # Chat-action feedback is optional and must not block media delivery.
         except Exception:  # noqa: BLE001, S110
             pass
 
@@ -489,14 +462,11 @@ async def handle_group_message(
     if receipt:
         try:
             await update.message.delete()
-        # User-message deletion is optional and may fail without group permissions.
         except Exception as e:  # noqa: BLE001
             logger.debug("Could not delete user message", extra={"error": str(e)})
         await status_msg.delete()
     else:
         await status_msg.edit_text(Texts.GROUP_SEND_ERROR)
-
-    # File remains in state.file_cache (TTLCache) for GIF conversion reuse
 
 
 @exclusive_media_callback
@@ -530,7 +500,6 @@ async def on_group_slideshow(
     if not payload:
         try:
             await q.edit_message_text(Texts.SLIDESHOW_ERROR)
-        # An expired slideshow notice is optional; there is no cached request to deliver.
         except Exception:  # noqa: BLE001, S110
             pass
         return
@@ -547,14 +516,12 @@ async def on_group_slideshow(
 
     try:
         await q.edit_message_reply_markup(None)
-    # Removing stale buttons is optional; slideshow queue ownership must proceed.
     except Exception:  # noqa: BLE001, S110
         pass
 
     async def _grp_slide_ui(text: str, _markup: object | None = None) -> None:
         try:
             await q.edit_message_text(text)
-        # Queue/status edits are optional and must not abort the active slideshow.
         except Exception:  # noqa: BLE001, S110
             pass
 
@@ -616,7 +583,6 @@ async def on_group_slideshow(
             if pipeline_success:
                 try:
                     await context.bot.delete_message(chat_id, original_msg_id)
-                # Deleting the source message is optional; the pipeline receipt confirms delivery.
                 except Exception:  # noqa: BLE001, S110
                     pass
                 await q.delete_message()
@@ -656,7 +622,6 @@ async def on_group_slideshow(
                 result, error = await MediaSender.download_slideshow(page_url)
 
         if error or not result:
-            # Slideshow download failed — try TikWM as video fallback
             from app.services.tikwm import TikWMService
 
             logger.info(
@@ -664,13 +629,11 @@ async def on_group_slideshow(
             )
             tikwm_path, tikwm_err = await TikWMService.download_video(page_url)
             if tikwm_path:
-                # Got video via TikWM — send as video
                 await q.edit_message_text(Texts.GROUP_SENDING)
                 try:
                     await context.bot.send_chat_action(
                         chat_id=chat_id, action=ChatAction.UPLOAD_VIDEO
                     )
-                # Upload-action feedback is optional; fallback-video delivery must continue.
                 except Exception:  # noqa: BLE001, S110
                     pass
 
@@ -694,7 +657,6 @@ async def on_group_slideshow(
                 if receipt:
                     try:
                         await context.bot.delete_message(chat_id, original_msg_id)
-                    # Deleting the source message is optional; the fallback-video receipt is authoritative.
                     except Exception:  # noqa: BLE001, S110
                         pass
                     await q.delete_message()
@@ -715,7 +677,6 @@ async def on_group_slideshow(
                     await context.bot.send_chat_action(
                         chat_id=chat_id, action=ChatAction.UPLOAD_PHOTO
                     )
-                # Upload-action feedback is optional; album delivery must continue.
                 except Exception:  # noqa: BLE001, S110
                     pass
 
@@ -730,14 +691,12 @@ async def on_group_slideshow(
                 if receipt:
                     try:
                         await context.bot.delete_message(chat_id, original_msg_id)
-                    # Deleting the source message is optional; the album receipt is authoritative.
                     except Exception:  # noqa: BLE001, S110
                         pass
                     await q.delete_message()
                 else:
                     await q.edit_message_text(Texts.GROUP_SEND_ERROR)
             else:
-                # Convert to video
                 await q.edit_message_text(Texts.SLIDESHOW_CONVERTING)
 
                 with process_owner_scope(token):
@@ -753,7 +712,6 @@ async def on_group_slideshow(
                     await context.bot.send_chat_action(
                         chat_id=chat_id, action=ChatAction.UPLOAD_VIDEO
                     )
-                # Upload-action feedback is optional; slideshow-video delivery must continue.
                 except Exception:  # noqa: BLE001, S110
                     pass
 
@@ -776,15 +734,12 @@ async def on_group_slideshow(
                 if receipt:
                     try:
                         await context.bot.delete_message(chat_id, original_msg_id)
-                    # Deleting the source message is optional; the video receipt is authoritative.
                     except Exception:  # noqa: BLE001, S110
                         pass
                     await q.delete_message()
                 else:
                     await q.edit_message_text(Texts.GROUP_SEND_ERROR)
 
-                # Cleanup video file (not cached for GIF, slideshow video is one-off)
-                # Actually, we cached it above for GIF. Don't remove.
         finally:
             await asyncio.to_thread(MediaSender.cleanup_slideshow, result)
     finally:

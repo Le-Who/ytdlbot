@@ -21,8 +21,6 @@ class TestRedisStorage(unittest.IsolatedAsyncioTestCase):
             redis_client=self.mock_redis, default_ttl=self.default_ttl
         )
 
-    # ── GET tests ─────────────────────────────────────────────────────
-
     async def test_get_missing_data(self):
         self.mock_redis.get.return_value = None
         result = await self.storage.get("missing_key")
@@ -62,7 +60,6 @@ class TestRedisStorage(unittest.IsolatedAsyncioTestCase):
 
     @patch("app.core.storage.redis_storage.logger")
     async def test_get_decode_error(self, mock_logger):
-        # Starts with raw prefix but contains invalid msgpack
         self.mock_redis.get.return_value = _RAW_PREFIX + b"invalid"
 
         result = await self.storage.get("test_key")
@@ -72,15 +69,12 @@ class TestRedisStorage(unittest.IsolatedAsyncioTestCase):
             "Redis decode error for key %s: %s", mock_logger.error.call_args[0][0]
         )
 
-    # ── SET tests ─────────────────────────────────────────────────────
-
     async def test_set_success_default_ttl(self):
         test_data = {"key": "value"}
         await self.storage.set("test_key", test_data)
 
         call_args = self.mock_redis.set.call_args
         self.assertEqual(call_args.args[0], "test_key")
-        # Verify it's a properly prefixed msgpack blob
         data = call_args.args[1]
         self.assertEqual(data[0:1], _RAW_PREFIX)
         decoded = msgspec.msgpack.decode(data[1:])
@@ -107,8 +101,6 @@ class TestRedisStorage(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(
             "Redis encode error for key %s: %s", mock_logger.error.call_args[0][0]
         )
-
-    # ── DELETE / CLEAR ────────────────────────────────────────────────
 
     async def test_delete(self):
         await self.storage.delete("test_key")
@@ -143,7 +135,6 @@ class TestRedisStorageCompression(unittest.IsolatedAsyncioTestCase):
         stored = self.mock_redis.set.call_args.args[1]
         self.assertEqual(stored[0:1], _COMPRESSED_PREFIX)
 
-        # Manually decompress and verify
         decompressed = zlib.decompress(stored[1:])
         self.assertEqual(msgspec.msgpack.decode(decompressed), large_data)
 
@@ -161,7 +152,6 @@ class TestRedisStorageCompression(unittest.IsolatedAsyncioTestCase):
         """Legacy JSON-encoded values (no magic prefix) should still decode."""
         legacy_data = {"legacy": True}
         legacy_bytes = msgspec.json.encode(legacy_data)
-        # Simulates old data: no \x00/\x01 prefix, just raw JSON bytes
         self.mock_redis.get.return_value = legacy_bytes
 
         result = await self.storage.get("old_key")

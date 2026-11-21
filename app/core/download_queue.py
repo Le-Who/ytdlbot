@@ -103,8 +103,6 @@ class DownloadLease:
         if self._release_task is None:
             self._state = _LeaseState.RELEASED
             self._release_task = asyncio.create_task(self._queue._release_slot())
-        # Release belongs to the lease, not to any one caller. Cancellation of
-        # a caller cannot abandon the slot while the queue lock is contended.
         await asyncio.shield(self._release_task)
 
 
@@ -176,8 +174,6 @@ class DownloadQueue:
             return False
 
         async with self._lock:
-            # locked() is public. The queue lock serializes this check with all
-            # grants; acquire() completes immediately while a slot is available.
             if not self._sem.locked():
                 await self._sem.acquire()
                 return True
@@ -203,8 +199,6 @@ class DownloadQueue:
             logger.warning("Queue waiter timed out after %ds", self._timeout)
             return False
         except BaseException:
-            # If release granted the slot at the same instant cancellation won,
-            # atomically forward that grant instead of losing capacity.
             await await_owned(self._withdraw_and_settle(waiter))
             raise
 
@@ -274,8 +268,6 @@ class DownloadQueue:
         try:
             async with asyncio.timeout(min(5.0, float(self._timeout))):
                 await update_ui(text, markup)
-        # Caller-supplied UI callbacks are optional; queue ownership must survive
-        # any callback failure while cancellation continues to propagate.
         except Exception as exc:  # noqa: BLE001
             logger.debug("Queue position update failed: %s", exc)
 

@@ -39,8 +39,6 @@ def test_release_entrypoints_do_not_inherit_compose_file_or_environment_override
 
     docker = fake_host.fake_bin / "docker"
     original = docker.read_text(encoding="utf-8")
-    # Model Compose's selection boundary: -f overrides COMPOSE_FILE; otherwise
-    # an inherited COMPOSE_FILE replaces the canonical project configuration.
     probe = """if [ "$1" = compose ]; then
   effective_file=${COMPOSE_FILE:-$PROJECT_ROOT/docker-compose.yml}
   previous=''

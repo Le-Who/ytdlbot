@@ -35,6 +35,7 @@ copying its assertions:
 | Local Bot API limit | the degraded cloud profile uses the exact decimal byte boundary before opening or sending |
 | Readiness | release, 2,000 MB policy, durable store, and required Local Bot API state are exposed |
 | Durable admission/recovery | Telegram update IDs deduplicate; checkpointed and failed jobs recover without replaying successful or uncertain sends |
+| Scoped evidence cancellation | the adapter targets its own authenticated update, waits for owner cleanup, preserves partial receipts, and leaves unrelated work running |
 | Deploy rollback | readiness failure and interrupted activation restore the captured release state |
 | Immutable retry | an interrupted same-SHA promotion is reusable only when every allowlisted payload byte matches |
 | Callback compatibility | v2 is emitted while the previous callback shape still decodes for the existing link-cache TTL |
@@ -305,7 +306,10 @@ environment variable or command argument.
 For `candidate`, the collector first proves an exact digest/release binding,
 quiescent metrics, and exact case-scoped cache eviction. It then posts one
 synthetic update to the configured administrative delivery target and observes
-the durable job, correlated events, metrics, and delivery outcome. The atomic
+the durable job, correlated events, metrics, and delivery outcome. The
+authenticated webhook records the synthetic update and its evidence correlation
+in one transaction. An ordinary Telegram update or a duplicate update ID cannot
+acquire that association. The atomic
 `IN_FLIGHT` reservation and audited-reconciliation rule are identical to the
 full collector, so an unknown submit outcome is never replayed automatically.
 
@@ -434,9 +438,23 @@ Before the one-shot container starts, the output is atomically replaced with an
 `IN_FLIGHT` reservation containing deterministic update/correlation IDs. After
 an SSH loss, timeout, or unknown result, resume hard-stops and never launches the
 case again. `Future.cancel()` is not application cancellation. A timeout asks the
-adapter to stop only the deterministic, correctly labelled evidence container;
-the reservation remains unresolved either way. Only after an operator has
-independently reconciled the result may they record an audited decision:
+legacy adapter to stop only the deterministic, correctly labelled evidence
+container. A candidate image with scoped cancellation support uses the
+container-local JobStore to request cancellation by the persisted evidence
+correlation. The adapter waits up to five seconds for the store to acknowledge
+withdrawal before claim or for the live worker to join the targeted handler and
+release its resources. The running worker stops accepting new delivery attempts
+for that job once the request is recorded. Delivery receipts retain their
+actual outcomes, including successful items and uncertain in-flight sends.
+
+An unknown correlation, a naturally completed job, or cleanup past the deadline
+leaves cancellation unconfirmed. An older rollback image can read the same
+database and cannot replay a confirmed cancellation. It does not recognize a
+pending request. If the candidate cannot confirm cleanup before rollback,
+reconcile the job and its receipts before deciding what happened. Confirmed
+cancellation also requires reconciliation because Telegram may have received
+part of the request before cancellation. The `IN_FLIGHT` reservation remains
+unresolved for both profiles until an operator records an audited decision:
 
 ```sh
 python3 scripts/collect-media-release-evidence.py reconcile-in-flight \

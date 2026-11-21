@@ -8,8 +8,6 @@
 import unittest
 from unittest.mock import MagicMock
 
-# ── Feature 2: extract_url_from_update ───────────────────────────────────────
-
 
 class TestExtractUrlFromUpdate(unittest.TestCase):
     """Tests for utils.extract_url_from_update()."""
@@ -96,9 +94,8 @@ class TestExtractUrlFromUpdate(unittest.TestCase):
         """MagicMock attributes (from test stubs) must not cause TypeError."""
         from app.core.utils import extract_url_from_update
 
-        msg = MagicMock()  # .text returns a MagicMock, not a string
+        msg = MagicMock()
         msg.reply_to_message = None
-        # Must not raise
         url, _section = extract_url_from_update(msg)
         self.assertIsNone(url)
 
@@ -111,9 +108,6 @@ class TestExtractUrlFromUpdate(unittest.TestCase):
         self.assertIsNotNone(url)
         self.assertIsNotNone(section)
         self.assertIn("00:10", section)
-
-
-# ── Feature 4: user_prefs ────────────────────────────────────────────────────
 
 
 class AsyncMockCache(dict):
@@ -183,9 +177,6 @@ class TestUserPrefs(unittest.IsolatedAsyncioTestCase):
         self.assertIn("best", VALID_QUALITIES)
         self.assertIsNone(VALID_QUALITIES["best"])
         self.assertEqual(VALID_QUALITIES["720"], 720)
-
-
-# ── Feature 5: Tiered Semaphore Selection ────────────────────────────────────
 
 
 class TestTieredSemaphoreLogic(unittest.IsolatedAsyncioTestCase):

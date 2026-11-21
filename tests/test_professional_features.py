@@ -2,8 +2,6 @@ import unittest
 from unittest.mock import AsyncMock
 
 from app.core.config import CONCURRENT_FRAGMENTS
-
-# Add repo root to path
 from app.services.ytdlp.service import YtDlpService
 
 
@@ -12,7 +10,6 @@ class TestProfessionalRefinements(unittest.IsolatedAsyncioTestCase):
         self.service = YtDlpService()
 
     async def test_live_stream_rejection(self):
-        # Mock extract to return a live stream info
         self.service.extract = AsyncMock(
             return_value={"is_live": True, "title": "Live Video"}
         )

@@ -203,7 +203,7 @@ async def test_telegram_gif_source_is_removed_after_early_exit(
     export_state, tmp_path, failure
 ):
     async def download_to_drive(path):
-        with Path(path).open("wb") as output:  # noqa: ASYNC230 - deterministic local fake
+        with Path(path).open("wb") as output:  # noqa: ASYNC230
             output.write(b"partial source")
             if failure == "oversize":
                 output.truncate(51 * 1024 * 1024)

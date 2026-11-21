@@ -17,26 +17,21 @@ from app.services.ytdlp.parsers import (
 class TestYtDlpParsers(unittest.TestCase):
     def test_format_duration(self):
         """Test duration formatting (HH:MM:SS or MM:SS)"""
-        # None or 0 cases
         self.assertEqual(_format_duration(None), "--:--")
         self.assertEqual(_format_duration(0), "--:--")
         self.assertEqual(_format_duration(0.0), "--:--")
 
-        # Seconds only (< 60)
         self.assertEqual(_format_duration(59), "00:59")
         self.assertEqual(_format_duration(5), "00:05")
 
-        # Minutes and seconds (>= 60, < 3600)
         self.assertEqual(_format_duration(60), "01:00")
         self.assertEqual(_format_duration(61), "01:01")
         self.assertEqual(_format_duration(3599), "59:59")
 
-        # Hours, minutes, and seconds (>= 3600)
         self.assertEqual(_format_duration(3600), "1:00:00")
         self.assertEqual(_format_duration(3661), "1:01:01")
         self.assertEqual(_format_duration(7322), "2:02:02")
 
-        # Float input (should be truncated/converted to int)
         self.assertEqual(_format_duration(123.45), "02:03")
         self.assertEqual(_format_duration(123.99), "02:03")
 
@@ -47,7 +42,7 @@ class TestYtDlpParsers(unittest.TestCase):
             "ext": "mp4",
             "vcodec": "avc1.640028",
             "height": 1080,
-            "filesize": 100 * 1024 * 1024,  # 100 MB
+            "filesize": 100 * 1024 * 1024,
             "protocol": "https",
         }
         url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
@@ -60,7 +55,6 @@ class TestYtDlpParsers(unittest.TestCase):
         self.assertEqual(metadata.filesize, 100 * 1024 * 1024)
         self.assertEqual(metadata.ext, "mp4")
 
-        # Verify label creation via formatter
         item = create_format_item(metadata, is_tiktok)
         label = format_label(item)
         self.assertIn("📺", label)
@@ -94,7 +88,7 @@ class TestYtDlpParsers(unittest.TestCase):
 
         self.assertIsNotNone(metadata)
         self.assertEqual(metadata.format_id, "tiktok_fmt")
-        self.assertEqual(metadata.height, 720)  # Default for TikTok
+        self.assertEqual(metadata.height, 720)
 
         item = create_format_item(metadata, is_tiktok)
         label = format_label(item)
@@ -181,7 +175,7 @@ class TestYtDlpParsers(unittest.TestCase):
             "ext": "mp4",
             "vcodec": "avc1",
             "height": 720,
-            "tbr": 1000,  # 1000 kbps
+            "tbr": 1000,
             "protocol": "https",
         }
         duration_sec = 10.0
@@ -190,7 +184,6 @@ class TestYtDlpParsers(unittest.TestCase):
         is_tiktok = "tiktok.com" in url
         metadata = parse_format_metadata(format_dict, duration_factor, is_tiktok)
 
-        # Calculation: (1000 * 1024 / 8) * 10 = 128000 * 10 = 1,280,000 bytes
         expected_size = 1280000
         self.assertEqual(metadata.filesize, expected_size)
 
@@ -203,7 +196,7 @@ class TestYtDlpParsers(unittest.TestCase):
         format_dict = {
             "format_id": "small",
             "ext": "mp4",
-            "filesize": 500 * 1024,  # 500 KB
+            "filesize": 500 * 1024,
             "height": 360,
         }
         metadata = parse_format_metadata(format_dict, None, False)
@@ -235,7 +228,7 @@ class TestDeduplicateFormats(unittest.TestCase):
             ),
             FormatMetadata(
                 format_id="2", ext="mp4", height=1080, filesize=200, protocol="https"
-            ),  # Duplicate height
+            ),
             FormatMetadata(
                 format_id="3", ext="mp4", height=720, filesize=300, protocol="https"
             ),
@@ -269,7 +262,7 @@ class TestDeduplicateFormats(unittest.TestCase):
             ),
             FormatMetadata(
                 format_id="2", ext="mp4", height=1080, filesize=200, protocol="https"
-            ),  # Dup
+            ),
             FormatMetadata(
                 format_id="3", ext="mp4", height=None, filesize=300, protocol="https"
             ),
@@ -342,8 +335,8 @@ class TestExtractHeight(unittest.TestCase):
         """Should return None for strings without valid height pattern"""
         self.assertIsNone(_extract_height("audio"))
         self.assertIsNone(_extract_height("unknown"))
-        self.assertIsNone(_extract_height("p720"))  # Pattern expects digits then p
-        self.assertIsNone(_extract_height("1080"))  # Missing p
+        self.assertIsNone(_extract_height("p720"))
+        self.assertIsNone(_extract_height("1080"))
         self.assertIsNone(_extract_height("myp"))
 
     def test_extract_height_none_empty(self):

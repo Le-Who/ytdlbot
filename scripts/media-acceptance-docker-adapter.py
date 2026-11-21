@@ -169,6 +169,7 @@ import sqlite3
 import sys
 import time
 import urllib.request
+from contextlib import closing
 from pathlib import Path
 
 action = sys.argv[1]
@@ -420,6 +421,13 @@ def job_snapshot(update_id, since):
         row = connection.execute(
             "SELECT job_id, state, error FROM jobs WHERE update_id = ?", (update_id,)
         ).fetchone()
+        cancelled = (
+            row is not None and "evidence_jobs" in tables
+            and connection.execute(
+                "SELECT 1 FROM evidence_jobs WHERE job_id = ? AND cancellation = 'confirmed'",
+                (row["job_id"],),
+            ).fetchone() is not None
+        )
         other_jobs = connection.execute(
             "SELECT COUNT(*) FROM jobs WHERE accepted_at >= ? AND update_id != ?",
             (since, update_id),
@@ -446,7 +454,7 @@ def job_snapshot(update_id, since):
         )
         return {
             "supported": True,
-            "state": row["state"] if row is not None else None,
+            "state": "failed" if cancelled else row["state"] if row is not None else None,
             "deliveries": deliveries,
             "other_jobs": int(other_jobs),
             "active_jobs": int(active_jobs),
@@ -460,6 +468,45 @@ def job_snapshot(update_id, since):
             connection.close()
         except Exception:
             pass
+
+def evidence_cancellation_supported(path):
+    try:
+        from app.core.job_store import EvidenceCancellation
+
+        if not path.is_file():
+            return False
+        with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.25)) as connection:
+            return (
+                EvidenceCancellation.CONFIRMED == "confirmed"
+                and connection.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='evidence_jobs'"
+                ).fetchone() is not None
+            )
+    except (ImportError, OSError, ValueError, sqlite3.Error):
+        return False
+
+def candidate_cancel_supported():
+    path = Path(os.environ.get("YTDLBOT_JOB_DB", "/srv/ytdlbot/state/jobs.sqlite3"))
+    return evidence_cancellation_supported(path)
+
+async def cancel_evidence_job(correlation_id, release):
+    try:
+        from app.core.job_store import EvidenceCancellation, JobStore
+
+        if os.environ.get("APP_RELEASE") != release:
+            return False
+        path = JobStore.DEFAULT_PATH
+        if not evidence_cancellation_supported(path):
+            return False
+        store = JobStore(path, busy_timeout_ms=250)
+        async with asyncio.timeout(5.0):
+            result = await store.request_evidence_cancellation(correlation_id)
+            while result is EvidenceCancellation.REQUESTED:
+                await asyncio.sleep(0.1)
+                result = await store.evidence_cancellation_status(correlation_id)
+        return result is EvidenceCancellation.CONFIRMED
+    except (ImportError, OSError, RuntimeError, sqlite3.Error):
+        return False
 
 def validate_template(update):
     message = update.get("message")
@@ -534,7 +581,7 @@ if action == "preflight":
         "media_child_processes": process_fence["count"],
         "job_store_supported": job_snapshot(0, time.time())["supported"],
         "cache_modes": cache_modes(),
-        "bounded_cancel_supported": False,
+        "bounded_cancel_supported": candidate_cancel_supported(),
     })
 elif action == "snapshot":
     update_id = int(payload["update_id"])
@@ -570,6 +617,7 @@ elif action == "submit":
             "Content-Type": "application/json",
             "X-Correlation-ID": payload["correlation_id"],
             "X-Telegram-Bot-Api-Secret-Token": secret,
+            "X-Ytdlbot-Acceptance-ID": payload["correlation_id"],
         },
     )
     with urllib.request.urlopen(request, timeout=float(payload["timeout_seconds"])) as response:
@@ -605,9 +653,9 @@ elif action == "evict-case":
     safe = asyncio.run(evict())
     emit({"safe": bool(safe), "mode": mode, "deleted_count": deleted})
 elif action == "cancel":
-    # No current application API maps an external correlation ID to a running
-    # task. Refuse to claim cancellation; the collector will stop the window.
-    emit({"cancelled": False})
+    emit({"cancelled": asyncio.run(
+        cancel_evidence_job(payload["correlation_id"], payload["release"])
+    )})
 else:
     raise SystemExit(12)
 """
@@ -856,7 +904,6 @@ class DockerRuntime:
 
     def correlated_logs(self, *, since: str, correlation_id: str) -> str:
         raw = self.logs_since(since=since)
-        # Raw log text is used in memory only and is never returned or printed.
         return "\n".join(line for line in raw.splitlines() if correlation_id in line)
 
     def logs_since(self, *, since: str) -> str:
@@ -1341,6 +1388,8 @@ class ProductionDockerAdapter:
             raise AdapterError(
                 "legacy live observation is disabled; use the isolated smoke runner"
             )
+        if not CORRELATION_RE.fullmatch(correlation_id):
+            raise AdapterError("candidate correlation is invalid")
         self.preflight(update)
         started = self._clock()
         deadline = started + timeout_seconds
@@ -1549,18 +1598,28 @@ class ProductionDockerAdapter:
         }
 
     def cancel(self, correlation_id: str) -> bool:
-        self.runtime.identity()
         if self.runtime_profile == "legacy-baseline":
+            self.runtime.identity()
             if not CORRELATION_RE.fullmatch(correlation_id):
                 raise AdapterError("legacy correlation is invalid")
             digest = hashlib.sha256(correlation_id.encode("utf-8")).hexdigest()[:16]
             return self.runtime.stop_legacy_container(
                 f"ytdlbot-media-evidence-{digest}"
             )
-        result = self.runtime.container_call(
-            "cancel", {"correlation_id": correlation_id}, timeout=15.0
-        )
-        return result == {"cancelled": True}
+        if not CORRELATION_RE.fullmatch(correlation_id):
+            return False
+        try:
+            identity = self.runtime.identity()
+            if identity.image_id != self.expected_image_id:
+                return False
+            result = self.runtime.container_call(
+                "cancel",
+                {"correlation_id": correlation_id, "release": self.expected_release},
+                timeout=10.0,
+            )
+        except (AdapterError, AdapterTimeout):
+            return False
+        return set(result) == {"cancelled"} and result["cancelled"] is True
 
 
 def _input() -> dict[str, Any]:
@@ -1657,7 +1716,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             output = {"cancelled": adapter.cancel(str(payload["correlation_id"]))}
         print(json.dumps(output, separators=(",", ":"), sort_keys=True))
     except (AdapterError, AdapterTimeout, KeyError, TypeError, ValueError) as exc:
-        # Never print subprocess output or input fields; both may contain secrets.
         print(f"media acceptance adapter failed: {type(exc).__name__}", file=sys.stderr)
         return 2
     return 0

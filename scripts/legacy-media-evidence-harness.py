@@ -381,7 +381,6 @@ def main() -> int:
             raise RuntimeError("non-finite resource measurement")
         print(json.dumps(result, separators=(",", ":"), ensure_ascii=True))
         return 0
-    # Isolated CLI failures must stay redacted and produce a nonzero, unsafe result.
     except Exception:  # noqa: BLE001
         print('{"safe":false,"error":"isolated-run-failed"}')
         return 2

@@ -57,7 +57,6 @@ class TestMetricsEndpoint(unittest.TestCase):
     @patch("app.api.routes.state")
     def test_metrics_returns_200(self, mock_state):
         """Metrics endpoint should return 200 with text/plain."""
-        # Import metrics to ensure the module is available
         resp = self.client.get("/metrics")
         self.assertEqual(resp.status_code, 200)
         self.assertIn("text/plain", resp.headers["content-type"])

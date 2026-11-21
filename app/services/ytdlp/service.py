@@ -60,7 +60,6 @@ class YtDlpService:
         self.vk_proxy = VK_PROXY
         self.has_aria2 = bool(shutil.which("aria2c"))
 
-        # Initialize builder without hardcoded youtube clients
         self.builder = YtDlpCLIBuilder()
 
         if self.has_aria2:
@@ -95,7 +94,6 @@ class YtDlpService:
         if is_vk:
             url = _rewrite_vk_url(url)
 
-        # Legacy callers retain configured cookies; policy-aware providers opt out.
         cookies = self.cookies_manager.get_cookies_path(url) if use_cookies else None
         proxy = (
             self.tiktok_proxy if _is_tiktok(url) else (self.vk_proxy if is_vk else None)
@@ -114,7 +112,6 @@ class YtDlpService:
             else timeout,
             extractor_retries=extractor_retries,
         )
-        # Ensure we use the current python executable for stability
         cmd[0] = sys.executable
         cmd.insert(1, "-m")
         cmd.insert(2, "yt_dlp")
@@ -134,7 +131,6 @@ class YtDlpService:
                     handle.proc.returncode,
                     err_text,
                 )
-                # Map error to specific exception type using the new strict mapper mapping
                 raise map_ytdlp_error(err_text, url)
 
             if not stdout:
@@ -146,7 +142,6 @@ class YtDlpService:
         """Извлекает форматы видео с обработкой ошибок."""
         info: dict[str, Any] | None = None
 
-        # TikTok pre-routing: detect slideshows by URL pattern BEFORE extraction
         if _is_tiktok(url):
             logger.info("TikTok URL detected, bypassing yt-dlp: %s", url)
             content_type = classify_tiktok_content(url)
@@ -208,7 +203,6 @@ class YtDlpService:
         except VideoNotFoundError:
             raise
         except Exception as e:
-            # Re-raise known API exceptions that should trigger orchestration fallback
             logger.exception("YtDlp extraction failed")
             raise ExtractionError(
                 Texts.SVC_EXTRACTION_ERROR.format(detail=str(e)[:300])
@@ -254,13 +248,9 @@ class YtDlpService:
                 info_json_path = os.path.join(
                     TEMP_DIR, f"info_{_uuid.uuid4().hex}.json"
                 )
-                # Publish this extraction-owned optional cache synchronously:
-                # cancellation cannot leave a detached writer or a late path.
                 with open(info_json_path, "w", encoding="utf-8") as f:  # noqa: ASYNC230
                     json.dump(info, f, ensure_ascii=False)
                 logger.info("Cached extraction info: %s", info_json_path)
-            # yt-dlp metadata can include arbitrary extractor values; caching
-            # is optional and must not discard a successful extraction result.
             except Exception as exc:  # noqa: BLE001
                 logger.warning("Failed to cache info JSON: %s", exc)
                 info_json_path = None
@@ -296,7 +286,6 @@ class YtDlpService:
         is_tiktok = _is_tiktok(page_url)
         is_vk = _is_vk(page_url)
 
-        # Rewrite to m.vk.com for better anti-bot bypass
         if is_vk:
             page_url = _rewrite_vk_url(page_url)
             use_aria2 = False
@@ -321,7 +310,6 @@ class YtDlpService:
             audio_format=audio_format,
         )
 
-        # Always use exact python executable to avoid environment path issues
         cmd[0] = sys.executable
         cmd.insert(1, "-m")
         cmd.insert(2, "yt_dlp")

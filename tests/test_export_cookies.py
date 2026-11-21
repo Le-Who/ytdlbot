@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import Mock
 
 import pytest
 
@@ -17,15 +17,19 @@ ROOT = Path(__file__).resolve().parents[1]
 COOKIE = ".youtube.com\tTRUE\t/\tTRUE\t0\tsession\tsynthetic-only\n"
 
 
-@pytest.fixture
-def exporter(monkeypatch: pytest.MonkeyPatch) -> Any:
+def _load_exporter() -> Any:
     spec = importlib.util.spec_from_file_location(
         "synthetic_cookie_exporter", ROOT / "tools/export_cookies.py"
     )
+    assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    # The CLI configures stdout at import; give it an owned UTF-8 stream.
-    with patch.object(sys, "stdout", io.TextIOWrapper(io.BytesIO(), encoding="utf-8")):
-        spec.loader.exec_module(module)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.fixture
+def exporter(monkeypatch: pytest.MonkeyPatch) -> Any:
+    module = _load_exporter()
     external_attempts = []
 
     def forbidden_process(*args: Any, **kwargs: Any) -> Any:
@@ -40,6 +44,123 @@ def exporter(monkeypatch: pytest.MonkeyPatch) -> Any:
     assert external_attempts == [], (
         "an exporter test reached an unfaked external process"
     )
+
+
+def test_import_leaves_redirected_standard_streams_untouched(monkeypatch) -> None:
+    stdin = Mock(encoding="ascii")
+    stdout = Mock(encoding="utf-8")
+    stderr = Mock(encoding="ascii")
+    with monkeypatch.context() as redirect:
+        redirect.setattr(sys, "stdin", stdin)
+        redirect.setattr(sys, "stdout", stdout)
+        redirect.setattr(sys, "stderr", stderr)
+        _load_exporter()
+        assert sys.stdin is stdin
+        assert sys.stdout is stdout
+        assert sys.stderr is stderr
+
+    stdin.reconfigure.assert_not_called()
+    stdout.reconfigure.assert_not_called()
+    stderr.reconfigure.assert_not_called()
+
+
+@pytest.fixture
+def file_exporter(exporter: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    def forbidden(*_args: Any, **_kwargs: Any) -> None:
+        raise AssertionError("the input-file mode reached the browser or provider path")
+
+    for name in (
+        "_check_ytdlp",
+        "_pick_browser_and_profile",
+        "_check_browser_running",
+        "_resolve_profile",
+        "_discover_chromium_profiles",
+        "_extract_cookies",
+        "_copy_to_clipboard",
+    ):
+        monkeypatch.setattr(exporter, name, forbidden)
+    monkeypatch.setattr("builtins.input", forbidden)
+    return exporter
+
+
+def test_input_cookie_file_filters_and_emits_complete_environment_line(
+    file_exporter, tmp_path, monkeypatch, capsys
+) -> None:
+    source = tmp_path / "user supplied cookies.txt"
+    accepted = "#HttpOnly_" + COOKIE
+    unrelated = COOKIE.replace(".youtube.com", ".unrelated.invalid")
+    source.write_text(unrelated + accepted, encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["export_cookies.py", "--input", str(source)])
+
+    file_exporter.main()
+
+    captured = capsys.readouterr()
+    encoded = base64.b64encode(("# Netscape HTTP Cookie File\n" + accepted).encode())
+    assert f"YTDLP_COOKIES_B64={encoded.decode()}" in captured.out
+    assert captured.err == ""
+    assert source.read_text(encoding="utf-8") == unrelated + accepted
+
+
+def test_cli_configures_redirected_output_without_replacing_streams(
+    file_exporter, tmp_path, monkeypatch
+) -> None:
+    source = tmp_path / "cookies.txt"
+    source.write_text(COOKIE, encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["export_cookies.py", f"--input={source}"])
+
+    with (
+        io.TextIOWrapper(io.BytesIO(), encoding="ascii") as stdin,
+        io.TextIOWrapper(io.BytesIO(), encoding="ascii") as stdout,
+        io.TextIOWrapper(io.BytesIO(), encoding="ascii") as stderr,
+        monkeypatch.context() as redirect,
+    ):
+        redirect.setattr(sys, "stdin", stdin)
+        redirect.setattr(sys, "stdout", stdout)
+        redirect.setattr(sys, "stderr", stderr)
+        file_exporter.main()
+
+        assert sys.stdin is stdin and stdin.encoding == "ascii"
+        assert sys.stdout is stdout and stdout.encoding == "utf-8"
+        assert sys.stderr is stderr and stderr.encoding == "utf-8"
+        assert stdout.line_buffering and stderr.line_buffering
+        assert b"YTDLP_COOKIES_B64=" in stdout.buffer.getvalue()
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "missing-path",
+        "missing-file",
+        "invalid-encoding",
+        "malformed",
+        "browser",
+        "duplicate",
+    ],
+)
+def test_invalid_cookie_file_inputs_exit_without_export(
+    file_exporter, tmp_path, monkeypatch, capsys, failure
+) -> None:
+    source = tmp_path / "cookies.txt"
+    arguments = ["--input", str(source)]
+    if failure == "missing-path":
+        arguments = ["--input"]
+    elif failure == "invalid-encoding":
+        source.write_bytes(b"\xff")
+    elif failure == "malformed":
+        source.write_text("invalid cookie row", encoding="utf-8")
+    elif failure == "browser":
+        arguments.insert(0, "firefox")
+    elif failure == "duplicate":
+        arguments += ["--input", str(tmp_path / "second.txt")]
+    monkeypatch.setattr(sys, "argv", ["export_cookies.py", *arguments])
+
+    with pytest.raises(SystemExit) as error:
+        file_exporter.main()
+
+    assert error.value.code == (1 if failure == "malformed" else 2)
+    output = capsys.readouterr()
+    assert "YTDLP_COOKIES_B64=" not in output.out
+    assert output.err or "No YouTube/Google cookies found" in output.out
 
 
 @pytest.mark.parametrize(
@@ -73,7 +194,7 @@ def test_filter_keeps_only_exact_google_domain_boundaries(
 @pytest.mark.parametrize(
     "line",
     [
-        "youtube.com\tTRUE\t/\tTRUE\t0\tname",  # incomplete
+        "youtube.com\tTRUE\t/\tTRUE\t0\tname",
         "youtube.com\tTRUE\t/\tTRUE\t0\tname\tvalue\textra",
         "youtube.com\tTRUE\t/\tTRUE\t0\t\tvalue",
         "youtube.com\tTRUE\t\tTRUE\t0\tname\tvalue",

@@ -3,6 +3,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -17,7 +18,7 @@ from app.core.process import ProcessHandle, ProcessOwnerCancelled, ProcessSuperv
     [
         ("_windows_kernel32", ()),
         ("_create_windows_job", ()),
-        ("_assign_windows_job_and_resume", (99, object())),
+        ("_assign_windows_job_and_resume", (99, 123)),
         ("_terminate_windows_job", (99,)),
         ("_windows_job_active_processes", (99,)),
         ("_close_windows_job", (99,)),
@@ -423,7 +424,6 @@ async def test_windows_job_kills_child_after_group_leader_exits(tmp_path: Path):
 
     setup_task = asyncio.create_task(wait_for_tree_setup())
     try:
-        # Bound stalled fixture construction separately from measured cancellation.
         done, _ = await asyncio.wait(
             (setup_task, task), timeout=10, return_when=asyncio.FIRST_COMPLETED
         )
@@ -450,7 +450,6 @@ async def test_windows_job_kills_child_after_group_leader_exits(tmp_path: Path):
         setup_task.cancel()
         await asyncio.gather(setup_task, return_exceptions=True)
         if child_pid.exists():
-            # Failure cleanup must finish reaping the real test child before returning.
             subprocess.run(  # noqa: ASYNC221
                 ["taskkill", "/F", "/T", "/PID", child_pid.read_text()],
                 capture_output=True,
@@ -506,39 +505,83 @@ async def test_windows_normal_finish_closes_job_and_kills_descendant(tmp_path: P
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Object behavior")
 @pytest.mark.asyncio
-async def test_windows_assignment_failure_kills_process_and_closes_job(monkeypatch):
-    proc = AsyncMock()
-    proc.pid = 12345
-    proc.returncode = None
-    proc.kill = Mock()
-    proc.wait = AsyncMock(return_value=0)
-    closed: list[int] = []
+@pytest.mark.parametrize(
+    ("api", "failure"),
+    [
+        ("OpenProcess", None),
+        ("AssignProcessToJobObject", False),
+        ("OpenThread", None),
+        ("ResumeThread", 0xFFFFFFFF),
+    ],
+)
+async def test_windows_start_failure_reaps_suspended_child_and_closes_handles(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api: str, failure: int | None
+) -> None:
+    import ctypes
 
-    async def create_process(*_args, **_kwargs):
+    from app.core import process
+
+    kernel = process._windows_kernel32()
+    opened: list[int] = []
+    closed: list[int] = []
+    spawned = []
+    original_close = kernel.CloseHandle
+    original_launch = asyncio.create_subprocess_exec
+
+    def track_open(function_name: str):
+        original = getattr(kernel, function_name)
+
+        def open_handle(*args):
+            handle = original(*args)
+            assert handle and handle != ctypes.c_void_p(-1).value
+            opened.append(handle)
+            return handle
+
+        return open_handle
+
+    def close_handle(handle: int):
+        closed.append(handle)
+        return original_close(handle)
+
+    def fail_call(*_args):
+        ctypes.set_last_error(5)
+        return failure
+
+    async def create_process(*args, **kwargs):
+        proc = await original_launch(*args, **kwargs)
+        spawned.append(proc)
         return proc
 
-    monkeypatch.setattr(asyncio, "create_subprocess_exec", create_process)
-    monkeypatch.setattr("app.core.process._create_windows_job", lambda: 99)
-    monkeypatch.setattr(
-        "app.core.process._assign_windows_job_and_resume",
-        Mock(side_effect=OSError("assign failed")),
-    )
-    monkeypatch.setattr(
-        "app.core.process._close_windows_job", lambda handle: closed.append(handle)
-    )
-    monkeypatch.setattr(
-        subprocess,
-        "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=1),
-    )
-
     supervisor = ProcessSupervisor(max_processes=1)
-    with pytest.raises(OSError, match="assign failed"):
-        await supervisor.run(["fake"], owner="failed-job")
+    ready = tmp_path / "child-ran"
+    command = [
+        sys.executable,
+        "-c",
+        f"from pathlib import Path; Path({str(ready)!r}).touch()",
+    ]
+    with monkeypatch.context() as injected:
+        for function_name in (
+            "CreateJobObjectW",
+            "OpenProcess",
+            "CreateToolhelp32Snapshot",
+            "OpenThread",
+        ):
+            injected.setattr(kernel, function_name, track_open(function_name))
+        injected.setattr(kernel, "CloseHandle", close_handle)
+        injected.setattr(kernel, api, fail_call)
+        injected.setattr(process, "_windows_kernel32", lambda: kernel)
+        injected.setattr(asyncio, "create_subprocess_exec", create_process)
+        with pytest.raises(OSError) as failed:
+            await asyncio.wait_for(supervisor.run(command, owner="failed-job"), 10)
 
-    proc.kill.assert_called_once()
-    assert closed == [99]
+    assert failed.value.winerror == 5
+    assert len(spawned) == 1 and spawned[0].returncode is not None
+    assert not ready.exists()
+    assert Counter(opened) == Counter(closed)
     assert supervisor.processes_for("failed-job") == ()
+    result = await asyncio.wait_for(supervisor.run(command, owner="next-job"), 10)
+    assert result.returncode == 0
+    assert ready.is_file()
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows Job Object behavior")

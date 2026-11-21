@@ -102,7 +102,6 @@ async def test_youtube_403_list_formats_propagates_without_retry():
 class TestYtDlpService(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.service = YtDlpService()
-        # Mock PlatformCookiesManager to return a deterministic cookies path
         self.service.cookies_manager.get_cookies_path = MagicMock(
             return_value="/tmp/cookies.txt"
         )
@@ -116,8 +115,6 @@ class TestYtDlpService(unittest.IsolatedAsyncioTestCase):
             output="/tmp/out.mp4",
         )
         self.assertTrue(any("yt-dlp" in arg or "yt_dlp" in arg for arg in cmd))
-        # Check format string construction
-        # We check substring
         fmt = cmd[cmd.index("--format") + 1]
         self.assertIn("137[height<=1080]", fmt)
         self.assertIn("+140", fmt)
@@ -134,7 +131,6 @@ class TestYtDlpService(unittest.IsolatedAsyncioTestCase):
             height=None,
             output="/tmp/out.mp4",
         )
-        # Should select video only for GIF conversion
         expected_fmt = "bestvideo[ext=mp4]/bestvideo/best[ext=mp4]/best"
         self.assertIn(expected_fmt, cmd)
 
@@ -149,7 +145,6 @@ class TestYtDlpService(unittest.IsolatedAsyncioTestCase):
         self.assertIn("--cookies", cmd)
 
     def test_build_command_no_aria2(self):
-        # Verify aria2c is never in the command args
         cmd = self.service.build_command(
             page_url="http://example.com/video",
             format_id="best",
@@ -162,14 +157,12 @@ class TestYtDlpService(unittest.IsolatedAsyncioTestCase):
         with patch.object(
             self.service, "extract", new_callable=AsyncMock
         ) as mock_extract:
-            # Test TikTok
             url_tiktok = "https://tiktok.com/@user/video/123"
             res_tiktok = await self.service.list_formats(url_tiktok)
             mock_extract.assert_not_called()
             self.assertEqual(len(res_tiktok.formats), 1)
             self.assertEqual(res_tiktok.formats[0].format_id, "tikwm_fallback")
 
-            # Test Pinterest
             url_pin = "https://pinterest.com/pin/123"
             res_pin = await self.service.list_formats(url_pin)
             mock_extract.assert_not_called()

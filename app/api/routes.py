@@ -16,7 +16,7 @@ from app.constants import AUDIO_FORMAT_ID, CHUNK_SIZE, GIF_FORMAT_ID
 from app.core import config, state
 from app.core.asyncio_utils import await_owned
 from app.core.config import DL_TIMEOUT_HTTP, MAX_DL_MB, TELEGRAM_SECRET_TOKEN
-from app.core.job_store import JobStore
+from app.core.job_store import JobStore, evidence_update_id
 from app.core.logging import set_correlation_id
 from app.core.metrics import metrics
 from app.core.models import DownloadContext
@@ -47,6 +47,10 @@ _local_probe_lock = threading.Lock()
 
 class DurableUpdateStore(Protocol):
     def accept_update(self, payload: Mapping[str, Any]) -> Awaitable[object]: ...
+
+    def accept_evidence_update(
+        self, payload: Mapping[str, Any], correlation_id: str
+    ) -> Awaitable[bool]: ...
 
     def schema_version(self) -> Awaitable[int]: ...
 
@@ -98,7 +102,7 @@ async def _run_local_bot_api_probe(bot: Any) -> bool:
         )
         result = True
         completed = True
-    except Exception as error:  # noqa: BLE001 - dependency readiness boundary
+    except Exception as error:  # noqa: BLE001
         logger.warning(
             "Authenticated Local Bot API readiness probe failed",
             extra={"error_type": type(error).__name__},
@@ -158,7 +162,7 @@ async def _durable_store_health() -> dict[str, object]:
             asyncio.gather(*probes),
             timeout=_DURABLE_STORE_PROBE_TIMEOUT_SECONDS,
         )
-    except Exception as error:  # noqa: BLE001 - dependency readiness boundary
+    except Exception as error:  # noqa: BLE001
         logger.warning(
             "Durable store readiness probe failed",
             extra={"error_type": type(error).__name__},
@@ -187,8 +191,6 @@ async def _durable_store_health() -> dict[str, object]:
 async def health_ready() -> JSONResponse:
     durable_store = await _durable_store_health()
     local_configured = bool(config.TELEGRAM_LOCAL_ENDPOINT)
-    # getMe is both authenticated and bounded. Neither the token nor exception
-    # text enters this response or its logs.
     local_functional = await _local_bot_api_functional()
     local_bot_api = {
         "required": config.TELEGRAM_LOCAL_REQUIRED,
@@ -265,7 +267,6 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
         file_ext = "mp3"
         media_type = "audio/mpeg"
     else:
-        # Both video and GIF (mute MP4) use mp4
         file_ext = "mp4"
         media_type = "video/mp4"
 
@@ -358,14 +359,12 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
     async def stream_video_subprocess():
         bytes_sent = 0
         if is_gif:
-            # GIF = download video directly to ffmpeg pipe
             cmd = state.ytdlp.build_command(
                 payload.page_url,
                 payload.format_id,
                 payload.height,
                 output="-",
             )
-            # Mute MP4: strip audio, copy video stream (no quality loss, instant)
             ffmpeg_cmd = [
                 "ffmpeg",
                 "-y",
@@ -429,8 +428,6 @@ async def download(token: str, request: Request):  # type: ignore[no-untyped-def
                     )
                 if await ff_handle.proc.wait() != 0:
                     raise RuntimeError("Media conversion subprocess failed")
-                # ffmpeg deliberately stops after 60 seconds. Do not wait on an
-                # unread source that still needs its context to terminate it.
                 source_code = dl_handle.proc.returncode
                 if source_complete:
                     source_code = await dl_handle.proc.wait()
@@ -541,8 +538,6 @@ async def _stop_lease_renewal(
     except asyncio.CancelledError:
         if not cancelled_here:
             raise
-    # Return the task's terminal failure so the stream owner can report it;
-    # cancellation initiated by somebody else is propagated above.
     except BaseException as error:  # noqa: BLE001
         return error
     return None
@@ -554,7 +549,6 @@ async def telegram_webhook(request: Request) -> dict[str, bool]:
     if not token or not hmac.compare_digest(token, TELEGRAM_SECRET_TOKEN):
         raise HTTPException(401, "Unauthorized")
 
-    # Rate limit by source IP to prevent replay attacks
     ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
     if not ip and request.client:
         ip = request.client.host
@@ -570,7 +564,16 @@ async def telegram_webhook(request: Request) -> dict[str, bool]:
         payload = await request.json()
         if not isinstance(payload, dict):
             raise TypeError("Telegram update must be a JSON object")
-        await store.accept_update(payload)
+        evidence_id = request.headers.get("X-Ytdlbot-Acceptance-ID")
+        if evidence_id is None:
+            await store.accept_update(payload)
+        else:
+            if not _acceptance_update(payload, evidence_id):
+                raise HTTPException(400, "Invalid acceptance update")
+            if not await store.accept_evidence_update(payload, evidence_id):
+                raise HTTPException(409, "Acceptance update was not newly admitted")
+    except HTTPException:
+        raise
     except Exception as error:
         logger.error(
             "Webhook persistence failed",
@@ -582,3 +585,27 @@ async def telegram_webhook(request: Request) -> dict[str, bool]:
             headers={"Retry-After": "1"},
         ) from error
     return {"ok": True}
+
+
+def _acceptance_update(payload: dict[str, Any], correlation_id: str) -> bool:
+    admin_id = config.ADMIN_CHAT_ID
+    message = payload.get("message")
+    if (
+        admin_id is None
+        or set(payload) != {"update_id", "message"}
+        or not isinstance(message, dict)
+    ):
+        return False
+    text = message.get("text")
+    user = message.get("from")
+    return (
+        isinstance(text, str)
+        and text.startswith("/mp4 https://")
+        and message.get("message_id") == evidence_update_id(f"message:{correlation_id}")
+        and message.get("chat") == {"id": admin_id, "type": "private"}
+        and isinstance(user, dict)
+        and user.get("id") == admin_id
+        and user.get("is_bot") is False
+        and message.get("entities")
+        == [{"type": "bot_command", "offset": 0, "length": 4}]
+    )

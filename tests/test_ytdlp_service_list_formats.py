@@ -12,9 +12,7 @@ from app.services.ytdlp.service import YtDlpService
 
 class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-        # Setup mocks before YtDlpService init
         self.service = YtDlpService()
-        # Mock cookies path for deterministic testing
         self.service.cookies_manager = MagicMock()
         self.service.cookies_manager.cookies_path = "/tmp/cookies.txt"
 
@@ -95,7 +93,6 @@ class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):
         """Test that TikTok video URLs bypass yt-dlp and return tikwm_fallback."""
         url = "https://tiktok.com/@user/video/123"
 
-        # No need to mock extract — it should never be called
         result = await self.service.list_formats(url)
 
         self.assertEqual(result.title, "TikTok Video")
@@ -205,7 +202,7 @@ class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):
             "ERROR: [TikTok] 123: This post may not be comfortable. "
             "Log in for access. Use --cookies-from-browser or --cookies"
         )
-        self.service.tiktok_proxy = None  # no proxy
+        self.service.tiktok_proxy = None
         with patch.object(self.service, "extract", new_callable=AsyncMock) as mock_ext:
             mock_ext.side_effect = Exception(error_msg)
             result = await self.service.list_formats(url)
@@ -233,13 +230,12 @@ class TestYtDlpServiceListFormats(unittest.IsolatedAsyncioTestCase):
         url = "https://tiktok.com/@user/video/789"
         self.service.tiktok_proxy = "socks5://proxy:1080"
 
-        # extract() should never be called — TikTok is fully bypassed
         result = await self.service.list_formats(url)
         self.assertEqual(result.title, "TikTok Video")
         self.assertFalse(result.is_slideshow)
         self.assertEqual(len(result.formats), 1)
         self.assertEqual(result.formats[0].format_id, "tikwm_fallback")
-        self.service.tiktok_proxy = None  # reset
+        self.service.tiktok_proxy = None
 
     async def test_tiktok_unknown_error_falls_back_to_slideshow(self):
         """TikTok /photo/ URLs bypass yt-dlp and return is_slideshow=True."""

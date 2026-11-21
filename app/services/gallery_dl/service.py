@@ -26,15 +26,15 @@ logger = logging.getLogger("app.services.gallery_dl")
 class SlideshowResult:
     """Result of a slideshow download."""
 
-    images: list[str] = field(default_factory=list)  # Absolute paths to images
-    audio: str | None = None  # Path to audio file (if any)
+    images: list[str] = field(default_factory=list)
+    audio: str | None = None
     title: str = ""
 
 
 class GalleryDlService:
     """Wrapper around gallery-dl CLI for TikTok content downloads."""
 
-    TIMEOUT = 120  # seconds
+    TIMEOUT = 120
 
     @staticmethod
     async def download_slideshow(
@@ -198,7 +198,6 @@ class GalleryDlService:
         image_extensions = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
         audio_extensions = {".mp3", ".m4a", ".aac", ".ogg", ".opus"}
 
-        # gallery-dl may create subdirectories, so we walk recursively
         for root, _dirs, files in os.walk(output_dir):
             for fname in sorted(files):
                 fpath = os.path.join(root, fname)
@@ -209,7 +208,6 @@ class GalleryDlService:
                 elif ext in audio_extensions and audio is None:
                     audio = fpath
                 elif ext == ".json":
-                    # Try to extract title from metadata
                     try:
                         with open(fpath, encoding="utf-8") as f:
                             meta = json.load(f)
@@ -219,11 +217,9 @@ class GalleryDlService:
                                 or meta.get("title", "")
                                 or ""
                             )
-                            # Truncate long descriptions
                             if len(title) > 200:
                                 title = title[:197] + "..."
                     except (OSError, ValueError, AttributeError, TypeError):
-                        # Optional provider metadata must not discard downloaded images.
                         pass
 
         if not images:

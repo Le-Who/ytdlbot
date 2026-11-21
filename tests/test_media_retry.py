@@ -198,7 +198,6 @@ async def test_failure_button_repeats_the_original_request_in_the_same_message(
     assert env.pipeline.captions[1] == env.pipeline.captions[0]
     assert env.update.message.reply_text.await_count == 1
     env.status.delete.assert_awaited_once()
-    # Queued callbacks from the same button cannot send the media again.
     await on_retry(SimpleNamespace(callback_query=query), env.context)
     assert len(env.pipeline.requests) == 2
 
@@ -586,7 +585,6 @@ async def test_polling_retry_remains_consumed_after_restart_and_cache_cleanup_fa
     )
     query = query_for(env, markup.inline_keyboard[0][0].callback_data)
     await retry.on_retry(SimpleNamespace(callback_query=query), env.context)
-    # A restarted process retains Redis and SQLite, but no in-memory tombstones.
     retry._finished_retries.clear()
     monkeypatch.setattr(state, "job_store", JobStore(env.store.path))
     await retry.on_retry(SimpleNamespace(callback_query=query), env.context)
@@ -699,7 +697,6 @@ async def test_manual_retry_retires_failed_jobs_before_worker_restart(
     async def save_with_transient_failure(key, value, ttl=None):
         nonlocal drop_advancement
         if drop_advancement:
-            # RedisStorage logs and swallows a failed SET in production.
             drop_advancement = False
             return
         await real_set(key, value, ttl)

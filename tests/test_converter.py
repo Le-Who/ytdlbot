@@ -13,18 +13,13 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         from app.core import state
 
-        # Mock the state semaphore
         state.conversion_sem = MagicMock()
         state.conversion_sem.__aenter__ = AsyncMock()
         state.conversion_sem.__aexit__ = AsyncMock()
 
-    # ── Helper to build subprocess mocks ──────────────────────────────
-
     @staticmethod
     def _make_proc(returncode=0, stdout=b"", stderr=b""):
         return ProcessResult(returncode=returncode, stdout=stdout, stderr=stderr)
-
-    # ── convert_to_gif_ffmpeg ─────────────────────────────────────────
 
     @patch("app.services.converter.os.path.exists", return_value=True)
     @patch("app.services.converter.os.path.getsize", return_value=1024)
@@ -40,7 +35,6 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
         result = await MediaConverter.convert_to_gif_ffmpeg("/tmp/video.mp4")
 
         self.assertEqual(result, mock_exec.call_args[0][0][-1])
-        # ffmpeg should have been called once (copy mode)
         mock_exec.assert_called_once()
         cmd_args = mock_exec.call_args[0][0]
         self.assertIn("-c:v", cmd_args)
@@ -74,7 +68,6 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
     ):
         """Stream-copy fail → auto-fallback to libx264 transcode."""
         mock_probe.return_value = "h264"
-        # First call (copy) fails, second call (transcode) succeeds
         mock_exec.side_effect = [
             self._make_proc(1, stderr=b"copy error"),
             self._make_proc(0, stderr=b""),
@@ -84,7 +77,6 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, mock_exec.call_args[0][0][-1])
         self.assertEqual(mock_exec.call_count, 2)
-        # Second call should use libx264
         second_call_args = mock_exec.call_args_list[1][0][0]
         self.assertIn("libx264", second_call_args)
 
@@ -119,8 +111,6 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
         mock_exec.assert_called_once()
         cmd_args = mock_exec.call_args[0][0]
         self.assertIn("libx264", cmd_args)
-
-    # ── images_to_video ───────────────────────────────────────────────
 
     @patch("app.services.converter.os.path.exists", return_value=True)
     @patch("app.services.converter.os.path.getsize", return_value=1024)
@@ -164,7 +154,6 @@ class TestMediaConverter(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result)
         self.assertTrue("slideshow_5678.mp4" in result)
 
-        # Audio args should not be in the command
         cmd_args = mock_exec.call_args[0][0]
         self.assertNotIn("-c:a", cmd_args)
 
@@ -203,9 +192,7 @@ class TestConvertToNativeGif(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(result)
         self.assertTrue(result.endswith("_native.gif"))
-        # Two ffmpeg calls: palettegen + paletteuse
         self.assertEqual(mock_exec.call_count, 2)
-        # palette png must be cleaned up
         mock_safe_remove.assert_called()
 
     @patch("app.services.converter.safe_remove")
@@ -220,7 +207,6 @@ class TestConvertToNativeGif(unittest.IsolatedAsyncioTestCase):
         result = await MediaConverter.convert_to_native_gif("/tmp/test.mp4")
 
         self.assertIsNone(result)
-        # Only one ffmpeg call (pass 1 bails early)
         self.assertEqual(mock_exec.call_count, 1)
 
     @patch("app.services.converter.safe_remove")

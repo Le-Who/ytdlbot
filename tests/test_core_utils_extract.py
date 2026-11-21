@@ -4,7 +4,6 @@ from datetime import UTC, datetime
 
 from telegram import Chat, Message, MessageEntity
 
-# Set env vars
 os.environ["BOT_TOKEN"] = "test_token"
 
 from app.core.utils import extract_supported_url, extract_url_from_update

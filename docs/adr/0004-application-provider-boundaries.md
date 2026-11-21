@@ -8,7 +8,9 @@ and proxies. Instagram CDN transfer uses a fresh session without authentication
 cookies after the post metadata is resolved.
 
 An error from one Cobalt origin cannot establish what another configured origin
-will do. Keep adapter exceptions local, classify unknown failures as internal,
+will do. The legacy resolver advances to the next origin after an unsupported
+response mode and reports the final failure if all origins are exhausted.
+Keep adapter exceptions local, classify unknown failures as internal,
 and reserve part of the request deadline for sequential fallback. A fully cooled
 proxy pool permits one recovery attempt per request. Optional probes, metadata,
 and UI observers can fail without invalidating completed media.
@@ -18,7 +20,10 @@ CDN. Legacy paths use gallery-dl after an API extraction failure and a new
 yt-dlp source when the selected CDN fails or yields an unusable codec. TikWM
 chooses the advertised high-quality variant and leaves codec checks to
 downstream probing. Its signed URL cache uses a lifetime below the advertised
-expiry. Optional slideshow audio can fail while completed images remain usable.
+expiry. A failed CDN status or invalid body evicts the matching short and
+expanded aliases before one refreshed transfer. The retry can reuse metadata
+that another request has already refreshed. Optional slideshow audio can fail
+while completed images remain usable.
 
 The authorized Instagram adapter tries the web and mobile endpoints with its
 session pool. Health checks quarantine rejected sessions, and an unavailable

@@ -482,12 +482,23 @@ class DownloadOrchestrator:
                 isinstance(file_path, str) and file_path.lower().endswith(".gif")
             )
             is_audio = payload.format_id == AUDIO_FORMAT_ID
+            is_direct_video = (
+                isinstance(file_path, str)
+                and not is_gif
+                and not is_audio
+                and file_path.startswith(("http://", "https://"))
+            )
 
             if is_gif and isinstance(file_path, str) and token not in state.file_cache:
                 state.file_cache[token] = file_path
 
             thumbnail_path: str | None = None
-            if isinstance(file_path, str) and not is_gif and not is_audio:
+            if (
+                isinstance(file_path, str)
+                and not is_gif
+                and not is_audio
+                and not is_direct_video
+            ):
                 thumbnail_path = find_thumbnail(file_path)
                 if thumbnail_path:
                     _cleanup_extras.append(thumbnail_path)
@@ -504,17 +515,31 @@ class DownloadOrchestrator:
                     return False
                 file_path = mp3_path
 
-            if isinstance(file_path, str) and not is_gif and not is_audio:
+            if (
+                isinstance(file_path, str)
+                and not is_gif
+                and not is_audio
+                and not is_direct_video
+            ):
+                source_path = file_path
                 file_path = await ensure_telegram_compatible(
                     file_path, info_json_path=payload.info_json_path
                 )
-
-            if isinstance(file_path, str) and not is_gif and not is_audio:
                 if not config.TELEGRAM_LOCAL_ENDPOINT:
                     try:
                         file_size = os.path.getsize(file_path)
-                    except OSError:
-                        file_size = 0
+                    except OSError as inspection_error:
+                        if state.file_cache.get(token) in (source_path, file_path):
+                            state.file_cache.pop(token, None)
+                        if file_path not in state.file_cache.values():
+                            _cleanup_extras.append(file_path)
+                        mark_current_job_failed(inspection_error)
+                        logger.warning(
+                            "Could not inspect video before cloud upload",
+                            extra={"error_type": type(inspection_error).__name__},
+                        )
+                        await update_ui(Texts.GENERIC_ERROR_SHORT, kb_error)
+                        return False
                     if file_size > _TG_UPLOAD_LIMIT_BYTES:
                         logger.info(
                             "OPT-2: File %.1f MB > limit — attempting stream-copy split",
@@ -584,9 +609,12 @@ class DownloadOrchestrator:
                         "Skipping video compression/split; Local API provides 2GB upload limit"
                     )
 
-            video_meta = await extract_video_meta(
-                file_path,
-                info_json_path=payload.info_json_path,
+            video_meta = (
+                {}
+                if is_direct_video
+                else await extract_video_meta(
+                    file_path, info_json_path=payload.info_json_path
+                )
             )
 
             thumb_bytes: io.BytesIO | None = None

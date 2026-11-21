@@ -100,10 +100,6 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
 
         first = MagicMock()
         first.status_code = 200
-        first.json.return_value = {
-            "status": "error",
-            "error": {"code": "not_found"},
-        }
         second = MagicMock()
         second.status_code = 200
         second.json.return_value = {
@@ -113,7 +109,36 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
-        mock_session.post = AsyncMock(side_effect=[first, second])
+        for rejection in (
+            {"status": "error", "error": {"code": "not_found"}},
+            {"status": "local-processing"},
+        ):
+            with (
+                self.subTest(rejection=rejection),
+                patch("app.services.cobalt.AsyncSession", return_value=mock_session),
+                patch(
+                    "app.services.cobalt.COBALT_API_URLS",
+                    ["https://one.example", "https://two.example"],
+                ),
+            ):
+                first.json.return_value = rejection
+                mock_session.post = AsyncMock(side_effect=[first, second])
+                result = await CobaltService.process("https://tiktok.com/@u/video/1")
+                self.assertEqual(result.status, "redirect")
+                self.assertEqual(result.url, "https://cdn.example.com/video.mp4")
+                self.assertEqual(
+                    [call.args[0] for call in mock_session.post.await_args_list],
+                    ["https://one.example/", "https://two.example/"],
+                )
+
+    async def test_unsupported_response_exhausts_origins_without_retrying_modes(self):
+        from app.services.cobalt import CobaltService
+
+        unsupported = MagicMock(status_code=200)
+        unsupported.json.return_value = {"status": "local-processing"}
+        mock_session = AsyncMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.post = AsyncMock(return_value=unsupported)
 
         with (
             patch("app.services.cobalt.AsyncSession", return_value=mock_session),
@@ -124,7 +149,10 @@ class TestCobaltService(unittest.IsolatedAsyncioTestCase):
         ):
             result = await CobaltService.process("https://tiktok.com/@u/video/1")
 
-        self.assertEqual(result.status, "redirect")
+        self.assertEqual(result.status, "error")
+        self.assertEqual(
+            result.error_message, "Unsupported Cobalt status: local-processing"
+        )
         self.assertEqual(
             [call.args[0] for call in mock_session.post.await_args_list],
             ["https://one.example/", "https://two.example/"],

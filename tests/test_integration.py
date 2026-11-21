@@ -22,6 +22,8 @@ class AsyncMockCache(dict):
 
 
 import asyncio
+import tempfile
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from telegram import Message
@@ -221,8 +223,11 @@ class TestEndToEndDownload(unittest.IsolatedAsyncioTestCase):
             patch(
                 "app.services.downloader.MediaSender.send_file", new_callable=AsyncMock
             ) as mock_send,
+            tempfile.TemporaryDirectory() as local_dir,
         ):
-            mock_dl.return_value = ("/tmp/integration_test.mp4", None)
+            path = Path(local_dir) / "integration_test.mp4"
+            path.write_bytes(b"fixture video")
+            mock_dl.return_value = (str(path), None)
             mock_send.return_value = True
 
             await callbacks.on_send(update, context)

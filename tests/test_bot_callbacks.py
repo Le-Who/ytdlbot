@@ -1,7 +1,9 @@
 # mypy: ignore-errors
 import asyncio
+import tempfile
 import time
 import unittest
+from pathlib import Path
 from unittest.mock import AsyncMock
 
 
@@ -304,6 +306,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         self.context.user_data = {"size_map": {"137": 100}}
 
         with (
+            tempfile.TemporaryDirectory() as local_dir,
             patch(
                 "app.services.downloader.MediaSender.download_video",
                 new_callable=AsyncMock,
@@ -312,7 +315,9 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
                 "app.services.downloader.MediaSender.send_file", new_callable=AsyncMock
             ) as mock_send,
         ):
-            mock_dl.return_value = ("/tmp/test.mp4", None)
+            path = Path(local_dir) / "test.mp4"
+            path.write_bytes(b"fixture video")
+            mock_dl.return_value = (str(path), None)
             mock_send.return_value = True
 
             await callbacks.on_send(self.update, self.context)
@@ -440,6 +445,7 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         )
 
         with (
+            tempfile.TemporaryDirectory() as local_dir,
             patch(
                 "app.services.downloader.MediaSender.download_video",
                 new_callable=AsyncMock,
@@ -448,7 +454,9 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
                 "app.services.downloader.MediaSender.send_file", new_callable=AsyncMock
             ) as mock_send,
         ):
-            mock_dl.return_value = ("/tmp/test.mp4", None)
+            path = Path(local_dir) / "test.mp4"
+            path.write_bytes(b"fixture video")
+            mock_dl.return_value = (str(path), None)
             mock_send.return_value = True
 
             await callbacks.on_send(self.update, self.context)

@@ -10,8 +10,10 @@ generation is CPU intensive.
 The legacy cloud path prefers stream-copy splits to preserve quality and avoid
 encoding. The segment target leaves room for mux overhead. Large inputs or an
 unusable split fall through to two-pass compression. Local Bot API uploads skip
-the cloud fitting path. Legacy URL sends use Telegram's smaller server-fetch
-size ceiling and fall back to owned local files when the size hint fails.
+the cloud fitting path. Failed local file inspection in the legacy cloud path
+ends the request before split or send and reports the failure to the active job.
+Legacy URL sends use Telegram's smaller server-fetch size ceiling and fall back
+to owned local files when the size hint fails.
 
 The compatibility pass checks codec, pixel format, and tag, including 10-bit
 H.264 and the formats that TikTok can return under an MP4 filename. It retains

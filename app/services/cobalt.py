@@ -180,10 +180,8 @@ class CobaltService:
                                 picker=items,
                             )
 
-                        return CobaltResult(
-                            status="error",
-                            error_message=f"Unsupported Cobalt status: {status}",
-                        )
+                        last_error = f"Unsupported Cobalt status: {status}"
+                        break
 
                 except Exception as e:  # noqa: BLE001
                     last_error = str(e)

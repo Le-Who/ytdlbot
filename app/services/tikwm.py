@@ -37,6 +37,11 @@ TIMEOUT = 15
 MAX_RETRIES = 3
 CHUNK_SIZE = 1024 * 1024
 MAX_MEDIA_BYTES = 2_000_000_000
+MIN_VIDEO_BYTES = 10 * 1024
+
+
+class _InvalidBodyLength(ValueError):
+    pass
 
 
 async def _stream_response(response: Response, output_path: str) -> int:
@@ -61,7 +66,7 @@ async def _stream_response(response: Response, output_path: str) -> int:
             except ValueError:
                 expected = -1
             if expected >= 0 and written != expected:
-                raise ValueError("truncated media response")
+                raise _InvalidBodyLength("truncated media response")
         return written
     except BaseException:
         safe_remove(output_path)
@@ -83,11 +88,23 @@ class TikWMResult:
         return self.status == "picker"
 
 
+def _evict_failed_video(url: str, canonical_url: str | None, video_url: str) -> None:
+    for key in (url, canonical_url):
+        if (
+            key is not None
+            and (cached := _tikwm_cache.get(key)) is not None
+            and cached[0].url == video_url
+        ):
+            del _tikwm_cache[key]
+
+
 class TikWMService:
     """Fetches TikTok media via the TikWM API."""
 
     @staticmethod
-    async def process(url: str) -> TikWMResult:
+    async def process(
+        url: str, *, _rejected_video_url: str | None = None
+    ) -> TikWMResult:
         """
         Fetch TikTok media info via TikWM API.
         Returns unified TikWMResult for Video or Picker (Slideshow).
@@ -116,6 +133,9 @@ class TikWMService:
         api_url = f"{API_BASE}?url={quote(url, safe='')}&hd=1"
         last_error: str | None = None
         global _last_request_time
+
+        if _rejected_video_url is not None:
+            _evict_failed_video(_original_url, url, _rejected_video_url)
 
         now_ts = time.time()
         if url in _tikwm_cache:
@@ -247,85 +267,84 @@ class TikWMService:
         Args:
             url: Original TikTok page URL (may be a short vt.tiktok.com link).
             direct_video_url: Skip the API call and use this CDN URL directly.
-            _cdn_retry: Internal flag — when True, a single retry with a fresh
-                API call is attempted after a CDN 404/empty-body failure.
-                Set to False on the retry call to prevent infinite recursion.
+            _cdn_retry: Allow one retry with fresh metadata after an HTTP or
+                invalid-body failure.
 
         Returns:
             (file_path, None) on success.
             (None, error_message) on failure.
         """
-        _canonical: str | None = None
-        if not direct_video_url:
-            res = await TikWMService.process(url)
-            if res.status != "video" or not res.url:
-                return None, res.error_message or "TikWM: Not a video"
-            video_url = res.url
-            _canonical = res.canonical_url or url
-        else:
-            video_url = direct_video_url
-
-        output_path = os.path.join(TEMP_DIR, f"tikwm_{uuid.uuid4().hex}.mp4")
-
-        _MIN_VIDEO_BYTES = 10 * 1024
-
-        try:
-            assert video_url is not None
-            async with AsyncSession() as session:
-                resp = await session.get(
-                    video_url,
-                    impersonate="chrome",
-                    timeout=60,
-                    stream=True,
+        rejected_video_url: str | None = None
+        last_error = "TikWM download error: Download failed"
+        for attempt in range(2 if _cdn_retry else 1):
+            if attempt == 0 and direct_video_url:
+                video_url = direct_video_url
+                cached = _tikwm_cache.get(url)
+                canonical_url = (
+                    cached[0].canonical_url
+                    if cached is not None and cached[0].url == video_url
+                    else None
                 )
+            else:
+                res = (
+                    await TikWMService.process(url)
+                    if rejected_video_url is None
+                    else await TikWMService.process(
+                        url, _rejected_video_url=rejected_video_url
+                    )
+                )
+                if res.status != "video" or not res.url:
+                    return None, res.error_message or "TikWM: Not a video"
+                video_url = res.url
+                canonical_url = res.canonical_url
+
+            output_path = os.path.join(TEMP_DIR, f"tikwm_{uuid.uuid4().hex}.mp4")
+            try:
+                content_size: int | None = None
+                async with AsyncSession() as session:
+                    resp = await session.get(
+                        video_url,
+                        impersonate="chrome",
+                        timeout=60,
+                        stream=True,
+                    )
+                    if resp.status_code == 200:
+                        try:
+                            content_size = await _stream_response(resp, output_path)
+                        except _InvalidBodyLength:
+                            pass
+
                 if resp.status_code != 200:
+                    last_error = f"TikWM CDN error: HTTP {resp.status_code}"
                     logger.error(
-                        "[TIKWM] CDN returned HTTP %d for %s — evicting cache",
+                        "[TIKWM] CDN returned HTTP %d for %s",
                         resp.status_code,
                         redact_url(video_url),
                     )
-                    for _key in {url, _canonical}:
-                        if _key:
-                            _tikwm_cache.pop(_key, None)
-                    if _cdn_retry:
-                        logger.info(
-                            "[TIKWM] CDN %d — retrying with fresh API fetch...",
-                            resp.status_code,
-                        )
-                        return await TikWMService.download_video(url, _cdn_retry=False)
-                    return None, f"TikWM CDN error: HTTP {resp.status_code}"
-
-                content_size = await _stream_response(resp, output_path)
-            if content_size < _MIN_VIDEO_BYTES:
-                ct = resp.headers.get("content-type", "unknown")
-                logger.error(
-                    "[TIKWM] CDN body too small (%d bytes, content-type=%s) — likely an error page. Evicting cache.",
-                    content_size,
-                    ct,
-                )
-                await await_owned(asyncio.to_thread(safe_remove, output_path))
-                for _key in {url, _canonical}:
-                    if _key:
-                        _tikwm_cache.pop(_key, None)
-                if _cdn_retry:
-                    logger.info(
-                        "[TIKWM] CDN returned empty body — retrying with fresh API fetch..."
+                elif content_size is None or content_size < MIN_VIDEO_BYTES:
+                    last_error = "TikWM CDN returned empty/invalid body"
+                    logger.error(
+                        "[TIKWM] CDN returned an invalid video body for %s",
+                        redact_url(video_url),
                     )
-                    return await TikWMService.download_video(url, _cdn_retry=False)
-                return None, "TikWM CDN returned empty/invalid body"
+                    await await_owned(asyncio.to_thread(safe_remove, output_path))
+                else:
+                    size_mb = os.path.getsize(output_path) / (1024 * 1024)
+                    logger.info(
+                        "[TIKWM] Downloaded: %s (%.1f MB)", output_path, size_mb
+                    )
+                    return output_path, None
+            except asyncio.CancelledError:
+                safe_remove(output_path)
+                raise
+            except Exception as error:  # noqa: BLE001
+                logger.error("[TIKWM] Download failed (%s)", type(error).__name__)
+                await await_owned(asyncio.to_thread(safe_remove, output_path))
+                return None, "TikWM download error: Download failed"
 
-            file_size = os.path.getsize(output_path)
-            size_mb = file_size / (1024 * 1024)
-            logger.info("[TIKWM] Downloaded: %s (%.1f MB)", output_path, size_mb)
-            return output_path, None
-
-        except asyncio.CancelledError:
-            safe_remove(output_path)
-            raise
-        except Exception as e:  # noqa: BLE001
-            logger.error("[TIKWM] Download failed (%s)", type(e).__name__)
-            await await_owned(asyncio.to_thread(safe_remove, output_path))
-            return None, "TikWM download error: Download failed"
+            _evict_failed_video(url, canonical_url, video_url)
+            rejected_video_url = video_url
+        return None, last_error
 
     @staticmethod
     async def download_audio(audio_url: str) -> str | None:

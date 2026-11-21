@@ -2,10 +2,11 @@
 """
 YouTube Cookie Exporter for ytdlbot
 ====================================
-Extracts YouTube session cookies from your browser via yt-dlp,
-encodes them as base64, and outputs a ready-to-paste .env line.
+Reads a user-supplied Netscape file or uses the legacy yt-dlp browser mode.
+Filters the records and outputs a base64-encoded .env line.
 
 Usage:
+    python export_cookies.py --input PATH
     python export_cookies.py                    # Chrome default profile
     python export_cookies.py chrome             # Chrome — pick profile interactively
     python export_cookies.py chrome "Profile 3" # Chrome — specific profile
@@ -13,10 +14,11 @@ Usage:
     python export_cookies.py edge               # Edge
 
 Requirements:
-    - Python 3.8+
-    - yt-dlp installed (pip install yt-dlp)
+    - Python 3.10+
+    - yt-dlp installed for browser mode
 """
 
+import argparse
 import base64
 import io
 import json
@@ -26,16 +28,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
-
-if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
-    sys.stdout = io.TextIOWrapper(
-        sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
-    )
-    sys.stderr = io.TextIOWrapper(
-        sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
-    )
-else:
-    sys.stdout.reconfigure(line_buffering=True)  # type: ignore[attr-defined]
+from pathlib import Path
 
 SUPPORTED_BROWSERS = ("chrome", "firefox", "edge", "brave", "opera", "vivaldi")
 ENV_VAR_NAME = "YTDLP_COOKIES_B64"
@@ -461,7 +454,81 @@ def _copy_to_clipboard(text: str) -> bool:
         return False
 
 
+def _configure_cli_output() -> None:
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if callable(reconfigure):
+            try:
+                reconfigure(encoding="utf-8", errors="replace", line_buffering=True)
+            except io.UnsupportedOperation:
+                pass
+
+
+def _read_input_file(arguments: list[str]) -> str:
+    parser = argparse.ArgumentParser(
+        usage="%(prog)s --input PATH",
+        description="Encode an existing Netscape cookie file for ytdlbot.",
+        allow_abbrev=False,
+    )
+    parser.add_argument("--input", type=Path, action="append", required=True)
+    paths: list[Path] = parser.parse_args(arguments).input
+    if len(paths) != 1:
+        parser.error("--input accepts exactly one file")
+    try:
+        return paths[0].read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError):
+        parser.error("cannot read --input as a UTF-8 Netscape cookie file")
+
+
+def _print_export(raw_cookies: str, *, use_clipboard: bool) -> None:
+    filtered = _filter_youtube_cookies(raw_cookies)
+    if not filtered:
+        print("  [X]  No YouTube/Google cookies found.")
+        sys.exit(1)
+    cookie_lines = [
+        l for l in filtered.splitlines() if l.strip() and not l.startswith("#")
+    ]
+    b64 = _encode_base64(filtered)
+
+    print(f"  [OK]  Extracted {len(cookie_lines)} YouTube/Google cookies")
+    print(f"  [OK]  Base64 size: {len(b64)} chars")
+    print()
+
+    env_line = f"{ENV_VAR_NAME}={b64}"
+
+    copied = use_clipboard and _copy_to_clipboard(env_line)
+
+    print("  +--- Ready .env line -------------------------")
+    print("  |")
+    preview_len = 80
+    if copied and len(env_line) > preview_len:
+        print(f"  |  {env_line[:preview_len]}...")
+    else:
+        print(f"  |  {env_line}")
+    print("  |")
+    print("  +---------------------------------------------")
+    print()
+
+    if copied:
+        print("  [CLIPBOARD] Copied! Just paste into .env on the server.")
+    else:
+        print("  Copy the line above and paste it into .env on the server.")
+
+    print()
+    print("  Then restart the bot:")
+    print("      docker compose restart bot")
+    print()
+
+
 def main() -> None:
+    _configure_cli_output()
+    arguments = sys.argv[1:]
+    if any(arg == "--input" or arg.startswith("--input=") for arg in arguments):
+        input_text = _read_input_file(arguments)
+        _print_banner()
+        _print_export(input_text, use_clipboard=False)
+        return
+
     _print_banner()
 
     ytdlp_path = _check_ytdlp()
@@ -488,43 +555,7 @@ def main() -> None:
     if raw_cookies is None:
         sys.exit(1)
 
-    filtered = _filter_youtube_cookies(raw_cookies)
-    if not filtered:
-        print("  [X]  No YouTube/Google cookies found.")
-        sys.exit(1)
-    cookie_lines = [
-        l for l in filtered.splitlines() if l.strip() and not l.startswith("#")
-    ]
-    b64 = _encode_base64(filtered)
-
-    print(f"  [OK]  Extracted {len(cookie_lines)} YouTube/Google cookies")
-    print(f"  [OK]  Base64 size: {len(b64)} chars")
-    print()
-
-    env_line = f"{ENV_VAR_NAME}={b64}"
-
-    copied = _copy_to_clipboard(env_line)
-
-    print("  +--- Ready .env line -------------------------")
-    print("  |")
-    preview_len = 80
-    if copied and len(env_line) > preview_len:
-        print(f"  |  {env_line[:preview_len]}...")
-    else:
-        print(f"  |  {env_line}")
-    print("  |")
-    print("  +---------------------------------------------")
-    print()
-
-    if copied:
-        print("  [CLIPBOARD] Copied! Just paste into .env on the server.")
-    else:
-        print("  Copy the line above and paste it into .env on the server.")
-
-    print()
-    print("  Then restart the bot:")
-    print("      docker compose restart bot")
-    print()
+    _print_export(raw_cookies, use_clipboard=True)
 
 
 if __name__ == "__main__":

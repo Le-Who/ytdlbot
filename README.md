@@ -214,6 +214,12 @@ export the signed-in browser session in Netscape format, base64-encode the file,
 and set `VK_COOKIES_B64` in the private environment. Public yt-dlp and gallery-dl
 provider calls use a separate cookie-free path.
 
+To encode a Netscape cookie file you already exported, run
+`python tools/export_cookies.py --input "path/to/cookies.txt"`. This mode prints
+the filtered `YTDLP_COOKIES_B64` line to standard output. It reads the supplied
+file locally without checking a browser or invoking yt-dlp. The existing
+browser-selector invocation still uses yt-dlp and a placeholder media URL.
+
 Run locally:
 
 ```sh

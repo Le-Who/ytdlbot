@@ -131,7 +131,6 @@ class MetricsCollector:
     def __init__(self):
         self.start_time = time.time()
 
-        # Counters
         self.downloads_total = _Counter(
             "ytdlbot_downloads_total",
             "Total download attempts",
@@ -189,7 +188,6 @@ class MetricsCollector:
             "Wall-clock seconds spent running bounded media transforms",
         )
 
-        # Gauges
         self.active_downloads = _Gauge(
             "ytdlbot_active_downloads",
             "Currently active downloads",
@@ -207,7 +205,6 @@ class MetricsCollector:
             "Active Telegram delivery profile, upload limit, and release",
         )
 
-        # Histograms (phase timing)
         self.extraction_duration = _Histogram(
             "ytdlbot_extraction_duration_seconds",
             "Time spent extracting video metadata",
@@ -234,7 +231,6 @@ class MetricsCollector:
         lines = []
         uptime = time.time() - self.start_time
 
-        # Uptime gauge
         lines.append("# HELP ytdlbot_uptime_seconds Bot uptime in seconds")
         lines.append("# TYPE ytdlbot_uptime_seconds gauge")
         lines.append(f"ytdlbot_uptime_seconds {uptime:.1f}")
@@ -280,7 +276,6 @@ class MetricsCollector:
                         lines.append(f"{metric.name} {value}")
             lines.append("")
 
-        # Histograms (count + sum)
         for hist in [
             self.extraction_duration,
             self.download_duration,
@@ -327,7 +322,6 @@ class MetricsCollector:
             "active": sum(v for _, v in self.active_downloads.collect()),
             "uptime_h": (time.time() - self.start_time) / 3600,
         }
-        # Add average durations per phase
         for hist in [
             self.extraction_duration,
             self.download_duration,
@@ -344,5 +338,4 @@ class MetricsCollector:
         logger.info("Metrics summary", extra={"metrics": summary})
 
 
-# Global singleton
 metrics = MetricsCollector()

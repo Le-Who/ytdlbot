@@ -35,8 +35,6 @@ from app.core.process import (
 )
 from app.core.utils import safe_remove
 from app.services.converter import MediaConverter
-
-# Re-export decomposed services for backward compatibility
 from app.services.sender import MAX_TELEGRAM_ALBUM_SIZE, TelegramSender
 from app.services.slideshow import SlideshowPipeline
 
@@ -52,7 +50,6 @@ __all__ = [
 logger = logging.getLogger("app.services.downloader")
 
 
-# Late import to avoid circular dep — metrics is a lightweight singleton
 def _metrics():
     from app.core.metrics import metrics
 
@@ -101,10 +98,8 @@ class VideoDownloader:
         else:
             file_ext = "mp4"
 
-        # Ensure we only use pipe for standard videos, not audio or GIF converting target
         use_pipe = YOUTUBE_PIPE_MODE and not is_gif and not is_audio
 
-        # Check if we already have this file in cache (e.g. for GIF conversion reuse)
         cached_path = state.file_cache.get(token)
         if cached_path and isinstance(cached_path, str) and os.path.exists(cached_path):
             logger.info("Reusing cached file", extra={"path": cached_path})
@@ -120,7 +115,7 @@ class VideoDownloader:
             height,
             output=output_path,
             max_filesize=MAX_TG_UPLOAD_MB,
-            use_aria2=not use_pipe,  # aria2c doesn't support stdout piping
+            use_aria2=not use_pipe,
             info_json_path=info_json_path,
             fallback_clients=fallback_clients,
             pipe_mode=use_pipe,
@@ -148,8 +143,6 @@ class VideoDownloader:
                         pct = float(m.group(1))
                         eta = f"ETA {m.group(2).decode()}"
                         await progress_callback(pct, eta)
-                    # Progress callbacks are optional caller adapters; their
-                    # failures must not interrupt the supervised media download.
                     except Exception as error:  # noqa: BLE001
                         logger.debug(
                             "Download progress callback failed",
@@ -176,9 +169,6 @@ class VideoDownloader:
                 buffer = io.BytesIO() if use_pipe else None
                 last_cancel_check = 0.0
 
-                # The callback cancels this stable token owner immediately.
-                # This short poll remains as a fallback for non-Bot callers
-                # that only update the shared cancellation cache.
                 while True:
                     now = time.time()
                     if now - last_cancel_check > 0.25:
@@ -240,7 +230,6 @@ class VideoDownloader:
                         )
 
                     if isinstance(mapped_err, AccessDeniedError):
-                        # Surface the specific message (e.g. VK auth instruction)
                         return None, str(mapped_err)
                     elif isinstance(mapped_err, VideoNotFoundError):
                         return (
@@ -257,14 +246,12 @@ class VideoDownloader:
                             "⚠️ Ошибка загрузки. Попробуйте другое качество или ссылку.",
                         )
 
-            # Verify file
             if use_pipe:
                 assert buffer is not None
                 buffer.seek(0)
                 file_size = buffer.getbuffer().nbytes
                 if not size_allowed(file_size, target="telegram"):
                     return None, f"⚠️ Файл слишком большой (> {MAX_TG_UPLOAD_MB} МБ)."
-                # For pipes, we don't save to file_cache (no physical path)
                 _metrics().downloads_success.inc(platform="telegram")
                 _metrics().download_duration.observe(
                     time.time() - _dl_start, platform="telegram"
@@ -286,7 +273,6 @@ class VideoDownloader:
                     await asyncio.to_thread(safe_remove, tmp_path)
                     return None, "⚠️ Ошибка проверки файла."
 
-                # Save to cache
                 state.file_cache[token] = tmp_path
                 _metrics().downloads_success.inc(platform="telegram")
                 _metrics().download_duration.observe(
@@ -320,17 +306,13 @@ class MediaSender:
     New code should import from the specific service modules directly.
     """
 
-    # VideoDownloader
     download_video = VideoDownloader.download_video
 
-    # TelegramSender
     send_file = TelegramSender.send_file
     send_slideshow_photos = TelegramSender.send_slideshow_photos
 
-    # MediaConverter
     convert_to_gif_ffmpeg = MediaConverter.convert_to_gif_ffmpeg
     images_to_video = MediaConverter.images_to_video
 
-    # SlideshowPipeline
     download_slideshow = SlideshowPipeline.download_slideshow
     cleanup_slideshow = SlideshowPipeline.cleanup_slideshow

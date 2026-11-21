@@ -346,7 +346,7 @@ def _helper_functions(module: Any, *names: str) -> dict[str, Any]:
         type_ignores=[],
     )
     namespace = {"re": re, "urllib": urllib, "Path": Path, "os": os, "sqlite3": sqlite3}
-    exec(compile(selected, "<container-helper>", "exec"), namespace)  # noqa: S102 - checked-in helper only
+    exec(compile(selected, "<container-helper>", "exec"), namespace)  # noqa: S102
     return namespace
 
 

@@ -41,7 +41,6 @@ def cleanup_temp_dir(root: str | None = None) -> tuple[int, int]:
             _cleanup_inactive_lease(target)
             continue
 
-        # Clean slideshow directories (slideshow_* subdirs)
         if name.startswith("slideshow_") and os.path.isdir(path):
             try:
                 age = now - os.path.getmtime(path)
@@ -56,7 +55,6 @@ def cleanup_temp_dir(root: str | None = None) -> tuple[int, int]:
                     pass
             continue
 
-        # Clean bot-created files
         if not name.startswith(
             ("ytdl_", "concat_", "tikwm_", "gdl_video_", "info_", "media_")
         ):
@@ -177,7 +175,6 @@ def _delete_media_target(path: str, *, now: float, require_old: bool) -> bool:
         return False
 
 
-# 0 = ok, 1 = warning sent, 2 = critical sent
 _last_alert_level: int = 0
 
 
@@ -187,7 +184,7 @@ async def _notify_admin(message: str) -> None:
         from app.core import (
             config,
             state,
-        )  # local import to avoid circular at module level
+        )
 
         if not config.ADMIN_CHAT_ID or not state.bot_app:
             return
@@ -196,8 +193,6 @@ async def _notify_admin(message: str) -> None:
             text=message,
             parse_mode="HTML",
         )
-    # Alert delivery crosses the optional Telegram adapter; disk maintenance
-    # must continue even when that adapter raises an unexpected failure.
     except Exception as exc:  # noqa: BLE001
         logger.warning("Disk alert admin notification failed: %s", exc)
 
@@ -206,7 +201,7 @@ async def check_disk_space() -> None:
     """Check free disk space and take action based on thresholds."""
     global _last_alert_level
 
-    from app.core import config, state  # local import
+    from app.core import config, state
 
     try:
         usage = await asyncio.to_thread(shutil.disk_usage, MEDIA_DIR)
@@ -226,7 +221,6 @@ async def check_disk_space() -> None:
     )
 
     if free_pct <= config.DISK_CRITICAL_PCT:
-        # ── Critical: aggressive purge + maintenance mode ────────────────
         state.disk_critical = True
         purged = await asyncio.to_thread(_aggressive_purge_media_dirs)
         logger.error(
@@ -244,7 +238,6 @@ async def check_disk_space() -> None:
             )
 
     elif free_pct <= config.DISK_WARNING_PCT:
-        # ── Warning: alert only ──────────────────────────────────────────
         logger.warning("DISK WARNING: %.1f%% free (%.2f GB)", free_pct, free_gb)
         if _last_alert_level < 1:
             _last_alert_level = 1
@@ -256,7 +249,6 @@ async def check_disk_space() -> None:
             )
 
     else:
-        # ── Recovery ─────────────────────────────────────────────────────
         if state.disk_critical:
             state.disk_critical = False
             logger.info(
@@ -285,8 +277,6 @@ async def janitor_loop(stop_event: asyncio.Event) -> None:
             from app.core.metrics import metrics as app_metrics
 
             app_metrics.log_summary()
-        # Metrics observers are optional; their failures must not prevent disk
-        # checks or lease-aware cleanup from running on subsequent iterations.
         except Exception as error:  # noqa: BLE001
             logger.debug(
                 "Janitor metrics summary failed",

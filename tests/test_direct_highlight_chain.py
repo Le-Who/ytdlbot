@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from test_ig_callback_chains import _button, _click, _serialized
 from test_ig_callback_chains import (
-    ig_chain as ig_chain,  # noqa: PLC0414 - shared fixture
+    ig_chain as ig_chain,  # noqa: PLC0414
 )
 
 from app.bot import commands, group_logic, ig_callbacks, messages

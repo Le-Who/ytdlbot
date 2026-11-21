@@ -74,8 +74,6 @@ async def shutdown_runtime(
     ) -> None:
         try:
             await operation()
-        # Shutdown crosses independent external services; every phase must get
-        # an attempt even if an earlier adapter raises an unexpected failure.
         except Exception as error:  # noqa: BLE001
             logger.error(
                 "Shutdown phase failed",
@@ -110,8 +108,6 @@ async def shutdown_runtime(
         await attempt("Telegram application stop", bot_app.stop)
         await attempt("Telegram application shutdown", bot_app.shutdown)
         await attempt("job store close", job_store.close)
-        # Redis is created at import time and reused by each lifespan. The
-        # runtime that adopted this same client owns its eventual close.
         redis_adopted = (
             state.redis_client is redis_client
             and state.bot_app is not None
@@ -120,8 +116,6 @@ async def shutdown_runtime(
         if redis_client and not redis_adopted:
             await attempt("Redis close", redis_client.aclose)
             logger.info("Redis connection closed ✅")
-        # A newer lifespan may already own these globals when deferred cleanup
-        # runs. Close captured resources without clearing its runtime bindings.
         if state.media_pipeline is runtime_pipeline:
             state.media_pipeline = None
         if state.bot_app is bot_app:
@@ -193,26 +187,21 @@ async def _global_error_handler(update, context):
         extra={"op": "error_handler"},
     )
 
-    # ── Notify user ───────────────────────────────────────────────
     try:
         if update and update.effective_message:
             await update.effective_message.reply_text(
                 "⚠️ Произошла внутренняя ошибка. Попробуйте позже."
             )
-    # The failed handler is already recorded above; optional error-message UI
-    # must not prevent the separate admin notification from being attempted.
     except Exception as notify_err:  # noqa: BLE001
         logger.debug(
             "Failed to notify user about handler error",
             extra={"error_type": type(notify_err).__name__},
         )
 
-    # ── Notify admin ──────────────────────────────────────────────
     if not config.ADMIN_CHAT_ID:
         return
 
     try:
-        # Format traceback (capped to keep within 4096 TG limit)
         tb_lines = traceback.format_exception(
             type(context.error), context.error, context.error.__traceback__
         )
@@ -220,7 +209,6 @@ async def _global_error_handler(update, context):
         if len(tb_text) > 3500:
             tb_text = "...(truncated)\n" + tb_text[-3500:]
 
-        # Extract useful update context
         ctx_lines: list[str] = []
         if update:
             if update.effective_user:
@@ -247,8 +235,6 @@ async def _global_error_handler(update, context):
             text=report,
             parse_mode="HTML",
         )
-    # Traceback formatting and Telegram delivery are optional error-reporting
-    # adapters; a reporting failure must not replace the original handler error.
     except Exception as notify_err:  # noqa: BLE001
         logger.warning("Failed to send error report to admin: %s", notify_err)
 
@@ -302,7 +288,6 @@ async def _lifespan_runtime(
     logger.info("Starting up...")
     logger.info("aria2c: %s", "enabled ✅" if state.ytdlp.has_aria2 else "not found ❌")
 
-    # Cookie diagnostics — re-emit after logging is configured (cookies init at import time)
     _cm = state.ytdlp.cookies_manager
     _loaded = [k for k, v in _cm._platform_cookies.items() if v]
     if _cm._global_cookies_path:
@@ -387,7 +372,6 @@ async def _lifespan_runtime(
         )
     )
 
-    # ── Instagram callback handlers ──────────────────────────────────
     from app.bot import ig_callbacks
 
     bot_app.add_handler(
@@ -446,8 +430,6 @@ async def _lifespan_runtime(
     owner.worker = durable_worker
 
     try:
-        # Acquire runtime resources only after synchronous application setup so
-        # builder/handler failures cannot strand tasks or durable ownership.
         if state.redis_client:
             await state.redis_client.ping()
             logger.info("Redis connected ✅")

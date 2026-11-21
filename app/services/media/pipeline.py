@@ -192,8 +192,6 @@ class MediaPipeline:
         self.lease_renew_interval = lease_renew_interval
         self.slideshow_converter = slideshow_converter or _convert_slideshow
         self.youtube_routes = tuple(youtube_routes)
-        # Domain separation is intentional: the same textual key can never make
-        # a resolve factory subscribe to its own materialization flight.
         self._resolve_flights: SingleFlightGroup[str, ResolvedMedia] = (
             SingleFlightGroup()
         )
@@ -223,7 +221,7 @@ class MediaPipeline:
             return None
         try:
             metadata = await self.media_cache.get_metadata(request)
-        except Exception:  # noqa: BLE001 - cache is optional acceleration
+        except Exception:  # noqa: BLE001
             return None
         if metadata is None or metadata.item_count <= 0:
             return None
@@ -569,8 +567,6 @@ class MediaPipeline:
                     materialized, convert_validate_deliver()
                 )
             finally:
-                # _with_lease_renewals has stopped and joined its heartbeat
-                # before ownership markers are removed.
                 if derived is not None:
                     await _await_preserving_cancellation(derived.release(delete=True))
 
@@ -659,9 +655,6 @@ class MediaPipeline:
                                 and work_request.platform == "tiktok"
                                 and selected.provider == "ytdlp"
                             ):
-                                # Keep a lightweight resolver running while yt-dlp
-                                # attempts the native CDN. It may be ready before
-                                # those URLs fail, without another serial wait.
                                 retried_tiktok_cheap = True
                                 cheap_prefetch = asyncio.create_task(
                                     self._resolve_reserve(
@@ -790,11 +783,9 @@ class MediaPipeline:
         try:
             await self._store_metadata(selected)
         except BaseException:
-            # Bytes stay factory-owned until publication, including cancellation.
             await _await_preserving_cancellation(completed.release(delete=True))
             raise
         try:
-            # Publication retains the final subscriber's ownership across cancellation.
             await _await_preserving_cancellation(
                 self._publish_materialization(key, completed)
             )
@@ -980,9 +971,6 @@ class MediaPipeline:
             }:
                 item_count = 1
             else:
-                # AUTO and ALBUM can represent multiple outputs.  Without
-                # stable cardinality metadata, item zero is not proof that the
-                # complete ordered result is cached.
                 return None
             indexes = tuple(range(item_count))
             assets: list[DeliveryAsset] = []
@@ -1007,7 +995,7 @@ class MediaPipeline:
                         item_index=index,
                     )
                 )
-        except Exception:  # noqa: BLE001 - cache acceleration is non-authoritative
+        except Exception:  # noqa: BLE001
             return None
         metrics.media_cache_events.inc(
             len(assets), event="file_id_hit", platform=request.platform
@@ -1066,7 +1054,7 @@ class MediaPipeline:
         )
         try:
             await self.media_cache.put_metadata(resolved.request, metadata)
-        except Exception:  # noqa: BLE001 - metadata cache is best effort
+        except Exception:  # noqa: BLE001
             return
 
     async def _register_materialization_user(
@@ -1280,7 +1268,6 @@ async def validate_materialized_artifact(
         if item.kind is MediaKind.AUDIO and not audio:
             raise ArtifactValidationError("final artifact has no audio stream")
         if item.kind is MediaKind.VIDEO and candidate.has_audio and not audio:
-            # FxTwitter cannot declare audio presence; an untouched source may be silent.
             silent_direct_fxtwitter = (
                 candidate.provider == "fxtwitter"
                 and candidate.mux_mode is None
@@ -1760,9 +1747,6 @@ def _materialization_candidates(
         if not candidate.items:
             normalized.append(candidate)
             continue
-        # Album items are the ordered delivery contract.  Provider payloads may
-        # also expose a slideshow soundtrack; it must not silently become an
-        # extra Telegram item or trigger a default slideshow conversion.
         sources_by_url = {source.url: source for source in candidate.sources}
         sources = tuple(
             replace(source, format_id=str(index))
@@ -1992,7 +1976,6 @@ def _generic_media_id(
 def _validate_callback_parts(values: Sequence[str]) -> None:
     if not values or (values[0] != "back" and len(values) < 2):
         raise CallbackDataError("callback data is incomplete")
-    # New back buttons identify a menu; legacy buttons use conversation state.
     if values[0] == "back" and len(values) not in {1, 2}:
         raise CallbackDataError("callback action or shape is invalid")
     if any(not value or not _CALLBACK_PART.fullmatch(value) for value in values):

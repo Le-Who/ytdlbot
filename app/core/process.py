@@ -168,8 +168,6 @@ def _create_windows_job() -> int:
 
 
 def _windows_process_handle(proc: asyncio.subprocess.Process) -> int:
-    # Windows Job Object adoption needs CPython's private transport, absent from
-    # the public Process stub; preserve the audited dynamic platform bridge.
     transport = getattr(proc, "_transport")  # noqa: B009
     popen = transport.get_extra_info("subprocess")
     return int(popen._handle)
@@ -292,8 +290,6 @@ class ProcessHandle:
                 await asyncio.wait_for(self.proc.wait(), timeout=0.5)
             except TimeoutError:
                 pass
-            # Waiting for the leader does not prove its descendants exited.
-            # Kill any remaining group members before releasing their files.
             try:
                 os.killpg(self.process_group_id, signal.SIGKILL)
             except ProcessLookupError:
@@ -309,9 +305,6 @@ class ProcessHandle:
             try:
                 await asyncio.wait_for(self.proc.wait(), timeout=0.2)
             except TimeoutError:
-                # The process has received the strongest available kill. Never
-                # let a broken platform wait primitive violate cancellation's
-                # bounded completion contract.
                 pass
 
     async def _cleanup_cancelled_paths(self) -> None:
@@ -324,9 +317,6 @@ class ProcessHandle:
             except OSError:
                 pass
         for output in self.cleanup_stems:
-            # yt-dlp inserts format identifiers between the configured UUID
-            # stem and extension (for example job.f137.mp4.part).  Matching
-            # only "<stem>.*" removes that job without touching job-other.
             try:
                 for candidate in output.parent.glob(f"{output.stem}.*"):
                     if candidate.is_dir():
@@ -381,9 +371,6 @@ class ProcessSupervisor:
         )
         if child_limit < 1:
             raise ValueError("max_child_processes must be positive")
-        # A workload lease prevents unrelated jobs from bypassing the limit.
-        # A separate process lease permits the one required two-process pipe,
-        # while still imposing a hard upper bound on same-owner children.
         self._workload_slots = asyncio.Semaphore(max_processes)
         self._process_slots = asyncio.Semaphore(child_limit)
         self._lock = asyncio.Lock()
@@ -631,8 +618,6 @@ class ProcessSupervisor:
         stderr_pipe: bool = True,
         timeout: float | None = None,
     ) -> Coroutine[object, object, ProcessResult]:
-        # Capture the owner's generation when run() is called, before a task
-        # created from the returned coroutine can race cancel_owner().
         owner_key = self._owner(owner)
         generation = self._owner_generation.get(owner_key, 0)
         return self._run(
@@ -712,8 +697,6 @@ class ProcessSupervisor:
                     if stderr_callback is not None:
                         try:
                             stderr_callback(line)
-                        # Progress observers are caller-supplied and optional;
-                        # their failures must not stop draining the process pipe.
                         except Exception as error:  # noqa: BLE001
                             logger.debug(
                                 "Subprocess stderr callback failed",

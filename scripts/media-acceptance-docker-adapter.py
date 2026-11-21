@@ -605,8 +605,6 @@ elif action == "evict-case":
     safe = asyncio.run(evict())
     emit({"safe": bool(safe), "mode": mode, "deleted_count": deleted})
 elif action == "cancel":
-    # No current application API maps an external correlation ID to a running
-    # task. Refuse to claim cancellation; the collector will stop the window.
     emit({"cancelled": False})
 else:
     raise SystemExit(12)
@@ -856,7 +854,6 @@ class DockerRuntime:
 
     def correlated_logs(self, *, since: str, correlation_id: str) -> str:
         raw = self.logs_since(since=since)
-        # Raw log text is used in memory only and is never returned or printed.
         return "\n".join(line for line in raw.splitlines() if correlation_id in line)
 
     def logs_since(self, *, since: str) -> str:
@@ -1657,7 +1654,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             output = {"cancelled": adapter.cancel(str(payload["correlation_id"]))}
         print(json.dumps(output, separators=(",", ":"), sort_keys=True))
     except (AdapterError, AdapterTimeout, KeyError, TypeError, ValueError) as exc:
-        # Never print subprocess output or input fields; both may contain secrets.
         print(f"media acceptance adapter failed: {type(exc).__name__}", file=sys.stderr)
         return 2
     return 0

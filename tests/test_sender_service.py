@@ -97,7 +97,6 @@ class TestSendSlideshowPhotos(unittest.IsolatedAsyncioTestCase):
         self.images = []
         for i in range(3):
             p = os.path.join(self.tmpdir, f"img_{i}.jpg")
-            # Small synthetic fixture I/O completes inline; no runtime worker ownership.
             with open(p, "wb") as f:  # noqa: ASYNC230
                 f.write(b"\xff\xd8\xff" + b"\x00" * 100)
             self.images.append(p)

@@ -23,7 +23,6 @@ def exporter(monkeypatch: pytest.MonkeyPatch) -> Any:
         "synthetic_cookie_exporter", ROOT / "tools/export_cookies.py"
     )
     module = importlib.util.module_from_spec(spec)
-    # The CLI configures stdout at import; give it an owned UTF-8 stream.
     with patch.object(sys, "stdout", io.TextIOWrapper(io.BytesIO(), encoding="utf-8")):
         spec.loader.exec_module(module)
     external_attempts = []
@@ -73,7 +72,7 @@ def test_filter_keeps_only_exact_google_domain_boundaries(
 @pytest.mark.parametrize(
     "line",
     [
-        "youtube.com\tTRUE\t/\tTRUE\t0\tname",  # incomplete
+        "youtube.com\tTRUE\t/\tTRUE\t0\tname",
         "youtube.com\tTRUE\t/\tTRUE\t0\tname\tvalue\textra",
         "youtube.com\tTRUE\t/\tTRUE\t0\t\tvalue",
         "youtube.com\tTRUE\t\tTRUE\t0\tname\tvalue",

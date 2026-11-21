@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("app.services.pinterest")
 
-CHUNK_SIZE = 512 * 1024  # 512 KB chunks for streaming
+CHUNK_SIZE = 512 * 1024
 MAX_MEDIA_BYTES = max_media_file_bytes()
 
 
@@ -178,13 +178,11 @@ class PinterestNativeService:
         """
         video_url, image_url = await PinterestNativeService.extract_media_url(url)
 
-        # Tier 1: Direct video download with streaming
         if video_url:
             result = await _stream_download(video_url, "pin_", "mp4")
             if result:
                 return result, None
 
-        # Tier 2: Single image download
         if image_url:
             ext = "jpg"
             if ".gif" in image_url.lower():
@@ -195,7 +193,6 @@ class PinterestNativeService:
             if result:
                 return result, None
 
-        # Tier 3: Cobalt fallback (handles both video and carousels)
         return await _cobalt_fallback(url)
 
     @staticmethod
@@ -210,7 +207,6 @@ class PinterestNativeService:
         c_res = await CobaltService.process(url)
 
         if c_res.status == "picker" and c_res.picker:
-            # Download all picker items concurrently
             image_urls = [p.url for p in c_res.picker if p.url]
             if not image_urls:
                 return None, "Cobalt picker returned empty items"
@@ -253,9 +249,6 @@ class PinterestNativeService:
         return None, "Not a carousel or Cobalt failed"
 
 
-# ── Private helpers ──────────────────────────────────────────────────────────
-
-
 def _parse_native_media(html: str) -> tuple[str | None, str | None]:
     video_url = _extract_og_video(html)
     image_url = _extract_og_image(html)
@@ -295,7 +288,6 @@ def _extract_og_video(html: str) -> str | None:
         re.IGNORECASE,
     )
     if not match:
-        # Alternative: content attribute comes first
         match = re.search(
             r'<meta[^>]+content=["\']([^"\']+\.mp4(?:[?#][^"\']*)?)["\'][^>]+property=["\']og:video(:secure_url)?["\']',
             html,
@@ -306,15 +298,12 @@ def _extract_og_video(html: str) -> str | None:
             if group and isinstance(group, str) and ".mp4" in group:
                 return group if group.startswith("https") else None
 
-    # Fallback: Many video pins lack og:video but embed the MP4 stream directly in the JSON script payload.
-    # We prefer 720p/mc format if available.
     match = re.search(
         r'(https?://[a-zA-Z0-9_\-\.]+\.pinimg\.com/videos/mc/[^"\']+\.mp4)\b', html
     )
     if match:
         return match.group(1)
 
-    # Any other MP4 fallback
     match = re.search(
         r'(https?://[a-zA-Z0-9_\-\.]+\.pinimg\.com/videos/[^"\']+\.mp4)\b', html
     )
@@ -404,8 +393,6 @@ async def _stream_download(direct_url: str, prefix: str, ext: str) -> str | None
         completed = True
         return out_p
 
-    # curl streaming is an external adapter boundary; no partial file may be
-    # returned as success and callers use their established fallback on failure.
     except Exception as e:  # noqa: BLE001
         logger.warning("[PINTEREST] Stream download failed: %s", e)
         if os.path.exists(out_p):
@@ -432,14 +419,12 @@ async def _cobalt_fallback(
             or "Не удалось извлечь медиа с Pinterest (Нативный метод и Cobalt не справились)",
         )
 
-    # Cobalt returned a direct video URL
     if c_res.url:
         result = await _stream_download(c_res.url, "pin_cobalt_", "mp4")
         if result:
             return result, None
         return None, "Ошибка загрузки через резервный канал"
 
-    # Cobalt returned picker (carousel) — download the first item as a video/image
     if c_res.picker:
         first_item = c_res.picker[0]
         ext = "mp4" if first_item.type == "video" else "jpg"

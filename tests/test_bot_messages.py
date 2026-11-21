@@ -37,9 +37,7 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
         state.info_cache = AsyncMockCache()
         state.link_cache = AsyncMockCache()
         state.cancel_cache = AsyncMockCache()
-        state.prefs_cache = (
-            AsyncMockCache()
-        )  # needed by user_prefs fast-path in on_message
+        state.prefs_cache = AsyncMockCache()
         state.inflight_parsing = {}
         state.limiter = MagicMock()
         state.limiter.allow_user = AsyncMock(return_value=True)
@@ -110,7 +108,6 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
 
         from app.services.ytdlp.models import ExtractionResult
 
-        # Pre-populate cache
         state.info_cache[url] = ExtractionResult(
             title="Cached Video Title",
             formats=formats,
@@ -129,12 +126,10 @@ class TestOnMessage(unittest.IsolatedAsyncioTestCase):
             mock_kb.return_value = MagicMock()
             await messages.on_message(self.update, self.context)
 
-        # Should have called edit_text with the title (status message)
         self.assertTrue(status_msg.edit_text.called)
         args, _kwargs = status_msg.edit_text.call_args
         self.assertIn("Cached Video Title", args[0])
 
-        # user_data should have page_url set
         self.assertEqual(self.context.user_data["page_url"], url)
         self.assertEqual(self.context.user_data["title"], "Cached Video Title")
 
@@ -395,7 +390,6 @@ async def test_twitter_receipt_write_failure_propagates_without_fallback(
     )
     assert await store.has_unsafe_deliveries(claimed.id)
     assert not await store.has_failed_deliveries(claimed.id)
-    # Failure after durable sending starts must not advertise a yt-dlp fallback.
     status.delete.assert_not_awaited()
     msg.delete.assert_not_awaited()
     if local_download:

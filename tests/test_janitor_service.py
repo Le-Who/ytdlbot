@@ -42,7 +42,6 @@ class TestCleanupTempDir(unittest.TestCase):
         path = os.path.join(self.temp_dir, "ytdl_test.mp4")
         with open(path, "w") as f:
             f.write("x")
-        # Backdate the file
         old_time = time.time() - 100
         os.utime(path, (old_time, old_time))
 
@@ -88,7 +87,6 @@ class TestCleanupTempDir(unittest.TestCase):
         """Old slideshow_ directory gets deleted."""
         dir_path = os.path.join(self.temp_dir, "slideshow_test")
         os.makedirs(dir_path)
-        # Put a file inside
         with open(os.path.join(dir_path, "img.jpg"), "w") as f:
             f.write("x")
         old_time = time.time() - 100

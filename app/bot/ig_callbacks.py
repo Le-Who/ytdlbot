@@ -137,7 +137,6 @@ async def _deliver_authorized_stories(
             candidate,
             caption=f"📷 {getattr(stories[0], 'label', '')}",
         )
-    # Preserve the False/UI contract while retaining unexpected failures for the worker.
     except Exception as error:  # noqa: BLE001
         mark_current_job_failed(error)
         logger.warning("Authorized Instagram delivery failed: %s", error)
@@ -176,7 +175,6 @@ async def on_ig_stories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     stories = ig_data["stories"]
 
-    # Build numbered story list as caption text
     lines = ["📸 <b>Истории</b>\n"]
     for i, s in enumerate(stories, 1):
         emoji = "🎬" if s.get("is_video") else "📸"
@@ -194,7 +192,6 @@ async def on_ig_stories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     caption = "\n".join(lines)
 
-    # Build keyboard with numbered buttons (max 8 per row)
     btn_rows = []
     row: list[InlineKeyboardButton] = []
     for i, s in enumerate(stories):
@@ -211,7 +208,6 @@ async def on_ig_stories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if row:
         btn_rows.append(row)
 
-    # Add "Download All" and "Back" buttons
     btn_rows.append(
         [
             InlineKeyboardButton(
@@ -234,7 +230,6 @@ async def on_ig_stories(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             reply_markup=InlineKeyboardMarkup(btn_rows),
             parse_mode="HTML",
         )
-    # Story-menu UI is best effort; transport adapter failures must not escape the callback.
     except Exception as e:  # noqa: BLE001
         logger.warning("Failed to show stories: %s", e)
 
@@ -326,7 +321,6 @@ async def on_ig_highlight_items(
         await q.edit_message_text(Texts.CACHE_EXPIRED_RESEND)
         return
 
-    # Find the highlight title
     hl_title = "Highlight"
     for hl in ig_data.get("highlights", []):
         if hl.get("highlight_id") == hl_id:
@@ -342,7 +336,6 @@ async def on_ig_highlight_items(
         await q.edit_message_text(error or "⚠️ Не удалось загрузить элементы хайлайта.")
         return
 
-    # Store highlight items in a sub-cache
     hl_cache_key = f"{token}_hl_{hl_id}"
     hl_items_data = [
         {
@@ -360,7 +353,6 @@ async def on_ig_highlight_items(
         hl_cache_key, {"items": hl_items_data, "section": payload.section}
     )
 
-    # Build item list
     lines = [f"📁 <b>{hl_title}</b>\n"]
     for i, item in enumerate(items, 1):
         emoji = "🎬" if item.is_video else "📸"
@@ -468,7 +460,6 @@ async def on_ig_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if error or not file_path:
         try:
             await q.message.reply_text(error or Texts.IG_DOWNLOAD_ERROR)
-        # Download failure is established; its Telegram notice is best effort.
         except Exception:  # noqa: BLE001, S110
             pass
         return
@@ -480,7 +471,6 @@ async def on_ig_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 ChatAction.UPLOAD_VIDEO if story.is_video else ChatAction.UPLOAD_PHOTO
             ),
         )
-    # Upload-action feedback is optional and must not block authorized story delivery.
     except Exception:  # noqa: BLE001, S110
         pass
 
@@ -496,7 +486,6 @@ async def on_ig_download(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not receipt:
         try:
             await q.message.reply_text(Texts.IG_DOWNLOAD_ERROR)
-        # The sender receipt determines failure; its Telegram notice is best effort.
         except Exception:  # noqa: BLE001, S110
             pass
 
@@ -579,7 +568,6 @@ async def on_ig_download_all(
                     else ChatAction.UPLOAD_PHOTO
                 ),
             )
-        # Upload-action feedback is optional; other selected stories must still be sent.
         except Exception:  # noqa: BLE001, S110
             pass
 
@@ -598,7 +586,6 @@ async def on_ig_download_all(
     total = len(stories)
     try:
         await q.edit_message_text(f"✅ Скачано {sent}/{total} историй.")
-    # Count feedback is optional; individual story receipts already determine delivery.
     except Exception:  # noqa: BLE001, S110
         pass
 
@@ -653,7 +640,6 @@ async def on_ig_hl_download(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if error or not file_path:
         try:
             await q.message.reply_text(error or Texts.IG_DOWNLOAD_ERROR)
-        # Highlight download failure is established; its Telegram notice is best effort.
         except Exception:  # noqa: BLE001, S110
             pass
         return
@@ -670,7 +656,6 @@ async def on_ig_hl_download(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not receipt:
         try:
             await q.message.reply_text(Texts.IG_DOWNLOAD_ERROR)
-        # The highlight sender receipt determines failure; its Telegram notice is best effort.
         except Exception:  # noqa: BLE001, S110
             pass
 
@@ -748,7 +733,6 @@ async def on_ig_hl_download_all(
 
     try:
         await q.edit_message_text(f"✅ Скачано {sent}/{len(items)} элементов хайлайта.")
-    # Count feedback is optional; individual highlight receipts already determine delivery.
     except Exception:  # noqa: BLE001, S110
         pass
 

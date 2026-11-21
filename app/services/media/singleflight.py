@@ -107,8 +107,6 @@ class SingleFlightGroup[K: Hashable, T]:
                     flight.task.cancel()
                     cleanup = flight.task
                 else:
-                    # Retrieve an exception even if a subscriber was cancelled
-                    # exactly as the shared task finished.
                     if not flight.task.cancelled():
                         flight.task.exception()
         if cleanup is not None:
@@ -120,8 +118,6 @@ async def _invoke[T](
     marker: _FactoryMarker,
     owner: _FactoryOwner,
 ) -> T:
-    # Import lazily: core.process imports global state, whose typing-only media
-    # pipeline reference would otherwise make initialization order fragile.
     from app.core.process import process_owner_scope
 
     inherited = tuple(item for item in _ACTIVE_FACTORIES.get() if item.active)

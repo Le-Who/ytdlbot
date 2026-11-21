@@ -62,17 +62,14 @@ async def _stream_media_response(response: Response, out_path: str) -> None:
         raise ValueError("empty or truncated media response")
 
 
-# ── Data Models ──────────────────────────────────────────────────────────────
-
-
 @dataclass
 class IGStoryItem:
     """A single story item (photo or video) with metadata."""
 
     mediaid: str
     is_video: bool
-    url: str  # direct media URL
-    thumbnail_url: str  # thumbnail for preview
+    url: str
+    thumbnail_url: str
     timestamp: datetime
     duration: float | None = None
     typename: str = ""
@@ -153,8 +150,6 @@ def _parse_reel_items(items: list[dict[str, Any]]) -> list[IGStoryItem]:
     return parsed
 
 
-# ── URL Parsing ──────────────────────────────────────────────────────────────
-
 _IG_PROFILE_RE = re.compile(r"/(?:@)?([A-Za-z0-9_.]+)/?")
 _IG_STORIES_RE = re.compile(r"/stories/([A-Za-z0-9_.]+)(?:/([0-9]+))?/?")
 _IG_HIGHLIGHT_RE = re.compile(r"/stories/highlights/([0-9]+)/?")
@@ -229,8 +224,6 @@ def parse_instagram_url(url: str) -> tuple[str, str | None, str | None]:
     return "unknown", None, None
 
 
-# ── Shortcode ↔ Media PK Conversion ─────────────────────────────────────────
-
 _IG_SHORTCODE_ALPHABET = (
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 )
@@ -254,9 +247,6 @@ class _InstagramSessionUnavailable(RuntimeError):
     pass
 
 
-# ── Core Service ─────────────────────────────────────────────────────────────
-
-
 class InstagramService:
     """Fetches Instagram media with curl_cffi and configured sessions."""
 
@@ -267,7 +257,7 @@ class InstagramService:
     _ig_cookie_pool: ClassVar[list[dict[str, str]]] = []
     _pool_initialized: ClassVar[bool] = False
     _current_pool_index: ClassVar[int] = 0
-    _dead_sessions: ClassVar[set[int]] = set()  # Suspended/checkpointed session indices
+    _dead_sessions: ClassVar[set[int]] = set()
 
     @classmethod
     def _init_pool(cls) -> None:
@@ -308,8 +298,6 @@ class InstagramService:
                         idx,
                     )
 
-            # Legacy session pickles may instantiate cookie objects with their
-            # own iteration/properties; one bad session must not discard the pool.
             except Exception as e:  # noqa: BLE001
                 logger.error(
                     "[INSTAGRAM] Failed to parse IG_SESSIONS_B64 index %d: %s",
@@ -337,11 +325,9 @@ class InstagramService:
             idx = cls._current_pool_index
             cls._current_pool_index = (cls._current_pool_index + 1) % pool_size
 
-            # Skip sessions marked as dead (suspended/checkpointed)
             if idx in cls._dead_sessions:
                 continue
 
-            # Atomic global limit check via RedisTokenBucketLimiter
             if (
                 await state.limiter.allow_ig_fallback(idx)
                 and idx not in cls._dead_sessions
@@ -464,7 +450,6 @@ class InstagramService:
                     )
         except _InstagramSessionUnavailable as error:
             result.error = str(error)
-        # Keep partial results when the profile has stories but the tray is unavailable.
         except Exception as error:  # noqa: BLE001
             logger.warning(
                 "[INSTAGRAM] Profile lookup failed: %s", type(error).__name__
@@ -495,7 +480,6 @@ class InstagramService:
             if status == 429:
                 return [], "Instagram временно ограничил загрузку хайлайтов (HTTP 429)."
             return [], "Ошибка загрузки хайлайта из Instagram."
-        # Keep upstream responses and session details out of the error and logs.
         except Exception as error:  # noqa: BLE001
             logger.warning(
                 "[INSTAGRAM] Highlight items error: %s", type(error).__name__
@@ -603,8 +587,6 @@ class InstagramService:
             completed = True
             return out_path, None
 
-        # No partial file is returned after an arbitrary external stream failure;
-        # the synchronous context manager has closed its handle before cleanup.
         except Exception as e:  # noqa: BLE001
             logger.error("[INSTAGRAM] Download error: %s", e)
             safe_remove(out_path)
@@ -627,7 +609,6 @@ class InstagramService:
         out_path = os.path.join(TEMP_DIR, f"ig_fallback_{uuid.uuid4().hex}.mp4")
         video_url = None
 
-        # 1. Try public Cobalt infrastructure first (saves session bans & parses fast)
         try:
             from app.services.cobalt import CobaltService
 
@@ -636,12 +617,9 @@ class InstagramService:
                 video_url = c_res.url
             elif c_res and getattr(c_res, "status", None) == "picker":
                 return None, "⚠️ Multi-photo карусели скачивайте через основное меню."
-        # Cobalt is an optional provider adapter; any adapter failure must permit
-        # the independent native Instagram fallback below.
         except Exception as e:  # noqa: BLE001
             logger.warning("[INSTAGRAM] Cobalt attempt failed for post %s: %s", url, e)
 
-        # 2. Native Fallback if Cobalt failed or returned empty URL
         if not video_url:
             logger.info(
                 "[INSTAGRAM] Cobalt failed/empty for %s, triggering Mobile API Fallback",
@@ -660,13 +638,11 @@ class InstagramService:
 
             media_pk = _shortcode_to_media_pk(shortcode)
 
-            # Try both web and mobile endpoints — web is more stable with desktop cookies
             endpoints = [
                 f"https://www.instagram.com/api/v1/media/{media_pk}/info/",
                 f"https://i.instagram.com/api/v1/media/{media_pk}/info/",
             ]
 
-            # Retry loop: if current session is dead, evict it and try the next one
             max_retries = len(cls._ig_cookie_pool)
             for _attempt in range(max_retries):
                 sess_idx, cookies_to_use = await cls._get_available_session()
@@ -694,11 +670,8 @@ class InstagramService:
                             if doc.status_code == 200:
                                 break
 
-                            # Check if this session is dead (suspended/checkpointed)
                             try:
                                 body_text = doc.text[:500] if doc.text else ""
-                            # Body decoding is optional session-health evidence;
-                            # a broken response adapter must not mask its status.
                             except Exception:  # noqa: BLE001
                                 body_text = ""
 
@@ -708,7 +681,6 @@ class InstagramService:
                                 session_is_dead = True
                                 break
 
-                            # Diagnostic: log non-checkpoint errors
                             logger.warning(
                                 "[INSTAGRAM] Endpoint %s returned %s. Body: %s",
                                 endpoint_url,
@@ -716,7 +688,6 @@ class InstagramService:
                                 body_text[:300] if body_text else "(empty)",
                             )
 
-                        # If session was evicted, retry with the next available one
                         if session_is_dead:
                             continue
 
@@ -753,20 +724,15 @@ class InstagramService:
                                 None,
                                 "⚠️ Ошибка нативного запасного канала. Вероятно, пост недоступен.",
                             )
-                        # Success — break out of retry loop
                         break
-                # Translate failures of native authentication/HTTP/parsing into
-                # the public post-download error contract after retries finish.
                 except Exception as e:  # noqa: BLE001
                     logger.error(
                         "[INSTAGRAM] Mobile API fallback exception for %s: %s", url, e
                     )
                     return None, "⚠️ Внутренняя ошибка нативного парсера."
 
-        # 3. Download the actual video buffer (for both Cobalt link and Native link)
         completed = False
         try:
-            # Re-init impersonate session without cookies for pure CDN download to avoid tracking
             async with AsyncSession(impersonate=cls.IMPERSONATE) as session:
                 resp = await session.get(video_url, stream=True)
                 if resp.status_code != 200:
@@ -779,8 +745,6 @@ class InstagramService:
             completed = True
             return out_path, None
 
-        # Arbitrary CDN stream failures must remove the closed partial file and
-        # return an error rather than publish an incomplete video path.
         except Exception as e:  # noqa: BLE001
             logger.error("[INSTAGRAM] Post video pipe error: %s", e)
             safe_remove(out_path)

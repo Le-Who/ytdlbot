@@ -70,13 +70,11 @@ class TestCallbacksExceptions(unittest.IsolatedAsyncioTestCase):
         self.update.callback_query.from_user = MagicMock()
         self.update.callback_query.from_user.id = 12345
 
-    # --- on_pick ---
     async def test_on_pick_none_data_returns_silently(self):
         """on_pick with data=None answers the query, removes markup, then returns early (no edit_text)."""
         self.update.callback_query.data = None
         await callbacks.on_pick(self.update, self.context)
         self.update.callback_query.answer.assert_awaited()
-        # With None data, edit_message_text should NOT be called (no error message shown)
         self.update.callback_query.edit_message_text.assert_not_awaited()
 
     async def test_on_pick_malformed_data_no_crash(self):
@@ -84,25 +82,22 @@ class TestCallbacksExceptions(unittest.IsolatedAsyncioTestCase):
         self.update.callback_query.data = "malformed_no_pipe"
         with patch("app.bot.callbacks.logger") as mock_logger:
             await callbacks.on_pick(self.update, self.context)
-            # Should log the parsing error
             mock_logger.error.assert_called_once()
             self.assertIn("Invalid callback data", mock_logger.error.call_args[0][0])
 
     async def test_on_pick_valid_data_but_no_page_url_shows_expired(self):
         """on_pick with valid format but empty user_data shows data expired message."""
         self.update.callback_query.data = "pick|137"
-        self.context.user_data = {}  # No page_url
+        self.context.user_data = {}
         await callbacks.on_pick(self.update, self.context)
         args, _ = self.update.callback_query.edit_message_text.call_args
         self.assertIn("устарели", args[0].lower())
 
-    # --- on_cancel ---
     async def test_on_cancel_none_data_returns_silently(self):
         """on_cancel with data=None answers with cancelling text, then returns early."""
         self.update.callback_query.data = None
         await callbacks.on_cancel(self.update, self.context)
         self.update.callback_query.answer.assert_awaited()
-        # No edit_message_text call for None data
         self.update.callback_query.edit_message_text.assert_not_awaited()
 
     async def test_on_cancel_malformed_data_logs_error(self):
@@ -121,7 +116,6 @@ class TestCallbacksExceptions(unittest.IsolatedAsyncioTestCase):
         args, _ = self.update.callback_query.edit_message_text.call_args
         self.assertEqual(args[0], "❌ Загрузка отменена пользователем.")
 
-    # --- on_send ---
     async def test_on_send_none_data_returns_silently(self):
         """on_send with data=None answers 'download started' toast, then returns early."""
         self.update.callback_query.data = None

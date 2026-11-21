@@ -169,7 +169,7 @@ class TestIGStoryItem(unittest.TestCase):
         label = item.label
         self.assertIn("📸", label)
         self.assertIn("14:00", label)
-        self.assertNotIn("(", label)  # no duration for photos
+        self.assertNotIn("(", label)
 
     def test_type_emoji(self):
         from app.services.instagram import IGStoryItem
@@ -400,8 +400,6 @@ class TestInstagramServiceDownloadStoryItem(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(path)
         assert path is not None
         self.assertTrue(os.path.exists(path))
-
-        # Small synthetic fixture I/O completes inline; no runtime worker ownership.
 
         with open(path, "rb") as f:  # noqa: ASYNC230
             self.assertEqual(f.read(), b"video_part1video_part2")

@@ -434,9 +434,11 @@ Before the one-shot container starts, the output is atomically replaced with an
 `IN_FLIGHT` reservation containing deterministic update/correlation IDs. After
 an SSH loss, timeout, or unknown result, resume hard-stops and never launches the
 case again. `Future.cancel()` is not application cancellation. A timeout asks the
-adapter to stop only the deterministic, correctly labelled evidence container;
-the reservation remains unresolved either way. Only after an operator has
-independently reconciled the result may they record an audited decision:
+legacy adapter to stop only the deterministic, correctly labelled evidence
+container. The candidate adapter cannot confirm cancellation of the accepted
+application job. The reservation remains unresolved for both profiles. An
+operator may record an audited decision after independently reconciling the
+result:
 
 ```sh
 python3 scripts/collect-media-release-evidence.py reconcile-in-flight \

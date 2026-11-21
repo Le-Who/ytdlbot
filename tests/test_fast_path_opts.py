@@ -36,7 +36,7 @@ class TestFindThumbnail(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             video = os.path.join(d, "test.mp4")
             thumb = os.path.join(d, "test.jpg")
-            Path(thumb).write_bytes(b"")  # empty
+            Path(thumb).write_bytes(b"")
             result = self.find_thumbnail(video)
             self.assertIsNone(result)
 
@@ -82,7 +82,7 @@ class TestCobaltUrlHeadSize(unittest.IsolatedAsyncioTestCase):
         from app.services.orchestrator import _cobalt_url_head_size
 
         mock_response = MagicMock()
-        mock_response.headers = {"content-length": "10485760"}  # 10 MB
+        mock_response.headers = {"content-length": "10485760"}
 
         mock_session = AsyncMock()
         mock_session.head = AsyncMock(return_value=mock_response)
@@ -383,8 +383,8 @@ class TestEnsureTelegramCompatible(unittest.IsolatedAsyncioTestCase):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return probe_result  # ffprobe
-            return ffmpeg_result  # ffmpeg re-encode
+                return probe_result
+            return ffmpeg_result
 
         with patch(
             "app.services.orchestrator.process_supervisor.run",
@@ -392,7 +392,6 @@ class TestEnsureTelegramCompatible(unittest.IsolatedAsyncioTestCase):
         ):
             result = await ensure_telegram_compatible("/fake/hevc.mp4")
 
-        # On re-encode failure should fall back to original path
         self.assertEqual(result, "/fake/hevc.mp4")
 
 

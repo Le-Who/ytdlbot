@@ -18,8 +18,6 @@ from app.services.ytdlp.parsers import (
     parse_format_metadata,
 )
 
-# ── Platform detection ────────────────────────────────────────────
-
 
 class TestPlatformDetection(unittest.TestCase):
     def test_is_tiktok(self):
@@ -30,9 +28,6 @@ class TestPlatformDetection(unittest.TestCase):
         self.assertTrue(_is_pinterest("https://pinterest.com/pin/123"))
         self.assertTrue(_is_pinterest("https://pin.it/abc"))
         self.assertFalse(_is_pinterest("https://youtube.com"))
-
-
-# ── TikTok classification ────────────────────────────────────────
 
 
 class TestClassifyTikTokContent(unittest.TestCase):
@@ -47,9 +42,6 @@ class TestClassifyTikTokContent(unittest.TestCase):
             classify_tiktok_content("https://tiktok.com/@user/video/123"),
             "video",
         )
-
-
-# ── Duration formatting ──────────────────────────────────────────
 
 
 class TestFormatDuration(unittest.TestCase):
@@ -69,9 +61,6 @@ class TestFormatDuration(unittest.TestCase):
         self.assertEqual(_format_duration(3661), "1:01:01")
 
 
-# ── Height extraction ────────────────────────────────────────────
-
-
 class TestExtractHeight(unittest.TestCase):
     def test_720p(self):
         self.assertEqual(_extract_height("720p"), 720)
@@ -86,9 +75,6 @@ class TestExtractHeight(unittest.TestCase):
         self.assertIsNone(_extract_height(""))
 
 
-# ── Filesize calculation ─────────────────────────────────────────
-
-
 class TestCalculateFilesize(unittest.TestCase):
     def test_explicit_filesize(self):
         self.assertEqual(_calculate_filesize({"filesize": 5000}, None), 5000)
@@ -97,7 +83,6 @@ class TestCalculateFilesize(unittest.TestCase):
         self.assertEqual(_calculate_filesize({"filesize_approx": 3000}, None), 3000)
 
     def test_tbr_with_duration(self):
-        # tbr * duration_factor
         result = _calculate_filesize({"tbr": 1000}, 10.0)
         self.assertEqual(result, 10000)
 
@@ -106,9 +91,6 @@ class TestCalculateFilesize(unittest.TestCase):
 
     def test_tbr_without_duration(self):
         self.assertIsNone(_calculate_filesize({"tbr": 1000}, None))
-
-
-# ── Format formatter ───────────────────────────────────────────────
 
 
 class TestFormatFormatter(unittest.TestCase):
@@ -174,9 +156,6 @@ class TestFormatFormatter(unittest.TestCase):
         self.assertIn("KB", label)
 
 
-# ── parse_format_metadata ────────────────────────────────────────
-
-
 class TestParseFormatMetadata(unittest.TestCase):
     def test_valid_mp4_format(self):
         fmt = {
@@ -207,7 +186,7 @@ class TestParseFormatMetadata(unittest.TestCase):
         }
         result = parse_format_metadata(fmt, None, is_tiktok_url=True)
         self.assertIsNotNone(result)
-        self.assertEqual(result.height, 720)  # TikTok default
+        self.assertEqual(result.height, 720)
 
     def test_no_format_id_returns_none(self):
         fmt = {"ext": "mp4", "vcodec": "avc1"}
@@ -238,9 +217,6 @@ class TestParseFormatMetadata(unittest.TestCase):
         self.assertEqual(result.height, 360)
 
 
-# ── create_format_item ───────────────────────────────────────────
-
-
 class TestCreateFormatItem(unittest.TestCase):
     def test_creates_item(self):
         meta = FormatMetadata(
@@ -253,9 +229,6 @@ class TestCreateFormatItem(unittest.TestCase):
         item = create_format_item(meta, is_tiktok=False)
         self.assertEqual(item.format_id, "137")
         self.assertEqual(item.height, 1080)
-
-
-# ── deduplicate_formats ──────────────────────────────────────────
 
 
 class TestDeduplicateFormats(unittest.TestCase):
@@ -287,9 +260,6 @@ class TestDeduplicateFormats(unittest.TestCase):
         self.assertEqual(len(result), 2)
 
 
-# ── get_special_format ───────────────────────────────────────────
-
-
 class TestGetSpecialFormat(unittest.TestCase):
     def test_pinterest_returns_gif(self):
         item = get_special_format("https://pinterest.com/pin/123")
@@ -300,9 +270,6 @@ class TestGetSpecialFormat(unittest.TestCase):
         item = get_special_format("https://youtube.com/watch?v=abc")
         self.assertEqual(item.format_id, AUDIO_FORMAT_ID)
         self.assertEqual(item.format_note, "audio")
-
-
-# ── detect_tiktok_slideshow ──────────────────────────────────────
 
 
 class TestDetectTikTokSlideshow(unittest.TestCase):

@@ -26,7 +26,6 @@ from app.core import state
 
 logger = logging.getLogger("app.core.user_prefs")
 
-# Valid option sets (used for validation in commands.py)
 VALID_FORMATS = {"video", "audio"}
 VALID_QUALITIES: dict[str, int | None] = {
     "best": None,
@@ -36,7 +35,7 @@ VALID_QUALITIES: dict[str, int | None] = {
     "360": 360,
 }
 
-_TTL_SECONDS = 90 * 86400  # 90 days
+_TTL_SECONDS = 90 * 86400
 _user_locks: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
 
 
@@ -60,7 +59,6 @@ async def get_prefs(user_id: int) -> dict[str, Any]:
         return {}
     if isinstance(raw, dict):
         return dict(raw)
-    # Unexpected type — return empty to be safe
     logger.warning("Unexpected prefs type for user %s: %s", user_id, type(raw))
     return {}
 

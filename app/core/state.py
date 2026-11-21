@@ -34,33 +34,19 @@ from app.core.storage.base import StateStorage
 from app.core.utils import safe_remove
 from app.services.ytdlp.service import YtDlpService
 
-# Инициализация логгера
 logger = logging.getLogger("app")
 
-# Сервисы
 ytdlp = YtDlpService()
 
-# Глобальные примитивы синхронизации
-# ── Semaphores —————————————————————————————————————————————————————
-# Tiered to prevent heavy FFmpeg jobs from starving lightweight API calls.
-#
-# api_sem     : TikWM / Cobalt / Pinterest fetches (near-zero CPU).
-# download_sem: yt-dlp + aria2 downloads (IO-bound, moderate CPU).
-# conversion_sem / gif_file_sem retain their existing limits.
 api_sem = asyncio.Semaphore(int(os.getenv("MAX_API_TASKS", "10")))
 download_sem = asyncio.Semaphore(MAX_CONCURRENT_TASKS)
-parsing_sem = asyncio.Semaphore(5)  # Лимит на одновременный парсинг форматов
+parsing_sem = asyncio.Semaphore(5)
 active_processes_lock = asyncio.Lock()
 active_processes: set[asyncio.subprocess.Process] = set()
-processing_gifs: set[str] = set()  # Set of tokens currently being converted to GIF
-conversion_sem = asyncio.Semaphore(
-    3
-)  # Bounded concurrency for CPU-intensive conversions
-gif_file_sem = asyncio.Semaphore(
-    2
-)  # Bounded concurrency for on-demand native .gif file exports (palette+scale)
+processing_gifs: set[str] = set()
+conversion_sem = asyncio.Semaphore(3)
+gif_file_sem = asyncio.Semaphore(2)
 
-# ── Download queues (fair wait-queue wrapping each semaphore tier) ──────────
 
 download_queue = DownloadQueue(
     download_sem,
@@ -72,16 +58,12 @@ api_queue = DownloadQueue(
     api_sem,
     max_queue_size=MAX_QUEUE_SIZE,
     timeout_seconds=QUEUE_TIMEOUT_SECONDS,
-    avg_task_seconds=15,  # API tasks are much faster
+    avg_task_seconds=15,
 )
 
-# ── System health flags ───────────────────────────────────────────────────────
-# Set to True by janitor when free disk space drops below DISK_CRITICAL_PCT.
-# When True, all new download enqueue() calls are rejected with MAINTENANCE_MODE.
 disk_critical: bool = False
 
 
-# Глобальный объект приложения Telegram (инициализируется в main.py)
 if TYPE_CHECKING:
     from telegram.ext import Application
 
@@ -105,7 +87,6 @@ if REDIS_URL:
 else:
     redis_client = None
 
-# Explicitly type hints for state storage variables
 link_cache: StateStorage
 info_cache: StateStorage
 cancel_cache: StateStorage
@@ -124,19 +105,16 @@ else:
     cancel_cache = MemoryStorage(maxsize=100, ttl=3600)
     gifdoc_cache = MemoryStorage(maxsize=500, ttl=604800)
 
-# Per-user download preferences (format / quality)
 prefs_cache: StateStorage
 if redis_client:
     prefs_cache = RedisStorage(redis_client, default_ttl=90 * 86400, prefix="prefs")
 else:
     prefs_cache = MemoryStorage(maxsize=5000, ttl=90 * 86400)
 
-inflight_parsing: TTLCache = TTLCache(
-    maxsize=100, ttl=600
-)  # url -> asyncio.Event (auto-evicts after 10 min)
+inflight_parsing: TTLCache = TTLCache(maxsize=100, ttl=600)
 file_cache: FileTTLCache = FileTTLCache(
     maxsize=30, ttl=LINK_TTL_MINUTES * 60, on_eviction=safe_remove
-)  # token -> file_path
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +123,6 @@ class _SentMediaSource:
     version: tuple[int, int, int, int]
 
 
-# Metadata only: the original cache/materialization still owns these files.
 sent_media_sources: TTLCache[tuple[str, str], _SentMediaSource] = TTLCache(
     maxsize=500, ttl=LINK_TTL_MINUTES * 60
 )

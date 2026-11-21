@@ -10,7 +10,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# --- КОНФИГУРАЦИЯ ---
 TEMP_DIR = os.getenv("TMPDIR", tempfile.gettempdir())
 os.makedirs(TEMP_DIR, exist_ok=True)
 MEDIA_DIR = os.getenv("MEDIA_DIR", os.path.join(TEMP_DIR, "ytdlbot-media"))
@@ -60,9 +59,6 @@ def _boolean(name: str, default: bool) -> bool:
     raise RuntimeError(f"{name} must be a boolean")
 
 
-# Production Compose sets this explicitly.  Defaulting to the presence of a
-# local endpoint keeps development/cloud-only compatibility while preventing a
-# configured Local Bot API from being treated as an optional optimization.
 TELEGRAM_LOCAL_REQUIRED = _boolean(
     "TELEGRAM_LOCAL_REQUIRED", bool(TELEGRAM_LOCAL_ENDPOINT)
 )
@@ -123,7 +119,6 @@ def _resolve_media_file_limit_mb() -> int:
 
 
 MAX_MEDIA_FILE_MB = _resolve_media_file_limit_mb()
-# Compatibility aliases only; all three names resolve to one effective policy.
 MAX_TG_UPLOAD_MB = MAX_MEDIA_FILE_MB
 MAX_DL_MB = MAX_MEDIA_FILE_MB
 TELEGRAM_CLOUD_MAX_FILE_MB = _positive_int(
@@ -152,15 +147,9 @@ JANITOR_INTERVAL_SECONDS = int(os.getenv("JANITOR_INTERVAL_SECONDS", "300"))
 DL_TIMEOUT_TELEGRAM = int(os.getenv("DL_TIMEOUT_TELEGRAM", "600"))
 DL_TIMEOUT_HTTP = int(os.getenv("DL_TIMEOUT_HTTP", "900"))
 
-# yt-dlp concurrent fragment downloads for DASH/HLS streams.
-# 5 is conservative (yt-dlp default), 8 is optimal for most CDNs.
-# Above 10 risks rate-limiting on YouTube. Configurable for easy tuning.
 CONCURRENT_FRAGMENTS = int(os.getenv("YTDLP_CONCURRENT_FRAGMENTS", "8"))
 YOUTUBE_PIPE_MODE = os.getenv("YOUTUBE_PIPE_MODE", "0").strip() == "1"
 
-# YouTube POT (Proof-of-Origin Token) provider — bypasses "Sign in to confirm
-# you're not a bot" without requiring YouTube cookies.
-# Set to the bgutil HTTP server URL. Empty string disables POT injection.
 POT_PROVIDER_URL: str | None = os.getenv("POT_PROVIDER_URL", "").strip() or None
 
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
@@ -173,37 +162,24 @@ def parse_proxy_uri(proxy_raw: str | None) -> str | None:
     if not proxy_raw:
         return None
 
-    # If it already has a scheme, assume it is correctly formatted
     if "://" in proxy_raw:
         return proxy_raw
 
     parts = proxy_raw.split(":")
     if len(parts) == 4:
-        # Format: host:port:user:pass
         host, port, user, password = parts
         return f"http://{user}:{password}@{host}:{port}"
     elif len(parts) == 2:
-        # Format: host:port
         host, port = parts
         return f"http://{host}:{port}"
 
-    # Fallback to appending http://
     return f"http://{proxy_raw}"
 
 
-# TikTok proxy — route TikTok requests through WireGuard/SOCKS5 to bypass
-# datacenter IP blocks on age-restricted content.
-# Example: socks5://wireguard-proxy:1080 or host:port:user:pass
 TIKTOK_PROXY: str | None = parse_proxy_uri(os.getenv("TIKTOK_PROXY"))
 
-# VK proxy — residential HTTP/SOCKS5 proxy to bypass VK's datacenter IP block.
-# VK redirects datacenter IPs to badbrowser.php even with valid cookies.
-# Format: http://user:pass@host:port, socks5://host:port, or host:port:user:pass
 VK_PROXY: str | None = parse_proxy_uri(os.getenv("VK_PROXY"))
 
-# Cobalt API (Primary TikTok backend) - Supports multiple comma-separated instances for fallback
-# NOTE: The public api.cobalt.tools now requires Turnstile JWT auth and cannot be used by bots.
-# You MUST set your own instance URL. See README.md for deployment instructions.
 COBALT_API_URLS = [
     url.strip() for url in os.getenv("COBALT_API_URL", "").split(",") if url.strip()
 ]
@@ -308,31 +284,20 @@ LIMITER_IG_REFILL_PER_SEC = float(
     os.getenv("LIMITER_IG_REFILL_PER_SEC", str(15 / 3600))
 )
 
-# Instagram session rotation pool. Comma-separated Base64 encoded cookies.
-# Fallback to IG_SESSION_B64 for backward compatibility.
 IG_SESSIONS_B64 = [
     s.strip()
     for s in os.getenv("IG_SESSIONS_B64", os.getenv("IG_SESSION_B64", "")).split(",")
     if s.strip()
 ]
 
-# Admin chat ID for error reporting. Set to your Telegram user ID.
-# If unset, error reporting to admin is disabled.
 _admin_raw = os.getenv("ADMIN_CHAT_ID", "").strip()
 ADMIN_CHAT_ID: int | None = (
     int(_admin_raw) if _admin_raw.lstrip("-").isdigit() else None
 )
 
-# ── Download Queue ───────────────────────────────────────────────────────────
-# Hard cap on how many requests can wait in the queue before rejecting.
 MAX_QUEUE_SIZE = int(os.getenv("MAX_QUEUE_SIZE", "15"))
-# Seconds a task may wait in queue before it's abandoned.
 QUEUE_TIMEOUT_SECONDS = int(os.getenv("QUEUE_TIMEOUT_SECONDS", "300"))
 
-# ── Disk Protection ──────────────────────────────────────────────────────────
-# Janitor checks free disk space after every cleanup cycle.
-# Below WARNING → admin alert only.
-# Below CRITICAL → admin alert + aggressive purge + maintenance mode (no new downloads).
 DISK_WARNING_PCT = int(os.getenv("DISK_WARNING_PCT", "15"))
 DISK_CRITICAL_PCT = int(os.getenv("DISK_CRITICAL_PCT", "5"))
 

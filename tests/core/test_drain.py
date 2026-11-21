@@ -78,8 +78,6 @@ async def test_drain_accepts_updates_but_starts_no_new_jobs(tmp_path):
 
     worker = DurableUpdateWorker(store, controller, process, poll_interval=0.005)
     await worker.start()
-    # This test covers inserts into an already idle, draining worker. Late
-    # claims are covered separately by the gated real SQLite regression.
     await asyncio.wait_for(idle.wait(), 1)
     result = await controller.drain(deadline_seconds=0.1)
     accepted = await store.accept_update(update_payload(702))
@@ -531,8 +529,6 @@ async def test_timed_out_checkpoint_thread_cannot_mutate_replacement_owner(
     tmp_path, monkeypatch
 ):
     """A to_thread commit may outlive cancellation, so owner fencing is required."""
-    # Give the executor time to begin the real transaction boundary. The slow
-    # coroutine test covers a tight drain deadline without executor scheduling.
     monkeypatch.setattr(drain_module, "CLEANUP_TIMEOUT_SECONDS", 0.3)
     checkpoint_started = threading.Event()
     checkpoint_finished = threading.Event()
@@ -676,7 +672,6 @@ async def test_resistant_handler_stays_tracked_and_owned_after_bounded_stop(
         assert "710" in controller._active
         assert (await store.get_update(710)).state is JobState.RUNNING
         assert await store.acquire_worker("replacement") is False
-        # Repeated shutdown calls must not buy another work/cleanup grace.
         async with asyncio.timeout(0.02):
             assert await controller.drain(deadline_seconds=10) == result
             await worker.stop()

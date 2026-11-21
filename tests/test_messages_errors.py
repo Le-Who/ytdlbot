@@ -34,9 +34,7 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
         state.info_cache = AsyncMockCache()
         state.link_cache = AsyncMockCache()
         state.cancel_cache = AsyncMockCache()
-        state.prefs_cache = (
-            AsyncMockCache()
-        )  # needed by user_prefs fast-path in on_message
+        state.prefs_cache = AsyncMockCache()
         state.inflight_parsing = {}
         state.limiter = MagicMock()
         state.limiter.allow_user = AsyncMock(return_value=True)
@@ -172,7 +170,6 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
 
         await on_message(self.update, self.context)
 
-        # Should show format keyboard via edit_text (no thumbnail)
         args = self.status_msg.edit_text.call_args[0][0]
         self.assertIn("Test Video", args)
 
@@ -241,7 +238,6 @@ class TestOnMessageErrorPaths(unittest.IsolatedAsyncioTestCase):
 
         await on_message(self.update, self.context)
 
-        # Should use reply_photo for thumbnail
         self.update.message.reply_photo.assert_awaited_once()
 
 

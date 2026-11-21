@@ -96,8 +96,6 @@ def _start_fixture_bash(
             if job is not None:
                 from app.core.process import _assign_windows_job_and_resume
 
-                # The audited production bridge reads only this transport's
-                # Popen handle; synchronous fixtures retain the same ownership.
                 adapter = SimpleNamespace(
                     _transport=SimpleNamespace(get_extra_info=lambda _: process)
                 )
@@ -241,8 +239,6 @@ class FakeHost:
             [str(BASH), _bash_path(script)],
             cwd=self.root,
             env=env,
-            # This watchdog includes all MSYS process startup, not a production
-            # readiness/drain deadline; those remain asserted independently.
             timeout=60 if os.name == "nt" else 15,
         )
         print(f"simulated release command_count={len(self.commands())}")

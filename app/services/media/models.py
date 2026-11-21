@@ -301,10 +301,8 @@ def request_cache_key(request: MediaRequest) -> str:
         and request.kind in {MediaKind.AUTO, MediaKind.VIDEO, MediaKind.AUDIO}
         and not request.audio_language
     ):
-        # Old resolved plans and Telegram file IDs may contain an automatic dub.
         payload["audio_track_policy"] = "youtube-original-v1"
     if request.x_video_number is not None:
-        # Older entries can contain the entire post's attachments.
         payload["x_video_selection_policy"] = "ordered-attachment-v1"
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=list)
     return f"media:v1:{hashlib.sha256(encoded.encode()).hexdigest()}"

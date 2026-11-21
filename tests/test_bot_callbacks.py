@@ -20,8 +20,6 @@ from unittest.mock import MagicMock, patch
 
 from telegram import Message
 
-# Mock environment variables
-# Ensure app can be imported
 from app.bot import callbacks
 from app.constants import AUDIO_FORMAT_ID, GIF_FORMAT_ID
 from app.core import state
@@ -31,7 +29,6 @@ from app.services.ytdlp.models import ExtractionResult
 
 class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        # Reset state mocks for each test
         state.info_cache = AsyncMockCache()
         state.link_cache = AsyncMockCache()
         state.cancel_cache = AsyncMockCache()
@@ -39,7 +36,6 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.ytdlp.list_formats = AsyncMock()
         state.download_sem = asyncio.Semaphore(5)
         state.api_sem = asyncio.Semaphore(10)
-        # Reset queues each test so _queue_full tests don't pollute successors
         from app.core.download_queue import DownloadQueue
 
         state.download_queue = DownloadQueue(state.download_sem, max_queue_size=15)
@@ -49,17 +45,14 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         state.parsing_sem.__aenter__ = AsyncMock(return_value=None)
         state.parsing_sem.__aexit__ = AsyncMock(return_value=None)
 
-        # Mock limiter to allow by default
         state.limiter = MagicMock()
         state.limiter.allow_user = AsyncMock(return_value=True)
         state.limiter.allow_chat = AsyncMock(return_value=True)
 
-        # Mock Context
         self.context = MagicMock()
         self.context.user_data = {}
         self.context.bot = AsyncMock()
 
-        # Mock Update
         self.update = MagicMock()
         self.update.callback_query = MagicMock()
         self.update.callback_query.answer = AsyncMock()
@@ -98,7 +91,6 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
             await callbacks.on_back(self.update, self.context)
 
             self.update.callback_query.answer.assert_awaited_once()
-            # With thumbnail, edit_message_media is called instead of edit_message_text
             self.update.callback_query.edit_message_media.assert_awaited_once()
             _, kwargs = self.update.callback_query.edit_message_media.call_args
             media = kwargs["media"]
@@ -281,7 +273,6 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
     async def test_on_send_rate_limit(self):
         self.update.callback_query.data = "send|token123"
-        # Rate limit by making limiter reject
         state.limiter.allow_user = AsyncMock(return_value=False)
         await callbacks.on_send(self.update, self.context)
         args, _ = self.update.callback_query.edit_message_text.call_args
@@ -291,13 +282,10 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         token = "token"
         self.update.callback_query.data = f"send|{token}"
         state.link_cache[token] = {"page_url": "http://example.com", "format_id": "137"}
-        # Replace download_queue with one whose enqueue() rejects immediately
         from app.core.download_queue import DownloadQueue
 
-        full_sem = asyncio.Semaphore(0)  # 0 capacity → wait path
-        queue = DownloadQueue(
-            full_sem, max_queue_size=0
-        )  # 0 queue cap → immediate QUEUE_FULL
+        full_sem = asyncio.Semaphore(0)
+        queue = DownloadQueue(full_sem, max_queue_size=0)
         state.download_queue = queue
 
         await callbacks.on_send(self.update, self.context)
@@ -356,7 +344,6 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
             await callbacks.on_send(self.update, self.context)
             mock_send.assert_awaited_once()
-            # Verify is_audio=True was passed
             call_kwargs = mock_send.call_args[1]
             self.assertTrue(call_kwargs.get("is_audio"))
 
@@ -434,7 +421,6 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
         with patch(
             "app.services.downloader.MediaSender.download_video", new_callable=AsyncMock
         ) as mock_dl:
-            # File too large after download
             mock_dl.return_value = (None, "⚠️ Файл слишком большой.")
             await callbacks.on_send(self.update, self.context)
             args, _ = self.update.callback_query.edit_message_text.call_args
@@ -509,7 +495,6 @@ class TestBotCallbacks(unittest.IsolatedAsyncioTestCase):
 
         _, kwargs = self.update.callback_query.edit_message_text.call_args
         reply_markup = kwargs["reply_markup"]
-        # Traverse the real InlineKeyboardMarkup structure
         button_texts = [btn.text for row in reply_markup.inline_keyboard for btn in row]
         self.assertIn("📤 Отправить файл в TG", button_texts)
 

@@ -18,31 +18,22 @@ from app.core.utils import safe_remove
 
 logger = logging.getLogger("app.services.converter")
 
-# ffmpeg encoding thread budget per conversion job.
 _FFMPEG_THREADS = 2
 
-# Codecs that can be stream-copied into an MP4 container without re-encoding.
 _MP4_SAFE_CODECS = frozenset({"h264", "hevc", "h265", "mpeg4", "avc"})
 
-# Timeout for ffprobe / ffmpeg subprocesses (seconds).
 _FFPROBE_TIMEOUT = 10.0
 _FFMPEG_TIMEOUT = 300.0
 
-# Target file size ceiling for Telegram Bot API uploads (bytes).
-# Hard limit is 50 MB; we use 48.5 MB to absorb MP4 container/moov-atom overhead.
 _TG_MAX_BYTES = int(48.5 * 1024 * 1024)
 
-# Audio bitrate assumed for compression calculation when stream bitrate is unknown.
 _FALLBACK_AUDIO_KBPS = 128
 
-# Minimum acceptable video bitrate — below this quality degrades severely.
 _MIN_VIDEO_KBPS = 100
 
-# Max segment size for lossless stream-copy splitting (slightly under the Telegram limit).
-_SPLIT_SEGMENT_BYTES = 47 * 1024 * 1024  # 47 MB
+_SPLIT_SEGMENT_BYTES = 47 * 1024 * 1024
 
-# Maximum total size we're willing to split (avoids spawning dozens of parts).
-_SPLIT_MAX_INPUT_BYTES = 500 * 1024 * 1024  # 500 MB
+_SPLIT_MAX_INPUT_BYTES = 500 * 1024 * 1024
 
 
 async def _run_transform_process(
@@ -137,7 +128,6 @@ async def split_video_stream_copy(
         )
         return None
 
-    # Estimate segment duration proportionally
     segment_time = max(10.0, duration_s * segment_bytes / file_size)
 
     uid = uuid.uuid4().hex
@@ -179,7 +169,6 @@ async def split_video_stream_copy(
             )
             return None
 
-        # Collect produced segments (ffmpeg names them 000, 001, …)
         parts = sorted(glob.glob(parts_pattern))
         if not parts or any(
             not os.path.exists(part) or not 0 < os.path.getsize(part) <= segment_bytes
@@ -249,8 +238,6 @@ async def _probe_full_meta(video_path: str) -> dict:
                 if br:
                     result["audio_kbps"] = int(br) // 1000
                 break
-    # Probe execution and provider metadata are optional inputs; the supervisor
-    # owns process cleanup and callers retain their documented fallback values.
     except Exception as exc:  # noqa: BLE001
         logger.debug("_probe_full_meta failed for %s: %s", video_path, exc)
     return result
@@ -281,7 +268,6 @@ async def compress_video_to_size(
     if not input_path or not os.path.exists(input_path):
         return None
 
-    # --- Guard: only compress if actually over limit ---
     current_size = os.path.getsize(input_path)
     if current_size <= target_bytes:
         logger.debug(
@@ -299,7 +285,6 @@ async def compress_video_to_size(
         target_mb,
     )
 
-    # --- Step 1: probe duration & audio bitrate ---
     meta = await _probe_full_meta(input_path)
     duration_s = meta["duration_s"]
     if not duration_s or duration_s <= 0:
@@ -308,7 +293,6 @@ async def compress_video_to_size(
 
     probed_audio_kbps = meta.get("audio_kbps") or audio_kbps
 
-    # --- Step 2: compute exact video bitrate ---
     total_kbps = (target_bytes * 8) / (duration_s * 1000)
     video_kbps = int(total_kbps - probed_audio_kbps)
 
@@ -331,10 +315,8 @@ async def compress_video_to_size(
         video_kbps,
     )
 
-    # --- Step 3 & 4: two-pass encode ---
     uid = uuid.uuid4().hex
     output_path = input_path.rsplit(".", 1)[0] + f"_compressed_{uid}.mp4"
-    # FFmpeg writes pass-log files alongside the passlogfile prefix.
     passlog_prefix = os.path.join(TEMP_DIR, f"ffmpeg2pass_{uid}")
 
     common_video_args = [
@@ -352,7 +334,6 @@ async def compress_video_to_size(
         passlog_prefix,
     ]
 
-    # Pass 1: analysis only (no output written, -f null /dev/null)
     pass1_cmd = [
         "ffmpeg",
         "-y",
@@ -364,10 +345,9 @@ async def compress_video_to_size(
         "-an",
         "-f",
         "null",
-        os.devnull,  # Cross-platform safe (NUL on Windows, /dev/null on POSIX)
+        os.devnull,
     ]
 
-    # Pass 2: actual encode
     pass2_cmd = [
         "ffmpeg",
         "-y",
@@ -449,7 +429,6 @@ async def compress_video_to_size(
         safe_remove(output_path)
         return None
     finally:
-        # Clean up the two-pass log files (ffmpeg writes <prefix>-0.log etc.)
         for suffix in ("-0.log", "-0.log.mbtree"):
             safe_remove(passlog_prefix + suffix)
 
@@ -481,8 +460,6 @@ async def _probe_video_codec(video_path: str) -> str | None:
         stdout = process_result.stdout
         if process_result.returncode == 0 and stdout:
             return stdout.decode().strip().lower()
-    # An unavailable or failed external probe leaves codec detection unknown;
-    # this must not convert an optional compatibility probe into a download error.
     except Exception as exc:  # noqa: BLE001
         logger.debug("ffprobe failed: %s", exc)
     return None
@@ -501,13 +478,11 @@ def _get_audio_duration(audio_path: str) -> float | None:
             return None
 
         if ext == ".mp3":
-            # Rough estimate: assume ~128kbps CBR
             return size / (128_000 / 8)
 
         if ext in (".m4a", ".mp4", ".aac"):
-            # Parse the mvhd atom for timescale/duration
             with open(audio_path, "rb") as f:
-                data = f.read(min(size, 64 * 1024))  # first 64KB
+                data = f.read(min(size, 64 * 1024))
             idx = data.find(b"mvhd")
             if idx >= 0:
                 offset = idx + 4
@@ -648,7 +623,6 @@ class MediaConverter:
         succeeded = False
 
         try:
-            # Probe codec to decide copy vs transcode
             codec = await _probe_video_codec(video_path)
             use_copy = codec in _MP4_SAFE_CODECS if codec else False
             if codec:
@@ -666,7 +640,6 @@ class MediaConverter:
                         use_copy=use_copy,
                     )
 
-                    # Fallback: stream-copy failed → retry with transcode
                     if rc != 0 and use_copy:
                         logger.warning(
                             "Stream-copy failed (rc=%d), falling back to transcode",
@@ -699,8 +672,6 @@ class MediaConverter:
 
             succeeded = True
             return gif_path
-        # This compatibility facade translates external converter failures into
-        # its established None result; process cancellation remains a BaseException.
         except Exception as e:  # noqa: BLE001
             logger.error("FFmpeg exception", extra={"error": str(e)})
             return None
@@ -731,7 +702,6 @@ class MediaConverter:
         gif_path = f"{base}_{uuid.uuid4().hex}_native.gif"
         succeeded = False
 
-        # Scale to max 480px wide, 15fps; odd-dimension safety with force_divisible_by=2
         scale_filter = (
             "fps=15,scale=w='min(480,iw)':h=-2:force_divisible_by=2:flags=lanczos"
         )
@@ -786,7 +756,6 @@ class MediaConverter:
             from app.core import state as _state
 
             async with _state.gif_file_sem:
-                # Pass 1: generate palette image
                 rc1, err1 = await _run(pass1_cmd)
                 if rc1 != 0:
                     logger.error(
@@ -796,7 +765,6 @@ class MediaConverter:
                     )
                     return None
 
-                # Pass 2: render gif using palette
                 rc2, err2 = await _run(pass2_cmd)
                 if rc2 != 0:
                     logger.error(
@@ -847,15 +815,13 @@ class MediaConverter:
         concat_file = os.path.join(TEMP_DIR, f"concat_{uuid.uuid4().hex}.txt")
 
         try:
-            # --- Adaptive duration ---
-            image_dur = 3.0  # default: 3 seconds per image
+            image_dur = 3.0
             if audio_path and os.path.exists(audio_path):
                 audio_dur = await await_owned(
                     asyncio.to_thread(_get_audio_duration, audio_path)
                 )
                 if audio_dur and audio_dur > 0 and len(images) > 0:
                     image_dur = audio_dur / len(images)
-                    # Clamp between 1s and 10s to avoid extremes
                     image_dur = max(1.0, min(10.0, image_dur))
                     logger.info(
                         "Adaptive slideshow: %.1fs audio / %d images = %.2fs each",
@@ -864,7 +830,6 @@ class MediaConverter:
                         image_dur,
                     )
 
-            # --- Write concat file ---
             def _write_concat() -> None:
                 with open(concat_file, "w", encoding="utf-8") as f:
                     for img in images:
@@ -877,8 +842,6 @@ class MediaConverter:
 
             await await_owned(asyncio.to_thread(_write_concat))
 
-            # --- Build ffmpeg command ---
-            # Shared video encoding parameters (optimised for static images)
             scale_filter = "scale=w='min(1080,iw)':h=-2:force_divisible_by=2"
             video_args = [
                 "-c:v",
@@ -911,7 +874,6 @@ class MediaConverter:
             if audio_path and os.path.exists(audio_path):
                 cmd.extend(["-i", audio_path])
 
-                # Audio: stream copy if already MP3/AAC, else re-encode
                 if _can_copy_audio(audio_path):
                     audio_args = ["-c:a", "copy"]
                 else:

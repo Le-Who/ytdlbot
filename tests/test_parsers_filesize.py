@@ -31,10 +31,9 @@ class TestCalculateFilesize(unittest.TestCase):
 
     def test_calculate_from_tbr(self):
         """Should calculate from tbr and duration factor if sizes missing"""
-        tbr = 1000  # 1000 kbps
+        tbr = 1000
         duration = 10.0
         duration_factor = duration * BITRATE_COEFFICIENT
-        # Expected: tbr * duration_factor
         expected = int(1000 * duration_factor)
         format_dict = {"tbr": tbr}
         self.assertEqual(_calculate_filesize(format_dict, duration_factor), expected)

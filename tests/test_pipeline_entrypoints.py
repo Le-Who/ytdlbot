@@ -307,8 +307,6 @@ async def test_http_stream_surfaces_lease_renewal_failure_and_releases(
     iterator = response.body_iterator
     with pytest.raises(RuntimeError, match="lease owner changed"):
         async for _ in iterator:
-            # The filesystem may finish its first read before the renewal
-            # interval. Failure must still surface before the next chunk.
             await asyncio.wait_for(renewal_failed.wait(), timeout=1)
 
     assert pipeline.released

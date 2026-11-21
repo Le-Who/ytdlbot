@@ -326,7 +326,7 @@ class TelegramDelivery:
                         retry_error,
                         "unknown_outcome",
                     )
-                except Exception as retry_error:  # noqa: BLE001 - receipt boundary
+                except Exception as retry_error:  # noqa: BLE001
                     return self._failure(
                         asset, DeliveryStatus.FAILED, retry_error, "send_failed"
                     )
@@ -338,7 +338,7 @@ class TelegramDelivery:
             return self._failure(
                 asset, DeliveryStatus.UNCERTAIN, error, "unknown_outcome"
             )
-        except Exception as error:  # noqa: BLE001 - receipt boundary
+        except Exception as error:  # noqa: BLE001
             return self._failure(asset, DeliveryStatus.FAILED, error, "send_failed")
         delivered = self._success(asset, message)
         await self._store(request, delivered)
@@ -407,7 +407,7 @@ class TelegramDelivery:
                 self._failure(asset, DeliveryStatus.UNCERTAIN, error, "unknown_outcome")
                 for asset in assets
             )
-        except Exception as error:  # noqa: BLE001 - receipt boundary
+        except Exception as error:  # noqa: BLE001
             return tuple(
                 self._failure(asset, DeliveryStatus.FAILED, error, "send_failed")
                 for asset in assets
@@ -446,14 +446,14 @@ class TelegramDelivery:
                 cached = await cache.get_delivery(
                     request, bot_id=bot_id, item_index=asset.item_index or 0
                 )
-            except Exception:  # noqa: BLE001 - optional cache boundary
+            except Exception:  # noqa: BLE001
                 self._log_cache_failure("get", asset)
                 cached = None
             if cached is not None:
                 try:
                     if str(cached.telegram_type) == asset.item.kind.value:
                         return _PreparedAsset(asset, cached.file_id, cached)
-                except Exception:  # noqa: BLE001 - malformed optional cache record
+                except Exception:  # noqa: BLE001
                     self._log_cache_failure("decode", asset)
                 await self._evict(request, asset)
 
@@ -579,7 +579,7 @@ class TelegramDelivery:
             state.remember_sent_media_source(
                 _message_media(message, prepared.asset.item.kind), source
             )
-        except Exception:  # noqa: BLE001 - optional non-owning source metadata
+        except Exception:  # noqa: BLE001
             logger.debug("Unable to retain Telegram source metadata")
 
     @contextmanager
@@ -733,7 +733,7 @@ class TelegramDelivery:
                     file_unique_id=delivered.file_unique_id,
                 ),
             )
-        except Exception:  # noqa: BLE001 - optional cache boundary
+        except Exception:  # noqa: BLE001
             self._log_cache_failure("put", delivered)
 
     async def _evict(self, request: MediaRequest | None, asset: DeliveryAsset) -> None:
@@ -745,7 +745,7 @@ class TelegramDelivery:
                 await self.media_cache.evict_delivery(
                     request, bot_id=bot_id, item_index=asset.item_index or 0
                 )
-            except Exception:  # noqa: BLE001 - optional cache boundary
+            except Exception:  # noqa: BLE001
                 self._log_cache_failure("evict", asset)
 
     def _cache_bot_id(self) -> str | None:
@@ -753,7 +753,7 @@ class TelegramDelivery:
             return self.bot_id
         try:
             value = getattr(self.bot, "id", None)
-        except Exception:  # noqa: BLE001 - optional cache identity
+        except Exception:  # noqa: BLE001
             logger.warning(
                 "Optional media cache operation failed",
                 extra={"operation": "identity", "category": "backend_error"},

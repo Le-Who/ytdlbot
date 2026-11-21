@@ -183,15 +183,13 @@ class _CurlResponse:
         }
 
     async def iter_bytes(self, chunk_size: int) -> AsyncIterator[bytes]:
-        del chunk_size  # curl delivers its own bounded callback chunks.
+        del chunk_size
         async for chunk in self._response.aiter_content():
             if chunk:
                 yield chunk
 
     async def close(self) -> None:
         try:
-            # curl_cffi's aclose waits for the complete body. Cancel an unread
-            # transfer first so probes and cancellation do not drain full media.
             stream = self._response.astream_task
             if stream is not None:
                 task = asyncio.ensure_future(stream)
@@ -806,8 +804,7 @@ class MediaTransport:
                     )
                     try:
                         await result.release(delete=True)
-                    except BaseException as error:  # noqa: BLE001 - join every owner's cleanup
-                        # A failed loser release must not prevent other cleanup.
+                    except BaseException as error:  # noqa: BLE001
                         cleanup_error = cleanup_error or error
             if cleanup_error is not None:
                 raise cleanup_error
@@ -835,8 +832,6 @@ class MediaTransport:
             finally:
                 for task in tasks:
                     task.cancel()
-                # A cancelled gather would cancel attempts again while their
-                # cleanup runs. Join all attempts before transferring ownership.
                 await await_owned(discard_losers())
         except BaseException:
             if winner is not None:
@@ -964,7 +959,6 @@ class MediaTransport:
         )
         final_path = self.output_dir / f"media_{uuid.uuid4().hex}{extension}"
         partial_path = final_path.with_suffix(f"{final_path.suffix}.part")
-        # During a transform both inputs and the final artifact coexist.
         reserve_timeout = self._remaining(deadline)
         try:
             await asyncio.wait_for(
@@ -1165,9 +1159,6 @@ class MediaTransport:
                     except TimeoutError as error:
                         raise TransferTimeout("disk reservation timed out") from error
                 iterator = response.iter_bytes(self.chunk_size)
-                # Opening the already-created local path is intentionally synchronous:
-                # cancellation cannot strand a descriptor between a worker thread
-                # completing open() and handing its result back to this coroutine.
                 output = partial_path.open("wb")
                 try:
                     first = True
@@ -1387,15 +1378,11 @@ class MediaTransport:
             and original.has_audio
             and original.audio_languages
         ):
-            # yt-dlp can renumber duplicate format IDs between extractions.
-            # A refreshed URL must still refer to the selected audio language.
             identity_matches = (
                 identity_matches and fresh.audio_languages == original.audio_languages
             )
         validation_request = request
         if request.album_selection:
-            # Both candidates already represent the selected delivery contract.
-            # Do not apply original album indices to the projected subset again.
             identity_matches = identity_matches and tuple(
                 (item.media_id, item.kind) for item in original.items
             ) == tuple((item.media_id, item.kind) for item in fresh.items)
@@ -1682,19 +1669,19 @@ async def _run_process(command: list[str], timeout: float) -> int:
 def _has_media_signature(data: bytes) -> bool:
     """Recognize the bounded signatures accepted by current media providers."""
     if len(data) >= 8 and data[4:8] == b"ftyp":
-        return True  # MP4/M4A/MOV/HEIF/AVIF family
+        return True
     if data.startswith(
         (
-            b"\x1aE\xdf\xa3",  # Matroska/WebM
-            b"\xff\xd8\xff",  # JPEG
+            b"\x1aE\xdf\xa3",
+            b"\xff\xd8\xff",
             b"\x89PNG\r\n\x1a\n",
             b"GIF87a",
             b"GIF89a",
             b"OggS",
             b"fLaC",
             b"ID3",
-            b"BM",  # BMP
-            b"\x00\x00\x01\xba",  # MPEG program stream
+            b"BM",
+            b"\x00\x00\x01\xba",
         )
     ):
         return True
@@ -1710,5 +1697,5 @@ def _has_media_signature(data: bytes) -> bool:
     ):
         return True
     if len(data) >= 2 and data[0] == 0xFF and data[1] & 0xE0 == 0xE0:
-        return True  # MP3 or AAC frame sync
-    return bool(data) and data[0] == 0x47  # MPEG transport stream sync
+        return True
+    return bool(data) and data[0] == 0x47

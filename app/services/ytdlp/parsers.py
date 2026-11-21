@@ -14,7 +14,7 @@ from .models import FormatItem, FormatMetadata
 HEIGHT_REGEX = re.compile(HEIGHT_PATTERN)
 BYTES_IN_KB = 1024
 BYTES_IN_MB = 1024 * 1024
-BITRATE_COEFFICIENT = 128.0  # 1024 / 8
+BITRATE_COEFFICIENT = 128.0
 
 _COMMON_HEIGHTS = {
     "1080p": 1080,
@@ -44,9 +44,6 @@ def _is_pinterest(url: str) -> bool:
 
 def _is_vk(url: str) -> bool:
     return "vk.com" in url.lower()
-
-
-# ── TikTok content-type classification ─────────────────────────────
 
 
 def classify_tiktok_content(url: str) -> str:
@@ -116,7 +113,6 @@ def parse_format_metadata(
     ext = format_dict.get("ext")
     protocol = format_dict.get("protocol") or ""
     if ext not in VIDEO_EXTENSIONS and "m3u8" not in protocol:
-        # Accept formats without ext if they have a direct URL (e.g. Facebook sd/hd)
         if not format_dict.get("url"):
             return None
         ext = "mp4"
@@ -129,7 +125,6 @@ def parse_format_metadata(
     if not height:
         note = format_dict.get("format_note", "")
         height = _extract_height(note)
-        # Infer height from format_id for Facebook (sd/hd progressive formats)
         if not height and fid:
             fid_lower = fid.lower()
             if fid_lower in ("hd", "hd_src") or "_hd" in fid_lower:
@@ -177,10 +172,10 @@ def _score_format(f: FormatMetadata) -> int:
     """Score a format for deduplication: higher is preferred."""
     s = 0
     if f.vcodec not in ("none", "unknown") and f.acodec not in ("none", "unknown"):
-        s += 1000  # Premuxed is heavily preferred to save CPU and RAM
+        s += 1000
     vcodec_low = f.vcodec.lower()
     if "avc1" in vcodec_low or "h264" in vcodec_low:
-        s += 500  # H264 is the most compatible
+        s += 500
     elif "mp4" in vcodec_low:
         s += 300
     elif "vp" in vcodec_low:
@@ -192,7 +187,6 @@ def deduplicate_formats(
     formats: list[FormatMetadata], is_tiktok_url: bool
 ) -> list[FormatMetadata]:
     if is_tiktok_url:
-        # TikTok: dedup by filesize since heights are often identical
         unique = []
         seen_sizes = set()
         for fmt in formats:
@@ -202,9 +196,6 @@ def deduplicate_formats(
                 seen_sizes.add(key)
         return unique
 
-    # Pre-compute original positions once (O(N)) to avoid O(N²) list.index() calls
-    # in the sort key below. Using id() is safe because the list elements are the
-    # same objects throughout this function's scope.
     pos: dict[int, int] = {id(f): i for i, f in enumerate(formats)}
 
     groups: OrderedDict[int | None, list[FormatMetadata]] = OrderedDict()
@@ -258,10 +249,8 @@ def detect_tiktok_slideshow(info: dict[str, Any], url: str) -> bool:
 
     raw_formats = info.get("formats", [])
     if not raw_formats:
-        # No formats at all — likely a slideshow that yt-dlp can't handle
         return True
 
-    # Check if all formats are audio-only (vcodec == "none")
     has_video = any(fmt.get("vcodec") not in (None, "none") for fmt in raw_formats)
 
     return not has_video

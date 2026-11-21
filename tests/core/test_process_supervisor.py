@@ -423,7 +423,6 @@ async def test_windows_job_kills_child_after_group_leader_exits(tmp_path: Path):
 
     setup_task = asyncio.create_task(wait_for_tree_setup())
     try:
-        # Bound stalled fixture construction separately from measured cancellation.
         done, _ = await asyncio.wait(
             (setup_task, task), timeout=10, return_when=asyncio.FIRST_COMPLETED
         )
@@ -450,7 +449,6 @@ async def test_windows_job_kills_child_after_group_leader_exits(tmp_path: Path):
         setup_task.cancel()
         await asyncio.gather(setup_task, return_exceptions=True)
         if child_pid.exists():
-            # Failure cleanup must finish reaping the real test child before returning.
             subprocess.run(  # noqa: ASYNC221
                 ["taskkill", "/F", "/T", "/PID", child_pid.read_text()],
                 capture_output=True,

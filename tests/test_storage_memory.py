@@ -34,7 +34,6 @@ class TestMemoryStorage(unittest.IsolatedAsyncioTestCase):
 
     async def test_delete_missing_key(self):
         """Deleting a non-existent key shouldn't raise an error."""
-        # Should not raise any exception
         await self.storage.delete("missing_key")
         result = await self.storage.get("missing_key")
         self.assertIsNone(result)
@@ -53,7 +52,7 @@ class TestMemoryStorage(unittest.IsolatedAsyncioTestCase):
         await self.storage.set("key1", "val1")
         await self.storage.set("key2", "val2")
         await self.storage.set("key3", "val3")
-        await self.storage.set("key4", "val4")  # This should evict key1
+        await self.storage.set("key4", "val4")
 
         self.assertIsNone(await self.storage.get("key1"))
         self.assertEqual(await self.storage.get("key2"), "val2")
@@ -62,16 +61,12 @@ class TestMemoryStorage(unittest.IsolatedAsyncioTestCase):
 
     async def test_ttl_expiration(self):
         """Store a value, wait for ttl to expire, and ensure it's removed."""
-        # The TTL is set to 1 second in setUp
         await self.storage.set("key1", "val1")
 
-        # It should be present immediately
         self.assertEqual(await self.storage.get("key1"), "val1")
 
-        # Wait slightly more than 1 second
         await asyncio.sleep(1.1)
 
-        # Now it should be expired
         self.assertIsNone(await self.storage.get("key1"))
 
 

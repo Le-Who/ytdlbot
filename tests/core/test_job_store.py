@@ -357,7 +357,6 @@ async def test_polling_retry_claim_is_atomic_and_only_known_failure_reopens_it(
         first.begin_retry_token("token"), second.begin_retry_token("token")
     )
     assert sum(claims) == 1
-    # A fresh store models a process restart before the send was confirmed.
     reopened = JobStore(path)
     assert not await reopened.begin_retry_token("token")
     await first.record_delivery("retry:token", outcome)

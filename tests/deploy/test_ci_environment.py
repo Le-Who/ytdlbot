@@ -70,7 +70,6 @@ def test_ci_compose_validation_uses_and_removes_its_environment_fixture(
     _write_command(commands / "python", "#!/bin/sh\nexit 0\n")
     env = os.environ.copy()
     env.update({str(key): str(value) for key, value in step.get("env", {}).items()})
-    # Mimic the fail-fast Bash semantics used by GitHub Actions run steps.
     command = f"export PATH='{_bash_path(commands)}':$PATH\n{step['run']}"
     result = subprocess.run(
         [str(BASH), "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", command],
@@ -115,7 +114,6 @@ def test_ci_syntax_gate_checks_each_release_script(
     scripts = tmp_path / "scripts"
     scripts.mkdir()
     for source in (ROOT / "scripts").glob("*.sh"):
-        # Valid files must be parsed without executing their nonzero exit.
         (scripts / source.name).write_text(
             "if then\n" if source.name == broken_script else "exit 37\n",
             encoding="utf-8",
@@ -165,8 +163,6 @@ def test_ci_test_steps_receive_the_webhook_fixture_secret(
     env = os.environ.copy()
     for settings in (workflow.get("env", {}), job.get("env", {}), step.get("env", {})):
         env.update({str(key): str(value) for key, value in settings.items()})
-    # Exercise an existing real HTTP + SQLite webhook contract under each
-    # workflow's effective environment, without recursively running this suite.
     result = subprocess.run(
         [
             sys.executable,

@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 from app.services.ytdlp.cookies import PlatformCookiesManager
 
-# Valid base64 of "# Netscape HTTP Cookie File\n.example.com\tTRUE\t/\tFALSE\t0\ttest_cookie\tvalue"
 _DUMMY_B64 = "IyBOZXRzY2FwZSBIVFRQIENvb2tpZSBGaWxlCi5leGFtcGxlLmNvbQlUUlVFCS8JRkFMU0UJMAlj b29raWVfbmFtZQljb29raWVfdmFsdWU="
 
 
@@ -28,17 +27,14 @@ class TestPlatformCookiesManager(unittest.TestCase):
     def test_global_cookies_fallback(self):
         """Global cookies used for all platforms when no override."""
         mgr = PlatformCookiesManager()
-        # YouTube should get global cookies
         path = mgr.get_cookies_path("https://www.youtube.com/watch?v=123")
         self.assertIsNotNone(path)
         self.assertTrue(os.path.exists(path))
 
-        # TikTok also gets global cookies (no override)
         self.assertEqual(
             mgr.get_cookies_path("https://www.tiktok.com/@user/video/123"),
             path,
         )
-        # tiktok_cookies_path shortcut also returns global
         self.assertEqual(mgr.tiktok_cookies_path, path)
 
     @patch.dict(
@@ -52,11 +48,9 @@ class TestPlatformCookiesManager(unittest.TestCase):
         yt_path = mgr.get_cookies_path("https://www.youtube.com/watch?v=123")
         tt_path = mgr.get_cookies_path("https://www.tiktok.com/@user/video/123")
 
-        # Both should be non-None
         self.assertIsNotNone(yt_path)
         self.assertIsNotNone(tt_path)
 
-        # TikTok should get its own cookies, not the global ones
         self.assertNotEqual(yt_path, tt_path)
 
     @patch.dict(
@@ -68,18 +62,14 @@ class TestPlatformCookiesManager(unittest.TestCase):
         """Facebook cookies routed by domain."""
         mgr = PlatformCookiesManager()
 
-        # facebook.com
         fb_path = mgr.get_cookies_path("https://www.facebook.com/reel/123")
         self.assertIsNotNone(fb_path)
 
-        # fb.watch (short URL)
         fbw_path = mgr.get_cookies_path("https://fb.watch/abc123/")
         self.assertIsNotNone(fbw_path)
 
-        # Both should point to the same file (same env var)
         self.assertEqual(fb_path, fbw_path)
 
-        # Unknown platform → None (no global configured)
         self.assertIsNone(mgr.get_cookies_path("https://www.youtube.com/watch?v=123"))
 
 

@@ -57,7 +57,6 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
 
     async def test_full_private_message_flow(self):
         """User picks format → link generated → feedback message sent (Strict AAA)."""
-        # --- Arrange ---
         url = "https://youtube.com/watch?v=test123"
         formats = [
             FormatItem(
@@ -109,10 +108,8 @@ class TestEndToEndListFormats(unittest.IsolatedAsyncioTestCase):
             "size_map": {"137": 100 * 1024 * 1024, "136": 50 * 1024 * 1024},
         }
 
-        # --- Act ---
         await callbacks.on_pick(update, context)
 
-        # --- Assert ---
         self.assertTrue(len(state.link_cache) > 0)
         token = next(iter(state.link_cache))
         cached = state.link_cache[token]
@@ -319,7 +316,7 @@ class TestParserIntegration(unittest.TestCase):
             ),
         ]
         result = deduplicate_formats(formats, is_tiktok_url=True)
-        self.assertEqual(len(result), 2)  # 5000 and 10000
+        self.assertEqual(len(result), 2)
 
     def test_non_tiktok_deduplication(self):
         """Non-TikTok formats are deduplicated by height."""
@@ -335,7 +332,7 @@ class TestParserIntegration(unittest.TestCase):
             ),
         ]
         result = deduplicate_formats(formats, is_tiktok_url=False)
-        self.assertEqual(len(result), 2)  # 1080 and 720
+        self.assertEqual(len(result), 2)
 
     def test_special_format_audio(self):
         fmt = get_special_format("https://youtube.com/watch?v=123")

@@ -194,15 +194,25 @@ Selected configuration:
 | `TELEGRAM_LOCAL_REQUIRED` | Require Local Bot API for readiness |
 | `MEDIA_DIR` | Persistent shared media directory |
 | `YTDLBOT_JOB_DB` | Persistent SQLite job-store path |
+| `DRAIN_TIMEOUT_SECONDS` | Finite, nonnegative work grace. Zero starts cleanup immediately |
+| `YTDLP_CONCURRENT_FRAGMENTS` | Concurrent yt-dlp DASH/HLS fragment downloads, default 8 |
+| `YOUTUBE_PIPE_MODE` | Pipe option for the legacy downloader. The public pipeline uses bounded disk materialization and validation |
 | `MEDIA_PROXY_URLS` | JSON array of SOCKS5 URLs in primary/backup order; the optional GitHub Actions secret also accepts one URL or comma-separated URLs and updates this VPS setting during deploy |
-| `MEDIA_PROXY_PLATFORMS` | Platforms whose local extractors may use the pool; YouTube uses proxies first |
+| `MEDIA_PROXY_PLATFORMS` | Platforms whose local extractors may use the pool. Ordinary public YouTube downloads race a direct lane and a proxy lane |
 | `POT_PROVIDER_URL` | bgutil PO-token server origin; Compose uses the project sidecar |
 | `COBALT_API_URL` | Comma-separated exact Cobalt origins; no origin is trusted automatically |
-| `COBALT_CONTRACT_VERIFIED` | Enables configured Cobalt routes only after contract verification |
+| `COBALT_CONTRACT_VERIFIED` | Enables configured Cobalt routes for supported platforms after contract verification. YouTube uses the local extractor |
 | `SNAPSAVE_CONTRACT_VERIFIED` | Enables SnapSave only after contract verification |
 
 Review `.env.example` and `app/core/config.py` for the complete set. Do not commit
 tokens, cookies, sessions, provider keys, or signed media URLs.
+
+Legacy callers accept base64-encoded Netscape cookies through the global
+`YTDLP_COOKIES_B64` fallback and the `TIKTOK_COOKIES_B64`, `FACEBOOK_COOKIES_B64`,
+and `VK_COOKIES_B64` platform overrides. For VK audio that requires authentication,
+export the signed-in browser session in Netscape format, base64-encode the file,
+and set `VK_COOKIES_B64` in the private environment. Public yt-dlp and gallery-dl
+provider calls use a separate cookie-free path.
 
 Run locally:
 
@@ -225,6 +235,7 @@ Deterministic local suite:
 ```sh
 python -m pytest tests -q
 ruff check app tests
+python scripts/check-code-comments.py
 mypy app --no-incremental --platform linux
 mypy app --no-incremental --platform win32
 ```

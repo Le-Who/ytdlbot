@@ -78,7 +78,6 @@ class TestTikWMDownloadVideoOptimized(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(error)
         self.assertEqual(path, expected_path)
         self.assertTrue(os.path.exists(path))
-        # Small synthetic fixture I/O completes inline; no runtime worker ownership.
         with open(path, "rb") as f:  # noqa: ASYNC230
             self.assertEqual(f.read(), b"fake video data" * 1024)
 
@@ -93,7 +92,6 @@ class TestTikWMDownloadVideoOptimized(unittest.IsolatedAsyncioTestCase):
         mock_session = AsyncMock()
         mock_session.__aenter__ = AsyncMock(return_value=mock_session)
         mock_session.__aexit__ = AsyncMock(return_value=False)
-        # Force an error during download
         mock_session.get = AsyncMock(side_effect=Exception("Download failed"))
 
         with (

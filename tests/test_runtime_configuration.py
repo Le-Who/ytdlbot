@@ -21,8 +21,6 @@ async def test_invalid_drain_timeout_rejects_lifespan_before_acquiring_resources
     monkeypatch.setattr(main, "JobStore", construction)
     monkeypatch.setattr(main, "_build_telegram_application_builder", construction)
 
-    # A rejected start must release lifespan ownership so another start can
-    # report its configuration error, rather than seeing a phantom live worker.
     for _ in range(2):
         with pytest.raises(RuntimeError, match="DRAIN_TIMEOUT_SECONDS"):
             async with main.lifespan(FastAPI()):
@@ -84,8 +82,6 @@ async def test_lifespan_captures_valid_drain_timeout_before_environment_changes(
     )
     try:
         async with main.lifespan(FastAPI()):
-            # Shutdown must use the already validated value, even if another
-            # component changes the environment after resources are acquired.
             monkeypatch.setenv("DRAIN_TIMEOUT_SECONDS", "invalid-after-startup")
         assert stop.is_set()
         assert all(task.done() for task in background_tasks)

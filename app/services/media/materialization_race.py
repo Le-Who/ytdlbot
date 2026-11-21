@@ -36,7 +36,7 @@ async def race_materializations(attempts: Sequence[Attempt]) -> Result:
                 )
                 try:
                     await item.release(delete=True)
-                except BaseException as error:  # noqa: BLE001 - release every owned loser
+                except BaseException as error:  # noqa: BLE001
                     cleanup_error = cleanup_error or error
         if cleanup_error is not None:
             raise cleanup_error
@@ -52,7 +52,7 @@ async def race_materializations(attempts: Sequence[Attempt]) -> Result:
                         continue
                     try:
                         result = task.result()
-                    except Exception as error:  # noqa: BLE001 - retain the other route
+                    except Exception as error:  # noqa: BLE001
                         failures.append(error)
                     else:
                         if winner is None:

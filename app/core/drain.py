@@ -13,8 +13,6 @@ from app.core.job_store import JobRecord, JobStore, delivery_job_context
 
 logger = logging.getLogger("app.core.drain")
 
-# Deployment allows 30 seconds of work grace inside a 45-second container
-# stop grace. Cleanup has its own budget, shared by drain and worker.stop().
 CLEANUP_TIMEOUT_SECONDS = 5.0
 
 
@@ -114,7 +112,6 @@ class DrainController:
         if not pending:
             return DrainResult(len(done), 0, 0, False)
 
-        # Stop side effects before making work recoverable by another owner.
         for task in pending:
             task.cancel()
         stopped, still_running = await asyncio.wait(
@@ -243,8 +240,6 @@ class DurableUpdateWorker:
         try:
             return await asyncio.shield(acquisition)
         except asyncio.CancelledError:
-            # A cancelled to_thread caller cannot stop SQLite from committing.
-            # Its supervisor/startup remains live until ownership settles.
             await _settle(acquisition)
             raise
 
@@ -278,8 +273,6 @@ class DurableUpdateWorker:
 
     async def stop(self) -> None:
         """Share drain's cleanup budget and retain ownership of live handlers."""
-        # Synchronous with respect to start's final launch check: a pending
-        # startup cannot clear shutdown or launch new runtime tasks afterward.
         self._stop.set()
         if self._stop_task is None:
             self._stop_task = asyncio.create_task(self._stop_once())
@@ -293,7 +286,7 @@ class DurableUpdateWorker:
         if not self.drain_controller.draining:
             try:
                 await self.drain_controller.drain(deadline_seconds=0)
-            except Exception as error:  # noqa: BLE001 - shutdown must continue
+            except Exception as error:  # noqa: BLE001
                 logger.error(
                     "Durable worker drain failed during stop",
                     extra={"error_type": type(error).__name__},
@@ -332,8 +325,6 @@ class DurableUpdateWorker:
                 return
             except asyncio.CancelledError:
                 raise
-            # Supervise the complete worker boundary, including update handlers
-            # and store adapters; keep retrying without swallowing cancellation.
             except Exception as error:  # noqa: BLE001
                 logger.error(
                     "Durable update worker failed; retrying",
@@ -348,8 +339,6 @@ class DurableUpdateWorker:
         while not self._stop.is_set():
             try:
                 acquired = await self._acquire_worker()
-            # An adapter failure must leave this worker unacquired, never let it
-            # process without a durable lease; the restart loop retries below.
             except Exception as error:  # noqa: BLE001
                 logger.error(
                     "Durable update worker reacquire failed",
@@ -364,8 +353,6 @@ class DurableUpdateWorker:
     async def _release_worker(self) -> None:
         try:
             await self.store.release_worker(self.owner_id)
-        # Lease release is attempted during recovery and shutdown. Record all
-        # adapter failures so later cleanup phases still get their attempt.
         except Exception as error:  # noqa: BLE001
             logger.error(
                 "Durable update worker release failed",
@@ -463,8 +450,6 @@ class DurableUpdateWorker:
         except asyncio.CancelledError:
             if not process_task.done():
                 process_task.cancel()
-            # Repeated cancellation of the supervisor must not detach its
-            # handler. Heartbeat/ownership stay live until the handler exits.
             settled = asyncio.gather(process_task, return_exceptions=True)
             while not settled.done():
                 try:
@@ -549,8 +534,6 @@ class DurableUpdateWorker:
     async def _run_maintenance_once(self) -> None:
         try:
             await self.store.purge_expired_payloads(limit=1_000)
-        # Expired-payload maintenance is optional; adapter failures must remain
-        # visible without terminating the worker's separate processing task.
         except Exception as error:  # noqa: BLE001
             logger.error(
                 "Durable payload maintenance failed",

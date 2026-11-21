@@ -158,7 +158,6 @@ class JsonCommandAdapter:
         except OSError as exc:
             raise ObservationError(f"adapter {action} could not be started") from exc
         if result.returncode != 0:
-            # Adapter output may contain URLs or credentials. Never include it here.
             raise ObservationError(
                 f"adapter {action} failed with exit {result.returncode}"
             )

@@ -9,7 +9,6 @@ __all__ = ["Texts"]
 
 
 class Texts:
-    # ── Commands (/start, /help) ──────────────────────────────────
     WELCOME = (
         "👋 <b>Привет! Я помогу скачать видео.</b>\n\n"
         "Просто отправь мне ссылку с:\n"
@@ -37,7 +36,6 @@ class Texts:
         "📦 Максимальный размер для прямой загрузки: {max_dl_mb} МБ."
     )
 
-    # ── Messages (on_message handler) ─────────────────────────────
     URL_NOT_SUPPORTED = "❌ Ссылка не поддерживается. Проверьте список доступных платформ с помощью команды /help."
     RATE_LIMITED = "⏳ Слишком часто. Пожалуйста, подождите минуту и попробуйте снова."
     SEARCHING = "🔎 Ищу видео..."
@@ -83,7 +81,6 @@ class Texts:
     PINTEREST_ERROR = "❌ Ошибка загрузки с Pinterest. Попробуйте позже или используйте прямую ссылку на видео."
     GENERIC_ERROR = "❌ Ошибка: {detail}"
 
-    # ── Callbacks ─────────────────────────────────────────────────
     CACHE_EXPIRED_RESEND = "⚠️ Данные устарели. Пожалуйста, отправьте ссылку заново."
     CACHE_REFRESHING = "⏳ Кэш истек. Обновляю данные..."
     CACHE_REFRESH_FAIL = "⚠️ Ошибка обновления данных. Отправьте ссылку заново."
@@ -113,8 +110,6 @@ class Texts:
     GENERIC_ERROR_SHORT = "⚠️ Ошибка."
     SENDING_TO_TG = "📤 Отправляю в Telegram..."
     SEND_ERROR = "⚠️ Ошибка при отправке файла."
-    # Progress threshold bar (phase 1)
-    # bar: filled/empty blocks, pct: 0-100, eta: ETA string or empty string
     DOWNLOAD_PROGRESS = "⬇️ Загрузка {pct}%\n{bar}\n{eta}"
     BTN_CANCEL_DOWNLOAD = "✖️ Отмена"
     DOWNLOAD_CLIP_HINT = (
@@ -127,7 +122,6 @@ class Texts:
     GIF_ALREADY_IN_PROGRESS = "⏳ У вас уже идет генерация..."
     GIF_CONVERSION_ERROR = "⚠️ Ошибка конвертации."
     GIF_SEND_ERROR = "⚠️ Не удалось отправить GIF."
-    # Native .gif file export (on-demand)
     BTN_SEND_ANIMATION_MP4 = "🔄 Анимация (MP4)"
     BTN_SAVE_GIF_FILE = "💾 Файлом (.gif)"
     BTN_SAVE_GIF_WAIT = "⏳ Готовлю .gif файл..."
@@ -136,7 +130,6 @@ class Texts:
     GIF_FILE_ERROR = "⚠️ Ошибка конвертации. Попробуйте ещё раз."
     GIF_FILE_QUEUE_TOAST = "Сервер занят, добавляю в очередь..."
 
-    # ── Slideshow ─────────────────────────────────────────────────
     SLIDESHOW_DETECTED = "🖼 <b>{title}</b>\n📸 Это фотоальбом (TikTok Slideshow)"
     BTN_SLIDESHOW_PHOTOS = "📸 Фото (альбом)"
     BTN_SLIDESHOW_VIDEO = "🎬 Видео (slideshow)"
@@ -145,18 +138,15 @@ class Texts:
     SLIDESHOW_SENDING = "📤 Отправляю фотоальбом..."
     SLIDESHOW_TRUNCATED = "ℹ️ Показаны первые 10 из {total} фото."
     SLIDESHOW_ERROR = "⚠️ Ошибка загрузки слайдшоу."
-    # Shown as caption on the first album when content spans multiple batches of 10
     SLIDESHOW_MULTI_ALBUM = (
         "📸 1/{total_batches} • {total} фото — остальные придут следующими 🤫"
     )
 
-    # ── Group logic ───────────────────────────────────────────────
     GROUP_ERROR = "❌ Ошибка."
     GROUP_SENDING = "📤 Отправляю..."
     GROUP_SEND_ERROR = "⚠️ Ошибка отправки."
     GROUP_SLIDESHOW_CHOICE = "🖼 TikTok Slideshow\nВыберите формат:"
 
-    # ── Service layer (ytdlp exceptions) ──────────────────────────
     SVC_ACCESS_DENIED = (
         "Доступ запрещен. Возможно, контент приватный или требуется авторизация."
     )
@@ -172,7 +162,6 @@ class Texts:
     )
     SVC_DEFAULT_TITLE = "Видео"
 
-    # ── Instagram ─────────────────────────────────────────────────
     IG_LOADING_PROFILE = "🔎 Загружаю профиль @{username}..."
     IG_NO_STORIES = "📭 У @{username} сейчас нет активных историй."
     IG_NO_CONTENT = "📭 У @{username} нет доступных историй или хайлайтов."

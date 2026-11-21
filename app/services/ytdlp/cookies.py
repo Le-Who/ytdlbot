@@ -19,7 +19,6 @@ class PlatformCookiesManager:
     Priority: platform-specific → global fallback.
     """
 
-    # platform keyword (matched against URL) → env var name
     _PLATFORM_ENV_MAP: ClassVar[dict[str, str]] = {
         "tiktok.com": "TIKTOK_COOKIES_B64",
         "facebook.com": "FACEBOOK_COOKIES_B64",
@@ -30,22 +29,17 @@ class PlatformCookiesManager:
     _GLOBAL_ENV_VAR = "YTDLP_COOKIES_B64"
 
     def __init__(self) -> None:
-        # platform keyword → temp file path (or None)
         self._platform_cookies: dict[str, str] = {}
         self._global_cookies_path: str | None = None
         self._initialize()
 
     def _initialize(self) -> None:
         """Decode and write all cookie files from env vars."""
-        # 1. Global cookies (fallback for all platforms)
         self._global_cookies_path = self._decode_cookies(self._GLOBAL_ENV_VAR, "global")
 
-        # 2. Platform-specific cookies
-        # Deduplicate env vars (facebook.com and fb.watch share same var)
-        seen_env_vars: dict[str, str] = {}  # env_var → path
+        seen_env_vars: dict[str, str] = {}
         for keyword, env_var in self._PLATFORM_ENV_MAP.items():
             if env_var in seen_env_vars:
-                # Reuse already decoded file
                 self._platform_cookies[keyword] = seen_env_vars[env_var]
                 continue
 
@@ -54,7 +48,6 @@ class PlatformCookiesManager:
                 self._platform_cookies[keyword] = path
                 seen_env_vars[env_var] = path
 
-        # Log summary
         configured = [k for k, v in self._platform_cookies.items() if v]
         if configured:
             logger.info("Platform cookies configured: %s", ", ".join(configured))
@@ -112,10 +105,7 @@ class PlatformCookiesManager:
             return None
 
 
-# ── Module-level helpers ──────────────────────────────────────────
-
 _CRITICAL_COOKIES = {
-    # TikTok
     "sid_tt",
     "sessionid",
     "sessionid_ss",
@@ -125,19 +115,16 @@ _CRITICAL_COOKIES = {
     "msToken",
     "odin_tt",
     "ttwid",
-    # Facebook
     "c_user",
     "xs",
     "datr",
     "fr",
-    # YouTube / Google
     "SID",
     "HSID",
     "SSID",
     "APISID",
     "SAPISID",
     "LOGIN_INFO",
-    # VK
     "remixsid",
     "remixstid",
     "remixlang",
@@ -147,7 +134,7 @@ _CRITICAL_COOKIES = {
 
 def _log_cookie_diagnostics(content: str, label: str) -> None:
     """Log cookie file diagnostics for debugging (no values exposed)."""
-    found: dict[str, str] = {}  # name → domain
+    found: dict[str, str] = {}
     total = 0
 
     for line in content.splitlines():

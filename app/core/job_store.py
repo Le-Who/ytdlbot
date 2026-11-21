@@ -602,7 +602,7 @@ class JobStore:
                 "SELECT * FROM jobs WHERE update_id = ?",
                 (update_id,),
             ).fetchone()
-        if row is None:  # pragma: no cover - guarded by the transaction above
+        if row is None:  # pragma: no cover
             raise RuntimeError("accepted update was not persisted")
         return AcceptedUpdate(_row_to_job(row), cursor.rowcount == 1)
 
@@ -827,7 +827,7 @@ class JobStore:
                 "SELECT outcome FROM deliveries WHERE job_id = ? AND item_key = ?",
                 (job_id, item_key),
             ).fetchone()
-        if row is None:  # pragma: no cover - guarded by transaction
+        if row is None:  # pragma: no cover
             raise RuntimeError("delivery outcome was not persisted")
         return DeliveryOutcome(row["outcome"])
 
@@ -979,7 +979,6 @@ class JobStore:
                     (_encode_json(checkpoint), now, job_id),
                 )
                 return True
-            # The same callback job can resume after a worker restart.
             return True
 
     def _has_failed_deliveries_sync(self, job_id: str) -> bool:

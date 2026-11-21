@@ -248,7 +248,6 @@ async def test_lifespan_retains_dependencies_while_cancelled_handler_is_still_al
         close_calls = 0
 
         async def ping(self):
-            # redis-py can reconnect at a later legitimate lifespan after close.
             self.closed = False
 
         async def aclose(self):
@@ -357,8 +356,6 @@ async def test_lifespan_retains_dependencies_while_cancelled_handler_is_still_al
                 "_build_telegram_application_builder",
                 lambda: SimpleNamespace(build=lambda: successor_bot),
             )
-            # Actual overlapping lifespan, same persistent SQLite and shared
-            # Redis. Rejection must precede all resource/binding acquisition.
             with pytest.raises(RuntimeError):
                 async with lifespan(FastAPI()):
                     raise AssertionError("overlapping runtime must not start")
@@ -401,8 +398,6 @@ async def test_lifespan_retains_dependencies_while_cancelled_handler_is_still_al
             if cleanup is not None:
                 await cleanup
             assert redis.close_calls == 1
-            # The rejected successor can acquire the runtime after the old
-            # handler and its deferred cleanup have actually finished.
             successor_bot.process_update = AsyncMock()
             async with lifespan(FastAPI()):
                 assert state.bot_app is successor_bot
@@ -418,12 +413,8 @@ async def test_lifespan_retains_dependencies_while_cancelled_handler_is_still_al
             if successor_cleanup is not None:
                 await successor_cleanup
             assert successor_bot.closed and successor_store.closed
-            # One close for each separate successful lifespan; denied overlap
-            # performed no close or other resource acquisition.
             assert redis.close_calls == 2
         if replacement_runtime:
-            # Lifespans adopt the same import-time Redis client. Old cleanup
-            # must leave it usable until the replacement runtime shuts down.
             assert state.redis_client is redis
             await redis.ping()
             replacement_controller = drain_module.DrainController(replacement_store)
@@ -568,8 +559,6 @@ async def test_lifespan_cleans_partial_startup_failure(
         else:
             worker = created_workers[0]
             assert worker._task is None
-            # Runtime dependency updates belong to the immutable image build;
-            # only the janitor may be launched as a background maintenance task.
             assert len(background_tasks) == 1
             assert all(task.done() for task in background_tasks)
             assert store.close_calls == 1
@@ -663,8 +652,6 @@ async def test_concurrent_delivery_checks_cannot_reserve_and_send_the_same_item_
         ]
         try:
             await asyncio.wait_for(entered_send.wait(), 1)
-            # Both preflight reads completed before either reservation; let the
-            # second reservation settle while the first send is still in flight.
             async with asyncio.timeout(1):
                 while not any(task.done() for task in attempts) and bot.calls < 2:
                     await asyncio.sleep(0)
@@ -721,7 +708,6 @@ async def test_delivery_outcome_is_persisted_before_completion_and_not_replayed(
     assert still_running.state is JobState.RUNNING
     assert await store.delivery_outcome("802", item_key="__job__") is None
 
-    # Simulate a hard crash: no checkpoint/release runs, then the lease expires.
     now[0] += 2
     recovered = await store.claim_next("worker-b")
     assert recovered is not None
@@ -926,10 +912,8 @@ async def test_cached_gif_receipt_write_failure_propagates_without_regeneration(
     bot.get_file.assert_not_awaited()
     convert.assert_not_awaited()
     update.callback_query.message.reply_text.assert_not_awaited()
-    # The initial spinner is allowed; no done/error/restored button follows the failure.
     update.callback_query.message.edit_reply_markup.assert_awaited_once()
 
-    # Reservation uncertainty remains authoritative despite the finalization fault.
     with delivery_job_context(store, claimed.id, owner_id="worker-a"):
         outcome, replay_sent = await callbacks._send_gif_document_durable(
             bot, key, chat_id=42, document="cached-fid"

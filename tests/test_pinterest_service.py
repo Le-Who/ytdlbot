@@ -220,7 +220,6 @@ class TestPinterestStreamDownload(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsNotNone(result)
         self.assertTrue(os.path.exists(result))
-        # Small synthetic fixture I/O completes inline; no runtime worker ownership.
         with open(result, "rb") as f:  # noqa: ASYNC230
             data = f.read()
         self.assertEqual(data, b"chunk1chunk2chunk3")
@@ -255,7 +254,7 @@ class TestPinterestStreamDownload(unittest.IsolatedAsyncioTestCase):
 
         async def _aiter():
             return
-            yield  # makes it async generator
+            yield
 
         mock_resp.aiter_content = _aiter
 

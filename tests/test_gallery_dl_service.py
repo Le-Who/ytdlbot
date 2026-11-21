@@ -33,7 +33,6 @@ class TestGalleryDlService(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(result)
         self.assertIsNone(error)
 
-        # Verify command
         args = mock_run.call_args
         cmd = args[0][0]
         self.assertIn("gallery-dl", cmd)
@@ -121,16 +120,13 @@ class TestGalleryDlService(unittest.IsolatedAsyncioTestCase):
     def test_collect_files_with_images(self):
         """_collect_files should find images and audio."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create fake image files
             for name in ["001.jpg", "002.png", "003.webp"]:
                 with open(os.path.join(tmpdir, name), "w") as f:
                     f.write("fake image")
 
-            # Create fake audio
             with open(os.path.join(tmpdir, "audio.mp3"), "w") as f:
                 f.write("fake audio")
 
-            # Create metadata
             meta = {"description": "Test slideshow description"}
             with open(os.path.join(tmpdir, "meta.json"), "w") as f:
                 json.dump(meta, f)
@@ -146,7 +142,6 @@ class TestGalleryDlService(unittest.IsolatedAsyncioTestCase):
     def test_collect_files_no_images(self):
         """_collect_files should return error when no images found."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Only audio, no images
             with open(os.path.join(tmpdir, "audio.mp3"), "w") as f:
                 f.write("fake audio")
 
@@ -233,7 +228,7 @@ class TestGalleryDlService(unittest.IsolatedAsyncioTestCase):
             patch("app.services.gallery_dl.service.os.path.getsize") as mock_getsize,
         ):
             mock_walk.return_value = [("/tmp/fake_dir", [], ["video.mp4"])]
-            mock_getsize.return_value = 1048576 * 5  # 5 MB
+            mock_getsize.return_value = 1048576 * 5
 
             result, error = await GalleryDlService.download_video(
                 "https://tiktok.com/@user/video/123",
@@ -245,7 +240,6 @@ class TestGalleryDlService(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(error)
         self.assertEqual(result, os.path.join("/tmp/fake_dir", "video.mp4"))
 
-        # Verify command
         cmd = mock_run.call_args[0][0]
         self.assertIn("gallery-dl", cmd)
         self.assertIn("--cookies", cmd)

@@ -15,8 +15,6 @@ from app.services.ytdlp.parsers import (
     deduplicate_formats,
 )
 
-# ── Duration formatting properties ───────────────────────────────
-
 
 class TestDurationProperties(unittest.TestCase):
     @given(st.floats(min_value=0, max_value=100_000, allow_nan=False))
@@ -39,9 +37,6 @@ class TestDurationProperties(unittest.TestCase):
         """Durations >= 1h contain exactly two colons (HH:MM:SS)."""
         result = _format_duration(seconds)
         self.assertEqual(result.count(":"), 2)
-
-
-# ── Format label properties ──────────────────────────────────────
 
 
 class TestFormatLabelProperties(unittest.TestCase):
@@ -92,9 +87,6 @@ class TestFormatLabelProperties(unittest.TestCase):
         self.assertIn("📺", result)
 
 
-# ── Filesize calculation properties ──────────────────────────────
-
-
 class TestFilesizeProperties(unittest.TestCase):
     @given(filesize=st.integers(min_value=1, max_value=10**10))
     @settings(max_examples=50)
@@ -119,12 +111,6 @@ class TestFilesizeProperties(unittest.TestCase):
         self.assertGreaterEqual(result, 0)
 
 
-# ── TikTok error classification properties ───────────────────────
-
-
-# ── URL detection properties ─────────────────────────────────────
-
-
 class TestURLDetectionProperties(unittest.TestCase):
     @given(url=st.text(min_size=0, max_size=300))
     @settings(max_examples=200)
@@ -146,9 +132,6 @@ class TestURLDetectionProperties(unittest.TestCase):
         """extract_supported_url always returns str or None."""
         result = extract_supported_url(text)
         self.assertTrue(result is None or isinstance(result, str))
-
-
-# ── Deduplication properties ─────────────────────────────────────
 
 
 class TestDeduplicationProperties(unittest.TestCase):

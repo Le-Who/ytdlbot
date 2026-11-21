@@ -24,7 +24,6 @@ def exclusive_media_callback(handler: _Handler) -> _Handler:
         if not values:
             await handler(update, context)
             return
-        # Legacy private slideshows have no token, so their message owns the work.
         token = (
             values[1]
             if len(values) > 2 or values[0] == "send" and len(values) > 1

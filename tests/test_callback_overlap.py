@@ -105,7 +105,6 @@ async def test_overlapping_callbacks_share_one_active_operation(
         finish.set()
         await asyncio.gather(first, second, return_exceptions=True)
 
-    # Releasing an active claim never permanently consumes an existing button.
     if first_outcome == "failure":
         with pytest.raises(OSError):
             await handler(update(), context)

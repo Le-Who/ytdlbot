@@ -53,14 +53,11 @@ class YtDlpProvider:
     ) -> None:
         self._extract = extract
         self._service = YtDlpService() if extract is None else None
-        # Scopes are explicitly authorized by the provider's composition root.
-        # Merely supplying a non-public request scope does not authorize cookies.
         self._cookie_auth_scopes = cookie_auth_scopes - {"public"}
         self._proxy_pool = proxy_pool or MediaProxyPool()
         self._proxy_extract = proxy_extract
 
     def supports(self, request: MediaRequest) -> bool:
-        # yt-dlp's generic extractor also handles embedded media on arbitrary sites.
         return (
             request.x_video_number != 0
             and bool(self._proxy_pool.routes(request.platform))
@@ -156,8 +153,6 @@ class YtDlpProvider:
                 fmt for fmt in audio if fmt.get("language") == request.audio_language
             ]
         elif request.platform == "youtube":
-            # YouTube's default track may be a dub. yt-dlp marks the original
-            # with language_preference=10 and/or "original" in its format note.
             original = [
                 fmt
                 for fmt in audio
@@ -165,7 +160,6 @@ class YtDlpProvider:
                 or "original" in str(fmt.get("format_note") or "").lower()
             ]
             if original:
-                # Keep download retries on the original too, not just the winner.
                 audio = original
         audio.sort(
             key=lambda fmt: (fmt.get("vcodec") == "none", _number(fmt.get("abr")) or 0),
@@ -223,7 +217,6 @@ class YtDlpProvider:
             if all(source.filesize_bytes is not None for source in sources)
             else None
         )
-        # A split pair remains a plan, never misrepresented as a muxed direct URL.
         container = (
             "mp3"
             if mp3
@@ -359,7 +352,6 @@ def _candidate_sort_key(
         resolution_order = short_edge
     elif short_edge > _FAST_COMMAND_MAX_EDGE:
         resolution_band = 1
-        # Keep oversized formats only as fallbacks, nearest to 1080 first.
         resolution_order = -short_edge
     else:
         resolution_band = 0

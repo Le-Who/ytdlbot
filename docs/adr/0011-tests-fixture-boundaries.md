@@ -1,6 +1,6 @@
 # Keep ownership and integration boundaries real in offline tests
 
-Use real SQLite for admission, late claims, and process restart, while controlling when each transaction begins. Model POSIX process operations through the process module's platform bridge so pytest keeps its own host platform. For Windows release fixtures, attach the synchronous Popen object through the same transport-handle boundary used by the production job-object bridge.
+Use real SQLite for admission, late claims, and process restart, while controlling when each transaction begins. Model POSIX process operations through the process module's platform bridge so pytest keeps its own host platform. Windows release fixtures pass the suspended Bash process's public PID to the same Job Object bridge as production for assignment before resume.
 
 Run CI shell steps under fail-fast Bash with pipefail. Give valid syntax fixtures a nonzero exit so executing them fails the test. Reuse the focused HTTP and SQLite webhook test with each workflow's effective environment so validation reaches the real admission path without recursively invoking the workflow tests. Model Compose file selection so an explicit `-f` wins over an inherited `COMPOSE_FILE`. Execute only the extracted helper from the checked-in evidence adapter in the tests that inspect its embedded program.
 

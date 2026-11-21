@@ -32,6 +32,12 @@ from app.core.asyncio_utils import await_owned
 logger = logging.getLogger("app.core.process")
 
 _CREATE_SUSPENDED = 0x00000004
+_PROCESS_TERMINATE = 0x0001
+_PROCESS_SET_QUOTA = 0x0100
+_TH32CS_SNAPTHREAD = 0x00000004
+_THREAD_SUSPEND_RESUME = 0x0002
+_THREAD_QUERY_LIMITED_INFORMATION = 0x0800
+_ERROR_NO_MORE_FILES = 18
 _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION = 1
 _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
@@ -115,6 +121,18 @@ class _BasicAccountingInformation(ctypes.Structure):
     ]
 
 
+class _ThreadEntry32(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ThreadID", wintypes.DWORD),
+        ("th32OwnerProcessID", wintypes.DWORD),
+        ("tpBasePri", wintypes.LONG),
+        ("tpDeltaPri", wintypes.LONG),
+        ("dwFlags", wintypes.DWORD),
+    ]
+
+
 def _windows_kernel32():
     if sys.platform != "win32":
         raise OSError("Windows Job Objects require Windows")
@@ -130,6 +148,20 @@ def _windows_kernel32():
     kernel32.SetInformationJobObject.restype = wintypes.BOOL
     kernel32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
     kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    kernel32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    kernel32.Thread32First.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry32)]
+    kernel32.Thread32First.restype = wintypes.BOOL
+    kernel32.Thread32Next.argtypes = [wintypes.HANDLE, ctypes.POINTER(_ThreadEntry32)]
+    kernel32.Thread32Next.restype = wintypes.BOOL
+    kernel32.OpenThread.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel32.OpenThread.restype = wintypes.HANDLE
+    kernel32.GetProcessIdOfThread.argtypes = [wintypes.HANDLE]
+    kernel32.GetProcessIdOfThread.restype = wintypes.DWORD
+    kernel32.ResumeThread.argtypes = [wintypes.HANDLE]
+    kernel32.ResumeThread.restype = wintypes.DWORD
     kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
     kernel32.TerminateJobObject.restype = wintypes.BOOL
     kernel32.QueryInformationJobObject.argtypes = [
@@ -167,27 +199,76 @@ def _create_windows_job() -> int:
     return int(job)
 
 
-def _windows_process_handle(proc: asyncio.subprocess.Process) -> int:
-    transport = getattr(proc, "_transport")  # noqa: B009
-    popen = transport.get_extra_info("subprocess")
-    return int(popen._handle)
-
-
-def _assign_windows_job_and_resume(
-    job_handle: int, proc: asyncio.subprocess.Process
-) -> None:
+def _windows_primary_thread_id(pid: int) -> int:
     if sys.platform != "win32":
         raise OSError("Windows Job Objects require Windows")
     kernel32 = _windows_kernel32()
-    process_handle = _windows_process_handle(proc)
-    if not kernel32.AssignProcessToJobObject(job_handle, process_handle):
+    snapshot = kernel32.CreateToolhelp32Snapshot(_TH32CS_SNAPTHREAD, 0)
+    if snapshot == wintypes.HANDLE(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
-    ntdll = ctypes.WinDLL("ntdll")
-    ntdll.NtResumeProcess.argtypes = [wintypes.HANDLE]
-    ntdll.NtResumeProcess.restype = ctypes.c_long
-    status = ntdll.NtResumeProcess(process_handle)
-    if status != 0:
-        raise OSError(f"NtResumeProcess failed with NTSTATUS {status:#x}")
+    try:
+        entry = _ThreadEntry32()
+        entry_size = ctypes.sizeof(entry)
+        owner_field_end = _ThreadEntry32.th32OwnerProcessID.offset + ctypes.sizeof(
+            wintypes.DWORD
+        )
+        entry.dwSize = entry_size
+        thread_id = None
+        available = kernel32.Thread32First(snapshot, ctypes.byref(entry))
+        while available:
+            if entry.dwSize >= owner_field_end and entry.th32OwnerProcessID == pid:
+                if thread_id is not None:
+                    raise OSError(f"Suspended process {pid} has multiple threads")
+                thread_id = int(entry.th32ThreadID)
+            entry.dwSize = entry_size
+            available = kernel32.Thread32Next(snapshot, ctypes.byref(entry))
+        error = ctypes.get_last_error()
+        if error != _ERROR_NO_MORE_FILES:
+            raise ctypes.WinError(error)
+        if thread_id is None:
+            raise ProcessLookupError(f"No primary thread for suspended process {pid}")
+        return thread_id
+    finally:
+        kernel32.CloseHandle(snapshot)
+
+
+def _assign_windows_job_and_resume(job_handle: int, pid: int) -> None:
+    if sys.platform != "win32":
+        raise OSError("Windows Job Objects require Windows")
+    kernel32 = _windows_kernel32()
+    process_handle = kernel32.OpenProcess(
+        _PROCESS_SET_QUOTA | _PROCESS_TERMINATE, False, pid
+    )
+    if not process_handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        if not kernel32.AssignProcessToJobObject(job_handle, process_handle):
+            raise ctypes.WinError(ctypes.get_last_error())
+        thread_id = _windows_primary_thread_id(pid)
+        thread_handle = kernel32.OpenThread(
+            _THREAD_SUSPEND_RESUME | _THREAD_QUERY_LIMITED_INFORMATION, False, thread_id
+        )
+        if not thread_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            thread_pid = kernel32.GetProcessIdOfThread(thread_handle)
+            if not thread_pid:
+                raise ctypes.WinError(ctypes.get_last_error())
+            if thread_pid != pid:
+                raise ProcessLookupError(
+                    f"Primary thread does not belong to process {pid}"
+                )
+            suspended = kernel32.ResumeThread(thread_handle)
+            if suspended == 0xFFFFFFFF:
+                raise ctypes.WinError(ctypes.get_last_error())
+            if suspended != 1:
+                raise OSError(
+                    f"Unexpected suspend count for process {pid}: {suspended}"
+                )
+        finally:
+            kernel32.CloseHandle(thread_handle)
+    finally:
+        kernel32.CloseHandle(process_handle)
 
 
 def _terminate_windows_job(job_handle: int) -> bool:
@@ -444,7 +525,6 @@ class ProcessSupervisor:
         proc: asyncio.subprocess.Process | None = None
         handle: ProcessHandle | None = None
         windows_job: int | None = None
-        windows_job_ready = False
         process_slot_acquired = False
         try:
             await self._process_slots.acquire()
@@ -486,15 +566,14 @@ class ProcessSupervisor:
             await await_owned(launch_process())
             assert proc is not None
             if windows_job is not None:
-                _assign_windows_job_and_resume(windows_job, proc)
-                windows_job_ready = True
+                _assign_windows_job_and_resume(windows_job, proc.pid)
             handle = ProcessHandle(
                 proc=proc,
                 owner=owner_key,
                 process_group_id=proc.pid,
                 cleanup_paths=owned_paths,
                 cleanup_stems=owned_stems,
-                windows_job=windows_job if windows_job_ready else None,
+                windows_job=windows_job,
             )
             async with state.active_processes_lock:
                 state.active_processes.add(proc)
@@ -515,7 +594,6 @@ class ProcessSupervisor:
                     handle,
                     proc,
                     windows_job,
-                    windows_job_ready,
                     process_slot_acquired,
                     owned_paths,
                     owned_stems,
@@ -529,7 +607,6 @@ class ProcessSupervisor:
         handle: ProcessHandle | None,
         proc: asyncio.subprocess.Process | None,
         windows_job: int | None,
-        windows_job_ready: bool,
         process_slot_acquired: bool,
         cleanup_paths: tuple[Path, ...],
         cleanup_stems: tuple[Path, ...],
@@ -537,20 +614,26 @@ class ProcessSupervisor:
         if handle is not None:
             await handle.cancel()
             await self._finish(handle)
-        else:
+            return
+        try:
             if proc is not None:
+                if windows_job is not None and proc.returncode is None:
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
                 temporary = ProcessHandle(
                     proc=proc,
                     owner=owner,
                     process_group_id=proc.pid,
                     cleanup_paths=cleanup_paths,
                     cleanup_stems=cleanup_stems,
-                    windows_job=windows_job if windows_job_ready else None,
+                    windows_job=windows_job,
                 )
                 await temporary.cancel()
                 await temporary.close_tree()
-                if windows_job_ready:
-                    windows_job = None
+                windows_job = None
+        finally:
             if windows_job is not None:
                 _close_windows_job(windows_job)
             if process_slot_acquired:

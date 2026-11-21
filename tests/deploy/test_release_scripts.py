@@ -11,9 +11,9 @@ import sys
 import time
 import tomllib
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -96,10 +96,7 @@ def _start_fixture_bash(
             if job is not None:
                 from app.core.process import _assign_windows_job_and_resume
 
-                adapter = SimpleNamespace(
-                    _transport=SimpleNamespace(get_extra_info=lambda _: process)
-                )
-                _assign_windows_job_and_resume(job, adapter)
+                _assign_windows_job_and_resume(job, process.pid)
         except BaseException:
             process.kill()
             process.communicate(timeout=10)
@@ -441,8 +438,10 @@ fi
         """#!/bin/sh
 set -eu
 if mkdir "$FAKE_STATE_DIR/flock-held" 2>/dev/null; then
-  if [ "${FAKE_FLOCK_HOLD_SECONDS:-0}" != 0 ]; then
-    sleep "$FAKE_FLOCK_HOLD_SECONDS"
+  if [ "${FAKE_FLOCK_PAUSE:-0}" = 1 ]; then
+    while [ ! -e "$FAKE_STATE_DIR/flock-release" ]; do
+      sleep 0.02
+    done
   fi
   rmdir "$FAKE_STATE_DIR/flock-held"
   exit 0
@@ -567,27 +566,27 @@ def test_stale_branch_sha_is_a_successful_noop(fake_host: FakeHost) -> None:
 
 
 def test_concurrent_deploy_is_rejected_by_project_lock(fake_host: FakeHost) -> None:
-    first_env = fake_host.env | {"FAKE_FLOCK_HOLD_SECONDS": "2"}
-    script = ROOT / "scripts" / "deploy-release.sh"
-    first = subprocess.Popen(
-        [str(BASH), _bash_path(script)],
-        cwd=fake_host.root,
-        env=first_env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
     lock_marker = fake_host.state_dir / "flock-held"
-    deadline = time.monotonic() + 3
-    while not lock_marker.exists() and time.monotonic() < deadline:
-        time.sleep(0.02)
-    assert lock_marker.exists(), "first deploy never acquired its project lock"
+    release_lock = fake_host.state_dir / "flock-release"
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        first = executor.submit(fake_host.run, FAKE_FLOCK_PAUSE="1")
+        try:
+            deadline = time.monotonic() + (10 if os.name == "nt" else 3)
+            while (
+                not lock_marker.exists()
+                and not first.done()
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.02)
+            assert lock_marker.exists(), "first deploy never acquired its project lock"
+            second = fake_host.run()
+            assert lock_marker.is_dir() and not first.done()
+        finally:
+            release_lock.touch()
+        first_result = first.result()
 
-    second = fake_host.run()
-    first_stdout, first_stderr = first.communicate(timeout=10)
-
-    assert first.returncode == 0, first_stderr or first_stdout
-    assert second.returncode != 0
+    assert first_result.returncode == 0, first_result.stderr or first_result.stdout
+    assert second.returncode == 1
     assert "already running" in second.stderr.lower()
 
 
